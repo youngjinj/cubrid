@@ -177,15 +177,16 @@ static int log_rv_analysis_2pc_abort_inform_particps (THREAD_ENTRY * thread_p,
 						      LOG_LSA * log_lsa);
 static int log_rv_analysis_2pc_recv_ack (THREAD_ENTRY * thread_p, int tran_id,
 					 LOG_LSA * log_lsa);
-static int log_rv_analysis_log_end (int tran_id, LOG_LSA * log_lsa);
+static int log_rv_analysis_log_end (int tran_id, MVCCID mvcc_id,
+				    LOG_LSA * log_lsa);
 static void
 log_rv_analysis_record (THREAD_ENTRY * thread_p, LOG_RECTYPE log_type,
-			int tran_id, LOG_LSA * log_lsa, LOG_PAGE * log_page_p,
-			LOG_LSA * check_point, LOG_LSA * lsa,
-			LOG_LSA * start_lsa, LOG_LSA * start_redo_lsa,
-			LOG_LSA * end_redo_lsa, bool is_media_crash,
-			time_t * stop_at, bool * did_incom_recovery,
-			bool * may_use_checkpoint,
+			int tran_id, MVCCID mvcc_id, LOG_LSA * log_lsa,
+			LOG_PAGE * log_page_p, LOG_LSA * check_point,
+			LOG_LSA * lsa, LOG_LSA * start_lsa,
+			LOG_LSA * start_redo_lsa, LOG_LSA * end_redo_lsa,
+			bool is_media_crash, time_t * stop_at,
+			bool * did_incom_recovery, bool * may_use_checkpoint,
 			bool * may_need_synch_checkpoint_2pc);
 static void log_recovery_analysis (THREAD_ENTRY * thread_p,
 				   LOG_LSA * start_lsa,
@@ -2680,12 +2681,13 @@ log_rv_analysis_2pc_recv_ack (THREAD_ENTRY * thread_p, int tran_id,
  * return: error code
  *
  *   tran_id(in):
+ *   mvcc_id(in):
  *   lsa(in/out):
  *
  * Note:
  */
 static int
-log_rv_analysis_log_end (int tran_id, LOG_LSA * log_lsa)
+log_rv_analysis_log_end (int tran_id, MVCCID mvcc_id, LOG_LSA * log_lsa)
 {
   if (!logpb_is_page_in_archive (log_lsa->pageid))
     {
@@ -2694,6 +2696,7 @@ log_rv_analysis_log_end (int tran_id, LOG_LSA * log_lsa)
        */
       LOG_RESET_APPEND_LSA (log_lsa);
       log_Gl.hdr.next_trid = tran_id;
+      log_Gl.hdr.mvcc_next_id = mvcc_id;
     }
 
   return NO_ERROR;
@@ -2709,12 +2712,12 @@ log_rv_analysis_log_end (int tran_id, LOG_LSA * log_lsa)
  */
 static void
 log_rv_analysis_record (THREAD_ENTRY * thread_p, LOG_RECTYPE log_type,
-			int tran_id, LOG_LSA * log_lsa, LOG_PAGE * log_page_p,
-			LOG_LSA * checkpoint_lsa, LOG_LSA * lsa,
-			LOG_LSA * start_lsa, LOG_LSA * start_redo_lsa,
-			LOG_LSA * end_redo_lsa, bool is_media_crash,
-			time_t * stop_at, bool * did_incom_recovery,
-			bool * may_use_checkpoint,
+			int tran_id, MVCCID mvcc_id, LOG_LSA * log_lsa,
+			LOG_PAGE * log_page_p, LOG_LSA * checkpoint_lsa,
+			LOG_LSA * lsa, LOG_LSA * start_lsa,
+			LOG_LSA * start_redo_lsa, LOG_LSA * end_redo_lsa,
+			bool is_media_crash, time_t * stop_at,
+			bool * did_incom_recovery, bool * may_use_checkpoint,
 			bool * may_need_synch_checkpoint_2pc)
 {
   switch (log_type)
@@ -2873,7 +2876,7 @@ log_rv_analysis_record (THREAD_ENTRY * thread_p, LOG_RECTYPE log_type,
       break;
 
     case LOG_END_OF_LOG:
-      (void) log_rv_analysis_log_end (tran_id, log_lsa);
+      (void) log_rv_analysis_log_end (tran_id, mvcc_id, log_lsa);
       break;
 
     case LOG_DUMMY_CRASH_RECOVERY:
@@ -2953,6 +2956,7 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
   bool may_use_checkpoint = false;
   int tran_index;
   TRANID tran_id;
+  MVCCID mvcc_id;
   LOG_TDES *tdes;		/* Transaction descriptor */
   void *area = NULL;
   int size;
@@ -3024,6 +3028,8 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 		}
 	      log_recovery_resetlog (thread_p, &lsa, true, end_redo_lsa);
 	      *did_incom_recovery = true;
+	      log_Gl.highest_completed_mvccid = log_Gl.hdr.mvcc_next_id;
+	      MVCCID_BACKWARD (log_Gl.highest_completed_mvccid);
 	      return;
 	    }
 	  else
@@ -3065,6 +3071,7 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 	  log_rec = LOG_GET_LOG_RECORD_HEADER (log_page_p, &log_lsa);
 
 	  tran_id = log_rec->trid;
+	  mvcc_id = log_rec->mvcc_id;
 	  log_rtype = log_rec->type;
 
 	  /*
@@ -3139,10 +3146,17 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 			    (long long int) log_Gl.hdr.append_lsa.pageid,
 			    log_Gl.hdr.append_lsa.offset, tran_id);
 	      log_Gl.hdr.next_trid = tran_id;
+
+	      if (mvcc_id_precedes (log_Gl.hdr.mvcc_next_id, mvcc_id))
+		{
+		  log_Gl.hdr.mvcc_next_id = mvcc_id;
+		  /* advance mvcc id */
+		  MVCCID_FORWARD (log_Gl.hdr.mvcc_next_id);
+		}
 	    }
 
-	  log_rv_analysis_record (thread_p, log_rtype, tran_id, &log_lsa,
-				  log_page_p, &checkpoint_lsa, &lsa,
+	  log_rv_analysis_record (thread_p, log_rtype, tran_id, mvcc_id,
+				  &log_lsa, log_page_p, &checkpoint_lsa, &lsa,
 				  start_lsa, start_redo_lsa, end_redo_lsa,
 				  is_media_crash, stop_at, did_incom_recovery,
 				  &may_use_checkpoint,
@@ -3242,6 +3256,9 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 	  free_and_init (area);
 	}
     }
+
+  log_Gl.highest_completed_mvccid = log_Gl.hdr.mvcc_next_id;
+  MVCCID_BACKWARD (log_Gl.highest_completed_mvccid);
 
   return;
 }
@@ -3408,6 +3425,7 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	  /* Find the log record */
 	  log_lsa.offset = lsa.offset;
 	  log_rec = LOG_GET_LOG_RECORD_HEADER (log_pgptr, &log_lsa);
+	  rcv.mvcc_id = log_rec->mvcc_id;
 
 	  /* Get the address of next log record to scan */
 	  LSA_COPY (&lsa, &log_rec->forw_lsa);

@@ -176,7 +176,8 @@ TRANSACTION_SOURCES = \
 	$(TRANSACTION_DIR)/recovery.c \
 	$(TRANSACTION_DIR)/transaction_sr.c \
 	$(TRANSACTION_DIR)/wait_for_graph.c \
-	$(TRANSACTION_DIR)/log_writer.c
+	$(TRANSACTION_DIR)/log_writer.c \
+	$(TRANSACTION_DIR)/mvcc.c
 
 STORAGE_SOURCES = \
 	$(STORAGE_DIR)/btree.c \
@@ -201,7 +202,8 @@ STORAGE_SOURCES = \
 	$(STORAGE_DIR)/es_common.c \
 	$(STORAGE_DIR)/es.c \
 	$(STORAGE_DIR)/es_posix.c \
-	$(STORAGE_DIR)/es_owfs.c
+	$(STORAGE_DIR)/es_owfs.c \
+	$(STORAGE_DIR)/file_mvcc_status.c
 
 SESSION_SOURCES = \
 	$(SESSION_DIR)/session.c \

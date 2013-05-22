@@ -4898,7 +4898,21 @@ locator_mflush (MOP mop, void *mf)
 
   mflush->mobjs->num_objs++;
   mflush->obj->operation = operation;
-  mflush->obj->has_index = has_index ? 1 : 0;
+
+  /* init object flag */
+  mflush->obj->flag = 0;
+
+  /* set has index */
+  if (has_index)
+    {
+      LC_ONEOBJ_SET_HAS_INDEX (mflush->obj);
+    }
+
+  /* set is system class */
+  if (sm_is_system_class (class_mop) && class_mop != sm_Root_class_mop)
+    {
+      LC_ONEOBJ_SET_SYSTEM_CLASS_INSTANCE (mflush->obj);
+    }
   HFID_COPY (&mflush->obj->hfid, hfid);
   COPY_OID (&mflush->obj->class_oid, ws_oid (class_mop));
   COPY_OID (&mflush->obj->oid, oid);
@@ -5483,6 +5497,7 @@ locator_add_root (OID * root_oid, MOBJ class_root)
   ws_set_lock (root_mop, X_LOCK);
 
   sm_Root_class_mop = root_mop;
+  sm_mark_system_class (sm_Root_class_mop, 1);
   oid_Root_class_oid = ws_oid (root_mop);
 
   /* Reserve the class name */

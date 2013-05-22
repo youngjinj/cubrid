@@ -46,6 +46,7 @@
 #include "rb_tree.h"
 #include "query_list.h"
 #include "lock_manager.h"
+#include "mvcc.h"
 
 #if defined(SOLARIS)
 #include <netdb.h>		/* for MAXHOSTNAMELEN */
@@ -280,6 +281,7 @@
 #define LOGPB_IO_NPAGES                  4
 
 #define LOG_READ_NEXT_TRANID (log_Gl.hdr.next_trid)
+#define LOG_READ_NEXT_MVCCID (log_Gl.hdr.mvcc_next_id)
 #define LOG_HAS_LOGGING_BEEN_IGNORED() \
   (log_Gl.hdr.has_logging_been_skipped == true)
 
@@ -706,8 +708,18 @@ RB_HEAD (lob_rb_root, lob_locator_entry);
 typedef struct log_tdes LOG_TDES;
 struct log_tdes
 {				/* Transaction descriptor */
+  MVCC_SNAPSHOT mvcc_snapshot;	/* MVCC Snapshot */
   int tran_index;		/* Index onto transaction table          */
   TRANID trid;			/* Transaction identifier                */
+  MVCCID mvcc_id;		/* MVCC ID - increase with each transaction
+				   that modified data
+				 */
+
+  /* the lowest active mvcc id computed for the most recent snapshot of
+   * current transaction. This field help to know faster whether an mvcc id is
+   * active or not. Thus, mvccid older than this field are not active anymore
+   */
+  MVCCID recent_snapshot_lowest_active_mvccid;
   int isloose_end;
   TRAN_STATE state;		/* Transaction state (e.g., Active,
 				   aborted)
@@ -811,6 +823,13 @@ struct log_tdes
   LK_RES *waiting_for_res;	/* resource that i'm waiting for */
 
   int disable_modifications;	/* db_Disable_modification for each tran */
+#if defined(MVCC_USE_COMMAND_ID)
+  MVCC_COMMAND_ID mvcc_comm_id;	/* MVCC command id - increase with each
+				 * command that modified the data, 
+				 * inside transaction
+				 */
+  bool mvcc_comm_id_used;	/* true, if mvcc_comm_id is used */
+#endif				/* MVCC_USE_COMMAND_ID */
 };
 
 typedef struct log_addr_tdesarea LOG_ADDR_TDESAREA;
@@ -897,6 +916,7 @@ struct log_header
   PGLENGTH db_logpagesize;	/* Size of log pages in the database. */
   int is_shutdown;		/* Was the log shutdown ?                   */
   TRANID next_trid;		/* Next Transaction identifier              */
+  MVCCID mvcc_next_id;		/* Next MVCC ID */
   int avg_ntrans;		/* Number of average transactions           */
   int avg_nlocks;		/* Average number of object locks           */
   DKNPAGES npages;		/* Number of pages in the active log portion.
@@ -956,6 +976,8 @@ struct log_header
      0, 0, 0,                                    \
      /* next_trid */                             \
      NULL_TRANID,                                \
+     /* mvcc_id */				  \
+     MVCCID_NULL,                                \
      0, 0, 0, 0, 0,                              \
      /* append_lsa */                            \
      {NULL_PAGEID, NULL_OFFSET},                 \
@@ -998,6 +1020,8 @@ struct log_header
      0, 0, 0,                                    \
      /* next_trid */                             \
      NULL_TRANID,                                \
+     /* mvcc_next_id */                          \
+     MVCCID_NULL,                               \
      0, 0, 0, 0, 0,                              \
      /* append_lsa */                            \
      {NULL_PAGEID, NULL_OFFSET},                 \
@@ -1200,6 +1224,7 @@ struct log_rec_header
   LOG_LSA back_lsa;		/* Backward log address                      */
   LOG_LSA forw_lsa;		/* Forward  log address                      */
   TRANID trid;			/* Transaction identifier of the log record  */
+  MVCCID mvcc_id;		/* MVCC ID */
   LOG_RECTYPE type;		/* Log record type (e.g., commit, abort)     */
 };
 
@@ -1595,6 +1620,8 @@ struct log_global
   LOGWR_INFO writer_info;
   /* background log archiving info */
   BACKGROUND_ARCHIVING_INFO bg_archive_info;
+
+  MVCCID highest_completed_mvccid;	/* highest committed or aborted mvccid */
 };
 
 /* logging statistics */
@@ -2081,4 +2108,27 @@ extern void xlogtb_dump_trantable (THREAD_ENTRY * thread_p, FILE * out_fp);
 
 extern bool logpb_need_wal (const LOG_LSA * lsa);
 extern void logpb_get_nxio_lsa (LOG_LSA * lsa_p);
+
+extern int logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
+					 MVCC_SNAPSHOT * snapshot);
+
+extern MVCCID logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes);
+extern MVCCID logtb_find_current_mvccid (THREAD_ENTRY * thread_p);
+extern MVCCID logtb_get_current_mvccid (THREAD_ENTRY * thread_p);
+
+#if defined(MVCC_USE_COMMAND_ID)
+extern MVCC_COMMAND_ID logtb_get_current_mvcc_command_id (THREAD_ENTRY *
+							  thread_p);
+extern int logtb_inc_command_id (THREAD_ENTRY * thread_p);
+extern void logtb_activate_command_id (THREAD_ENTRY * thread_p);
+extern void logtb_deactivate_command_id (THREAD_ENTRY * thread_p);
+#endif /* MVCC_USE_COMMAND_ID */
+
+extern bool logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);
+extern bool logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);
+extern bool logtb_is_mvccid_committed (THREAD_ENTRY * thread_p,
+				       MVCCID mvccid);
+extern MVCC_SNAPSHOT *logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p);
+extern void logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
+				 int status);
 #endif /* _LOG_IMPL_H_ */

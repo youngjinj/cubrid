@@ -208,6 +208,11 @@ static void pt_bind_names_merge_update (PARSER_CONTEXT * parser,
 					SCOPES * scopestack,
 					PT_EXTRA_SPECS_FRAME * specs_frame);
 
+static PT_NODE *pt_resolve_star_reserved_names (PARSER_CONTEXT * parser,
+						PT_NODE * from);
+static PT_NODE *pt_bind_reserved_name (PARSER_CONTEXT * parser,
+				       PT_NODE * in_node, PT_NODE * spec);
+
 /*
  * pt_undef_names_pre () - Set error if name matching spec is found. Used in
  *			   insert to make sure no "correlated" names are used
@@ -523,6 +528,105 @@ pt_bind_parameter_path (PARSER_CONTEXT * parser, PT_NODE * path)
 
   return NULL;
 }				/* pt_bind_parameter_path */
+
+/*
+ * pt_bind_reserved_name () - Try to resolve name to one of the reserved names
+ *
+ * return	       : Resolved reserved name or NULL.
+ * parser (in)	       : Parser context.
+ * in_node (in)	       : Original name node.
+ * spec (in)	       : The spec to which the reserved name will belong.
+ *
+ * NOTE: Reserved names are allowed only if used in the context of a SELECT
+ *	 statement on a single table and having certain hints that unlock
+ *	 reserved names.
+ */
+static PT_NODE *
+pt_bind_reserved_name (PARSER_CONTEXT * parser, PT_NODE * in_node,
+		       PT_NODE * spec)
+{
+  int i = 0;
+  const char *name = NULL;
+  PT_NODE *reserved_name = NULL;
+
+  assert (in_node != NULL && spec != NULL);
+
+  /* get attribute name */
+  if (in_node->node_type == PT_NAME)
+    {
+      name = in_node->info.name.original;
+    }
+  else if (in_node->node_type == PT_DOT_)
+    {
+      /* we can only allow X.reserved_name where X is the name of spec */
+      if (in_node->info.dot.arg1->node_type != PT_NAME
+	  || pt_str_compare (in_node->info.dot.arg1->info.name.original,
+			     spec->info.spec.range_var->info.name.original,
+			     CASE_INSENSITIVE))
+	{
+	  return NULL;
+	}
+      if (in_node->info.dot.arg2->node_type != PT_NAME)
+	{
+	  return NULL;
+	}
+      name = in_node->info.dot.arg2->info.name.original;
+    }
+  else
+    {
+      /* not the scope of this function */
+      return NULL;
+    }
+
+  /* look for the name in reserved name table */
+  for (i = 0; i < RESERVED_ATTR_COUNT; i++)
+    {
+      if (!pt_str_compare
+	  (name, pt_Reserved_name_table[i].name, CASE_INSENSITIVE))
+	{
+	  /* the found reserved name should match the type of scan to which
+	   * the spec is flagged... otherwise it is a wrong name
+	   */
+	  if (!PT_CHECK_RESERVED_NAME_BIND (spec, i))
+	    {
+	      /* Unknown reserved name in current context */
+	      return NULL;
+	    }
+
+	  /* bind the reserved name */
+	  if (in_node->node_type == PT_NAME)
+	    {
+	      reserved_name = in_node;
+	    }
+	  else			/* PT_DOT_ */
+	    {
+	      reserved_name = in_node->info.dot.arg2;
+	      in_node->info.dot.arg2 = NULL;
+	      PT_NODE_MOVE_NUMBER_OUTERLINK (reserved_name, in_node);
+	      parser_free_tree (parser, in_node);
+	    }
+	  reserved_name->info.name.spec_id = spec->info.spec.id;
+	  reserved_name->info.name.resolved =
+	    spec->info.spec.range_var->info.name.original;
+	  reserved_name->info.name.meta_class = PT_RESERVED;
+	  reserved_name->info.name.reserved_id = i;
+	  reserved_name->type_enum =
+	    pt_db_to_type_enum (pt_Reserved_name_table[i].type);
+	  if (i == RESERVED_T_MVCC_NEXT_VERSION)
+	    {
+	      reserved_name->data_type =
+		pt_domain_to_data_type
+		(parser,
+		 tp_domain_resolve (pt_Reserved_name_table[i].type,
+				    spec->info.spec.entity_name->info.name.
+				    db_object, 0, 0, NULL));
+	    }
+	  return reserved_name;
+	}
+    }
+  /* this is not a reserved name */
+  return NULL;
+}
 
 /*
  * pt_bind_name_or_path_in_scope() - tries to resolve in_node using all the
@@ -1667,6 +1771,34 @@ pt_bind_names (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
 	  goto select_end;
 	}
 
+      /* 0-step: check for hints that can affect name resolving. some hints
+       * are supposed to change the result type by obtaining record
+       * information or page header information and so on. In these cases,
+       * names will be resolved to a set of reserved names for each type
+       * of results. The query spec must be marked accordingly.
+       * NOTE: These hints can be applied on single-spec queries. If this is a
+       * joined-spec query, just ignore the hints.
+       */
+      if (node->info.query.q.select.from != NULL
+	  && node->info.query.q.select.from->next == NULL)
+	{
+	  if ((node->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
+	      != 0)
+	    {
+	      /* mark spec to scan for record info */
+	      node->info.query.q.select.from->info.spec.flag |=
+		PT_SPEC_FLAG_RECORD_INFO_SCAN;
+	    }
+	  else
+	    if ((node->info.query.q.select.
+		 hint & PT_HINT_SELECT_PAGE_INFO) != 0)
+	    {
+	      /* mark spec to scan for heap page headers */
+	      node->info.query.q.select.from->info.spec.flag |=
+		PT_SPEC_FLAG_PAGE_INFO_SCAN;
+	    }
+	}
+
       /* resolve '*' for rewritten multicolumn subquery during parsing
        * STEP 1: remove sequence from select_list
        * STEP 2: resolve '*', if exists
@@ -1698,8 +1830,9 @@ pt_bind_names (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
 	      parser_free_node (parser, node->info.query.q.select.list);
 
 	      node->info.query.q.select.list =
-		pt_resolve_star (parser,
-				 node->info.query.q.select.from, NULL);
+		pt_resolve_star (parser, node->info.query.q.select.from,
+				 NULL);
+
 	      if (next != NULL)
 		{
 		  parser_append_node (next, node->info.query.q.select.list);
@@ -4534,10 +4667,28 @@ pt_get_resolution (PARSER_CONTEXT * parser,
   PT_NODE *exposed_spec, *spec, *savespec, *arg1, *arg2, *arg1_name;
   PT_NODE *unique_entity, *path_correlation;
   PT_NODE *temp, *chk_parent = NULL;
+  PT_NODE *reserved_name = NULL;
 
   if (!in_node)
     {
       return NULL;
+    }
+
+  if (PT_SHOULD_BIND_RESERVED_NAME (scope))
+    {
+      /* Attempt to bind to reserved name */
+      /* If scope should bind for record information, binding to table
+       * attribute is also allowed, so shouldn't stop if binding to reserved
+       * names fails.
+       */
+      reserved_name = pt_bind_reserved_name (parser, in_node, scope);
+      if (!PT_IS_SPEC_FLAG_SET (scope, PT_SPEC_FLAG_RECORD_INFO_SCAN)
+	  || reserved_name != NULL)
+	{
+	  return reserved_name;
+	}
+      /* Couldn't bind for record info, attempt to bind to table attributes */
+      /* Fall through */
     }
 
   if (in_node->node_type == PT_NAME)
@@ -6086,6 +6237,90 @@ pt_object_to_data_type (PARSER_CONTEXT * parser, PT_NODE * class_list)
 }
 
 /*
+ * pt_resolve_star_reserved_names () - Resolves '*' value in select list
+ *				       when a hint that activates reserved
+ *				       names is used.
+ *
+ * return      : List of reserved names.
+ * parser (in) : Parser context.
+ * from (in)   : Query spec.
+ *
+ * NOTE: The reserved names depend on the scan type flag on from node.
+ */
+static PT_NODE *
+pt_resolve_star_reserved_names (PARSER_CONTEXT * parser, PT_NODE * from)
+{
+  PT_NODE *reserved_names = NULL;
+  PT_NODE *new_name = NULL;
+  int i, start, end;
+
+  if (parser == NULL && from == NULL || from->node_type != PT_SPEC)
+    {
+      assert (0);
+      return NULL;
+    }
+
+  if (PT_IS_SPEC_FLAG_SET (from, PT_SPEC_FLAG_RECORD_INFO_SCAN))
+    {
+      start = RESERVED_FIRST_RECORD_INFO;
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  end = RESERVED_LAST_RECORD_INFO;
+	}
+      else
+	{
+	  /* stop before MVCC info */
+	  end = RESERVED_FIRST_MVCC_INFO - 1;
+	}
+    }
+  else if (PT_IS_SPEC_FLAG_SET (from, PT_SPEC_FLAG_PAGE_INFO_SCAN))
+    {
+      start = RESERVED_FIRST_PAGE_INFO;
+      end = RESERVED_LAST_PAGE_INFO;
+    }
+  else
+    {
+      assert (0);
+    }
+
+  for (i = start; i <= end; i++)
+    {
+      /* create a new node for each reserved name */
+      new_name = pt_name (parser, pt_Reserved_name_table[i].name);
+      if (new_name == NULL)
+	{
+	  PT_ERRORm (parser, from, MSGCAT_SET_PARSER_SEMANTIC,
+		     MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	  parser_free_tree (parser, reserved_names);
+	  return NULL;
+	}
+      /* mark the node as reserved */
+      new_name->info.name.meta_class = PT_RESERVED;
+      new_name->info.name.reserved_id = pt_Reserved_name_table[i].id;
+      /* resolve name */
+      new_name->info.name.spec_id = from->info.spec.id;
+      new_name->info.name.resolved =
+	from->info.spec.range_var->info.name.original;
+      /* set type enum to the expected type */
+      new_name->type_enum =
+	pt_db_to_type_enum (pt_Reserved_name_table[i].type);
+      if (i == RESERVED_T_MVCC_NEXT_VERSION)
+	{
+	  new_name->data_type =
+	    pt_domain_to_data_type
+	    (parser,
+	     tp_domain_resolve (pt_Reserved_name_table[i].type,
+				from->info.spec.entity_name->info.name.
+				db_object, 0, 0, NULL));
+	}
+      /* append to name list */
+      reserved_names = parser_append_node (new_name, reserved_names);
+    }
+  /* return reserved name list */
+  return reserved_names;
+}
+
+/*
  * pt_resolve_star () - resolve the '*' as in a query
  *      Replace the star with an equivalent list x.a, x.b, y.a, y.d ...
  *   return:
@@ -6104,6 +6339,12 @@ pt_resolve_star (PARSER_CONTEXT * parser, PT_NODE * from, PT_NODE * attr)
   PT_NODE *flat_list, *derived_table;
   PT_NODE *flat, *spec_att, *class_att, *attr_name, *range, *result = NULL;
   PT_NODE *spec = from;
+
+  if (PT_SHOULD_BIND_RESERVED_NAME (from))
+    {
+      return pt_resolve_star_reserved_names (parser, from);
+    }
+
   while (spec)
     {
       if (attr)

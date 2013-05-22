@@ -485,9 +485,29 @@
    OR_VAR_TABLE_ELEMENT_OFFSET_INTERNAL(table, (index), offset_size))
 
 /* OBJECT HEADER LAYOUT */
-#define OR_HEADER_SIZE  8	/* two integers */
+#if defined(MVCC_USE_COMMAND_ID)
+
+#define OR_HEADER_SIZE  36	/* seven integers + OID */
 #define OR_REP_OFFSET   0
 #define OR_CHN_OFFSET   4
+#define OR_MVCC_INSID_OFFSET    8
+#define OR_MVCC_DELID_OFFSET   12
+#define OR_MVCC_INS_CID_OFFSET 16
+#define OR_MVCC_DEL_CID_OFFSET 20
+#define OR_MVCC_FLAGS_OFFSET   24
+#define OR_MVCC_NEXT_VERSION   28
+
+#else /* !MVCC_USE_COMMAND_ID */
+
+#define OR_HEADER_SIZE  28	/* seven integers + OID */
+#define OR_REP_OFFSET   0
+#define OR_CHN_OFFSET   4
+#define OR_MVCC_INSID_OFFSET    8
+#define OR_MVCC_DELID_OFFSET   12
+#define OR_MVCC_FLAGS_OFFSET   16
+#define OR_MVCC_NEXT_VERSION   20
+
+#endif /* !MVCC_USE_COMMAND_ID */
 
 /* high bit of the repid word is reserved for the bound bit flag,
    need to keep representations from going negative ! */

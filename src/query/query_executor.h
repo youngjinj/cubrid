@@ -220,6 +220,9 @@ struct cls_spec_node
   HEAP_CACHE_ATTRINFO *cache_rest;	/* cache for the non-pred attrs */
   int num_attrs_rest;		/* number of atts other than pred */
   ACCESS_SCHEMA_TYPE schema_type;	/* schema type */
+  DB_VALUE **cache_reserved;	/* cache for record information */
+  int num_attrs_reserved;
+  REGU_VARIABLE_LIST cls_regu_list_reserved;	/* regu list for record info */
 };
 
 typedef struct list_spec_node LIST_SPEC_TYPE;

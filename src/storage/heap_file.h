@@ -19,7 +19,7 @@
 
 
 /*
- * heap_file.h: Heap file ojbect manager (at Server)
+ * heap_file.h: Heap file object manager (at Server)
  */
 
 #ifndef _HEAP_FILE_H_
@@ -48,6 +48,54 @@
 #define HEAP_HEADER_AND_CHAIN_SLOTID  0	/* Slot for chain and header */
 
 #define HEAP_MAX_ALIGN INT_ALIGNMENT	/* maximum alignment for heap record */
+
+#define HEAP_MVCC_FLAG_INSID_INVALID	0x0001	/* invalid mvcc insert id */
+#define HEAP_MVCC_FLAG_DELID_INVALID	0x0002	/* invalid mvcc delete id */
+#define HEAP_MVCC_FLAG_INSID_COMMITTED  0x0004	/* mvcc insert id committed */
+#define HEAP_MVCC_FLAG_DELID_COMMITTED  0x0008	/* mvcc delete id committed */
+#define HEAP_MVCC_FLAG_DISABLED		0x0010	/* mvcc disabled - temporary
+						 * use for catalog classes
+						 */
+
+#define HEAP_GET_MVCC_INS_ID(header)   \
+  ((header)->mvcc_ins_id)
+
+#define HEAP_SET_MVCC_INS_ID(header, mvcc_id)   \
+  ((header)->mvcc_ins_id = (mvcc_id))
+
+#define HEAP_GET_MVCC_DEL_ID(header)   \
+  ((header)->mvcc_del_id)
+
+#define HEAP_SET_MVCC_DEL_ID(header, mvcc_id)   \
+  ((header)->mvcc_del_id = (mvcc_id))
+
+#if defined(MVCC_USE_COMMAND_ID)
+/* TO DO - use combo for the same field */
+#define HEAP_GET_MVCC_INS_COMM_ID(header)   \
+  ((header)->mvcc_ins_cid)
+
+#define HEAP_GET_MVCC_DEL_COMM_ID(header)   \
+  ((header)->mvcc_del_cid)
+
+#define HEAP_SET_MVCC_INS_CID(header, mvcc_command_id)   \
+  ((header)->mvcc_ins_cid = (mvcc_command_id))
+
+#define HEAP_SET_MVCC_DEL_CID(header, mvcc_command_id)   \
+  ((header)->mvcc_del_cid = (mvcc_command_id))
+#endif /* MVCC_USE_COMMAND_ID */
+
+#define HEAP_SET_MVCC_NEXT_VERSION(header, next_oid_version)  \
+  ((header)->next_version = *(next_oid_version))
+
+#define HEAP_GET_MVCC_NEXT_VERSION(header, next_oid_version)  \
+  (*(next_oid_version) = (header)->next_version)
+
+#define HEAP_MVCC_IS_FLAG_SET(header, flag) \
+  (((header)->mvcc_flags & (flag)) != 0)
+#define HEAP_MVCC_SET_FLAG(header, flag) \
+  (header)->mvcc_flags |= (flag)
+#define HEAP_MVCC_CLEAR_FLAG(header, flag) \
+  (header)->mvcc_flags &= ~(flag)
 
 /*
  * Heap scan structures
@@ -121,6 +169,8 @@ struct heap_scancache
 				 * scanned. Can be FILE_HEAP or
 				 * FILE_HEAP_REUSE_SLOTS
 				 */
+  MVCC_SNAPSHOT *mvcc_snapshot;	/* mvcc snapshot */
+  bool delete_old_row;		/* true, if old row must be physically deleted */
 };
 
 typedef struct heap_scanrange HEAP_SCANRANGE;
@@ -261,11 +311,14 @@ extern int heap_scancache_start (THREAD_ENTRY * thread_p,
 				 HEAP_SCANCACHE * scan_cache,
 				 const HFID * hfid, const OID * class_oid,
 				 int cache_last_fix_page, int is_indexscan,
-				 int lock_hint);
+				 int lock_hint,
+				 MVCC_SNAPSHOT * mvcc_snapshot);
 extern int heap_scancache_start_modify (THREAD_ENTRY * thread_p,
 					HEAP_SCANCACHE * scan_cache,
 					const HFID * hfid,
-					const OID * class_oid, int op_type);
+					const OID * class_oid, int op_type,
+					MVCC_SNAPSHOT * mvcc_snapshot,
+					bool delete_old_row);
 extern int heap_scancache_quick_start (HEAP_SCANCACHE * scan_cache);
 extern int heap_scancache_quick_start_modify (HEAP_SCANCACHE * scan_cache);
 extern int heap_scancache_end (THREAD_ENTRY * thread_p,
@@ -292,9 +345,21 @@ extern SCAN_CODE heap_get_with_class_oid (THREAD_ENTRY * thread_p,
 extern SCAN_CODE heap_next (THREAD_ENTRY * thread_p, const HFID * hfid,
 			    OID * class_oid, OID * next_oid, RECDES * recdes,
 			    HEAP_SCANCACHE * scan_cache, int ispeeking);
+extern SCAN_CODE heap_next_record_info (THREAD_ENTRY * thread_p,
+					const HFID * hfid, OID * class_oid,
+					OID * next_oid, RECDES * recdes,
+					HEAP_SCANCACHE * scan_cache,
+					int ispeeking,
+					DB_VALUE ** cache_recordinfo);
 extern SCAN_CODE heap_prev (THREAD_ENTRY * thread_p, const HFID * hfid,
 			    OID * class_oid, OID * prev_oid, RECDES * recdes,
 			    HEAP_SCANCACHE * scan_cache, int ispeeking);
+extern SCAN_CODE heap_prev_record_info (THREAD_ENTRY * thread_p,
+					const HFID * hfid, OID * class_oid,
+					OID * next_oid, RECDES * recdes,
+					HEAP_SCANCACHE * scan_cache,
+					int ispeeking,
+					DB_VALUE ** cache_recordinfo);
 extern SCAN_CODE heap_first (THREAD_ENTRY * thread_p, const HFID * hfid,
 			     OID * class_oid, OID * oid, RECDES * recdes,
 			     HEAP_SCANCACHE * scan_cache, int ispeeking);
@@ -310,7 +375,8 @@ extern int heap_cmp (THREAD_ENTRY * thread_p, const OID * oid,
 extern int heap_scanrange_start (THREAD_ENTRY * thread_p,
 				 HEAP_SCANRANGE * scan_range,
 				 const HFID * hfid, const OID * class_oid,
-				 int lock_hint);
+				 int lock_hint,
+				 MVCC_SNAPSHOT * mvcc_snapshot);
 extern void heap_scanrange_end (THREAD_ENTRY * thread_p,
 				HEAP_SCANRANGE * scan_range);
 extern SCAN_CODE heap_scanrange_to_following (THREAD_ENTRY * thread_p,
@@ -543,13 +609,16 @@ extern void heap_rv_dump_statistics (FILE * fp, int ignore_length,
 extern void heap_rv_dump_chain (FILE * fp, int ignore_length, void *data);
 extern int heap_rv_undo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_redo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+extern int heap_rv_mvcc_redo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+extern int heap_rv_mvcc_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_redo_delete_newhome (THREAD_ENTRY * thread_p,
 					LOG_RCV * rcv);
 extern int heap_rv_redo_mark_reusable_slot (THREAD_ENTRY * thread_p,
 					    LOG_RCV * rcv);
 extern int heap_rv_undoredo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+extern int heap_rv_mvcc_redo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_undoredo_update_type (THREAD_ENTRY * thread_p,
 					 LOG_RCV * rcv);
 extern int heap_rv_redo_reuse_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
@@ -574,5 +643,25 @@ extern int heap_object_upgrade_domain (THREAD_ENTRY * thread_p,
 				       HEAP_SCANCACHE * upd_scancache,
 				       HEAP_CACHE_ATTRINFO * attr_info,
 				       OID * oid, const ATTR_ID att_id);
+
+extern SCAN_CODE heap_page_prev (THREAD_ENTRY * thread_p,
+				 const OID * class_oid,
+				 const HFID * hfid,
+				 VPID * prev_vpid,
+				 DB_VALUE ** cache_pageinfo);
+extern SCAN_CODE heap_page_next (THREAD_ENTRY * thread_p,
+				 const OID * class_oid,
+				 const HFID * hfid,
+				 VPID * next_vpid,
+				 DB_VALUE ** cache_pageinfo);
+
+extern int heap_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
+			    PAGE_PTR page_p, MVCC_SNAPSHOT * mvcc_snapshot);
+extern int heap_rv_redo_clean_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+
+extern bool heap_set_record_header_flag (THREAD_ENTRY * thread_p,
+					 MVCC_REC_HEADER * rec_header,
+					 PAGE_PTR pgptr, int flag,
+					 MVCCID mvccid);
 
 #endif /* _HEAP_FILE_H_ */

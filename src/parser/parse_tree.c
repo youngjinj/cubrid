@@ -83,6 +83,67 @@ struct parser_string_block
   } u;
 };
 
+/* Global reserved name table including info for each reserved name */
+PT_RESERVED_NAME pt_Reserved_name_table[] = {
+  /* record info attributes */
+  {"t_pageid", RESERVED_T_PAGEID, DB_TYPE_INTEGER}
+  ,
+  {"t_slotid", RESERVED_T_SLOTID, DB_TYPE_INTEGER}
+  ,
+  {"t_volumeid", RESERVED_T_VOLUMEID, DB_TYPE_INTEGER}
+  ,
+  {"t_offset", RESERVED_T_OFFSET, DB_TYPE_INTEGER}
+  ,
+  {"t_length", RESERVED_T_LENGTH, DB_TYPE_INTEGER}
+  ,
+  {"t_rectype", RESERVED_T_REC_TYPE, DB_TYPE_INTEGER}
+  ,
+  {"t_reprid", RESERVED_T_REPRID, DB_TYPE_INTEGER}
+  ,
+  {"t_chn", RESERVED_T_CHN, DB_TYPE_INTEGER}
+  ,
+  {"t_insid", RESERVED_T_MVCC_INSID, DB_TYPE_INTEGER}
+  ,
+  {"t_delid", RESERVED_T_MVCC_DELID, DB_TYPE_INTEGER}
+#if defined(MVCC_USE_COMMAND_ID)
+  ,
+  {"t_ins_cid", RESERVED_T_MVCC_INS_CID, DB_TYPE_INTEGER}
+  ,
+  {"t_del_cid", RESERVED_T_MVCC_DEL_CID, DB_TYPE_INTEGER}
+#endif /* MVCC_USE_COMMAND_ID */
+  ,
+  {"t_flags", RESERVED_T_MVCC_FLAGS, DB_TYPE_INTEGER}
+  ,
+  {"t_next_version", RESERVED_T_MVCC_NEXT_VERSION, DB_TYPE_OBJECT}
+  ,
+  /* page header info attributes */
+  {"p_class_oid", RESERVED_P_CLASS_OID, DB_TYPE_OBJECT}
+  ,
+  {"p_prev_pageid", RESERVED_P_PREV_PAGEID, DB_TYPE_INTEGER}
+  ,
+  {"p_next_pageid", RESERVED_P_NEXT_PAGEID, DB_TYPE_INTEGER}
+  ,
+  {"p_num_slots", RESERVED_P_NUM_SLOTS, DB_TYPE_INTEGER}
+  ,
+  {"p_num_records", RESERVED_P_NUM_RECORDS, DB_TYPE_INTEGER}
+  ,
+  {"p_anchor_type", RESERVED_P_ANCHOR_TYPE, DB_TYPE_INTEGER}
+  ,
+  {"p_alignment", RESERVED_P_ALIGNMENT, DB_TYPE_INTEGER}
+  ,
+  {"p_total_free", RESERVED_P_TOTAL_FREE, DB_TYPE_INTEGER}
+  ,
+  {"p_cont_free", RESERVED_P_CONT_FREE, DB_TYPE_INTEGER}
+  ,
+  {"p_offset_to_free_area", RESERVED_P_OFFSET_TO_FREE_AREA, DB_TYPE_INTEGER}
+  ,
+  {"p_is_saving", RESERVED_P_IS_SAVING, DB_TYPE_INTEGER}
+  ,
+  {"p_update_best", RESERVED_P_UPDATE_BEST, DB_TYPE_INTEGER}
+  ,
+  {"p_last_mvccid", RESERVED_P_LAST_MVCCID, DB_TYPE_INTEGER}
+};
+
 #if defined(SERVER_MODE)
 /* this is a kludge because many platforms do not handle extern
  * linking per ANSI. This should be deleted when nodes get used in server.

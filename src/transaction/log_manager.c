@@ -75,6 +75,7 @@
 #include "es.h"
 #include "memory_hash.h"
 #include "partition.h"
+#include "file_mvcc_status.h"
 
 #if !defined(SERVER_MODE)
 
@@ -179,6 +180,8 @@ struct lob_locator_entry
   char *key;
   char key_data[1];
 };
+
+bool mvcc_Enabled;
 
 /*
  * The maximum number of times to try to undo a log record.
@@ -1105,6 +1108,7 @@ log_initialize (THREAD_ENTRY * thread_p, const char *db_fullname,
 				  false);
 
   log_No_logging = prm_get_bool_value (PRM_ID_LOG_NO_LOGGING);
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);;
 #if !defined(NDEBUG)
   if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG) && log_No_logging)
     {
@@ -1419,6 +1423,8 @@ log_initialize_internal (THREAD_ENTRY * thread_p, const char *db_fullname,
 	}
     }
 
+  log_Gl.highest_completed_mvccid = log_Gl.hdr.mvcc_next_id;
+  MVCCID_BACKWARD (log_Gl.highest_completed_mvccid);
   /*
    * Was the database system shut down or was it involved in a crash ?
    */
@@ -5872,6 +5878,8 @@ RB_GENERATE_STATIC (lob_rb_root, lob_locator_entry, head, lob_locator_cmp);
 TRAN_STATE
 log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 {
+  logtb_complete_mvcc (thread_p, tdes, MVCC_STATUS_COMMITTED);
+
   qmgr_clear_trans_wakeup (thread_p, tdes->tran_index, false, false);
 
   if (!LSA_ISNULL (&tdes->tail_lsa))
@@ -6015,6 +6023,8 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 TRAN_STATE
 log_abort_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 {
+  logtb_complete_mvcc (thread_p, tdes, MVCC_STATUS_ABORTED);
+
   qmgr_clear_trans_wakeup (thread_p, tdes->tran_index, false, true);
 
   tdes->state = TRAN_UNACTIVE_ABORTED;
@@ -8082,14 +8092,15 @@ log_dump_header (FILE * out_fp, struct log_header *log_header_p)
 	   "     Creation_time = %s"
 	   "     Release = %s, Compatibility_disk_version = %g,\n"
 	   "     Db_pagesize = %d, log_pagesize= %d, Shutdown = %d,\n"
-	   "     Next_trid = %d, Num_avg_trans = %d, Num_avg_locks = %d,\n"
+	   "     Next_trid = %d, Next_mvcc_id = %d , Num_avg_trans = %d, Num_avg_locks = %d,\n"
 	   "     Num_active_log_pages = %d, First_active_log_page = %lld,\n"
 	   "     Current_append = %lld|%d, Checkpoint = %lld|%d,\n",
 	   log_header_p->magic, (long long) offsetof (LOG_PAGE, area),
 	   time_val, log_header_p->db_release,
 	   log_header_p->db_compatibility, log_header_p->db_iopagesize,
 	   log_header_p->db_logpagesize, log_header_p->is_shutdown,
-	   log_header_p->next_trid, log_header_p->avg_ntrans,
+	   log_header_p->next_trid, log_header_p->mvcc_next_id,
+	   log_header_p->avg_ntrans,
 	   log_header_p->avg_nlocks, log_header_p->npages,
 	   (long long int) log_header_p->fpageid,
 	   (long long int) log_header_p->append_lsa.pageid,
@@ -9783,6 +9794,7 @@ log_rollback (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 	  /* Find the log record to undo */
 	  log_lsa.offset = prev_tranlsa.offset;
 	  log_rec = LOG_GET_LOG_RECORD_HEADER (log_pgptr, &log_lsa);
+	  rcv.mvcc_id = log_rec->mvcc_id;
 
 	  /*
 	   * Next record to undo.. that is previous record in the chain.
@@ -10659,6 +10671,7 @@ log_find_end_log (THREAD_ENTRY * thread_p, LOG_LSA * end_lsa)
 	   */
 	  LOG_RESET_APPEND_LSA (end_lsa);
 	  log_Gl.hdr.next_trid = eof->trid;
+	  log_Gl.hdr.mvcc_next_id = eof->mvcc_id;
 	}
     }
 

@@ -7851,6 +7851,12 @@ au_install (void)
       goto exit_on_error;
     }
 
+  sm_mark_system_class (root, 1);
+  sm_mark_system_class (user, 1);
+  sm_mark_system_class (pass, 1);
+  sm_mark_system_class (auth, 1);
+  sm_mark_system_class (old, 1);
+
   /*
    * Authorization root, might not need this if we restrict the generation of
    * user and  group objects but could be useful in other ways - nice to

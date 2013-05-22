@@ -353,7 +353,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, TP_DOMAIN * key_type,
   if (heap_scancache_start (thread_p, &sort_args->hfscan_cache,
 			    &sort_args->hfids[cur_class],
 			    &sort_args->class_ids[cur_class],
-			    true, false, LOCKHINT_NONE) != NO_ERROR)
+			    true, false, LOCKHINT_NONE, NULL) != NO_ERROR)
     {
       goto error;
     }
@@ -2346,7 +2346,7 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
     {
       ret =
 	heap_scancache_start_modify (thread_p, &upd_scancache, hfid, cls_oid,
-				     SINGLE_ROW_UPDATE);
+				     SINGLE_ROW_UPDATE, NULL, false);
       if (ret != NO_ERROR)
 	{
 	  goto exit_on_error;
@@ -2515,7 +2515,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 					&sort_args->hfids[cur_class],
 					&sort_args->class_ids[cur_class],
 					true, false,
-					LOCKHINT_NONE) != NO_ERROR)
+					LOCKHINT_NONE, NULL) != NO_ERROR)
 		{
 		  return SORT_ERROR_OCCURRED;
 		}

@@ -554,7 +554,7 @@ locator_pack_copy_area_descriptor (int num_objs, LC_COPYAREA * copyarea,
        i < num_objs; i++, obj = LC_NEXT_ONEOBJ_PTR_IN_COPYAREA (obj))
     {
       ptr = or_pack_int (ptr, obj->operation);
-      ptr = or_pack_int (ptr, obj->has_index);
+      ptr = or_pack_int (ptr, obj->flag);
       ptr = or_pack_hfid (ptr, &obj->hfid);
       ptr = or_pack_oid (ptr, &obj->class_oid);
       ptr = or_pack_oid (ptr, &obj->oid);
@@ -594,7 +594,7 @@ locator_unpack_copy_area_descriptor (int num_objs, LC_COPYAREA * copyarea,
     {
       desc = or_unpack_int (desc, &ope);
       obj->operation = (LC_COPYAREA_OPERATION) ope;
-      desc = or_unpack_int (desc, &obj->has_index);
+      desc = or_unpack_int (desc, &obj->flag);
       desc = or_unpack_hfid (desc, &obj->hfid);
       desc = or_unpack_oid (desc, &obj->class_oid);
       desc = or_unpack_oid (desc, &obj->oid);

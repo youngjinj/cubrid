@@ -743,6 +743,10 @@
 					>
 				</File>
 				<File
+					RelativePath="..\..\src\storage\file_mvcc_status.c"
+					>
+				</File>
+				<File
 					RelativePath="..\..\src\storage\heap_file.c"
 					>
 				</File>
@@ -840,6 +844,10 @@
 				</File>
 				<File
 					RelativePath="..\..\src\transaction\log_writer.c"
+					>
+				</File>
+				<File
+					RelativePath="..\..\src\transaction\mvcc.c"
 					>
 				</File>
 				<File

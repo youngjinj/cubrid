@@ -233,6 +233,12 @@ typedef char *PAGE_PTR;		/* Pointer to a page */
     / OR_OID_SIZE) \
    * OR_OID_SIZE)
 
+typedef unsigned int MVCCID;	/* MVCC ID */
+
+#if defined(MVCC_USE_COMMAND_ID)
+typedef unsigned int MVCC_COMMAND_ID;	/* Command identifier */
+#endif /* MVCC_USE_COMMAND_ID */
+
 /* TYPE DEFINITIONS RELATED TO KEY AND VALUES */
 
 typedef enum			/* range search option */
@@ -293,6 +299,22 @@ struct recdes
   char *data;			/* The data */
 };
 
+/* MVCC RECORD HEADER */
+typedef struct mvcc_rec_header MVCC_REC_HEADER;
+struct mvcc_rec_header
+{
+  int repid;			/* representation id */
+  int chn;			/* coherency number */
+  MVCCID mvcc_ins_id;		/* mvcc insert id */
+  MVCCID mvcc_del_id;		/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+  MVCC_COMMAND_ID mvcc_ins_cid;	/* mvcc command id */
+  MVCC_COMMAND_ID mvcc_del_cid;	/* mvcc command id */
+#endif				/* MVCC_USE_COMMAND_ID */
+  int mvcc_flags;		/* mvcc flags */
+  OID next_version;		/* next row version */
+};
+
 typedef struct lorecdes LORECDES;	/* Work area descriptor */
 struct lorecdes
 {
@@ -340,8 +362,36 @@ struct lorecdes
 
 typedef int TRANID;		/* Transaction identifier      */
 
+#if defined(MVCC_USE_COMMAND_ID)
+#define MVCC_FIRST_COMMAND_ID  ((MVCC_COMMAND_ID) 0)
+#endif /* MVCC_USE_COMMAND_ID */
+
 #define NULL_TRANID     (-1)
 #define NULL_TRAN_INDEX (-1)
+#define MVCCID_NULL (0)
+#define MVCCID_FIRST	      ((MVCCID) 3)
+
+/* is MVCC ID valid? */
+#define MVCCID_IS_VALID(id)	  ((id) != MVCCID_NULL)
+/* is MVCC ID normal? */
+#define MVCCID_IS_NORMAL(id)	  ((id) >= MVCCID_FIRST)
+/* are MVCC IDs equal? */
+#define MVCCID_IS_EQUAL(id1,id2)	  ((id1) == (id2))
+
+/* advance mvcc ID */
+#define MVCCID_FORWARD(id)	\
+  do { \
+    (id)++; \
+    if ((id) < MVCCID_FIRST) \
+      (id) = MVCCID_FIRST; \
+    } while(0)
+
+/* back up MVCC ID */
+#define MVCCID_BACKWARD(id)	\
+  do { \
+    (id)--; \
+    } while ((id) < MVCCID_FIRST)
+
 
 typedef enum
 {
@@ -479,7 +529,8 @@ typedef enum
   S_SUCCESS = 1,
   S_SUCCESS_CHN_UPTODATE,	/* only for slotted page */
   S_DOESNT_FIT,			/* only for slotted page */
-  S_DOESNT_EXIST		/* only for slotted page */
+  S_DOESNT_EXIST,		/* only for slotted page */
+  S_SNAPSHOT_NOT_SATISFIED
 } SCAN_CODE;
 
 typedef enum
@@ -488,6 +539,56 @@ typedef enum
   S_DELETE,
   S_UPDATE
 } SCAN_OPERATION_TYPE;
+
+
+typedef enum
+{
+  HEAP_RECORD_INFO_INVALID = -1,
+  HEAP_RECORD_INFO_T_PAGEID = 0,
+  HEAP_RECORD_INFO_T_SLOTID,
+  HEAP_RECORD_INFO_T_VOLUMEID,
+  HEAP_RECORD_INFO_T_OFFSET,
+  HEAP_RECORD_INFO_T_LENGTH,
+  HEAP_RECORD_INFO_T_REC_TYPE,
+  HEAP_RECORD_INFO_T_REPRID,
+  HEAP_RECORD_INFO_T_CHN,
+  HEAP_RECORD_INFO_T_MVCC_INSID,
+  HEAP_RECORD_INFO_T_MVCC_DELID,
+#if defined(MVCC_USE_COMMAND_ID)
+  HEAP_RECORD_INFO_T_MVCC_INS_CID,
+  HEAP_RECORD_INFO_T_MVCC_DEL_CID,
+#endif /* MVCC_USE_COMMAND_ID */
+  HEAP_RECORD_INFO_T_MVCC_FLAGS,
+  HEAP_RECORD_INFO_T_MVCC_NEXT_VERSION,
+
+  /* leave this last */
+  HEAP_RECORD_INFO_NUMBER,
+
+  HEAP_RECORD_INFO_FIRST = HEAP_RECORD_INFO_T_PAGEID
+} HEAP_RECORD_INFO_ID;
+
+typedef enum
+{
+  HEAP_PAGE_INFO_INVALID = -1,
+  HEAP_PAGE_INFO_CLASS_OID = 0,
+  HEAP_PAGE_INFO_PREV_PAGE,
+  HEAP_PAGE_INFO_NEXT_PAGE,
+  HEAP_PAGE_INFO_NUM_SLOTS,
+  HEAP_PAGE_INFO_NUM_RECORDS,
+  HEAP_PAGE_INFO_ANCHOR_TYPE,
+  HEAP_PAGE_INFO_ALIGNMENT,
+  HEAP_PAGE_INFO_TOTAL_FREE,
+  HEAP_PAGE_INFO_CONT_FREE,
+  HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA,
+  HEAP_PAGE_INFO_IS_SAVING,
+  HEAP_PAGE_INFO_UPDATE_BEST,
+  HEAP_PAGE_INFO_LAST_MVCCID,
+
+  /* leave this last */
+  HEAP_PAGE_INFO_NUMBER,
+
+  HEAP_PAGE_INFO_FIRST = HEAP_PAGE_INFO_CLASS_OID
+} HEAP_PAGE_INFO_ID;
 
 extern INT16 db_page_size (void);
 extern INT16 db_io_page_size (void);

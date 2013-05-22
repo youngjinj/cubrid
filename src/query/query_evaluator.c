@@ -2701,12 +2701,13 @@ eval_data_filter (THREAD_ENTRY * thread_p, OID * oid, RECDES * recdesp,
 
   scan_predp = filterp->scan_pred;
   scan_attrsp = filterp->scan_attrs;
-  if (!scan_predp || !scan_attrsp)
+  if (!scan_predp)
     {
       return V_ERROR;
     }
 
-  if (scan_attrsp->attr_cache && scan_predp->regu_list)
+  if (scan_attrsp != NULL && scan_attrsp->attr_cache != NULL
+      && scan_predp->regu_list != NULL)
     {
       /* read the predicate values from the heap into the attribute cache */
       if (heap_attrinfo_read_dbvalues (thread_p, oid, recdesp,

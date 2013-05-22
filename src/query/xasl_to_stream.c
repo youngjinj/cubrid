@@ -2327,6 +2327,11 @@ xts_save_db_value_array (DB_VALUE ** db_value_array_p, int nelements)
   int *offset_array;
   int i;
 
+  if (db_value_array_p == NULL)
+    {
+      return NO_ERROR;
+    }
+
   offset_array = (int *) malloc (sizeof (int) * nelements);
   if (offset_array == NULL)
     {
@@ -4263,7 +4268,9 @@ xts_process_access_spec_type (char *ptr, const ACCESS_SPEC_TYPE * access_spec)
 
   ptr = or_pack_int (ptr, access_spec->lock_hint);
 
-  if (access_spec->access == SEQUENTIAL)
+  if (access_spec->access == SEQUENTIAL
+      || access_spec->access == SEQUENTIAL_RECORD_INFO
+      || access_spec->access == SEQUENTIAL_PAGE_SCAN)
     {
       ptr = or_pack_int (ptr, 0);
     }
@@ -4565,6 +4572,24 @@ xts_process_cls_spec_type (char *ptr, const CLS_SPEC_TYPE * cls_spec)
   ptr = or_pack_int (ptr, offset);
 
   ptr = or_pack_int (ptr, cls_spec->schema_type);
+
+  ptr = or_pack_int (ptr, cls_spec->num_attrs_reserved);
+
+  offset =
+    xts_save_db_value_array (cls_spec->cache_reserved,
+			     cls_spec->num_attrs_reserved);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  offset = xts_save_regu_variable_list (cls_spec->cls_regu_list_reserved);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
 
   return ptr;
 }
@@ -6350,7 +6375,9 @@ xts_sizeof_cls_spec_type (const CLS_SPEC_TYPE * cls_spec)
     OR_INT_SIZE +		/* num_attrs_rest */
     PTR_SIZE +			/* attrids_rest */
     PTR_SIZE +			/* cache_rest */
-    OR_INT_SIZE;		/* schema_type */
+    OR_INT_SIZE +		/* schema_type */
+    PTR_SIZE +			/* cache_reserved */
+    PTR_SIZE;			/* cls_regu_list_reserved */
 
   return size;
 }

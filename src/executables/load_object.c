@@ -606,6 +606,18 @@ desc_obj_to_disk (DESC_OBJ * obj, RECDES * record, bool * index_flag)
       /* start chn off at 0 ? */
       or_put_int (buf, 0);
 
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* set mvcc fields */
+	  or_put_int (buf, 0);	/* mvcc insert id */
+	  or_put_int (buf, 0);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+	  or_put_int (buf, 0);	/* mvcc insert command id */
+	  or_put_int (buf, 0);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+	  or_put_int (buf, 0);	/* mvcc flags */
+	  or_put_oid (buf, (OID *) & oid_Null_oid);	/* mvcc next version */
+	}
       /* variable info block */
       put_varinfo (buf, obj, offset_size);
 
@@ -1023,7 +1035,19 @@ desc_disk_to_obj (MOP classop, SM_CLASS * class_, RECDES * record,
       offset_size = OR_GET_OFFSET_SIZE (buf->ptr);
 
       repid_bits = or_get_int (buf, &rc);
-      (void) or_get_int (buf, &rc);	/* skip chn */
+      or_advance (buf, OR_INT_SIZE);	/* skip chn */
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* skip mvcc fields */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert id */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert command id */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc flags */
+	  or_advance (buf, OR_OID_SIZE);	/* mvcc next version */
+	}
 
       /* mask out the repid & bound bit flag & offset size flag */
       repid = repid_bits & ~OR_BOUND_BIT_FLAG & ~OR_OFFSET_SIZE_FLAG;

@@ -808,6 +808,10 @@
 					>
 				</File>
 				<File
+					RelativePath="..\..\src\transaction\mvcc.c"
+					>
+				</File>
+				<File
 					RelativePath="..\..\src\transaction\recovery.c"
 					>
 				</File>
@@ -1101,6 +1105,10 @@
 				</File>
 				<File
 					RelativePath="..\..\src\storage\file_manager.c"
+					>
+				</File>
+				<File
+					RelativePath="..\..\src\storage\file_mvcc_status.c"
 					>
 				</File>
 				<File

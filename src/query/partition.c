@@ -2986,7 +2986,8 @@ partition_prune_spec (THREAD_ENTRY * thread_p, VAL_DESCR * vd,
   pinfo.spec = spec;
   pinfo.vd = vd;
 
-  if (spec->access == SEQUENTIAL)
+  if (spec->access == SEQUENTIAL || spec->access == SEQUENTIAL_RECORD_INFO
+      || spec->access == SEQUENTIAL_PAGE_SCAN)
     {
       error = partition_prune_heap_scan (&pinfo);
     }

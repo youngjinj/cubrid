@@ -402,6 +402,15 @@ pt_get_hint (const char *text, PT_HINT hint_table[], PT_NODE * node)
 		  hint_table[i].arg_list = NULL;
 		}
 	      break;
+	    case PT_HINT_SELECT_RECORD_INFO:
+	    case PT_HINT_SELECT_PAGE_INFO:
+	      if (node->node_type == PT_SELECT)
+		{
+		  node->info.query.q.select.hint |= hint_table[i].hint;
+		  /* need recompile too */
+		  node->recompile = 1;
+		}
+	      break;
 	    default:
 	      break;
 	    }

@@ -3712,6 +3712,7 @@ catcls_class_install (void)
 	  error_code = er_errid ();
 	  goto end;
 	}
+      sm_mark_system_class (class_mop[i], 1);
     }
 
   for (i = 0; i < num_classes; i++)

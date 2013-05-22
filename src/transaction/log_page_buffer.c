@@ -1876,6 +1876,7 @@ logpb_initialize_header (THREAD_ENTRY * thread_p, struct log_header *loghdr,
   loghdr->db_logpagesize = LOG_PAGESIZE;
   loghdr->is_shutdown = true;
   loghdr->next_trid = LOG_SYSTEM_TRANID + 1;
+  loghdr->mvcc_next_id = MVCCID_FIRST;
   loghdr->avg_ntrans = LOG_ESTIMATE_NACTIVE_TRANS;
   loghdr->avg_nlocks = LOG_ESTIMATE_NOBJ_LOCKS;
   loghdr->npages = npages - 1;	/* Hdr pg is stolen */
@@ -4885,6 +4886,7 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
       eof = (LOG_RECORD_HEADER *) LOG_APPEND_PTR ();
 
       eof->trid = LOG_READ_NEXT_TRANID;
+      eof->mvcc_id = LOG_READ_NEXT_MVCCID;
       LSA_SET_NULL (&eof->prev_tranlsa);
       LSA_COPY (&eof->back_lsa, &log_Gl.append.prev_lsa);
       LSA_SET_NULL (&eof->forw_lsa);
@@ -5629,6 +5631,7 @@ prior_lsa_start_append (THREAD_ENTRY * thread_p, LOG_PRIOR_NODE * node,
   LOG_PRIOR_LSA_APPEND_ADVANCE_WHEN_DOESNOT_FIT (sizeof (LOG_RECORD_HEADER));
 
   node->log_header.trid = tdes->trid;
+  node->log_header.mvcc_id = tdes->mvcc_id;
 
   /*
    * Link the record with the previous transaction record for quick undos.
@@ -11224,6 +11227,7 @@ logpb_copy_database (THREAD_ENTRY * thread_p, VOLID num_perm_vols,
 
   eof = (LOG_RECORD_HEADER *) to_malloc_log_pgptr->area;
   eof->trid = LOG_SYSTEM_TRANID + 1;
+  eof->mvcc_id = MVCCID_FIRST;
   LSA_SET_NULL (&eof->prev_tranlsa);
   LSA_SET_NULL (&eof->back_lsa);
   LSA_SET_NULL (&eof->forw_lsa);

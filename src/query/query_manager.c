@@ -1977,6 +1977,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   bool cached_result;
   XASL_CACHE_CLONE *cache_clone_p;
   bool saved_is_stats_on;
+  bool error_flag = false;
 
   cached_result = false;
   query_p = NULL;
@@ -1984,6 +1985,18 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   list_id_p = NULL;
   xasl_cache_entry_p = NULL;
   list_cache_entry_p = NULL;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  if (mvcc_Enabled)
+    {
+      LOG_TDES *tdes = NULL;
+      tdes = LOG_FIND_TDES (tran_index);
+      if (logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot)
+	  != NO_ERROR)
+	{
+	  return NULL;
+	}
+    }
 
   saved_is_stats_on = mnt_server_is_stats_on (thread_p);
   if (DO_NOT_COLLECT_EXEC_STATS (*flag_p) && saved_is_stats_on == true)
@@ -2065,7 +2078,6 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 
   /* Make an query entry */
   /* mark that this transaction is running a query */
-  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tran_entry_p = &qmgr_Query_table.tran_entries_p[tran_index];
 
 #if defined (SERVER_MODE)
@@ -2298,6 +2310,17 @@ end:
       xmnt_server_start_stats (thread_p, false);
     }
 
+#if defined(MVCC_USE_COMMAND_ID)
+  if (error_flag == false)
+    {
+      logtb_inc_command_id (thread_p);
+    }
+  else
+    {
+      logtb_deactivate_command_id (thread_p);
+    }
+#endif
+
 #if defined (SERVER_MODE)
   qmgr_reset_query_exec_info (tran_index);
 #endif
@@ -2305,6 +2328,8 @@ end:
   return list_id_p;
 
 exit_on_error:
+
+  error_flag = true;
 
   /* end the use of the cached result if any when an error occurred */
   if (cached_result)
@@ -2373,6 +2398,7 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   int tran_index;
   QMGR_TRAN_ENTRY *tran_entry_p;
   bool saved_is_stats_on;
+  bool error_flag = false;
 
   query_p = NULL;
   *query_id_p = -1;
@@ -2388,6 +2414,17 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   /* mark that this transaction is running a query */
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tran_entry_p = &qmgr_Query_table.tran_entries_p[tran_index];
+
+  if (mvcc_Enabled)
+    {
+      LOG_TDES *tdes = NULL;
+      tdes = LOG_FIND_TDES (tran_index);
+      if (logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot)
+	  != NO_ERROR)
+	{
+	  return NULL;
+	}
+    }
 
 #if defined (SERVER_MODE)
   qmgr_lock_mutex (thread_p, &tran_entry_p->lock);
@@ -2475,6 +2512,17 @@ end:
       xmnt_server_start_stats (thread_p, false);
     }
 
+#if defined(MVCC_USE_COMMAND_ID)
+  if (error_flag == false)
+    {
+      logtb_inc_command_id (thread_p);
+    }
+  else
+    {
+      logtb_deactivate_command_id (thread_p);
+    }
+#endif /* MVCC_USE_COMMAND_ID */
+
 #if defined (SERVER_MODE)
   qmgr_reset_query_exec_info (tran_index);
 #endif
@@ -2482,6 +2530,8 @@ end:
   return list_id_p;
 
 exit_on_error:
+  error_flag = true;
+
   /*
    * free the query entry when error occurrs. note that the query_id should be
    * set to 0 so as to upper levels can detect the error.

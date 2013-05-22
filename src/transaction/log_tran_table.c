@@ -69,6 +69,9 @@
 #include "thread.h"
 #endif /* SERVER_MODE */
 #include "rb_tree.h"
+#include "mvcc.h"
+#include "file_mvcc_status.h"
+
 
 #if defined(SERVER_MODE) || defined(SA_MODE)
 #include "replication.h"
@@ -127,7 +130,9 @@ static void logtb_dump_tdes (FILE * out_fp, LOG_TDES * tdes);
 static void logtb_set_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 			    const BOOT_CLIENT_CREDENTIAL * client_credential,
 			    int wait_msecs, TRAN_ISOLATION isolation);
-
+static void logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes);
+static void logtb_init_mvcc_snapshot_data (LOG_TDES * tdes);
+static void logtb_finalize_mvcc_snapshot_data (LOG_TDES * tdes);
 
 /*
  * logtb_realloc_topops_stack - realloc stack of top system operations
@@ -537,6 +542,7 @@ logtb_initialize_system_tdes (THREAD_ENTRY * thread_p)
   logtb_clear_tdes (thread_p, tdes);
   tdes->tran_index = LOG_SYSTEM_TRAN_INDEX;
   tdes->trid = LOG_SYSTEM_TRANID;
+  tdes->mvcc_id = MVCCID_NULL;
   tdes->isloose_end = true;
   tdes->wait_msecs = TRAN_LOCK_INFINITE_WAIT;
   tdes->isolation = TRAN_DEFAULT_ISOLATION;
@@ -582,6 +588,7 @@ logtb_undefine_trantable (THREAD_ENTRY * thread_p)
 	  if (tdes != NULL)
 	    {
 	      logtb_clear_tdes (thread_p, tdes);
+	      logtb_finalize_mvcc_snapshot_data (tdes);
 	      csect_finalize_critical_section (&tdes->cs_topop);
 	      if (tdes->topops.max != 0)
 		{
@@ -1067,6 +1074,78 @@ logtb_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
     }
 
   return tran_index;
+}
+
+/*
+ * logtb_clear_mvcc_snapshot_data - clear mvcc snapshot data
+ *
+ * return: nothing..
+ *
+ *   tdes(in): Transaction descriptor
+ */
+static void
+logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes)
+{
+  /* clear snapshot - do no free active_ids and active_child_ids
+   * since they are reused by future transactions
+   */
+  assert (tdes != NULL);
+
+  tdes->mvcc_snapshot.snapshot_fnc = NULL;
+  tdes->mvcc_snapshot.lowest_active_mvccid = 0;
+  tdes->mvcc_snapshot.highest_completed_mvccid = 0;
+  tdes->mvcc_snapshot.cnt_active_ids = 0;
+  tdes->mvcc_snapshot.cnt_active_child_ids = 0;
+#if defined(MVCC_USE_COMMAND_ID)
+  tdes->mvcc_snapshot.current_command_id = 0;
+#endif /* MVCC_USE_COMMAND_ID */
+}
+
+/*
+ * logtb_init_mvcc_snapshot_data - init mvcc snapshot data
+ *
+ * return: nothing..
+ *
+ *   tdes(in): Transaction descriptor
+ */
+static void
+logtb_init_mvcc_snapshot_data (LOG_TDES * tdes)
+{
+  assert (tdes != NULL);
+
+  tdes->mvcc_snapshot.snapshot_fnc = NULL;
+  tdes->mvcc_snapshot.lowest_active_mvccid = 0;
+  tdes->mvcc_snapshot.highest_completed_mvccid = 0;
+  tdes->mvcc_snapshot.active_ids = NULL;
+  tdes->mvcc_snapshot.cnt_active_ids = 0;
+  tdes->mvcc_snapshot.active_child_ids = NULL;
+  tdes->mvcc_snapshot.cnt_active_child_ids = 0;
+#if defined(MVCC_USE_COMMAND_ID)
+  tdes->mvcc_snapshot.current_command_id = 0;
+#endif /* MVCC_USE_COMMAND_ID */
+}
+
+/*
+ * logtb_finalize_mvcc_snapshot_data - free allocated mvcc snapshot data
+ *
+ * return: nothing..
+ *
+ *   tdes(in): Transaction descriptor
+ */
+static void
+logtb_finalize_mvcc_snapshot_data (LOG_TDES * tdes)
+{
+  assert (tdes != NULL);
+
+  if (tdes->mvcc_snapshot.active_ids != NULL)
+    {
+      free_and_init (tdes->mvcc_snapshot.active_ids);
+    }
+
+  if (tdes->mvcc_snapshot.active_child_ids != NULL)
+    {
+      free_and_init (tdes->mvcc_snapshot.active_child_ids);
+    }
 }
 
 int
@@ -1596,6 +1675,11 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   XASL_ID_SET_NULL (&tdes->xasl_id);
   tdes->waiting_for_res = NULL;
   tdes->disable_modifications = db_Disable_modifications;
+#if defined(MVCC_USE_COMMAND_ID)
+  tdes->mvcc_comm_id = MVCC_FIRST_COMMAND_ID;
+  tdes->mvcc_comm_id_used = false;
+#endif /* MVCC_USE_COMMAND_ID */
+  logtb_clear_mvcc_snapshot_data (tdes);
 }
 
 /*
@@ -1658,6 +1742,7 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
   XASL_ID_SET_NULL (&tdes->xasl_id);
   tdes->waiting_for_res = NULL;
   tdes->disable_modifications = db_Disable_modifications;
+  logtb_init_mvcc_snapshot_data (tdes);
 }
 
 /*
@@ -1674,12 +1759,20 @@ logtb_get_new_tran_id (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 
   logtb_clear_tdes (thread_p, tdes);
 
+  /* reset mvcc id only inside transaction table critical section */
+  tdes->mvcc_id = MVCCID_NULL;
+  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+  /* TO DO update vacuum flags, subtransactions */
+  tdes->mvcc_id = MVCCID_NULL;
+  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+
   tdes->trid = log_Gl.hdr.next_trid++;
   /* check overflow */
   if (tdes->trid < 0)
     {
       tdes->trid = LOG_SYSTEM_TRANID + 1;
-      log_Gl.hdr.next_trid = tdes->trid + 1;
+      /* set mvcc next id to null */
+      log_Gl.hdr.mvcc_next_id = MVCCID_NULL;
     }
 
   TR_TABLE_CS_EXIT ();
@@ -3266,6 +3359,492 @@ logtb_find_smallest_lsa (THREAD_ENTRY * thread_p, LOG_LSA * lsa)
     {
       LSA_COPY (lsa, min_lsa);
     }
+  TR_TABLE_CS_EXIT ();
+}
+
+/*
+ * logtb_get_mvcc_snapshot_data - get mvcc snapshot
+ *
+ * return: error code
+ *
+ *   thread_p(in): thread entry
+ *   largest(in/out): largest active log page
+ *
+ */
+int
+logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
+			      MVCC_SNAPSHOT * snapshot)
+{
+  MVCCID lowest_active_mvccid = 0, highest_completed_mvccid = 0;
+  unsigned int cnt_active_trans = 0;
+  LOG_TDES *curr_tdes = NULL;
+  int i, num_tran, tran_index;
+  LOG_TDES *tdes;
+  TRANID curr_tranid;
+
+#define NUM_CHILDREN_PER_TRAN_TEMP 32
+
+  assert (snapshot != NULL);
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  tdes = LOG_FIND_TDES (tran_index);
+  curr_tranid = tdes->trid;
+
+  snapshot->snapshot_fnc = mvcc_satisfies_snapshot;
+  if (snapshot->active_ids == NULL)
+    {
+      /* allocate only once */
+      int size;
+      size = NUM_TOTAL_TRAN_INDICES * sizeof (TRANID);
+
+      snapshot->active_ids = malloc (size);
+      if (snapshot->active_ids == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, size);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+
+      assert (snapshot->active_child_ids == NULL);
+      /* TODO - replace 32 with constant */
+      size =
+	NUM_TOTAL_TRAN_INDICES * NUM_CHILDREN_PER_TRAN_TEMP * sizeof (TRANID);
+      snapshot->active_child_ids = malloc (size);
+      if (snapshot->active_child_ids == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, size);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+    }
+
+  /* allow other transactions to get snapshot 
+   * do not allow any transaction to finish
+   */
+  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+
+  highest_completed_mvccid = log_Gl.highest_completed_mvccid;
+  MVCCID_FORWARD (highest_completed_mvccid);
+  lowest_active_mvccid = highest_completed_mvccid;
+
+  for (i = 0, num_tran = 0; i < log_Gl.trantable.num_total_indices,
+       num_tran < log_Gl.trantable.num_assigned_indices; i++)
+    {
+      tdes = LOG_FIND_TDES (i);
+      if (tdes != NULL && tdes->trid != NULL_TRANID)
+	{
+	  if (i == LOG_SYSTEM_TRAN_INDEX)
+	    {
+	      num_tran++;
+	      continue;
+	    }
+
+	  if (!MVCCID_IS_VALID (tdes->mvcc_id))
+	    {
+	      num_tran++;
+	      continue;
+	    }
+
+	  if (!MVCCID_IS_NORMAL (tdes->mvcc_id)
+	      || mvcc_id_follow_or_equal (tdes->mvcc_id,
+					  highest_completed_mvccid))
+	    {
+	      /* skip since these transactions are considered as
+	       * running anyway
+	       */
+	      num_tran++;
+	      continue;
+	    }
+
+	  /* active transaction found it */
+	  if (tdes->mvcc_id < lowest_active_mvccid)
+	    {
+	      lowest_active_mvccid = tdes->mvcc_id;
+	    }
+
+	  if (tdes->trid == curr_tranid)
+	    {
+	      /* do not add mvcc id of current transaction in snapshot */
+	      num_tran++;
+	      continue;
+	    }
+
+	  snapshot->active_ids[cnt_active_trans++] = tdes->trid;
+
+	  /* TODO sub-transactions */
+	  num_tran++;
+	}
+    }
+
+  TR_TABLE_CS_EXIT ();
+
+  /* update global variabile */
+  tdes->recent_snapshot_lowest_active_mvccid = lowest_active_mvccid;
+
+  snapshot->lowest_active_mvccid = lowest_active_mvccid;
+  snapshot->highest_completed_mvccid = highest_completed_mvccid;
+  snapshot->cnt_active_child_ids = cnt_active_trans;
+
+  return NO_ERROR;
+}
+
+/*
+ * logtb_get_new_mvccid - mvcc get new id
+ *
+ * return: new mvcc id
+ *
+ *  thread_p(in):
+ *  tdes(in): transaction descriptor
+ *
+ */
+MVCCID
+logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
+{
+  MVCCID mvcc_id;
+
+  /* acquire trans table critical section in order to prevent others commit
+   * while current assign mvcc id
+   */
+  TR_TABLE_CS_ENTER (thread_p);
+
+  /* TO DO - extend clog, subtrans */
+  mvcc_id = log_Gl.hdr.mvcc_next_id;
+  MVCCID_FORWARD (log_Gl.hdr.mvcc_next_id);
+
+  /* TO DO subtransactions */
+  tdes->mvcc_id = mvcc_id;
+
+  TR_TABLE_CS_EXIT ();
+
+  return mvcc_id;
+}
+
+/*
+ * logtb_find_current_mvccid - find current transaction mvcc id
+ *
+ * return: MVCCID
+ *
+ *   thread_p(in):
+ */
+MVCCID
+logtb_find_current_mvccid (THREAD_ENTRY * thread_p)
+{
+  LOG_TDES *tdes;
+  MVCCID mvcc_id = MVCCID_NULL;
+  tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  if (tdes != NULL)
+    {
+      mvcc_id = tdes->mvcc_id;
+    }
+  return mvcc_id;
+}
+
+/*
+ * logtb_get_current_mvccid - return current transaction mvcc id. Assign
+ *			      a new ID if not previously set.
+ *
+ * return: current MVCCID
+ *
+ *   thread_p(in):
+ */
+MVCCID
+logtb_get_current_mvccid (THREAD_ENTRY * thread_p)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  assert (tdes != NULL);
+
+  if (MVCCID_IS_VALID (tdes->mvcc_id) == false)
+    {
+      (void) logtb_get_new_mvccid (thread_p, tdes);
+    }
+
+  return tdes->mvcc_id;
+}
+
+#if defined(MVCC_USE_COMMAND_ID)
+/*
+ * logtb_get_current_mvcc_command_id - return current mvcc command id. 
+ *
+ * return: current mvcc command id
+ *
+ *   thread_p(in):
+ */
+MVCC_COMMAND_ID
+logtb_get_current_mvcc_command_id (THREAD_ENTRY * thread_p)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  assert (tdes != NULL);
+
+  return tdes->mvcc_comm_id;
+}
+
+/*
+ * logtb_inc_command_id - increment command id. 
+ *
+ * return: error code
+ *
+ *   thread_p(in):
+ */
+int
+logtb_inc_command_id (THREAD_ENTRY * thread_p)
+{
+  int error_code = NO_ERROR;
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  assert (tdes != NULL);
+
+  if (!mvcc_Enabled)
+    {
+      /* this is an MVCC feature */
+      return NO_ERROR;
+    }
+
+  if (tdes->mvcc_comm_id_used == true)
+    {
+      (tdes->mvcc_comm_id)++;
+      if (tdes->mvcc_comm_id == MVCC_FIRST_COMMAND_ID)
+	{
+	  tdes->mvcc_comm_id--;
+	  /* TO DO - set new error code */
+	  error_code = ER_FAILED;
+	}
+
+      tdes->mvcc_comm_id_used = false;
+
+      /* update snapshot command id */
+      tdes->mvcc_snapshot.current_command_id = tdes->mvcc_comm_id;
+    }
+
+  return error_code;
+}
+
+/*
+ * logtb_activate_command_id - activate command id. 
+ *
+ * return: 
+ *
+ *   thread_p(in):
+ */
+void
+logtb_activate_command_id (THREAD_ENTRY * thread_p)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  assert (tdes != NULL);
+
+  /* activate command id only if MVCC is enabled */
+  assert (mvcc_Enabled);
+
+  tdes->mvcc_comm_id_used = true;
+}
+
+/*
+ * logtb_deactivate_command_id - deactivate command id. 
+ *
+ * return: 
+ *
+ *   thread_p(in):
+ */
+void
+logtb_deactivate_command_id (THREAD_ENTRY * thread_p)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  assert (tdes != NULL);
+
+  tdes->mvcc_comm_id_used = false;
+}
+#endif /* MVCC_USE_COMMAND_ID */
+
+/*
+ * logtb_is_current_mvccid - check whether given mvccid is current mvccid
+ *
+ * return: bool
+ *
+ *   thread_p(in): thred entry
+ *   mvccid(in): mvcc id
+ */
+bool
+logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  assert (tdes != NULL);
+
+  /* TO DO - check parent transaction too */
+
+  if (tdes->mvcc_id == mvccid)
+    {
+      return true;
+    }
+
+  return false;
+}
+
+/*
+ * logtb_is_active_mvccid - check whether given mvccid is active
+ *
+ * return: bool
+ *
+ *   thread_p(in): thred entry
+ *   mvccid(in): mvcc id
+ */
+bool
+logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  int i, num_tran;
+  MVCCID tran_mvccid;
+  MVCC_STATUS mvcc_status;
+
+  assert (tdes != NULL);
+  if (mvcc_id_precedes (mvccid, tdes->recent_snapshot_lowest_active_mvccid))
+    {
+      return false;
+    }
+
+  /* TO DO - check the status of transaction - completed or not */
+
+  if (logtb_is_current_mvccid (thread_p, mvccid))
+    {
+      return true;
+    }
+
+  /* TO DO - check latest completed id */
+
+  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+
+  /*if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, mvccid))
+     {
+     TR_TABLE_CS_EXIT ();
+     return true;
+     } */
+
+  for (i = 0, num_tran = 0; i < log_Gl.trantable.num_total_indices,
+       num_tran < log_Gl.trantable.num_assigned_indices; i++)
+    {
+      tdes = LOG_FIND_TDES (i);
+      if (tdes != NULL && tdes->trid != NULL_TRANID)
+	{
+	  if (i == LOG_SYSTEM_TRAN_INDEX)
+	    {
+	      num_tran++;
+	      continue;
+	    }
+
+	  tran_mvccid = tdes->mvcc_id;
+	  if (!MVCCID_IS_VALID (tdes->mvcc_id))
+	    {
+	      num_tran++;
+	      continue;
+
+	    }
+
+	  if (MVCCID_IS_EQUAL (mvccid, tran_mvccid))
+	    {
+	      TR_TABLE_CS_EXIT ();
+	      return true;
+	    }
+
+	  if (mvcc_id_precedes (mvccid, tran_mvccid))
+	    {
+	      num_tran++;
+	      continue;
+	    }
+
+	  /* TO DO - check children */
+	}
+    }
+
+  TR_TABLE_CS_EXIT ();
+
+  if (file_mvcc_get_id_status (thread_p, mvccid, &mvcc_status)
+      == MVCC_STATUS_ABORTED)
+    {
+      return false;
+    }
+
+  /* TO Do - check if mvccid is subtransaction of an active transaction */
+
+  return false;
+}
+
+/*
+ * logtb_is_mvccid_committed - check whether given mvccid was committes
+ *
+ * return: bool
+ *
+ *   thread_p(in): thread entry
+ *   mvccid(in): mvcc id
+ */
+bool
+logtb_is_mvccid_committed (THREAD_ENTRY * thread_p, MVCCID mvccid)
+{
+  MVCC_STATUS mvcc_status;
+  /* TO do check frozen transaction id */
+  (void) file_mvcc_get_id_status (thread_p, mvccid, &mvcc_status);
+  if (mvcc_status == MVCC_STATUS_COMMITTED)
+    {
+      return true;
+    }
+
+  /* TO DO : check subcommitted transactions */
+
+  return false;
+}
+
+/*
+ * logtb_get_mvcc_snapshot  - get mvcc snapshot
+ *
+ * return: mvcc snapshot
+ *
+ *   thread_p(in): thread entry
+ */
+MVCC_SNAPSHOT *
+logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p)
+{
+  if (mvcc_Enabled == false)
+    {
+      /* null snapshot if mvcc is disabled */
+      return NULL;
+    }
+  else
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+
+      assert (tdes != NULL && tdes->trid != NULL_TRANID);
+      return &tdes->mvcc_snapshot;
+    }
+}
+
+/*
+ * logtb_complete_mvcc () - Called at commit or rollback, completes mvcc info
+ *			    for current transaction.
+ *
+ * return	 : Void. 
+ * thread_p (in) : Thread entry.
+ * tdes (in)	 : Transaction descriptor.
+ * status (in)	 : MVCC Status: MVCC_STATUS_COMMITTED or MVCC_STATUS_ABORTED.
+ */
+void
+logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, int status)
+{
+  assert (tdes != NULL);
+  assert (status == MVCC_STATUS_COMMITTED || status == MVCC_STATUS_ABORTED);
+
+  if (!mvcc_Enabled || tdes->mvcc_id == MVCCID_NULL)
+    {
+      /* nothing to do here */
+      return;
+    }
+
+  TR_TABLE_CS_ENTER (thread_p);
+
+  /* update transaction MVCC status */
+  (void) file_mvcc_set_id_status (thread_p, tdes->mvcc_id, status);
+
+  /* update highest completed mvccid */
+  if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, tdes->mvcc_id))
+    {
+      log_Gl.highest_completed_mvccid = tdes->mvcc_id;
+    }
+
   TR_TABLE_CS_EXIT ();
 }
 

@@ -77,6 +77,9 @@ struct symbol_info
   UNBOX listfile_unbox;
   int listfile_attr_offset;
   PT_NODE *query_node;		/* the query node that is being translated */
+  DB_VALUE **reserved_values;	/* db_values array used for reserved
+				 * attributes
+				 */
 };
 
 

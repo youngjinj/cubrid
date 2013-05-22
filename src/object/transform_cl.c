@@ -837,6 +837,19 @@ tf_mem_to_disk (MOP classmop, MOBJ classobj,
       chn = WS_CHN (obj) + 1;
       or_put_int (buf, chn);
 
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* default values for mvcc fields */
+	  or_put_int (buf, 0);	/* mvcc insert id */
+	  or_put_int (buf, 0);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+	  or_put_int (buf, 0);	/* mvcc insert command id */
+	  or_put_int (buf, 0);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+	  or_put_int (buf, 0);	/* mvcc flags */
+	  or_put_oid (buf, (OID *) & oid_Null_oid);	/* mvcc next version */
+	}
+
       /* variable info block */
       put_varinfo (buf, obj, class_, offset_size);
 
@@ -1348,6 +1361,18 @@ tf_disk_to_mem (MOBJ classobj, RECDES * record, int *convertp)
 
       repid_bits = or_get_int (buf, &rc);
       chn = or_get_int (buf, &rc);
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* skip mvcc fields */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert id */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert command id */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc flags */
+	  or_advance (buf, OR_OID_SIZE);	/* mvcc next version */
+	}
 
       /* mask out the repid & bound bit flag  & offset size flag */
       repid = repid_bits & ~OR_BOUND_BIT_FLAG & ~OR_OFFSET_SIZE_FLAG;
@@ -4325,6 +4350,19 @@ tf_disk_to_class (OID * oid, RECDES * record)
 
       chn = or_get_int (buf, &rc);
 
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* skip mvcc fields */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert id */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert command id */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+	  or_advance (buf, OR_INT_SIZE);	/* mvcc flags */
+	  or_advance (buf, OR_OID_SIZE);	/* mvcc next version */
+	}
+
       if (oid_is_root (oid))
 	{
 	  class_ = (MOBJ) disk_to_root (buf);
@@ -4355,7 +4393,7 @@ tf_disk_to_class (OID * oid, RECDES * record)
 
   /* restore gc */
   ws_gc_enable ();
-  sm_bump_global_schema_version();
+  sm_bump_global_schema_version ();
 
   buf->error_abort = 0;
   return (class_);
@@ -4460,6 +4498,19 @@ tf_class_to_disk (MOBJ classobj, RECDES * record)
       chn = class_->header.obj_header.chn + 1;
       or_put_int (buf, chn);
       class_->header.obj_header.chn = chn;
+
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* set mvcc fields */
+	  or_put_int (buf, 0);	/* mvcc insert id */
+	  or_put_int (buf, 0);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+	  or_put_int (buf, 0);	/* mvcc insert command id */
+	  or_put_int (buf, 0);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+	  or_put_int (buf, 0);	/* mvcc flags */
+	  or_put_oid (buf, (OID *) & oid_Null_oid);	/* mvcc next version */
+	}
 
       if (header->type == Meta_root)
 	{

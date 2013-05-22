@@ -171,6 +171,12 @@ typedef enum
   RVBT_KEYVAL_DEL_NDRECORD_UPD = 110,
   RVBT_KEYVAL_DEL_NDHEADER_UPD = 111,
   RVBT_KEYVAL_DEL_OID_TRUNCATE = 112,
+  RVHF_MVCC_INSERT = 113,
+  RVHF_MVCC_DELETE = 114,
+  RVHF_MVCC_UPDATE = 115,
+  RVBF_NEWPAGE_RESET = 116,
+  RVBF_MVCC_SET_STATUS = 117,
+  RVHF_MVCC_CLEAN_HEAP_PAGE = 118,
 
   RV_NOT_DEFINED = 999
 } LOG_RCVINDEX;
@@ -181,6 +187,7 @@ typedef enum
 typedef struct log_rcv LOG_RCV;
 struct log_rcv
 {				/* Recovery information */
+  MVCCID mvcc_id;		/* mvcc id */
   PAGE_PTR pgptr;		/* Page to recover. Page should not be free by recovery
 				   functions, however it should be set dirty whenever is
 				   needed

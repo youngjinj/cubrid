@@ -104,15 +104,34 @@ typedef enum
   (operation == LC_FLUSH_UPDATE || operation == LC_FLUSH_UPDATE_PRUNE \
    || operation == LC_FLUSH_UPDATE_PRUNE_VERIFY)
 
+#define LC_FLAG_HAS_INDEX     0x00000001	/* Used for flushing, set if
+						 * object has index
+						 */
+#define LC_FLAG_SYSTEM_CLASS_INSTANCE  0x00000002	/* Object is a system
+							 * class instance
+							 */
+
+#define LC_ONEOBJ_HAS_INDEX(obj)  \
+  (((obj)->flag & LC_FLAG_HAS_INDEX) != 0)
+
+#define LC_ONEOBJ_SET_HAS_INDEX(obj)  \
+  (obj)->flag |= LC_FLAG_HAS_INDEX
+
+#define LC_ONEOBJ_IS_SYSTEM_CLASS_INSTANCE(obj)	\
+  (((obj)->flag & LC_FLAG_SYSTEM_CLASS_INSTANCE) != 0)
+
+#define LC_ONEOBJ_SET_SYSTEM_CLASS_INSTANCE(obj)	\
+  (obj)->flag |= LC_FLAG_SYSTEM_CLASS_INSTANCE
+
 typedef struct lc_copyarea_oneobj LC_COPYAREA_ONEOBJ;
 struct lc_copyarea_oneobj
 {
   LC_COPYAREA_OPERATION operation;	/* Insert, delete, update  */
-  int has_index;		/* Valid only for flushing */
+  int flag;			/* Info flag for the object */
   HFID hfid;			/* Valid only for flushing */
   OID class_oid;		/* Oid of the Class of the object */
   OID oid;			/* Oid of the object       */
-  int length;			/* Lenght of the object    */
+  int length;			/* Length of the object    */
   int offset;			/* location in the copy area where the
 				 * content of the object is stored
 				 */

@@ -48,7 +48,13 @@ typedef enum
   S_LIST_SCAN,
   S_SET_SCAN,
   S_METHOD_SCAN,
-  S_VALUES_SCAN			/* regu_values_list scan */
+  S_VALUES_SCAN,		/* regu_values_list scan */
+  S_HEAP_SCAN_RECORD_INFO,	/* similar to heap scan but saving record info
+				 * (and maybe tuple data too). iterates
+				 * through all slots even if they do not
+				 * contain data.
+				 */
+  S_HEAP_PAGE_SCAN		/* scans heap pages and queries for page information */
 } SCAN_TYPE;
 
 typedef struct heap_scan_id HEAP_SCAN_ID;
@@ -67,7 +73,22 @@ struct heap_scan_id
   bool scancache_inited;
   bool scanrange_inited;
   int lock_hint;		/* lock hint */
+  DB_VALUE **cache_recordinfo;	/* cache for record information */
+  REGU_VARIABLE_LIST recordinfo_regu_list;	/* regulator variable list for record info */
 };				/* Regular Heap File Scan Identifier */
+
+typedef struct heap_page_scan_id HEAP_PAGE_SCAN_ID;
+struct heap_page_scan_id
+{
+  OID cls_oid;			/* class object identifier */
+  HFID hfid;			/* heap file identifier */
+  VPID curr_vpid;		/* current heap page identifier */
+  SCAN_PRED scan_pred;		/* scan predicates(filters) */
+  DB_VALUE **cache_page_info;	/* values for page headers */
+  REGU_VARIABLE_LIST page_info_regu_list;	/* regulator variable for page info */
+};				/* Heap File Scan Identifier used to scan
+				 * pages only (e.g. headers)
+				 */
 
 typedef struct key_val_range KEY_VAL_RANGE;
 struct key_val_range
@@ -274,6 +295,8 @@ struct scan_id_struct
   {
     LLIST_SCAN_ID llsid;	/* List File Scan Identifier */
     HEAP_SCAN_ID hsid;		/* Regular Heap File Scan Identifier */
+    HEAP_PAGE_SCAN_ID hpsid;	/* Scan heap pages without going through
+				 * records */
     INDX_SCAN_ID isid;		/* Indexed Heap File Scan Identifier */
     SET_SCAN_ID ssid;		/* Set Scan Identifier */
     VA_SCAN_ID vaid;		/* Value Array Identifier */
@@ -304,7 +327,21 @@ extern int scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				HEAP_CACHE_ATTRINFO * cache_pred,
 				int num_attrs_rest,
 				ATTR_ID * attrids_rest,
-				HEAP_CACHE_ATTRINFO * cache_rest);
+				HEAP_CACHE_ATTRINFO * cache_rest,
+				SCAN_TYPE scan_type,
+				DB_VALUE ** cache_recordinfo,
+				REGU_VARIABLE_LIST regu_list_recordinfo);
+extern int scan_open_heap_page_scan (THREAD_ENTRY * thread_p,
+				     SCAN_ID * scan_id,
+				     int lock_hint,
+				     VAL_LIST * val_list,
+				     VAL_DESCR * vd,
+				     OID * cls_oid,
+				     HFID * hfid,
+				     PRED_EXPR * pr,
+				     SCAN_TYPE scan_type,
+				     DB_VALUE ** cache_page_info,
+				     REGU_VARIABLE_LIST regu_list_page_info);
 extern int scan_open_class_attr_scan (THREAD_ENTRY * thread_p,
 				      SCAN_ID * scan_id,
 				      /* fields of SCAN_ID */

@@ -91,6 +91,7 @@
 #include "es.h"
 #include "session.h"
 #include "partition.h"
+#include "file_mvcc_status.h"
 
 #if defined(WINDOWS)
 #include "wintcp.h"
@@ -112,6 +113,7 @@ struct boot_dbparm
   HFID hfid;			/* Heap file where this information is stored.
 				 * It is only used for validation purposes */
   HFID rootclass_hfid;		/* Heap file where classes are stored */
+  VFID mvccid_status_vfid;	/* Heap file where mvccid status is stored */
   EHID classname_table;		/* The hash file of class names */
   CTID ctid;			/* The catalog file */
   VFID query_vfid;		/* Query file */
@@ -3259,6 +3261,8 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       fileio_dismount_all (thread_p);
       goto error;
     }
+
+  file_mvcc_status_cache_vfid (&boot_Db_parm->mvccid_status_vfid);
   catalog_initialize (&boot_Db_parm->ctid);
 
   (void) qexec_initialize_xasl_cache (thread_p);
@@ -5342,6 +5346,7 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
   boot_Db_parm->hfid.vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->rootclass_hfid.vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->classname_table.vfid.volid = LOG_DBFIRST_VOLID;
+  boot_Db_parm->mvccid_status_vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->ctid.vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->ctid.xhid.vfid.volid = LOG_DBFIRST_VOLID;
 
@@ -5364,12 +5369,17 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
       || xheap_create (thread_p, &boot_Db_parm->hfid, NULL, false) < 0
       || xheap_create (thread_p, &boot_Db_parm->rootclass_hfid, NULL,
 		       false) < 0
+      || (mvcc_Enabled
+	  && (file_mvcc_status_create (thread_p,
+				       &boot_Db_parm->mvccid_status_vfid)
+	      == NULL))
       || heap_assign_address (thread_p, &boot_Db_parm->rootclass_hfid,
 			      &boot_Db_parm->rootclass_oid, 0) != NO_ERROR)
     {
       goto error;
     }
 
+  file_mvcc_status_cache_vfid (&boot_Db_parm->mvccid_status_vfid);
   oid_set_root (&boot_Db_parm->rootclass_oid);
 
   if (xehash_create (thread_p, &boot_Db_parm->classname_table, DB_TYPE_STRING,
@@ -6112,6 +6122,21 @@ xboot_compact_db (THREAD_ENTRY * thread_p, OID * class_oids, int n_classes,
 		  int *modified_objects, int *big_objects,
 		  int *initial_last_repr_id)
 {
+  if (mvcc_Enabled)
+    {
+      int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+      LOG_TDES *tdes = NULL;
+      int error_code = NO_ERROR;
+      tdes = LOG_FIND_TDES (tran_index);
+
+      error_code =
+	logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
+      if (error_code != NO_ERROR)
+	{
+	  return error_code;
+	}
+    }
+
   return boot_compact_db (thread_p, class_oids, n_classes,
 			  space_to_process, instance_lock_timeout,
 			  class_lock_timeout, delete_old_repr,

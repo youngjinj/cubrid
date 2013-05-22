@@ -364,7 +364,8 @@ overflow_insert_internal (THREAD_ENTRY * thread_p, const VFID * ovf_vfid,
       length -= copy_length;
 
       pgbuf_get_vpid (addr.pgptr, &undo_recv.new_vpid);
-      if (file_is_new_file (thread_p, ovf_vfid) == FILE_OLD_FILE
+      if (mvcc_Enabled == false
+	  && file_is_new_file (thread_p, ovf_vfid) == FILE_OLD_FILE
 	  && logging_type == OVERFLOW_NORMAL_LOGGING)
 	{
 	  /* we don't do undo logging for new files */
@@ -1411,4 +1412,18 @@ overflow_rv_page_dump (FILE * fp, int length, void *data)
   dumpfrom += hdr_length;
 
   log_rv_dump_char (fp, length, (void *) dumpfrom);
+}
+
+/*
+ * overflow_get_first_page_data () - get data of overflow first page
+ *
+ *   return: overflow first page data data
+ *   page_ptr(in): overflow page
+ *
+ */
+char *
+overflow_get_first_page_data (char *page_ptr)
+{
+  assert (page_ptr != NULL);
+  return ((OVERFLOW_FIRST_PART *) page_ptr)->data;
 }

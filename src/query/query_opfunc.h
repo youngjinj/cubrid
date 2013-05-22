@@ -95,7 +95,11 @@ typedef enum
 {
   SEQUENTIAL,			/* sequential scan access */
   INDEX,			/* indexed access */
-  SCHEMA			/* shema access */
+  SCHEMA,			/* schema access */
+  SEQUENTIAL_RECORD_INFO,	/* sequential scan that will read record info */
+  SEQUENTIAL_PAGE_SCAN		/* sequential scan access that only scans
+				 * pages without accessing record data
+				 */
 } ACCESS_METHOD;
 
 typedef enum

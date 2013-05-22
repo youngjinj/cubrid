@@ -3523,6 +3523,7 @@ xcatalog_is_acceptable_new_representation (THREAD_ENTRY * thread_p,
   VPID page_id;
   PGSLOTID slot_id;
   PGLENGTH new_space;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
   *can_accept_p = false;
   record.area_size = -1;
@@ -3560,8 +3561,13 @@ xcatalog_is_acceptable_new_representation (THREAD_ENTRY * thread_p,
       return NO_ERROR;
     }
 
+  if (class_id_p != NULL && !OID_IS_ROOTOID (class_id_p))
+    {
+      /* be conservative */
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+    }
   if (heap_scancache_start (thread_p, &scan_cache, hfid_p, class_id_p, true,
-			    false, LOCKHINT_NONE) != NO_ERROR)
+			    false, LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
     {
       pgbuf_unfix_and_init (thread_p, page_p);
       return ER_FAILED;

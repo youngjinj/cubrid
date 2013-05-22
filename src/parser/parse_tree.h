@@ -660,6 +660,29 @@
 	}						    \
     } while (0)
 
+/* Check if spec is flagged with any of flags_ */
+#define PT_IS_SPEC_FLAG_SET(spec_, flags_)		    \
+  (((spec_)->info.spec.flag & (flags_)) != 0)
+
+/* Check if according to spec flag should bind names as reserved */
+#define PT_SHOULD_BIND_RESERVED_NAME(spec_)				\
+  ((spec_) != NULL && (spec_)->node_type == PT_SPEC			\
+   && (PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_RECORD_INFO_SCAN	\
+				   | PT_SPEC_FLAG_PAGE_INFO_SCAN)))
+
+/* After resolving to a reserved name, check the binding is correct according
+ * to spec flag
+ */
+#define PT_CHECK_RESERVED_NAME_BIND(spec_, reserved_id)			\
+  ((PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_RECORD_INFO_SCAN)		\
+    && (reserved_id) >= RESERVED_FIRST_RECORD_INFO			\
+    && (prm_get_bool_value (PRM_ID_MVCC_ENABLED) ?			\
+        (reserved_id) <= RESERVED_LAST_RECORD_INFO :			\
+	(reserved_id) < RESERVED_FIRST_MVCC_INFO))			\
+   || (PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_RECORD_INFO_SCAN)	\
+       && (reserved_id) >= RESERVED_FIRST_PAGE_INFO			\
+       && (reserved_id) <= RESERVED_LAST_PAGE_INFO))
+
 /*
  Enumerated types of parse tree statements
   WARNING ------ WARNING ----- WARNING
@@ -925,8 +948,8 @@ typedef enum
   PT_TRIGGER_OID,
   PT_NORMAL,
   /* PT_META_CLASS is used to embody the concept of a class OID reference
-   * that is constant at compile time.  (ie. it does not vary as instance
-   * OIDs vary across an inheritence hierarchy).  Contrast this with
+   * that is constant at compile time.  (i.e. it does not vary as instance
+   * OIDs vary across an inheritance hierarchy).  Contrast this with
    * the F_CLASS_OF function which returns the class OID for any
    * instance valued expression.  F_CLASS_OF is a server side function.
    */
@@ -935,8 +958,9 @@ typedef enum
   PT_PARAMETER,
   PT_HINT_NAME,			/* hint argument name */
   PT_INDEX_NAME,
+  PT_RESERVED,			/* reserved names for special attributes */
   PT_IS_SUBQUERY,		/* query is sub-query, not directly producing result */
-  PT_IS_UNION_SUBQUERY,		/* in a union subquery */
+  PT_IS_UNION_SUBQUERY,		/* in a union sub-query */
   PT_IS_UNION_QUERY,		/* query directly producing result in top level union */
   PT_IS_SET_EXPR,
   PT_IS_CSELECT,		/* query is CSELECT, not directly producing result */
@@ -1096,8 +1120,12 @@ typedef enum
   /* do not use multi range optimization */
   PT_HINT_USE_UPDATE_IDX = 0x200000,	/* 0010 0000 0000 0000 0000 0000 */
   /* use index for merge update */
-  PT_HINT_USE_INSERT_IDX = 0x400000	/* 0100 0000 0000 0000 0000 0000 */
-    /* use index for merge delete */
+  PT_HINT_USE_INSERT_IDX = 0x400000,	/* 0100 0000 0000 0000 0000 0000 */
+  /* use index for merge delete */
+  PT_HINT_SELECT_RECORD_INFO = 0x800000,	/* 1000 0000 0000 0000 0000 0000 */
+  /* SELECT record info from tuple header instead of data */
+  PT_HINT_SELECT_PAGE_INFO = 0x1000000,	/* 0001 0000 0000 0000 0000 0000 0000 */
+  /* SELECT page header information from heap file instead of record data */
 } PT_HINT_ENUM;
 
 
@@ -1385,8 +1413,15 @@ typedef enum
   PT_SPEC_FLAG_HAS_UNIQUE = 0x04,	/* the spec has unique */
   PT_SPEC_FLAG_FROM_VCLASS = 0x08,	/* applicable for derived tables, marks
 					   one as a rewritten view */
-  PT_SPEC_FLAG_CONTAINS_OID = 0x10	/* classoid and oid were added in the
+  PT_SPEC_FLAG_CONTAINS_OID = 0x10,	/* classoid and oid were added in the
 					   derived table's select list */
+  PT_SPEC_FLAG_RECORD_INFO_SCAN = 0x20,	/* spec will be scanned for record
+					 * information instead of record data
+					 */
+  PT_SPEC_FLAG_PAGE_INFO_SCAN = 0x40	/* spec's heap file will scanned page
+					 * by page for page information.
+					 * records will not be scanned.
+					 */
 } PT_SPEC_FLAG;
 
 typedef enum
@@ -2204,6 +2239,120 @@ struct pt_method_def_info
 };
 
 
+/*
+ * Reserved names section
+ */
+
+/* Enumeration of reserved names categories */
+typedef enum
+{
+  RESERVED_NAME_INVALID = -1,
+  RESERVED_NAME_RECORD_INFO = 0,
+  RESERVED_NAME_PAGE_INFO
+} PT_RESERVED_NAME_TYPE;
+
+/* Enumeration of reserved name ids */
+typedef enum
+{
+  RESERVED_T_PAGEID = 0,
+  RESERVED_T_SLOTID,
+  RESERVED_T_VOLUMEID,
+  RESERVED_T_OFFSET,
+  RESERVED_T_LENGTH,
+  RESERVED_T_REC_TYPE,
+  RESERVED_T_REPRID,
+  RESERVED_T_CHN,
+  /* leave MVCC attributes at the end of record information */
+  RESERVED_T_MVCC_INSID,
+  RESERVED_T_MVCC_DELID,
+#if defined(MVCC_USE_COMMAND_ID)
+  RESERVED_T_MVCC_INS_CID,
+  RESERVED_T_MVCC_DEL_CID,
+#endif /* MVCC_USE_COMMAND_ID */
+  RESERVED_T_MVCC_FLAGS,
+  RESERVED_T_MVCC_NEXT_VERSION,
+
+  RESERVED_P_CLASS_OID,
+  RESERVED_P_PREV_PAGEID,
+  RESERVED_P_NEXT_PAGEID,
+  RESERVED_P_NUM_SLOTS,
+  RESERVED_P_NUM_RECORDS,
+  RESERVED_P_ANCHOR_TYPE,
+  RESERVED_P_ALIGNMENT,
+  RESERVED_P_TOTAL_FREE,
+  RESERVED_P_CONT_FREE,
+  RESERVED_P_OFFSET_TO_FREE_AREA,
+  RESERVED_P_IS_SAVING,
+  RESERVED_P_UPDATE_BEST,
+  RESERVED_P_LAST_MVCCID,
+  /* leave this last to know how many reserved names are in
+   * pt_Reserved_name_table
+   */
+  RESERVED_ATTR_COUNT,
+
+  /* make sure you update these values when adding or removing items */
+  RESERVED_FIRST_RECORD_INFO = RESERVED_T_PAGEID,
+  RESERVED_FIRST_MVCC_INFO = RESERVED_T_MVCC_INSID,
+  RESERVED_LAST_RECORD_INFO = RESERVED_T_MVCC_NEXT_VERSION,
+
+  RESERVED_FIRST_PAGE_INFO = RESERVED_P_CLASS_OID,
+  RESERVED_LAST_PAGE_INFO = RESERVED_P_LAST_MVCCID
+} PT_RESERVED_NAME_ID;
+
+/* Reserved name info */
+typedef struct pt_reserved_name PT_RESERVED_NAME;
+struct pt_reserved_name
+{
+  char *name;
+  PT_RESERVED_NAME_ID id;
+  DB_TYPE type;
+};
+
+/* Global reserved name table which stores info for each name */
+extern PT_RESERVED_NAME pt_Reserved_name_table[];
+
+/* Obtain reserved name type from id */
+#define PT_GET_RESERVED_NAME_TYPE(reserved_id, type)	      \
+  if ((reserved_id) >= RESERVED_FIRST_RECORD_INFO	      \
+      && (reserved_id) <= RESERVED_LAST_RECORD_INFO)	      \
+    {							      \
+      (type) = RESERVED_NAME_RECORD_INFO;		      \
+    }							      \
+  else if ((reserved_id) >= RESERVED_FIRST_PAGE_INFO	      \
+	   && (reserved_id) <= RESERVED_LAST_PAGE_INFO)	      \
+    {							      \
+      (type) = RESERVED_NAME_PAGE_INFO;			      \
+    }							      \
+  else							      \
+    {							      \
+      assert (0);					      \
+    }
+
+/* Get first and last id for reserved name type */
+#define PT_GET_RESERVED_NAME_FIRST_AND_LAST(type, first, last)   \
+  switch (type)						      \
+    {							      \
+    case RESERVED_NAME_RECORD_INFO:			      \
+      (first) = RESERVED_FIRST_RECORD_INFO;		      \
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))	      \
+	{						      \
+	  (last) = RESERVED_LAST_RECORD_INFO;		      \
+	}						      \
+      else						      \
+	{						      \
+	  (last) = RESERVED_FIRST_MVCC_INFO - 1;	      \
+	}						      \
+      break;						      \
+    case RESERVED_NAME_PAGE_INFO:			      \
+      (first) = RESERVED_FIRST_PAGE_INFO;		      \
+      (last) = RESERVED_LAST_PAGE_INFO;			      \
+      break;						      \
+    default:						      \
+      assert (0);					      \
+      break;						      \
+    }
+
+
 /* Info for Names
   This includes identifiers
   */
@@ -2258,6 +2407,7 @@ struct pt_name_info
   short tag_click_counter;	/* 0: normal name, 1: click counter name */
   PT_NODE *indx_key_limit;	/* key limits for index name */
   int coll_modifier;		/* collation modifier = collation + 1 */
+  PT_RESERVED_NAME_ID reserved_id;	/* used to identify reserved name */
 };
 
 enum
@@ -3249,6 +3399,9 @@ struct pt_coll_infer
 				 * but that charset can be forced to another charset
 				 * (of another argument) if this flag is set */
 };
+
+
+
 
 void *parser_allocate_string_buffer (const PARSER_CONTEXT * parser,
 				     const int length, const int align);

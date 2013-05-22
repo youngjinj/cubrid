@@ -3122,7 +3122,8 @@ xbtree_delete_with_unique_key (THREAD_ENTRY * thread_p, BTID * btid,
 	}
 
       error = heap_scancache_start_modify (thread_p, &scan_cache, &hfid,
-					   class_oid, SINGLE_ROW_DELETE);
+					   class_oid, SINGLE_ROW_DELETE,
+					   NULL, false);
       if (error != NO_ERROR)
 	{
 	  return error;

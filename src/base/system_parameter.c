@@ -470,6 +470,9 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_INTL_COLLATION "intl_collation"
 
+#define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
+#define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
+
 
 /*
  * Note about ERROR_LIST and INTEGER_LIST type
@@ -1257,6 +1260,14 @@ static bool prm_sql_trace_execution_plan_default = false;
 
 char *PRM_INTL_COLLATION = NULL;
 static char *prm_intl_collation_default = NULL;
+
+bool PRM_MVCC_ENABLED = false;
+static bool prm_mvcc_enabled_default = false;
+
+float PRM_MVCC_CLEAN_PAGE_RATIO = 0.8f;
+static float prm_mvcc_clean_page_ratio_default = 0.8f;
+static float prm_mvcc_clean_page_ratio_lower = 0.1f;
+static float prm_mvcc_clean_page_ratio_upper = 0.95f;
 
 typedef struct sysprm_param SYSPRM_PARAM;
 struct sysprm_param
@@ -2623,6 +2634,22 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &prm_intl_collation_default,
    (void *) &PRM_INTL_COLLATION,
    (void *) NULL, (void *) NULL,
+   (char *) NULL},
+  {PRM_NAME_MVCC_ENABLED,
+   (PRM_FOR_SERVER | PRM_FOR_CLIENT | PRM_HIDDEN | PRM_FORCE_SERVER),
+   PRM_BOOLEAN,
+   (void *) &prm_mvcc_enabled_default,
+   (void *) &PRM_MVCC_ENABLED,
+   (void *) NULL,
+   (void *) NULL,
+   (char *) NULL},
+  {PRM_NAME_MVCC_CLEAN_PAGE_RATIO,
+   (PRM_FOR_SERVER | PRM_HIDDEN),
+   PRM_FLOAT,
+   (void *) &prm_mvcc_clean_page_ratio_default,
+   (void *) &PRM_MVCC_CLEAN_PAGE_RATIO,
+   (void *) &prm_mvcc_clean_page_ratio_upper,
+   (void *) &prm_mvcc_clean_page_ratio_lower,
    (char *) NULL}
 };
 

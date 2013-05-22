@@ -5295,6 +5295,12 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
   int n, i, j;
   int n_func_indexes;
   SM_CLASS_CONSTRAINT *consp;
+  bool is_reserved_name = false;
+
+  if ((QO_SEG_PT_NODE (seg))->info.name.meta_class == PT_RESERVED)
+    {
+      is_reserved_name = true;
+    }
 
   /* actual attribute name of the given segment */
   name = QO_SEG_NAME (seg);
@@ -5326,6 +5332,25 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
 
   /* initialize QO_ATTR_CUM_STATS structure of QO_ATTR_INFO */
   cum_statsp = &attr_infop->cum_stats;
+  if (is_reserved_name)
+    {
+      cum_statsp->type =
+	pt_Reserved_name_table[(QO_SEG_PT_NODE (seg))->info.name.reserved_id].
+	type;
+      cum_statsp->valid_limits = false;
+      OR_PUT_INT (&cum_statsp->min_value, 0);
+      OR_PUT_INT (&cum_statsp->max_value, 0);
+      cum_statsp->is_indexed = true;
+      cum_statsp->leafs = cum_statsp->pages = cum_statsp->height = 0;
+      cum_statsp->keys = 0;
+      cum_statsp->key_type = NULL;
+      cum_statsp->key_size = 0;
+      cum_statsp->pkeys = NULL;
+
+      return attr_infop;
+    }
+
+  /* not a reserved name */
   cum_statsp->type = sm_att_type_id (class_info_entryp->mop, name);
   cum_statsp->valid_limits = false;
   OR_PUT_INT (&cum_statsp->min_value, 0);
@@ -7614,15 +7639,28 @@ qo_discover_indexes (QO_ENV * env)
       if (nodep->info)
 	{
 	  /* find indexed segments that belong to this node and get indexes
-	     that apply to indexed segments */
-	  qo_find_node_indexes (env, nodep);
-	  /* collect statistic infomation on discovered indexes */
-	  qo_get_index_info (env, nodep);
+	   * that apply to indexed segments.
+	   * Note that a scan for record information or page informations
+	   * should follow, there is no need to check for index (a sequential
+	   * scan is needed).
+	   */
+	  if (!PT_IS_SPEC_FLAG_SET
+	      (QO_NODE_ENTITY_SPEC (nodep),
+	       PT_SPEC_FLAG_RECORD_INFO_SCAN | PT_SPEC_FLAG_PAGE_INFO_SCAN))
+	    {
+	      qo_find_node_indexes (env, nodep);
+	      /* collect statistic information on discovered indexes */
+	      qo_get_index_info (env, nodep);
+	    }
+	  else
+	    {
+	      QO_NODE_INDEXES (nodep) = NULL;
+	    }
 	}
       else
 	{
 	  /* If the 'info' of node is NULL, then this is probably a derived
-	     table. Without the info, we don't have class informatino to
+	     table. Without the info, we don't have class information to
 	     work with so we really can't do much so just skip the node. */
 	  QO_NODE_INDEXES (nodep) = NULL;	/* this node will not use a index */
 	}

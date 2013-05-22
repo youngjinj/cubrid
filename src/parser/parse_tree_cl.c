@@ -14107,6 +14107,15 @@ pt_print_select (PARSER_CONTEXT * parser, PT_NODE * p)
 	      q = pt_append_nulstring (parser, q, "NO_MULTI_RANGE_OPT ");
 	    }
 
+	  if (p->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
+	    {
+	      q = pt_append_nulstring (parser, q, "SELECT_RECORD_INFO");
+	    }
+
+	  if (p->info.query.q.select.hint & PT_HINT_SELECT_PAGE_INFO)
+	    {
+	      q = pt_append_nulstring (parser, q, "SELECT_PAGE_INFO");
+	    }
 	  q = pt_append_nulstring (parser, q, "*/ ");
 	}
 

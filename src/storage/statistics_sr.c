@@ -145,6 +145,7 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
   int i, j;
   OID *partitions = NULL;
   int count = 0, error_code = NO_ERROR;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 #if !defined(NDEBUG)
   int track_id;
 #endif
@@ -237,9 +238,14 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
 
   /* scan whole object of the class and update the statistics */
 
+  if (class_id_p != NULL && !OID_IS_ROOTOID (class_id_p))
+    {
+      /* be conservative */
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+    }
   if (heap_scancache_start (thread_p, &hf_scan_cache, &(cls_info_p->hfid),
 			    class_id_p, true, false,
-			    LOCKHINT_NONE) != NO_ERROR)
+			    LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
     {
       goto error;
     }

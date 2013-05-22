@@ -1346,6 +1346,8 @@ file_type_to_string (FILE_TYPE fstruct_type)
       return "UNKNOWN";
     case FILE_HEAP_REUSE_SLOTS:
       return "HEAP_REUSE_SLOTS";
+    case FILE_MVCC_STATUS:
+      return "MVCC_STATUS";
     }
   return "UNKNOWN";
 }
@@ -1370,6 +1372,7 @@ file_get_primary_vol_purpose (FILE_TYPE ftype)
     case FILE_EXTENDIBLE_HASH:
     case FILE_EXTENDIBLE_HASH_DIRECTORY:
     case FILE_LONGDATA:
+    case FILE_MVCC_STATUS:
       purpose = DISK_PERMVOL_DATA_PURPOSE;
       break;
 
@@ -1451,6 +1454,7 @@ file_find_good_maxpages (THREAD_ENTRY * thread_p, FILE_TYPE file_type)
     case FILE_EXTENDIBLE_HASH:
     case FILE_EXTENDIBLE_HASH_DIRECTORY:
     case FILE_LONGDATA:
+    case FILE_MVCC_STATUS:
       return disk_get_max_numpages (thread_p, DISK_PERMVOL_DATA_PURPOSE);
 
     case FILE_BTREE:
@@ -3760,7 +3764,8 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
 		    {
 		      ret =
 			file_reset_contiguous_temporary_pages (thread_p,
-							       allocset->volid,
+							       allocset->
+							       volid,
 							       batch_firstid,
 							       batch_ndealloc,
 							       false);
@@ -13291,6 +13296,7 @@ file_descriptor_get_length (const FILE_TYPE file_type)
     case FILE_TMP_TMP:
     case FILE_EITHER_TMP:
     case FILE_UNKNOWN_TYPE:
+    case FILE_MVCC_STATUS:
     default:
       return 0;
     }
@@ -13372,6 +13378,7 @@ file_descriptor_dump (THREAD_ENTRY * thread_p, FILE * fp,
     case FILE_TMP_TMP:
     case FILE_EITHER_TMP:
     case FILE_UNKNOWN_TYPE:
+    case FILE_MVCC_STATUS:
     default:
       fprintf (fp, "....Don't know how to dump desc..\n");
       break;

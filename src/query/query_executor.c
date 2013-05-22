@@ -2050,6 +2050,7 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 {
   ACCESS_SPEC_TYPE *p;
   HEAP_SCAN_ID *hsidp;
+  HEAP_PAGE_SCAN_ID *hpsidp;
   INDX_SCAN_ID *isidp;
   int pg_cnt;
 
@@ -2074,6 +2075,7 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
       switch (p->s_id.type)
 	{
 	case S_HEAP_SCAN:
+	case S_HEAP_SCAN_RECORD_INFO:
 	case S_CLASS_ATTR_SCAN:
 	  pg_cnt +=
 	    qexec_clear_regu_list (xasl_p, p->s_id.s.hsid.scan_pred.regu_list,
@@ -2084,11 +2086,30 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 	  hsidp = &p->s_id.s.hsid;
 	  if (hsidp->caches_inited)
 	    {
+	      int i;
 	      heap_attrinfo_end (thread_p, hsidp->pred_attrs.attr_cache);
 	      heap_attrinfo_end (thread_p, hsidp->rest_attrs.attr_cache);
+	      if (hsidp->cache_recordinfo != NULL)
+		{
+		  for (i = 0; i < HEAP_RECORD_INFO_NUMBER; i++)
+		    {
+		      db_value_clear (hsidp->cache_recordinfo[i]);
+		    }
+		}
 	      hsidp->caches_inited = false;
 	    }
 	  break;
+	case S_HEAP_PAGE_SCAN:
+	  hpsidp = &p->s_id.s.hpsid;
+	  if (hpsidp->cache_page_info != NULL)
+	    {
+	      int i;
+	      for (i = 0; i < HEAP_PAGE_INFO_NUMBER; i++)
+		{
+		  db_value_clear (hpsidp->cache_page_info[i]);
+		}
+	    }
+
 	case S_INDX_SCAN:
 	  pg_cnt +=
 	    qexec_clear_regu_list (xasl_p, p->s_id.s.isid.key_pred.regu_list,
@@ -6444,6 +6465,18 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 	  scan_type = S_HEAP_SCAN;
 	  indx_info = NULL;
 	}
+      else if (curr_spec->access == SEQUENTIAL_RECORD_INFO)
+	{
+	  /* open a sequential heap file scan that reads record info */
+	  scan_type = S_HEAP_SCAN_RECORD_INFO;
+	  indx_info = NULL;
+	}
+      else if (curr_spec->access == SEQUENTIAL_PAGE_SCAN)
+	{
+	  /* open a sequential heap file scan that reads page info */
+	  scan_type = S_HEAP_PAGE_SCAN;
+	  indx_info = NULL;
+	}
       else if (curr_spec->access == INDEX)
 	{
 	  /* open an indexed heap file scan */
@@ -6456,7 +6489,7 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 		  0);
 	  return ER_FAILED;
 	}			/* if */
-      if (scan_type == S_HEAP_SCAN)
+      if (scan_type == S_HEAP_SCAN || scan_type == S_HEAP_SCAN_RECORD_INFO)
 	{
 	  assert (composite_locking >= 0 && composite_locking <= 2);
 	  if (scan_open_heap_scan (thread_p, s_id,
@@ -6479,8 +6512,25 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 				   curr_spec->s.cls_node.cache_pred,
 				   curr_spec->s.cls_node.num_attrs_rest,
 				   curr_spec->s.cls_node.attrids_rest,
-				   curr_spec->s.cls_node.cache_rest) !=
-	      NO_ERROR)
+				   curr_spec->s.cls_node.cache_rest,
+				   scan_type,
+				   curr_spec->s.cls_node.cache_reserved,
+				   curr_spec->s.cls_node.
+				   cls_regu_list_reserved) != NO_ERROR)
+	    {
+	      goto exit_on_error;
+	    }
+	}
+      else if (scan_type == S_HEAP_PAGE_SCAN)
+	{
+	  if (scan_open_heap_page_scan (thread_p, s_id, curr_spec->lock_hint,
+					val_list, vd,
+					&ACCESS_SPEC_CLS_OID (curr_spec),
+					&ACCESS_SPEC_HFID (curr_spec),
+					curr_spec->where_pred, scan_type,
+					curr_spec->s.cls_node.cache_reserved,
+					curr_spec->s.cls_node.
+					cls_regu_list_reserved) != NO_ERROR)
 	    {
 	      goto exit_on_error;
 	    }
@@ -6652,7 +6702,9 @@ qexec_close_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec)
       switch (curr_spec->type)
 	{
 	case TARGET_CLASS:
-	  if (curr_spec->access == SEQUENTIAL)
+	  if (curr_spec->access == SEQUENTIAL
+	      || curr_spec->access == SEQUENTIAL_RECORD_INFO
+	      || curr_spec->access == SEQUENTIAL_PAGE_SCAN)
 	    {
 	      mnt_qm_sscans (thread_p);
 	    }
@@ -7396,7 +7448,9 @@ qexec_prune_spec (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec,
     }
   else
     {
-      if (spec->access == SEQUENTIAL)
+      if (spec->access == SEQUENTIAL
+	  || spec->access == S_HEAP_SCAN_RECORD_INFO
+	  || spec->access == S_HEAP_PAGE_SCAN)
 	{
 	  lock = X_LOCK;
 	}
@@ -7508,13 +7562,25 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 	  index_id = spec->curent->indx_id;
 	}
     }
-  if (spec->type == TARGET_CLASS && spec->access == SEQUENTIAL)
+  if (spec->type == TARGET_CLASS
+      && (spec->access == SEQUENTIAL
+	  || spec->access == SEQUENTIAL_RECORD_INFO))
     {
       HEAP_SCAN_ID *hsidp = &spec->s_id.s.hsid;
+      SCAN_TYPE scan_type =
+	(spec->access == SEQUENTIAL) ? S_HEAP_SCAN : S_HEAP_SCAN_RECORD_INFO;
+      int i = 0;
       if (hsidp->caches_inited)
 	{
 	  heap_attrinfo_end (thread_p, hsidp->pred_attrs.attr_cache);
 	  heap_attrinfo_end (thread_p, hsidp->rest_attrs.attr_cache);
+	  if (hsidp->cache_recordinfo != NULL)
+	    {
+	      for (i = 0; i < HEAP_RECORD_INFO_NUMBER; i++)
+		{
+		  db_value_clear (hsidp->cache_recordinfo[i]);
+		}
+	    }
 	  hsidp->caches_inited = false;
 	}
       hsidp->scancache_inited = false;
@@ -7532,7 +7598,29 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 			     spec->s.cls_node.cache_pred,
 			     spec->s.cls_node.num_attrs_rest,
 			     spec->s.cls_node.attrids_rest,
-			     spec->s.cls_node.cache_rest);
+			     spec->s.cls_node.cache_rest, scan_type,
+			     spec->s.cls_node.cache_reserved,
+			     spec->s.cls_node.cls_regu_list_reserved);
+    }
+  else if (spec->type == TARGET_CLASS && spec->access == SEQUENTIAL_PAGE_SCAN)
+    {
+      HEAP_PAGE_SCAN_ID *hpsidp = &spec->s_id.s.hpsid;
+      SCAN_TYPE scan_type = S_HEAP_PAGE_SCAN;
+      int i = 0;
+
+      if (hpsidp->cache_page_info != NULL)
+	{
+	  for (i = 0; i < HEAP_PAGE_INFO_NUMBER; i++)
+	    {
+	      db_value_clear (hpsidp->cache_page_info[i]);
+	    }
+	}
+      error =
+	scan_open_heap_page_scan (thread_p, &spec->s_id, spec->lock_hint,
+				  val_list, vd, &class_oid, &class_hfid,
+				  spec->where_pred, scan_type,
+				  spec->s.cls_node.cache_reserved,
+				  spec->s.cls_node.cls_regu_list_reserved);
     }
   else if (spec->type == TARGET_CLASS && spec->access == INDEX)
     {
@@ -11159,7 +11247,7 @@ qexec_execute_obj_fetch (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       /* Start heap file scan operation */
       /* A new argument(is_indexscan = false) is appended */
       (void) heap_scancache_start (thread_p, &scan_cache, NULL, NULL,
-				   true, false, LOCKHINT_NONE);
+				   true, false, LOCKHINT_NONE, NULL);
       scan_cache_end_needed = true;
 
       /* fetch the object and the class oid */
@@ -22888,6 +22976,12 @@ qexec_set_lock_for_sequential_access (THREAD_ENTRY * thread_p,
   UPDDEL_CLASS_INFO *query_class = NULL;
   bool found = false;
 
+  if (mvcc_Enabled == true)
+    {
+      /* no need to X-lock classes in mvcc */
+      return NO_ERROR;
+    }
+
   for (aptr = aptr_list; aptr != NULL; aptr = aptr->scan_ptr)
     {
       for (specp = aptr->spec_list; specp; specp = specp->next)
@@ -22916,7 +23010,9 @@ qexec_set_lock_for_sequential_access (THREAD_ENTRY * thread_p,
 		    {
 		      if (OID_EQ (&query_class->class_oid[j], class_oid))
 			{
-			  if (specp->access == SEQUENTIAL)
+			  if (specp->access == SEQUENTIAL
+			      || specp->access == SEQUENTIAL_RECORD_INFO
+			      || specp->access == SEQUENTIAL_PAGE_SCAN)
 			    {
 			      if (lock_object (thread_p, class_oid,
 					       oid_Root_class_oid, X_LOCK,

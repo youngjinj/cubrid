@@ -5140,6 +5140,43 @@ stx_build_cls_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 
   ptr = or_unpack_int (ptr, (int *) &cls_spec->schema_type);
 
+  ptr = or_unpack_int (ptr, &cls_spec->num_attrs_reserved);
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      cls_spec->cache_reserved = NULL;
+    }
+  else
+    {
+      cls_spec->cache_reserved =
+	stx_restore_db_value_array_extra (thread_p,
+					  &xasl_unpack_info->
+					  packed_xasl[offset],
+					  cls_spec->num_attrs_reserved,
+					  cls_spec->num_attrs_reserved);
+      if (cls_spec->cache_reserved == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      cls_spec->cls_regu_list_reserved = NULL;
+    }
+  else
+    {
+      cls_spec->cls_regu_list_reserved =
+	stx_restore_regu_variable_list (thread_p, &xasl_unpack_info->
+					packed_xasl[offset]);
+      if (cls_spec->cls_regu_list_reserved == NULL)
+	{
+	  goto error;
+	}
+    }
+
   return ptr;
 
 error:

@@ -39,6 +39,7 @@
 #include "large_object_directory.h"
 #include "large_object.h"
 #include "overflow_file.h"
+#include "file_mvcc_status.h"
 
 /*
  *
@@ -741,8 +742,43 @@ struct rvfun RV_fun[] = {
    btree_rv_keyval_undo_delete,
    btree_rv_redo_truncate_oid,
    btree_rv_keyval_dump,
+   NULL},
+  {RVHF_MVCC_INSERT,
+   "RVHF_MVCC_INSERT",
+   NULL,
+   heap_rv_mvcc_redo_insert,
+   NULL,
+   NULL},
+  {RVHF_MVCC_DELETE,
+   "RVHF_MVCC_DELETE",
+   NULL,
+   heap_rv_mvcc_redo_delete,
+   NULL,
+   NULL},
+  {RVHF_MVCC_UPDATE,
+   "RVHF_MVCC_UPDATE",
+   NULL,
+   heap_rv_mvcc_redo_update,
+   NULL,
+   NULL},
+  {RVBF_NEWPAGE_RESET,
+   "RVBF_NEWPAGE_RESET",
+   NULL,
+   file_mvcc_rv_newpage_reset,
+   NULL,
+   NULL},
+  {RVBF_MVCC_SET_STATUS,
+   "RVBF_MVCC_SET_STATUS",
+   file_mvcc_rv_undo_id_status,
+   file_mvcc_rv_redo_id_status,
+   NULL,
+   NULL},
+  {RVHF_MVCC_CLEAN_HEAP_PAGE,
+   "RVHF_MVCC_CLEAN_HEAP_PAGE",
+   NULL,
+   heap_rv_redo_clean_page,
+   NULL,
    NULL}
-
 };
 
 /*

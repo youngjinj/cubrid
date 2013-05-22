@@ -3006,6 +3006,19 @@ catcls_put_or_value_into_buffer (OR_VALUE * value_p, int chn, OR_BUF * buf_p,
 
   or_put_int (buf_p, chn);
 
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      /* mvcc related fields */
+      or_put_int (buf_p, 0);	/* mvcc insert id */
+      or_put_int (buf_p, 0);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+      or_put_int (buf_p, 0);	/* mvcc insert command id */
+      or_put_int (buf_p, 0);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+      or_put_int (buf_p, 0);	/* mvcc flags */
+      or_put_oid (buf_p, (OID *) & oid_Null_oid);	/* mvcc next version */
+    }
+
   /* offset table */
   offset_p = buf_p->ptr;
   or_advance (buf_p, OR_VAR_TABLE_SIZE (n_variable));
@@ -3120,6 +3133,19 @@ catcls_get_or_value_from_buffer (THREAD_ENTRY * thread_p, OR_BUF * buf_p,
   repr_id_bits = or_get_int (buf_p, &rc);	/* repid */
   bound_bits_flag = repr_id_bits & OR_BOUND_BIT_FLAG;
   or_advance (buf_p, OR_INT_SIZE);	/* chn */
+
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      /* skip mvcc realted fields */
+      or_advance (buf_p, OR_INT_SIZE);	/* mvcc insert id */
+      or_advance (buf_p, OR_INT_SIZE);	/* mvcc delete id */
+#if defined(MVCC_USE_COMMAND_ID)
+      or_advance (buf_p, OR_INT_SIZE);	/* mvcc insert command id */
+      or_advance (buf_p, OR_INT_SIZE);	/* mvcc insert delete id */
+#endif /* MVCC_USE_COMMAND_ID */
+      or_advance (buf_p, OR_INT_SIZE);	/* mvcc flags */
+      or_advance (buf_p, OR_OID_SIZE);	/* mvcc next version */
+    }
 
   if (bound_bits_flag)
     {
@@ -3431,7 +3457,7 @@ catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   MULTI_ROW_UPDATE) != NO_ERROR)
+				   MULTI_ROW_UPDATE, NULL, true) != NO_ERROR)
     {
       error = er_errid ();
       goto error;
@@ -3523,7 +3549,7 @@ catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p)
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   MULTI_ROW_DELETE) != NO_ERROR)
+				   MULTI_ROW_DELETE, NULL, true) != NO_ERROR)
     {
       error = er_errid ();
       goto error;
@@ -3632,7 +3658,7 @@ catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   MULTI_ROW_UPDATE) != NO_ERROR)
+				   MULTI_ROW_UPDATE, NULL, true) != NO_ERROR)
     {
       goto error;
     }
@@ -4206,7 +4232,7 @@ catcls_insert_catalog_classes (THREAD_ENTRY * thread_p, RECDES * record_p)
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   SINGLE_ROW_UPDATE) != NO_ERROR)
+				   SINGLE_ROW_UPDATE, NULL, true) != NO_ERROR)
     {
       goto error;
     }
@@ -4276,7 +4302,7 @@ catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p,
 				   ct_class_oid_p,
-				   SINGLE_ROW_DELETE) != NO_ERROR)
+				   SINGLE_ROW_DELETE, NULL, true) != NO_ERROR)
     {
       goto error;
     }
@@ -4365,7 +4391,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p,
 				   class_oid_p,
-				   SINGLE_ROW_UPDATE) != NO_ERROR)
+				   SINGLE_ROW_UPDATE, NULL, true) != NO_ERROR)
     {
       goto error;
     }
@@ -4609,7 +4635,7 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
     }
 
   error = heap_scancache_start (thread_p, &scan_cache, &hfid, NULL, true,
-				false, LOCKHINT_NONE);
+				false, LOCKHINT_NONE, NULL);
   if (error != NO_ERROR)
     {
       goto exit;
@@ -4776,7 +4802,7 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
     }
 
   error = heap_scancache_start (thread_p, &scan_cache, &hfid, NULL, true,
-				false, LOCKHINT_NONE);
+				false, LOCKHINT_NONE, NULL);
   if (error != NO_ERROR)
     {
       goto exit;

@@ -64,36 +64,6 @@ enum
   SPAGE_EMPTY_OFFSET = 0	/* uninitialized offset */
 };
 
-typedef struct spage_header SPAGE_HEADER;
-struct spage_header
-{
-  PGNSLOTS num_slots;		/* Number of allocated slots for the page */
-  PGNSLOTS num_records;		/* Number of records on page */
-  INT16 anchor_type;		/* Valid ANCHORED, ANCHORED_DONT_REUSE_SLOTS
-				   UNANCHORED_ANY_SEQUENCE,
-				   UNANCHORED_KEEP_SEQUENCE */
-  unsigned short alignment;	/* Alignment for records: Valid values sizeof
-				   char, short, int, double */
-  int total_free;		/* Total free space on page */
-  int cont_free;		/* Contiguous free space on page */
-  int offset_to_free_area;	/* Byte offset from the beginning of the page
-				   to the first free byte area on the page. */
-  int reserved3;
-  int reserved4;
-  unsigned int is_saving:1;	/* True if saving is need for recovery (undo) */
-  unsigned int need_update_best_hint:1;	/* True if we should update best pages hint
-					 * for this page. See heap_stats_update. */
-
-  /* The followings are reserved for future use. */
-  /* SPAGE_HEADER should be 8 bytes aligned. Packing of bit fields depends on
-   * compiler's behavior. It's better to use 4-bytes type in order not to be
-   * affected by the compiler.
-   */
-  unsigned int reserved_bits:30;
-  int reserved1;
-  int reserved2;
-};
-
 typedef struct spage_save_entry SPAGE_SAVE_ENTRY;
 typedef struct spage_save_head SPAGE_SAVE_HEAD;
 
@@ -183,7 +153,8 @@ static int spage_update_record_after_compact (PAGE_PTR page_p,
 static SCAN_CODE spage_search_record (PAGE_PTR page_p,
 				      PGSLOTID * out_slot_id_p,
 				      RECDES * record_descriptor_p,
-				      int is_peeking, int direction);
+				      int is_peeking, int direction,
+				      bool skip_empty);
 
 static const char *spage_record_type_string (INT16 record_type);
 
@@ -343,7 +314,7 @@ spage_free_all_saved_spaces_helper (const void *vpid_key, void *ent,
  * spage_save_space () - Save some space for recovery (undo) purposes
  *   return:
  *   sphdr(in): Pointer to header of slotted page
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   space(in): Amount of space to save
  *
  * Note: The current transaction saving information is kept on the page only if
@@ -528,7 +499,7 @@ spage_save_space (THREAD_ENTRY * thread_p, SPAGE_HEADER * page_header_p,
  *                                            other transactions
  *   return:
  *   sphdr(in): Pointer to header of slotted page
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  */
 static int
 spage_get_saved_spaces_by_other_trans (THREAD_ENTRY * thread_p,
@@ -548,7 +519,7 @@ spage_get_saved_spaces_by_other_trans (THREAD_ENTRY * thread_p,
  * spage_get_total_saved_spaces () - Find the total saved space
  *   return:
  *   sphdr(in): Pointer to header of slotted page
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  */
 static int
 spage_get_total_saved_spaces (THREAD_ENTRY * thread_p,
@@ -571,7 +542,7 @@ spage_get_total_saved_spaces (THREAD_ENTRY * thread_p,
                                other transactions
  *   return:
  *   sphdr(in): Pointer to header of slotted page
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   saved_by_other_trans(in/out) : The other transaction's saved space will
  *                                  be returned
  */
@@ -791,7 +762,7 @@ spage_max_record_size (void)
 /*
  * spage_number_of_records () - Return the total number of records in the slotted page
  *   return: Number of records (PGNSLOTS)
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  */
 PGNSLOTS
 spage_number_of_records (PAGE_PTR page_p)
@@ -809,7 +780,7 @@ spage_number_of_records (PAGE_PTR page_p)
 /*
  * spage_number_of_slots () - Return the total number of slots in the slotted page
  *   return: Number of slots (PGNSLOTS)
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  */
 PGNSLOTS
 spage_number_of_slots (PAGE_PTR page_p)
@@ -827,7 +798,7 @@ spage_number_of_slots (PAGE_PTR page_p)
 /*
  * spage_get_free_space () - Returns total free area
  *   return: Total free space
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  */
 int
 spage_get_free_space (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
@@ -854,7 +825,7 @@ spage_get_free_space (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
 /*
  * spage_get_free_space_without_saving () - Returns total free area without saving
  *   return: Total free space
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   need_update(out): Value of need_update_best_hint
  */
 int
@@ -887,7 +858,7 @@ spage_get_free_space_without_saving (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 /*
  * spage_set_need_update_best_hint () - Set need_update_best_hint on slotted page header
  *   return: void
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   need_update(in): Value of need_update_best_hint
  *
  * NOTE: We will set this value as TRUE when we failed updating best page hints
@@ -911,7 +882,7 @@ spage_set_need_update_best_hint (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
  * spage_max_space_for_new_record () - Find the maximum free space for a new
  *                                     insertion
  *   return: Maximum free length for an insertion
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *
  * Note: The function subtract any pointer array information that may be
  *       needed for a new insertion.
@@ -960,7 +931,7 @@ spage_max_space_for_new_record (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
 /*
  * spage_collect_statistics () - Collect statistical information of the page
  *   return: none
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   npages(out): the number of pages
  *   nrecords(out): the number of records
  *   rec_length(out): total length of records
@@ -1020,7 +991,7 @@ spage_collect_statistics (PAGE_PTR page_p,
 /*
  * spage_initialize () - Initialize a slotted page
  *   return: void
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slots_type(in): Flag which indicates the type of slots
  *   alignment(in): page alignment type
  *   safeguard_rvspace(in): Save space during updates. for transaction recovery
@@ -1050,7 +1021,7 @@ spage_initialize (THREAD_ENTRY * thread_p, PAGE_PTR page_p, INT16 slot_type,
   page_header_p->num_slots = 0;
   page_header_p->num_records = 0;
   page_header_p->is_saving = is_saving;
-  page_header_p->reserved3 = 0;
+  page_header_p->last_mvcc_id = MVCCID_NULL;
   page_header_p->reserved4 = 0;
   page_header_p->need_update_best_hint = 0;
   page_header_p->reserved_bits = 0;
@@ -1092,7 +1063,7 @@ spage_compare_slot_offset (const void *arg1, const void *arg2)
 /*
  * spage_compact () -  Compact an slotted page
  *   return:
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *
  * Note: Only the records are compacted, the slots are not compacted.
  */
@@ -1285,7 +1256,7 @@ spage_set_slot (SPAGE_SLOT * slot_p, int offset, int length, INT16 type)
  * sp_empty () - Find a free area/slot where a record of the given length can
  *               be inserted onto the given slotted page
  *   return: either SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   sptr(out): Pointer to slotted page array pointer
  *   length(in): Length of area/record
  *   type(in): Type of record to be inserted
@@ -1638,7 +1609,7 @@ spage_check_record_for_insert (RECDES * record_descriptor_p)
 /*
  * spage_insert () - Insert a record
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   recdes(in): Pointer to a record descriptor
  *   slotid(out): Slot identifier
  */
@@ -1670,7 +1641,7 @@ spage_insert (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
  * spage_find_slot_for_insert () - Find a slot id and related information in the
  *                          given page
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   recdes(in): Pointer to a record descriptor
  *   slotid(out): Slot identifier
  *   slotptr(out): Pointer to slotted array
@@ -1837,7 +1808,7 @@ spage_insert_at (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id,
  * spage_insert_for_recovery () - Insert a record onto the given slotted page at
  *                                the given slotid (only for recovery)
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slotid for insertion
  *   recdes(in): Pointer to a record descriptor
  *
@@ -1948,7 +1919,7 @@ spage_reduce_a_slot (SPAGE_HEADER * page_header_p)
 /*
  * spage_delete () - Delete the record located at given slot on the given page
  *   return: slotid on success and NULL_SLOTID on failure
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record to delete
  */
 PGSLOTID
@@ -1981,7 +1952,7 @@ spage_delete (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id)
   page_header_p->total_free += free_space;
 
   /* If it is the last slot in the page, the contiguous free space can be
-     adjusted. Avoid future compactions as much as possible */
+     adjusted. Avoid future compaction as much as possible */
   if (spage_is_record_located_at_end (page_header_p, slot_p))
     {
       page_header_p->cont_free += free_space;
@@ -2036,7 +2007,7 @@ spage_delete (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id)
  * spage_delete_for_recovery () - Delete the record located at given slot on the given page
  *                  (only for recovery)
  *   return: slotid on success and NULL_SLOTID on failure
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record to delete
  *
  * Note: The slot is always reused even in ANCHORED_DONT_REUSE_SLOTS pages
@@ -2279,7 +2250,7 @@ spage_update_record_after_compact (PAGE_PTR page_p,
  * spage_update () - Update the record located at the given slot with the data
  *                described by the given record descriptor
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record to update
  *   recdes(in): Pointer to a record descriptor
  */
@@ -2360,7 +2331,7 @@ spage_update (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id,
  * spage_is_updatable () - Find if there is enough area to update the record with
  *                   the given data
  *   return: true if there is enough area to update, or false
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record to update
  *   recdes(in): Pointer to a record descriptor
  */
@@ -2381,7 +2352,7 @@ spage_is_updatable (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
  * spage_update_record_type () - Update the type of the record located at the
  *                               given slot
  *   return: void
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record to update
  *   type(in): record type
  */
@@ -2418,7 +2389,7 @@ spage_update_record_type (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
  * spage_reclaim () - Reclaim all slots of marked deleted slots of anchored with
  *                 don't reuse slots pages
  *   return: true if anything was reclaimed and false if nothing was reclaimed
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *
  * Note: This function is intended to be run when there are no more references
  *       of the marked deleted slots, and thus they can be reused.
@@ -2490,7 +2461,7 @@ spage_reclaim (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
 /*
  * spage_split () - Split the record stored at given slotid at offset location
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record to update
  *   offset(in): Location of split must be > 0 and smaller than record length
  *   new_slotid(out): new slot id
@@ -2698,7 +2669,7 @@ spage_split (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id,
 /*
  * spage_take_out () - REMOVE A PORTION OF A RECORD
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of desired record
  *   takeout_offset(in): Location where to remove a portion of the data
  *   takeout_length(in): Length of data to rmove starting at takeout_offset
@@ -2851,7 +2822,7 @@ spage_take_out (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id,
  * spage_append () - Append the data described by the given record descriptor
  *                into the record located at the given slot
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of desired record
  *   recdes(in): Pointer to a record descriptor
  */
@@ -2867,7 +2838,7 @@ spage_append (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id,
  * spage_put () - Add the data described by the given record descriptor within
  *               the given offset of the record located at the given slot
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of desired record
  *   offset(in): Location where to add the portion of the data
  *   recdes(in): Pointer to a record descriptor
@@ -3152,7 +3123,7 @@ spage_put_helper (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id,
 /*
  * spage_overwrite () - Overwrite a portion of the record stored at given slotid
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record to overwrite
  *   overwrite_offset(in): Offset on the record to start the overwrite process
  *   recdes(in): New replacement data
@@ -3224,7 +3195,7 @@ spage_overwrite (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slot_id,
  * spage_merge () - Merge the record of the second slot onto the record of the
  *               first slot
  *   return: either of SP_ERROR, SP_DOESNT_FIT, SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid1(in): Slot identifier of first slot
  *   slotid2(in): Slot identifier of second slot
  *
@@ -3448,7 +3419,7 @@ spage_merge (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID first_slot_id,
 static SCAN_CODE
 spage_search_record (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
 		     RECDES * record_descriptor_p, int is_peeking,
-		     int direction)
+		     int direction, bool skip_empty)
 {
   SPAGE_HEADER *page_header_p;
   SPAGE_SLOT *slot_p;
@@ -3482,8 +3453,17 @@ spage_search_record (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
   while (slot_id >= 0 && slot_id < page_header_p->num_slots
 	 && slot_p->offset_to_record == SPAGE_EMPTY_OFFSET)
     {
-      slot_id += direction;
-      slot_p -= direction;
+      if (skip_empty)
+	{
+	  slot_id += direction;
+	  slot_p -= direction;
+	}
+      else
+	{
+	  record_descriptor_p->data = NULL;
+	  *out_slot_id_p = slot_id;
+	  return S_SUCCESS;
+	}
     }
 
   SPAGE_VERIFY_HEADER (page_header_p);
@@ -3506,7 +3486,7 @@ spage_search_record (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
 /*
  * spage_next_record () - Get next record
  *   return: Either of S_SUCCESS, S_DOESNT_FIT, S_END
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in/out): Slot identifier of current record
  *   recdes(out): Pointer to a record descriptor
  *   ispeeking(in): Indicates whether the record is going to be copied
@@ -3536,13 +3516,32 @@ spage_next_record (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
 		   RECDES * record_descriptor_p, int is_peeking)
 {
   return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
-			      is_peeking, SPAGE_SEARCH_NEXT);
+			      is_peeking, SPAGE_SEARCH_NEXT, true);
+}
+
+/*
+ * spage_next_record_dont_skip_empty () - Get next slot without skipping
+ *					  empty records.
+ *
+ * return		    : 
+ * page_p (in)		    :
+ * out_slot_id_p (in)	    :
+ * record_descriptor_p (in) :
+ * is_peeking (in)	    :
+ */
+SCAN_CODE
+spage_next_record_dont_skip_empty (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
+				   RECDES * record_descriptor_p,
+				   int is_peeking)
+{
+  return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
+			      is_peeking, SPAGE_SEARCH_NEXT, false);
 }
 
 /*
  * spage_previous_record () - Get previous record
  *   return: Either of S_SUCCESS, S_DOESNT_FIT, S_END
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(out): Slot identifier of current record
  *   recdes(out): Pointer to a record descriptor
  *   ispeeking(in): Indicates whether the record is going to be copied
@@ -3572,13 +3571,79 @@ spage_previous_record (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
 		       RECDES * record_descriptor_p, int is_peeking)
 {
   return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
-			      is_peeking, SPAGE_SEARCH_PREV);
+			      is_peeking, SPAGE_SEARCH_PREV, true);
+}
+
+/*
+ * spage_previous_record_dont_skip_empty () - Get previous slot without
+ *					      skipping empty records.
+ *
+ * return		    :
+ * page_p (in)		    :
+ * out_slot_id_p (in)	    :
+ * record_descriptor_p (in) :
+ * is_peeking (in)	    :
+ */
+SCAN_CODE
+spage_previous_record_dont_skip_empty (PAGE_PTR page_p,
+				       PGSLOTID * out_slot_id_p,
+				       RECDES * record_descriptor_p,
+				       int is_peeking)
+{
+  return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
+			      is_peeking, SPAGE_SEARCH_PREV, false);
+}
+
+/*
+ * spage_get_page_header_info () - Obtain page information for spage_header.
+ *
+ * return		 : 
+ * page_p (in)		 :
+ * page_header_info (in) :
+ */
+SCAN_CODE
+spage_get_page_header_info (PAGE_PTR page_p, DB_VALUE ** page_header_info)
+{
+  SPAGE_HEADER *page_header_p;
+
+  if (page_p == NULL || page_header_info == NULL)
+    {
+      return S_SUCCESS;
+    }
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_NUM_SLOTS],
+	       page_header_p->num_slots);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_NUM_RECORDS],
+	       page_header_p->num_records);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_ANCHOR_TYPE],
+	       page_header_p->anchor_type);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_ALIGNMENT],
+	       page_header_p->alignment);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
+	       page_header_p->total_free);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
+	       page_header_p->total_free);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_CONT_FREE],
+	       page_header_p->cont_free);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA],
+	       page_header_p->offset_to_free_area);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_LAST_MVCCID],
+	       page_header_p->last_mvcc_id);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_IS_SAVING],
+	       page_header_p->is_saving);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_UPDATE_BEST],
+	       page_header_p->need_update_best_hint);
+
+  return S_SUCCESS;
 }
 
 /*
  * spage_get_record () - Get specified record
  *   return: Either of S_SUCCESS, S_DOESNT_FIT, S_END
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of current record
  *   recdes(out): Pointer to a record descriptor
  *   ispeeking(in): Indicates whether the record is going to be copied
@@ -3683,7 +3748,7 @@ spage_get_record_data (PAGE_PTR page_p, SPAGE_SLOT * slot_p,
  * spage_get_record_length () - Find the length of the record associated with
  *                              the given slot on the given page
  *   return: Length of the record or -1 in case of error
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record
  */
 int
@@ -3710,9 +3775,62 @@ spage_get_record_length (PAGE_PTR page_p, PGSLOTID slot_id)
 }
 
 /*
+ * spage_get_record_offset () - Find the offset of the record associated with
+ *                              the given slot on the given page
+ *
+ * return     : Record offset.
+ * page_p (in): Pointer to slotted page.
+ * slotid (in): Slot identifier of record.
+ */
+int
+spage_get_record_offset (PAGE_PTR page_p, PGSLOTID slot_id)
+{
+  SPAGE_HEADER *page_header_p;
+  SPAGE_SLOT *slot_p;
+
+  assert (page_p != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  slot_p = spage_find_slot (page_p, page_header_p, slot_id, true);
+  if (slot_p == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_UNKNOWN_SLOTID, 3,
+	      slot_id, pgbuf_get_page_id (page_p),
+	      pgbuf_get_volume_label (page_p));
+      return -1;
+    }
+
+  return slot_p->offset_to_record;
+}
+
+/*
+ * spage_get_slot () - Looks for the slot with slot_id identifier in page_p
+ *		       and returns a SPAGE_SLOT. Does not check for unknown
+ *		       slots.
+ *
+ * return	: SPAGE_SLOT.
+ * page_p (in)  : Pointer to slotted page.
+ * slot_id (in) : Slot identifier.
+ */
+SPAGE_SLOT *
+spage_get_slot (PAGE_PTR page_p, PGSLOTID slot_id)
+{
+  SPAGE_HEADER *page_header_p = NULL;
+
+  assert (page_p != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  return spage_find_slot (page_p, page_header_p, slot_id, false);
+}
+
+/*
  * spage_get_space_for_record () -
  *   return:
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record
  */
 int
@@ -3744,7 +3862,7 @@ spage_get_space_for_record (PAGE_PTR page_p, PGSLOTID slot_id)
  * spage_get_record_type () - Find the type of the record associated with the given slot
  *                 on the given page
  *   return: record type, or -1 if the given slot is invalid
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record
  */
 INT16
@@ -3773,7 +3891,7 @@ spage_get_record_type (PAGE_PTR page_p, PGSLOTID slot_id)
  * spage_mark_deleted_slot_as_reusable () - Marks the slot of a previously
  *                                          deleted record as reusable
  *   return: SP_ERROR or SP_SUCCESS
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier
  */
 int
@@ -3831,7 +3949,7 @@ spage_mark_deleted_slot_as_reusable (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 /*
  * spage_is_slot_exist () - Find if there is a valid record in given slot
  *   return: true/false
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   slotid(in): Slot identifier of record
  */
 bool
@@ -4043,7 +4161,7 @@ spage_dump_record (FILE * fp, PAGE_PTR page_p, PGSLOTID slot_id,
 /*
  * spage_dump () - Dump an slotted page
  *   return: void
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  *   isrecord_printed(in): If true, records are printed in ascii format,
  *                         otherwise, the records are not printed.
  *
@@ -4094,7 +4212,7 @@ spage_dump (THREAD_ENTRY * thread_p, FILE * fp, PAGE_PTR page_p,
  * spage_check () - Check consistency of page. This function is used for
  *               debugging purposes
  *   return: void
- *   pgptr(in): Pointer to slotted page
+ *   page_p(in): Pointer to slotted page
  */
 static void
 spage_check (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
@@ -4207,7 +4325,7 @@ spage_check (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
 /*
  * spage_check_slot_owner () -
  *   return:
- *   pgptr(in):
+ *   page_p(in):
  *   slotid(in):
  */
 int
@@ -4339,3 +4457,239 @@ spage_reduce_contiguous_free_space (SPAGE_HEADER * page_header_p, int space)
 
   SPAGE_VERIFY_HEADER (page_header_p);
 }
+
+/*
+ * spage_clean_page () - Collects clean page information: dead records and
+ *			 overflow pages belonging to dead records.
+ *
+ * return	      : Error code.
+ * thread_p (in)      : Thread entry.
+ * page_p (in)	      : Heap page pointer.
+ * page_clean_p (in)  : Clean data.
+ * mvcc_snapshot (in) : MVCC snapshot data.
+ */
+int
+spage_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+		  SPAGE_CLEAN_STRUCT * page_clean_p,
+		  MVCC_SNAPSHOT * mvcc_snapshot)
+{
+  SPAGE_HEADER *page_header_p = NULL;
+  SPAGE_SLOT *slot_p = NULL;
+  int nslots, i;
+  OID ovf_oid;
+  RECDES ovf_recdes, recdes;
+  MVCC_REC_HEADER *mvcc_header = NULL;
+  MVCC_SATISFIES_VACUUM_RESULT record_status;
+
+  assert (page_p != NULL);
+  page_header_p = (SPAGE_HEADER *) page_p;
+
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  nslots = page_header_p->num_slots;
+
+  page_clean_p->num_dead = 0;
+  page_clean_p->num_ovfl_pages = 0;
+
+  /* Alloc enough space for clean data */
+  page_clean_p->dead_slots = (int *) malloc (nslots * sizeof (int));
+  if (page_clean_p->dead_slots == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      nslots * sizeof (int));
+    }
+  page_clean_p->ovfl_pages = (VPID *) malloc (nslots * sizeof (VPID));
+  if (page_clean_p->ovfl_pages == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      nslots * sizeof (VPID));
+    }
+
+  slot_p = (SPAGE_SLOT *) (page_p + DB_PAGESIZE - sizeof (SPAGE_SLOT));
+  for (i = 0; i < nslots; i++, slot_p--)
+    {
+      if (i == 0)
+	{
+	  /* this is header record, skip it */
+	  continue;
+	}
+      if (slot_p->record_type != REC_BIGONE
+	  && slot_p->record_type != REC_HOME)
+	{
+	  /* Only home and big records are handled here */
+	  continue;
+	}
+      if (spage_get_record_data (page_p, slot_p, &recdes, PEEK) != S_SUCCESS)
+	{
+	  return ER_FAILED;
+	}
+      /* Get MVCC header */
+      mvcc_header = (MVCC_REC_HEADER *) recdes.data;
+
+      /* Get record status */
+      record_status =
+	mvcc_satisfies_vacuum (thread_p, mvcc_header,
+			       mvcc_snapshot->lowest_active_mvccid, page_p);
+      if (record_status == VACUUM_RECORD_DEAD)
+	{
+	  /* Records is dead and is safe to remove it */
+	  page_clean_p->dead_slots[page_clean_p->num_dead++] = i;
+	  if (slot_p->record_type == REC_BIGONE)
+	    {
+	      /* Big records, must also delete overflow pages */
+	      ovf_recdes.data = (char *) &ovf_oid;
+	      ovf_recdes.length = -1;
+	      ovf_recdes.area_size = sizeof (OID);
+	      if (spage_get_record_data (page_p, slot_p, &ovf_recdes, COPY) !=
+		  S_SUCCESS)
+		{
+		  return ER_FAILED;
+		}
+	      /* save the overflow page id to release it later */
+	      /* maybe we should reconsider this: do we really need to save
+	       * overflow pages? couldn't we just delete them here?
+	       */
+	      page_clean_p->ovfl_pages[page_clean_p->num_ovfl_pages].pageid =
+		ovf_oid.pageid;
+	      page_clean_p->ovfl_pages[page_clean_p->num_ovfl_pages].volid =
+		ovf_oid.volid;
+	      page_clean_p->num_ovfl_pages++;
+	    }
+	}
+    }
+
+  return NO_ERROR;
+}
+
+/*
+ * spage_execute_clean_page () - Executes page cleaning.
+ *
+ * return	   : Error code.
+ * thread_p (in)   : Thread entry.
+ * page_p (in)	   : Heap page pointer.
+ * page_clean (in) : Clean data.
+ */
+int
+spage_execute_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+			  SPAGE_CLEAN_STRUCT page_clean)
+{
+  SPAGE_HEADER *page_header_p = NULL;
+  SPAGE_SLOT *slot_p = NULL;
+  int i, error = NO_ERROR;
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  /* Mark dead records */
+  for (i = 0; i < page_clean.num_dead; i++)
+    {
+      slot_p =
+	spage_find_slot (page_p, page_header_p, page_clean.dead_slots[i],
+			 false);
+      if (slot_p == NULL)
+	{
+	  return ER_FAILED;
+	}
+      spage_set_slot (slot_p, SPAGE_EMPTY_OFFSET, 0, REC_DEAD);
+      page_header_p->num_records--;
+    }
+
+  /* Compact page */
+  error = spage_compact (page_p);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  /* Mark page as clean */
+  spage_mark_page_as_cleaned (thread_p, page_p);
+  pgbuf_set_dirty (thread_p, page_p, DONT_FREE);
+  return NO_ERROR;
+}
+
+/*
+ * spage_should_clean_page () - Check if page has records that may be cleaned
+ *				and if the last change was done before oldest
+ *				active transaction.
+ *
+ * return	      : True if page should be cleaned, false otherwise.
+ * page_ptr (in)      : Heap page pointer.
+ * oldest_active (in) : MVCCID for oldest active transaction.
+ */
+bool
+spage_should_clean_page (PAGE_PTR page_ptr, MVCCID oldest_active)
+{
+  SPAGE_HEADER *page_header_p = NULL;
+
+  assert (page_ptr != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_ptr;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  /* There are records that may be cleaned if last_mvcc_id is not NULL.
+   * To avoid too many cleans, check that the latest change was not done
+   * by an active transaction.
+   */
+  return (page_header_p->last_mvcc_id != MVCCID_NULL
+	  && mvcc_id_precedes (page_header_p->last_mvcc_id, oldest_active));
+}
+
+/*
+ * spage_mark_page_as_cleaned () - Marks the page as cleaned to avoid future
+ *				   useless cleanings.
+ *
+ * return	 : void.
+ * thread_p (in) : Thread entry.
+ * page_ptr (in) : Heap page pointer.
+ */
+void
+spage_mark_page_as_cleaned (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr)
+{
+  SPAGE_HEADER *page_header_p = NULL;
+
+  assert (page_ptr != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_ptr;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  /* Set last_mvcc_id to NULL */
+  if (page_header_p->last_mvcc_id != MVCCID_NULL)
+    {
+      page_header_p->last_mvcc_id = MVCCID_NULL;
+      pgbuf_set_dirty (thread_p, page_ptr, DONT_FREE);
+    }
+}
+
+/*
+ * spage_mark_page_for_clean () - Mark the page as it may need to clean
+ *				  deleted records.
+ *
+ * return	 : void.
+ * thread_p (in) : Thread entry.
+ * page_ptr (in) : Heap page pointer.
+ * mvcc_id (in)  : The page is marked for cleaning by storing the MVCCID of
+ *		   the last transaction which deleted records in this page.
+ *		   Storing the MVCCID helps to avoid doing too many cleans
+ *		   while this transaction is still active.
+ */
+void
+spage_mark_page_for_clean (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr,
+			   MVCCID mvcc_id)
+{
+  SPAGE_HEADER *page_header_p = NULL;
+
+  assert (page_ptr != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_ptr;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  /* Update last_mvcc_id if it was NULL or if it precedes the new MVCCID */
+  if (page_header_p->last_mvcc_id == MVCCID_NULL
+      || mvcc_id_precedes (page_header_p->last_mvcc_id, mvcc_id))
+    {
+      page_header_p->last_mvcc_id = mvcc_id;
+      pgbuf_set_dirty (thread_p, page_ptr, DONT_FREE);
+    }
+}
+
+

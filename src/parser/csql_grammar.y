@@ -22136,6 +22136,10 @@ PT_HINT parser_hint_table[] = {
   ,
   {"USE_INSERT_IDX", NULL, PT_HINT_USE_INSERT_IDX}
   ,
+  {"SELECT_RECORD_INFO", NULL, PT_HINT_SELECT_RECORD_INFO}
+  ,
+  {"SELECT_PAGE_INFO", NULL, PT_HINT_SELECT_PAGE_INFO}
+  ,
   {NULL, NULL, -1}		/* mark as end */
 };
 

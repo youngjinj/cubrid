@@ -291,6 +291,12 @@ static ODKU_INFO *pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert,
 				   XASL_NODE * xasl,
 				   PT_NODE ** non_null_attrs);
 
+static REGU_VARIABLE *pt_to_regu_reserved_name (PARSER_CONTEXT * parser,
+						PT_NODE * attr);
+static int pt_reserved_id_to_valuelist_index (PARSER_CONTEXT * parser,
+					      PT_RESERVED_NAME_ID
+					      reserved_id);
+
 #define APPEND_TO_XASL(xasl_head, list, xasl_tail)                      \
     if (xasl_head) {                                                    \
         /* append xasl_tail to end of linked list denoted by list */    \
@@ -523,8 +529,9 @@ static void pt_split_having_grbynum (PARSER_CONTEXT * parser,
 
 static int pt_split_attrs (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
 			   PT_NODE * pred, PT_NODE ** pred_attrs,
-			   PT_NODE ** rest_attrs, int **pred_offsets,
-			   int **rest_offsets);
+			   PT_NODE ** rest_attrs, PT_NODE ** reserved_attrs,
+			   int **pred_offsets, int **rest_offsets,
+			   int **reserved_offsets);
 
 static int pt_to_index_attrs (PARSER_CONTEXT * parser,
 			      TABLE_INFO * table_info,
@@ -583,7 +590,11 @@ static ACCESS_SPEC_TYPE *pt_make_class_access_spec (PARSER_CONTEXT * parser,
 						    HEAP_CACHE_ATTRINFO *
 						    cache_rest,
 						    ACCESS_SCHEMA_TYPE
-						    schema_index);
+						    schema_index,
+						    DB_VALUE **
+						    cache_recordinfo,
+						    REGU_VARIABLE_LIST
+						    reserved_val_list);
 
 static ACCESS_SPEC_TYPE *pt_make_list_access_spec (XASL_NODE * xasl,
 						   ACCESS_METHOD access,
@@ -722,6 +733,8 @@ static bool pt_has_unresolved_types (PARSER_CONTEXT * parser,
 static bool pt_is_sort_list_covered (PARSER_CONTEXT * parser,
 				     SORT_LIST * covering_list_p,
 				     SORT_LIST * covered_list_p);
+static DB_VALUE **pt_make_reserved_value_list (PARSER_CONTEXT * parser,
+					       PT_RESERVED_NAME_TYPE type);
 
 static void
 pt_init_xasl_supp_info ()
@@ -3128,23 +3141,32 @@ pt_make_identity_offsets (PT_NODE * attr_list)
  *   pred(in):
  *   pred_attrs(out):
  *   rest_attrs(out):
+ *   reserved_attrs(out):
  *   pred_offsets(out):
  *   rest_offsets(out):
+ *   reserved_offsets(out):
  *
  * Note :
  * Those attrs that are found in the pred are put on the pred_attrs list,
- * those attrs not found in the pred are put on the rest_attrs list
+ * those attrs not found in the pred are put on the rest_attrs list.
+ * There are special spec flags that activate reserved attributes, which are
+ * handled differently compared with regular attributes.
+ * For now only reserved names of record information and page information are
+ * used.
  */
 static int
 pt_split_attrs (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
 		PT_NODE * pred, PT_NODE ** pred_attrs, PT_NODE ** rest_attrs,
-		int **pred_offsets, int **rest_offsets)
+		PT_NODE ** reserved_attrs, int **pred_offsets,
+		int **rest_offsets, int **reserved_offsets)
 {
-  PT_NODE *tmp, *pointer, *real_attrs;
-  PT_NODE *pred_nodes;
-  int cur_pred, cur_rest, num_attrs, i;
-  PT_NODE *attr_list = table_info->attribute_list;
-  PT_NODE *node, *save_node, *save_next, *ref_node;
+  PT_NODE *tmp = NULL, *pointer = NULL, *real_attrs = NULL;
+  PT_NODE *pred_nodes = NULL;
+  int cur_pred, cur_rest, cur_reserved, num_attrs, i;
+  PT_NODE *attr_list = NULL;
+  PT_NODE *node = NULL, *save_node = NULL, *save_next = NULL;
+  PT_NODE *ref_node = NULL;
+  bool has_reserved = false;
 
   pred_nodes = NULL;		/* init */
   *pred_attrs = NULL;
@@ -3153,11 +3175,34 @@ pt_split_attrs (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
   *rest_offsets = NULL;
   cur_pred = 0;
   cur_rest = 0;
+  if (reserved_attrs != NULL)
+    {
+      *reserved_attrs = NULL;
+    }
+  if (reserved_offsets != NULL)
+    {
+      *reserved_offsets = NULL;
+    }
+  cur_reserved = 0;
 
-  if (!attr_list)
-    return 1;			/* nothing to do */
+  if (table_info->attribute_list == NULL)
+    return NO_ERROR;		/* nothing to do */
 
-  num_attrs = pt_length_of_list (attr_list);
+  num_attrs = pt_length_of_list (table_info->attribute_list);
+  attr_list = table_info->attribute_list;
+
+  has_reserved = PT_SHOULD_BIND_RESERVED_NAME (table_info->class_spec);
+  if (has_reserved)
+    {
+      assert (reserved_attrs != NULL);
+      assert (reserved_offsets != NULL);
+      *reserved_offsets = (int *) malloc (num_attrs * sizeof (int));
+      if (*reserved_offsets == NULL)
+	{
+	  goto exit_on_error;
+	}
+    }
+
   if ((*pred_offsets = (int *) malloc (num_attrs * sizeof (int))) == NULL)
     {
       goto exit_on_error;
@@ -3168,50 +3213,60 @@ pt_split_attrs (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
       goto exit_on_error;
     }
 
-  if (!pred)
+  if (pred)
     {
-      *rest_attrs = pt_point_l (parser, attr_list);
-      for (i = 0; i < num_attrs; i++)
+      /* mq_get_references() is destructive to the real set of referenced
+       * attrs, so we need to squirrel it away. */
+      real_attrs = table_info->class_spec->info.spec.referenced_attrs;
+      table_info->class_spec->info.spec.referenced_attrs = NULL;
+
+      /* Traverse pred */
+      for (node = pred; node; node = node->next)
 	{
-	  (*rest_offsets)[i] = i;
-	}
-      return 1;
+	  save_node = node;	/* save */
+
+	  CAST_POINTER_TO_NODE (node);
+
+	  if (node)
+	    {
+	      /* save and cut-off node link */
+	      save_next = node->next;
+	      node->next = NULL;
+
+	      ref_node =
+		mq_get_references (parser, node, table_info->class_spec);
+	      pred_nodes = parser_append_node (ref_node, pred_nodes);
+
+	      /* restore node link */
+	      node->next = save_next;
+	    }
+
+	  node = save_node;	/* restore */
+	}			/* for (node = ...) */
+
+      table_info->class_spec->info.spec.referenced_attrs = real_attrs;
     }
-
-  /* mq_get_references() is destructive to the real set of referenced
-   * attrs, so we need to squirrel it away. */
-  real_attrs = table_info->class_spec->info.spec.referenced_attrs;
-  table_info->class_spec->info.spec.referenced_attrs = NULL;
-
-  /* Traverse pred */
-  for (node = pred; node; node = node->next)
-    {
-      save_node = node;		/* save */
-
-      CAST_POINTER_TO_NODE (node);
-
-      if (node)
-	{
-	  /* save and cut-off node link */
-	  save_next = node->next;
-	  node->next = NULL;
-
-	  ref_node = mq_get_references (parser, node, table_info->class_spec);
-	  pred_nodes = parser_append_node (ref_node, pred_nodes);
-
-	  /* restore node link */
-	  node->next = save_next;
-	}
-
-      node = save_node;		/* restore */
-    }				/* for (node = ...) */
-
-  table_info->class_spec->info.spec.referenced_attrs = real_attrs;
 
   tmp = attr_list;
   i = 0;
   while (tmp)
     {
+      if (has_reserved && tmp->node_type == PT_NAME
+	  && tmp->info.name.meta_class == PT_RESERVED)
+	{
+	  /* add to reserved */
+	  pointer = pt_point (parser, tmp);
+	  if (pointer == NULL)
+	    {
+	      goto exit_on_error;
+	    }
+	  *reserved_attrs = parser_append_node (pointer, *reserved_attrs);
+	  (*reserved_offsets)[cur_reserved++] = i;
+	  tmp = tmp->next;
+	  i++;
+	  continue;
+	}
+
       pointer = pt_point (parser, tmp);
       if (pointer == NULL)
 	{
@@ -3237,20 +3292,34 @@ pt_split_attrs (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
       parser_free_tree (parser, pred_nodes);
     }
 
-  return 1;
+  return NO_ERROR;
 
 exit_on_error:
 
   parser_free_tree (parser, *pred_attrs);
   parser_free_tree (parser, *rest_attrs);
-  free_and_init (*pred_offsets);
-  free_and_init (*rest_offsets);
+  if (reserved_attrs != NULL)
+    {
+      parser_free_tree (parser, *reserved_attrs);
+    }
+  if (*pred_offsets != NULL)
+    {
+      free_and_init (*pred_offsets);
+    }
+  if (*rest_offsets != NULL)
+    {
+      free_and_init (*rest_offsets);
+    }
+  if (reserved_offsets != NULL && *reserved_offsets != NULL)
+    {
+      free_and_init (*reserved_offsets);
+    }
   if (pred_nodes)
     {
       parser_free_tree (parser, pred_nodes);
     }
 
-  return 0;
+  return ER_FAILED;
 }
 
 
@@ -3656,6 +3725,7 @@ pt_symbol_info_alloc (void)
       symbols->current_listfile = NULL;
       symbols->listfile_unbox = UNBOX_AS_VALUE;
       symbols->listfile_value_list = NULL;
+      symbols->reserved_values = NULL;
 
       /* only used for server inserts and updates */
       symbols->listfile_attr_offset = 0;
@@ -4919,7 +4989,6 @@ pt_fill_in_attrid_array (REGU_VARIABLE_LIST attr_list, ATTR_ID * attr_array,
     }
 }
 
-
 /*
  * pt_make_class_access_spec () - Create an initialized
  *                                ACCESS_SPEC_TYPE TARGET_CLASS structure
@@ -4959,7 +5028,9 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
 			   HEAP_CACHE_ATTRINFO * cache_key,
 			   HEAP_CACHE_ATTRINFO * cache_pred,
 			   HEAP_CACHE_ATTRINFO * cache_rest,
-			   ACCESS_SCHEMA_TYPE schema_type)
+			   ACCESS_SCHEMA_TYPE schema_type,
+			   DB_VALUE ** cache_recordinfo,
+			   REGU_VARIABLE_LIST reserved_val_list)
 {
   ACCESS_SPEC_TYPE *spec;
   HFID *hfid;
@@ -5040,6 +5111,17 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
 			       spec->s.cls_node.attrids_rest, &attrnum);
       spec->s.cls_node.cache_rest = cache_rest;
       spec->s.cls_node.schema_type = schema_type;
+      spec->s.cls_node.cache_reserved = cache_recordinfo;
+      spec->s.cls_node.num_attrs_reserved = 0;
+      if (access == SEQUENTIAL_RECORD_INFO)
+	{
+	  spec->s.cls_node.num_attrs_reserved = HEAP_RECORD_INFO_NUMBER;
+	}
+      else if (access == SEQUENTIAL_PAGE_SCAN)
+	{
+	  spec->s.cls_node.num_attrs_reserved = HEAP_PAGE_INFO_NUMBER;
+	}
+      spec->s.cls_node.cls_regu_list_reserved = reserved_val_list;
     }
 
   return spec;
@@ -9434,6 +9516,42 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
   return regu;
 }
 
+/*
+ * pt_make_reserved_value_list () - Allocate an array of dbvalue pointers to
+ *				    use as a cache for reserved attribute
+ *				    values.
+ *
+ * return      : Pointer to dbvalue array.
+ * parser (in) : Parser context.
+ * type (in)   : Reserved name type.
+ */
+static DB_VALUE **
+pt_make_reserved_value_list (PARSER_CONTEXT * parser,
+			     PT_RESERVED_NAME_TYPE type)
+{
+  DB_VALUE **value_list = NULL;
+  int start, end, size, i;
+
+  PT_GET_RESERVED_NAME_FIRST_AND_LAST (type, start, end);
+  size = end - start + 1;
+
+  value_list = regu_dbvalptr_array_alloc (size);
+  if (value_list)
+    {
+      /* initialize values */
+      for (i = 0; i < size; i++)
+	{
+	  value_list[i] = regu_dbval_alloc ();
+	  if (value_list[i] == NULL)
+	    {
+	      /* memory will be freed later */
+	      return NULL;
+	    }
+	}
+    }
+  return value_list;
+}
+
 
 /*
  * pt_to_regu_variable_list () - converts a parse expression tree list
@@ -9694,6 +9812,56 @@ pt_to_regu_attr_descr (PARSER_CONTEXT * parser, DB_OBJECT * class_object,
   return regu;
 }
 
+/*
+ * pt_to_regu_reserved_name () - Creates a regu variable for a reserved
+ *				 attribute.
+ *
+ * return      : REGU VARIABLE.
+ * parser (in) : Parser Context.
+ * attr (in)   : Parse tree node for a reserved attribute.
+ *
+ * NOTE: parser->symbols must include current_valuelist, and this regu
+ *	 variable will point to one of the values in that list.
+ */
+static REGU_VARIABLE *
+pt_to_regu_reserved_name (PARSER_CONTEXT * parser, PT_NODE * attr)
+{
+  REGU_VARIABLE *regu = NULL;
+  SYMBOL_INFO *symbols = NULL;
+  int reserved_id, index;
+  DB_VALUE **reserved_values = NULL;
+
+  symbols = parser->symbols;
+  assert (symbols != NULL && symbols->reserved_values != NULL);
+  reserved_values = symbols->reserved_values;
+
+  CAST_POINTER_TO_NODE (attr);
+  assert (attr != NULL && attr->node_type == PT_NAME
+	  && attr->info.name.meta_class == PT_RESERVED);
+
+  regu = regu_var_alloc ();
+  if (regu == NULL)
+    {
+      return NULL;
+    }
+  reserved_id = attr->info.name.reserved_id;
+  index = pt_reserved_id_to_valuelist_index (parser, reserved_id);
+  if (index == RESERVED_NAME_INVALID)
+    {
+      return NULL;
+    }
+
+  /* set regu variable type */
+  regu->type = TYPE_CONSTANT;
+
+  /* set regu variable value */
+  regu->value.dbvalptr = reserved_values[index];
+
+  /* set domain */
+  regu->domain = pt_xasl_node_to_domain (parser, attr);
+
+  return regu;
+}
 
 /*
  * pt_attribute_to_regu () - Convert an attribute spec into a REGU_VARIABLE
@@ -9765,6 +9933,10 @@ pt_attribute_to_regu (PARSER_CONTEXT * parser, PT_NODE * attr)
 		      regu->type = TYPE_CLASSOID;
 		      regu->domain = pt_xasl_node_to_domain (parser, attr);
 		    }
+		}
+	      else if (attr->info.name.meta_class == PT_RESERVED)
+		{
+		  regu = pt_to_regu_reserved_name (parser, attr);
 		}
 	      else
 		{
@@ -11920,8 +12092,8 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 		       PT_NODE * where_key_part, PT_NODE * where_part,
 		       QO_XASL_INDEX_INFO * index_pred)
 {
-  SYMBOL_INFO *symbols;
-  ACCESS_SPEC_TYPE *access;
+  SYMBOL_INFO *symbols = NULL;
+  ACCESS_SPEC_TYPE *access = NULL;
   ACCESS_SPEC_TYPE *access_list = NULL;
   PT_NODE *flat;
   PT_NODE *class_;
@@ -11932,14 +12104,15 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
   int *key_offsets = NULL;
   PRED_EXPR *where = NULL;
   REGU_VARIABLE_LIST regu_attributes_pred, regu_attributes_rest;
-  TABLE_INFO *table_info;
-  INDX_INFO *index_info;
+  REGU_VARIABLE_LIST regu_attributes_reserved;
+  TABLE_INFO *table_info = NULL;
+  INDX_INFO *index_info = NULL;
   HEAP_CACHE_ATTRINFO *cache_pred = NULL, *cache_rest = NULL;
-  PT_NODE *pred_attrs = NULL, *rest_attrs = NULL;
-  int *pred_offsets = NULL, *rest_offsets = NULL;
+  PT_NODE *pred_attrs = NULL, *rest_attrs = NULL, *reserved_attrs = NULL;
+  int *pred_offsets = NULL, *rest_offsets = NULL, *reserved_offsets = NULL;
   OUTPTR_LIST *output_val_list = NULL;
-  REGU_VARIABLE_LIST regu_val_list = NULL;
-
+  REGU_VARIABLE_LIST regu_var_list = NULL;
+  DB_VALUE **db_values_array_p = NULL;
 
   assert (parser != NULL);
 
@@ -11979,6 +12152,18 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	  if (index_pred == NULL)
 	    {
 	      TARGET_TYPE scan_type;
+	      ACCESS_METHOD access_method = SEQUENTIAL;
+
+	      /* determine access_method */
+	      if (PT_IS_SPEC_FLAG_SET (spec, PT_SPEC_FLAG_RECORD_INFO_SCAN))
+		{
+		  access_method = SEQUENTIAL_RECORD_INFO;
+		}
+	      else if (PT_IS_SPEC_FLAG_SET
+		       (spec, PT_SPEC_FLAG_PAGE_INFO_SCAN))
+		{
+		  access_method = SEQUENTIAL_PAGE_SCAN;
+		}
 
 	      /* for VALUES query, a new scan type is set */
 	      if (PT_IS_VALUE_QUERY (spec))
@@ -11994,19 +12179,39 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 		  scan_type = TARGET_CLASS;
 		}
 
-	      if (!pt_split_attrs (parser, table_info, where_part,
-				   &pred_attrs, &rest_attrs,
-				   &pred_offsets, &rest_offsets))
+	      if (pt_split_attrs (parser, table_info, where_part,
+				  &pred_attrs, &rest_attrs, &reserved_attrs,
+				  &pred_offsets, &rest_offsets,
+				  &reserved_offsets) != NO_ERROR)
 		{
 		  return NULL;
 		}
 
-	      cache_pred = regu_cache_attrinfo_alloc ();
-	      cache_rest = regu_cache_attrinfo_alloc ();
+	      if (access_method == SEQUENTIAL_PAGE_SCAN)
+		{
+		  cache_pred = NULL;
+		  cache_rest = NULL;
+
+		  db_values_array_p =
+		    pt_make_reserved_value_list (parser,
+						 RESERVED_NAME_PAGE_INFO);
+		}
+	      else
+		{
+		  cache_pred = regu_cache_attrinfo_alloc ();
+		  cache_rest = regu_cache_attrinfo_alloc ();
+		  if (access_method == SEQUENTIAL_RECORD_INFO)
+		    {
+		      db_values_array_p =
+			pt_make_reserved_value_list (parser,
+						     RESERVED_NAME_RECORD_INFO);
+		    }
+		}
 
 	      symbols->current_class = (scan_type == TARGET_CLASS_ATTR)
 		? NULL : class_;
 	      symbols->cache_attrinfo = cache_pred;
+	      symbols->reserved_values = db_values_array_p;
 
 	      where = pt_to_pred_expr (parser, where_part);
 
@@ -12029,25 +12234,38 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 							       value_list,
 							       rest_offsets);
 
+	      regu_attributes_reserved =
+		pt_to_regu_variable_list (parser, reserved_attrs,
+					  UNBOX_AS_VALUE,
+					  table_info->value_list,
+					  reserved_offsets);
+
 	      output_val_list = NULL;
-	      regu_val_list = NULL;
+	      regu_var_list = NULL;
 
 	      parser_free_tree (parser, pred_attrs);
 	      parser_free_tree (parser, rest_attrs);
+	      parser_free_tree (parser, reserved_attrs);
 	      free_and_init (pred_offsets);
 	      free_and_init (rest_offsets);
+	      if (reserved_offsets != NULL)
+		{
+		  free_and_init (reserved_offsets);
+		}
 
 	      access = pt_make_class_access_spec (parser, flat,
 						  class_->info.name.db_object,
-						  scan_type, SEQUENTIAL,
+						  scan_type, access_method,
 						  spec->info.spec.lock_hint,
 						  NULL, NULL, where, NULL,
 						  regu_attributes_pred,
 						  regu_attributes_rest,
 						  output_val_list,
-						  regu_val_list, NULL,
+						  regu_var_list, NULL,
 						  cache_pred, cache_rest,
-						  NO_SCHEMA);
+						  NO_SCHEMA,
+						  db_values_array_p,
+						  regu_attributes_reserved);
 	    }
 	  else
 	    {
@@ -12088,9 +12306,10 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 		    }
 		  return NULL;
 		}
-	      if (!pt_split_attrs (parser, table_info, where_part,
-				   &pred_attrs, &rest_attrs,
-				   &pred_offsets, &rest_offsets))
+	      if (pt_split_attrs (parser, table_info, where_part,
+				  &pred_attrs, &rest_attrs, NULL,
+				  &pred_offsets, &rest_offsets, NULL)
+		  != NO_ERROR)
 		{
 		  if (ipl_where_part)
 		    {
@@ -12143,7 +12362,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 							      table_info->
 							      value_list);
 
-	      regu_val_list =
+	      regu_var_list =
 		pt_to_position_regu_variable_list (parser, rest_attrs,
 						   table_info->value_list,
 						   rest_offsets);
@@ -12172,9 +12391,10 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 						  regu_attributes_pred,
 						  regu_attributes_rest,
 						  output_val_list,
-						  regu_val_list,
+						  regu_var_list,
 						  cache_key, cache_pred,
-						  cache_rest, NO_SCHEMA);
+						  cache_rest, NO_SCHEMA,
+						  NULL, NULL);
 
 	      if (ipl_where_part)
 		{
@@ -12187,7 +12407,8 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	  if (access == NULL
 	      || (regu_attributes_pred == NULL
 		  && regu_attributes_rest == NULL
-		  && table_info->attribute_list) || pt_has_error (parser))
+		  && table_info->attribute_list != NULL
+		  && access->access == SEQUENTIAL) || pt_has_error (parser))
 	    {
 	      /* an error condition */
 	      access = NULL;
@@ -12242,9 +12463,9 @@ pt_to_subquery_table_spec_list (PARSER_CONTEXT * parser,
   tbl_info = pt_find_table_info (spec->info.spec.id,
 				 parser->symbols->table_info);
 
-  if (!pt_split_attrs (parser, tbl_info, where_part,
-		       &pred_attrs, &rest_attrs,
-		       &pred_offsets, &rest_offsets))
+  if (pt_split_attrs (parser, tbl_info, where_part,
+		      &pred_attrs, &rest_attrs, NULL,
+		      &pred_offsets, &rest_offsets, NULL) != NO_ERROR)
     {
       return NULL;
     }
@@ -13364,9 +13585,9 @@ pt_to_fetch_as_scan_proc (PARSER_CONTEXT * parser, PT_NODE * spec,
   tbl_info = pt_find_table_info (spec->info.spec.id,
 				 parser->symbols->table_info);
 
-  if (!pt_split_attrs (parser, tbl_info, join_term,
-		       &pred_attrs, &rest_attrs,
-		       &pred_offsets, &rest_offsets))
+  if (pt_split_attrs (parser, tbl_info, join_term,
+		      &pred_attrs, &rest_attrs, NULL,
+		      &pred_offsets, &rest_offsets, NULL) != NO_ERROR)
     {
       return NULL;
     }
@@ -14351,7 +14572,8 @@ pt_to_buildschema_proc (PARSER_CONTEXT * parser, PT_NODE * select_node)
 			       TARGET_CLASS, SCHEMA,
 			       from->info.spec.lock_hint,
 			       NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-			       NULL, NULL, NULL, NULL, acces_schema_type);
+			       NULL, NULL, NULL, NULL, acces_schema_type,
+			       NULL, NULL);
 
   if (xasl->spec_list == NULL)
     {
@@ -16649,8 +16871,10 @@ pt_make_aptr_parent_node (PARSER_CONTEXT * parser, PT_NODE * node,
 
 		  if (regu_attributes)
 		    {
-		      xasl->spec_list = pt_make_list_access_spec
-			(aptr, SEQUENTIAL, NULL, NULL, regu_attributes, NULL);
+		      xasl->spec_list =
+			pt_make_list_access_spec (aptr, SEQUENTIAL, NULL,
+						  NULL, regu_attributes,
+						  NULL);
 		    }
 		}
 	      else
@@ -23720,5 +23944,87 @@ pt_is_sort_list_covered (PARSER_CONTEXT * parser, SORT_LIST * covering_list_p,
   else
     {
       return true;
+    }
+}
+
+/*
+ * pt_reserved_id_to_valuelist_index () - Generate the index of value for
+ *					  reserved attribute in the array
+ *					  of cached attribute values.
+ *
+ * return	    : Index of value.
+ * parser (in)	    : Parser context.
+ * reserved_id (in) : Reserved name id.
+ */
+static int
+pt_reserved_id_to_valuelist_index (PARSER_CONTEXT * parser,
+				   PT_RESERVED_NAME_ID reserved_id)
+{
+  switch (reserved_id)
+    {
+      /* Record info names */
+    case RESERVED_T_PAGEID:
+      return HEAP_RECORD_INFO_T_PAGEID;
+    case RESERVED_T_SLOTID:
+      return HEAP_RECORD_INFO_T_SLOTID;
+    case RESERVED_T_VOLUMEID:
+      return HEAP_RECORD_INFO_T_VOLUMEID;
+    case RESERVED_T_OFFSET:
+      return HEAP_RECORD_INFO_T_OFFSET;
+    case RESERVED_T_LENGTH:
+      return HEAP_RECORD_INFO_T_LENGTH;
+    case RESERVED_T_REC_TYPE:
+      return HEAP_RECORD_INFO_T_REC_TYPE;
+    case RESERVED_T_REPRID:
+      return HEAP_RECORD_INFO_T_REPRID;
+    case RESERVED_T_CHN:
+      return HEAP_RECORD_INFO_T_CHN;
+    case RESERVED_T_MVCC_INSID:
+      return HEAP_RECORD_INFO_T_MVCC_INSID;
+    case RESERVED_T_MVCC_DELID:
+      return HEAP_RECORD_INFO_T_MVCC_DELID;
+#if defined(MVCC_USE_COMMAND_ID)
+    case RESERVED_T_MVCC_INS_CID:
+      return HEAP_RECORD_INFO_T_MVCC_INS_CID;
+    case RESERVED_T_MVCC_DEL_CID:
+      return HEAP_RECORD_INFO_T_MVCC_DEL_CID;
+#endif /* MVCC_USE_COMMAND_ID */
+    case RESERVED_T_MVCC_FLAGS:
+      return HEAP_RECORD_INFO_T_MVCC_FLAGS;
+    case RESERVED_T_MVCC_NEXT_VERSION:
+      return HEAP_RECORD_INFO_T_MVCC_NEXT_VERSION;
+
+      /* Page info names */
+    case RESERVED_P_CLASS_OID:
+      return HEAP_PAGE_INFO_CLASS_OID;
+    case RESERVED_P_PREV_PAGEID:
+      return HEAP_PAGE_INFO_PREV_PAGE;
+    case RESERVED_P_NEXT_PAGEID:
+      return HEAP_PAGE_INFO_NEXT_PAGE;
+    case RESERVED_P_NUM_SLOTS:
+      return HEAP_PAGE_INFO_NUM_SLOTS;
+    case RESERVED_P_NUM_RECORDS:
+      return HEAP_PAGE_INFO_NUM_RECORDS;
+    case RESERVED_P_ANCHOR_TYPE:
+      return HEAP_PAGE_INFO_ANCHOR_TYPE;
+    case RESERVED_P_ALIGNMENT:
+      return HEAP_PAGE_INFO_ALIGNMENT;
+    case RESERVED_P_TOTAL_FREE:
+      return HEAP_PAGE_INFO_TOTAL_FREE;
+    case RESERVED_P_CONT_FREE:
+      return HEAP_PAGE_INFO_CONT_FREE;
+    case RESERVED_P_OFFSET_TO_FREE_AREA:
+      return HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA;
+    case RESERVED_P_IS_SAVING:
+      return HEAP_PAGE_INFO_IS_SAVING;
+    case RESERVED_P_UPDATE_BEST:
+      return HEAP_PAGE_INFO_UPDATE_BEST;
+    case RESERVED_P_LAST_MVCCID:
+      return HEAP_PAGE_INFO_LAST_MVCCID;
+
+    default:
+      /* unknown reserved id or not handled */
+      assert (0);
+      return RESERVED_NAME_INVALID;
     }
 }
