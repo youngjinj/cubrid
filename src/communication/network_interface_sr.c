@@ -4537,16 +4537,18 @@ sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 {
   int error, do_now;
   OID classoid;
+  BTID btid;
   char *ptr;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
 
   ptr = or_unpack_oid (request, &classoid);
   ptr = or_unpack_int (ptr, &do_now);
+  ptr = or_unpack_btid (ptr, &btid);
 
   if (do_now)
     {
-      error = xstats_update_class_statistics (thread_p, &classoid);
+      error = xstats_update_class_statistics (thread_p, &classoid, &btid);
       if (error != NO_ERROR)
 	{
 	  return_error_to_client (thread_p, rid);
@@ -5732,17 +5734,11 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   OR_UNPACK_CACHE_TIME (ptr, &clt_cache_time);
   ptr = or_unpack_int (ptr, &query_timeout);
 
+  /* if the request contains parameter values for the query,
+     allocate space for them */
   if (dbval_cnt)
     {
-      /* if the request contains parameter values for the query,
-         allocate space for them */
-      dbvals = (DB_VALUE *) db_private_alloc (thread_p,
-					      sizeof (DB_VALUE) * dbval_cnt);
-      if (dbvals == NULL)
-	{
-	  css_send_abort_to_client (thread_p->conn_entry, rid);
-	  return;		/* error */
-	}
+      HL_HEAPID old_pri_heap_id;
 
       /* receive parameter values (DB_VALUE) from the client */
       csserror = css_receive_data_from_client (thread_p->conn_entry, rid,
@@ -5756,7 +5752,28 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 	    {
 	      free_and_init (data);
 	    }
-	  db_private_free_and_init (thread_p, dbvals);
+	  return;		/* error */
+	}
+
+      /* use global heap for memory allocation.
+         In the case of async query, the space will be freed
+         when the query is completed. See qmgr_execute_async_select() */
+      if (IS_ASYNC_EXEC_MODE (query_flag))
+	{
+	  old_pri_heap_id = db_change_private_heap (thread_p, 0);
+	}
+
+      dbvals = (DB_VALUE *) db_private_alloc (thread_p,
+					      sizeof (DB_VALUE) * dbval_cnt);
+      if (dbvals == NULL)
+	{
+	  if (IS_ASYNC_EXEC_MODE (query_flag))
+	    {
+	      /* restore private heap */
+	      (void) db_change_private_heap (thread_p, old_pri_heap_id);
+	    }
+
+	  css_send_abort_to_client (thread_p->conn_entry, rid);
 	  return;		/* error */
 	}
 
@@ -5765,6 +5782,12 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
       for (i = 0, dbval = dbvals; i < dbval_cnt; i++, dbval++)
 	{
 	  ptr = or_unpack_db_value (ptr, dbval);
+	}
+
+      if (IS_ASYNC_EXEC_MODE (query_flag))
+	{
+	  /* restore private heap */
+	  (void) db_change_private_heap (thread_p, old_pri_heap_id);
 	}
 
       if (data)
@@ -5792,17 +5815,14 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 
   /* clear and free space for DB_VALUEs after the query is executed
      In the case of async query, the space will be freed
-     when the query is completed. See xs_execute_async_select() */
+     when the query is completed. See qmgr_execute_async_select() */
   if (IS_SYNC_EXEC_MODE (query_flag) && dbvals)
     {
       for (i = 0, dbval = dbvals; i < dbval_cnt; i++, dbval++)
 	{
 	  db_value_clear (dbval);
 	}
-      if (dbvals)
-	{
-	  db_private_free_and_init (thread_p, dbvals);
-	}
+      db_private_free_and_init (thread_p, dbvals);
     }
 
   page_size = 0;
