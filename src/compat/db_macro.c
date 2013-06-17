@@ -5757,7 +5757,9 @@ db_domain_set (const DB_DOMAIN * domain)
 {
   DB_DOMAIN *setdomain = NULL;
 
-  if ((domain != NULL) && pr_is_set_type (TP_DOMAIN_TYPE (domain)))
+  if ((domain != NULL)
+      && (pr_is_set_type (TP_DOMAIN_TYPE (domain))
+	  || TP_DOMAIN_TYPE (domain) == DB_TYPE_MIDXKEY))
     {
       setdomain = domain->setdomain;
     }

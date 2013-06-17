@@ -6924,8 +6924,43 @@ pt_print_create_entity (PARSER_CONTEXT * parser, PT_NODE * p)
       if (p->info.create_entity.hint & PT_HINT_NO_STATS)
 	{
 	  q = pt_append_nulstring (parser, q, " NO_STATS");
-	}
-      q = pt_append_nulstring (parser, q, " */ ");
+	    }
+
+	  if (p->info.query.q.select.hint & PT_HINT_SELECT_KEY_INFO)
+	    {
+	      q = pt_append_nulstring (parser, q, "SELECT_KEY_INFO");
+	      if (p->info.query.q.select.using_index)
+		{
+		  q = pt_append_nulstring (parser, q, "(");
+		  q =
+		    pt_append_nulstring (parser, q, p->info.query.q.select.
+					 using_index->info.name.original);
+		  q = pt_append_nulstring (parser, q, ")");
+		}
+	      else
+		{
+		  assert (0);
+		}
+	    }
+
+	  if (p->info.query.q.select.hint & PT_HINT_SELECT_BTREE_NODE_INFO)
+	    {
+	      q = pt_append_nulstring (parser, q, "SELECT_BTREE_NODE_INFO");
+	      if (p->info.query.q.select.using_index)
+		{
+		  q = pt_append_nulstring (parser, q, "(");
+		  q =
+		    pt_append_nulstring (parser, q, p->info.query.q.select.
+					 using_index->info.name.original);
+		  q = pt_append_nulstring (parser, q, ")");
+		}
+	      else
+		{
+		  assert (0);
+		}
+	    }
+
+	  q = pt_append_nulstring (parser, q, " */");
     }
 
   q = pt_append_nulstring (parser, q,

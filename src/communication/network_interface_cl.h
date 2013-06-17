@@ -367,6 +367,7 @@ extern int heap_get_class_num_objects_pages (HFID * hfid, int approximation,
 					     int *nobjs, int *npages);
 
 extern int btree_get_statistics (BTID * btid, BTREE_STATS * stat_info);
+extern int btree_get_index_key_type (BTID btid, TP_DOMAIN ** key_type_p);
 extern int db_local_transaction_id (DB_VALUE * trid);
 extern int qp_get_server_info (SERVER_INFO * server_info);
 extern int heap_has_instance (HFID * hfid, OID * class_oid);

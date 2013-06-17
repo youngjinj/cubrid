@@ -36946,6 +36946,10 @@ PT_HINT parser_hint_table[] = {
   ,
   {"SELECT_PAGE_INFO", NULL, PT_HINT_SELECT_PAGE_INFO}
   ,
+  {"SELECT_KEY_INFO", NULL, PT_HINT_SELECT_KEY_INFO}
+  ,
+  {"SELECT_BTREE_NODE_INFO", NULL, PT_HINT_SELECT_BTREE_NODE_INFO}
+  ,
   {NULL, NULL, -1}		/* mark as end */
 };
 

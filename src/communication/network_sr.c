@@ -593,6 +593,11 @@ net_server_init (void)
   req_p->processing_function = sbtree_get_statistics;
   req_p->name = "NET_SERVER_BTREE_GET_STATISTICS";
 
+  req_p = &net_Requests[NET_SERVER_BTREE_GET_KEY_TYPE];
+  req_p->action_attribute = IN_TRANSACTION;
+  req_p->processing_function = sbtree_get_key_type;
+  req_p->name = "NET_SERVER_BTREE_GET_KEY_TYPE";
+
   /* disk */
   req_p = &net_Requests[NET_SERVER_DISK_TOTALPGS];
   req_p->processing_function = sdk_totalpgs;

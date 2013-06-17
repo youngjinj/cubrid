@@ -259,6 +259,80 @@ struct btree_capacity
   float avg_pg_free_sp;		/* Average page free space */
 };
 
+/*
+ * B-tree node scan section
+ */
+
+/* Structure used to queue b-tree nodes on index node info scan */
+typedef struct btree_node_scan_queue_item BTREE_NODE_SCAN_QUEUE_ITEM;
+struct btree_node_scan_queue_item
+{
+  VPID crt_vpid;			/* VPID for current node */
+  BTREE_NODE_SCAN_QUEUE_ITEM *next;	/* Next node */
+};
+
+/* Structure used for index node info scan */
+typedef struct btree_node_scan BTREE_NODE_SCAN;
+struct btree_node_scan
+{
+  BTID_INT btid_int;			    /* index btid_int structure */
+  VPID crt_vpid;			    /* VPID for current node */
+  PAGE_PTR crt_page;			    /* Current node PAGE_PTR */
+  bool first_call;			    /* First call for node info scan */
+
+  BTREE_NODE_SCAN_QUEUE_ITEM *queue_head;   /* B-tree node queue head */
+  BTREE_NODE_SCAN_QUEUE_ITEM *queue_tail;   /* B-tree node queue tail */
+};
+
+/* Initialize BTREE_NODE_SCAN stucture for node info scan */
+#define BTREE_NODE_SCAN_INIT(bns)  \
+  do				   \
+    {				   \
+      VPID_SET_NULL (&(bns)->crt_vpid);			\
+      (bns)->crt_page = NULL;				\
+      (bns)->queue_head = (bns)->queue_tail = NULL;	\
+      (bns)->first_call = true;				\
+    } while (0);
+
+/* Add new item to b-tree node queue */
+#define BTREE_NODE_SCAN_ADD_PAGE_TO_QUEUE(bns, node)	\
+  if ((bns)->queue_tail == NULL)			\
+    {							\
+      (bns)->queue_head = (bns)->queue_tail = node;	\
+    }							\
+  else							\
+    {							\
+      (bns)->queue_tail->next = node;			\
+      (bns)->queue_tail = node;				\
+    }
+
+/* Pop first item from b-tree node queue */
+#define BTREE_NODE_SCAN_POP_PAGE_FROM_QUEUE(bns, node)	\
+  if ((bns)->queue_head == NULL)			\
+    {							\
+      node = NULL;					\
+    }							\
+  else							\
+    {							\
+      if ((bns)->queue_head == (bns)->queue_tail)	\
+	{						\
+	  /* Only one item in queue */			\
+	  node = (bns)->queue_head;			\
+	  (bns)->queue_tail = NULL;			\
+	  (bns)->queue_head = NULL;			\
+	}						\
+      else						\
+	{						\
+	  node = (bns)->queue_head;			\
+	  (bns)->queue_head = node->next;		\
+	  node->next = NULL;				\
+	}						\
+    }
+
+/* Check if b-tree node queue is empty */
+#define BTREE_NODE_SCAN_IS_QUEUE_EMPTY(bns)	\
+  ((bns)->queue_head == NULL)
+
 #define DBVAL_BUFSIZE   4096
 
 extern int btree_find_foreign_key (THREAD_ENTRY * thread_p, BTID * btid,
@@ -458,4 +532,17 @@ extern int btree_set_unique_violation_error (THREAD_ENTRY * thread_p,
 extern BTREE_LOCKED_KEYS btree_get_locked_keys (BTID * delete_btid,
 						BTID * search_btid,
 						bool duplicate_key_locked);
+extern SCAN_CODE btree_get_next_key_info (THREAD_ENTRY * thread_p,
+					  BTID * btid, BTREE_SCAN * bts,
+					  int num_classes,
+					  OID * class_oids_ptr,
+					  INDX_SCAN_ID * index_scan_id_p,
+					  DB_VALUE ** key_info);
+extern SCAN_CODE btree_get_next_node_info (THREAD_ENTRY * thread_p,
+					   BTID * btid,
+					   BTREE_NODE_SCAN * btns,
+					   DB_VALUE ** node_info);
+
+extern int xbtree_get_key_type (THREAD_ENTRY * thread_p, BTID btid,
+				TP_DOMAIN ** key_type);
 #endif /* _BTREE_H_ */

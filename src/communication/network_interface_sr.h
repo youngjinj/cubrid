@@ -382,6 +382,8 @@ extern void shf_get_class_num_objs_and_pages (THREAD_ENTRY * thread_p,
 					      int reqlen);
 extern void sbtree_get_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 				   char *request, int reqlen);
+extern void sbtree_get_key_type (THREAD_ENTRY * thread_p, unsigned int rid,
+				 char *request, int reqlen);
 extern void sqp_get_server_info (THREAD_ENTRY * thread_p, unsigned int rid,
 				 char *request, int reqlen);
 extern void sprm_server_change_parameters (THREAD_ENTRY * thread_p,

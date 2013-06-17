@@ -907,7 +907,7 @@ pruningset_to_spec_list (PRUNING_CONTEXT * pinfo,
       goto cleanup;
     }
 
-  if (pinfo->spec->access == INDEX)
+  if (pinfo->spec->access == INDEX || pinfo->spec->access == INDEX_KEY_INFO)
     {
       /* we have to load information about the index used so we can duplicate
          it for each partition */

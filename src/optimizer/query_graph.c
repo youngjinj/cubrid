@@ -6703,7 +6703,7 @@ qo_find_matching_index (QO_INDEX_ENTRY * index_entry,
  *
  * Note:
  *     This is a recursive function which is used to verify that a
- *     given index entry is compatible accross the class hierarchy.
+ *     given index entry is compatible across the class hierarchy.
  *     An index entry is compatible if there exists an index definition
  *     on the same sequence of attributes at each level in the class
  *     hierarchy.  If the index entry is compatible, the entry will be
@@ -7225,6 +7225,7 @@ qo_find_node_indexes (QO_ENV * env, QO_NODE * nodep)
   int *seg_idx, seg_idx_arr[NELEMENTS], nseg_idx;
   bool found, is_hint_use, is_hint_ignore, is_hint_force, is_hint_all_except;
   BITSET index_segs, index_terms;
+  bool special_index_scan = false;
 
   /* information of classes underlying this node */
   class_infop = QO_NODE_INFO (nodep);
@@ -7234,7 +7235,17 @@ qo_find_node_indexes (QO_ENV * env, QO_NODE * nodep)
       return;			/* no classes, nothing to do process */
     }
 
-  /* for each class in the hierarachy, search the class constraint cache
+  if (PT_SPEC_SPECIAL_INDEX_SCAN (QO_NODE_ENTITY_SPEC (nodep)))
+    {
+      if (QO_NODE_USING_INDEX (nodep) == NULL)
+	{
+	  assert (0);
+	  return;
+	}
+      special_index_scan = true;
+    }
+
+  /* for each class in the hierarchy, search the class constraint cache
      looking for applicable indexes(UNIQUE and INDEX constraint) */
   for (i = 0; i < class_infop->n; i++)
     {
@@ -7411,13 +7422,17 @@ qo_find_node_indexes (QO_ENV * env, QO_NODE * nodep)
 				      seg_idx, col_num, &nseg_idx,
 				      &index_segs);
 	  /* 'seg_idx[nseg_idx]' array contains index no.(idx) of the segments
-	     which are found and applicable to this index(constraint) as
-	     search key in the order of the index key attribute. For example,
-	     if the index consists of attributes 'b' and 'a', and the given
-	     segments of the node are 'a(1)', 'b(2)' and 'c(3)', then the
-	     result of 'seg_idx[]' will be '{ 2, 1, -1 }'. The value -1 in
-	     'seg_idx[] array means that no segment is specified. */
-	  if (found == true)
+	   * which are found and applicable to this index(constraint) as
+	   * search key in the order of the index key attribute. For example,
+	   * if the index consists of attributes 'b' and 'a', and the given
+	   * segments of the node are 'a(1)', 'b(2)' and 'c(3)', then the
+	   * result of 'seg_idx[]' will be '{ 2, 1, -1 }'. The value -1 in
+	   * 'seg_idx[] array means that no segment is specified.
+	   */
+	  /* If key information is required, no index segments will be found,
+	   * but index scan has to be forced.
+	   */
+	  if (found == true || special_index_scan == true)
 	    {
 	      /* if applicable index was found, add it to the node */
 

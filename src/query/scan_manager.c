@@ -2873,6 +2873,8 @@ scan_init_scan_id (SCAN_ID * scan_id, int readonly_scan,
  *   num_attrs_rest(in):
  *   attrids_rest(in):
  *   cache_rest(in):
+ *   cache_recordinfo(in):
+ *   regu_list_recordinfo(in):
  *
  * Note: If you feel the need
  */
@@ -3171,7 +3173,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_init_scan_id (scan_id, readonly_scan, scan_op_type, fixed, grouped,
 		     single_fetch, join_dbval, val_list, vd);
 
-  /* read Root page heder info */
+  /* read Root page header info */
   btid = &indx_info->indx_id.i.btid;
 
   Root_vpid.pageid = btid->root_pageid;
@@ -3197,7 +3199,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   /* index information */
   isidp->indx_info = indx_info;
 
-  /* init alloced fields */
+  /* init allocated fields */
   isidp->bt_num_attrs = 0;
   isidp->bt_attr_ids = NULL;
   isidp->vstr_ids = NULL;
@@ -3304,7 +3306,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_init_scan_attrs (&isidp->pred_attrs, num_attrs_pred, attrids_pred,
 			cache_pred);
 
-  /* regulator vairable list for other than predicates */
+  /* regulator variable list for other than predicates */
   isidp->rest_regu_list = regu_list_rest;
 
   /* attribute information from other than predicates */
@@ -3466,6 +3468,389 @@ exit_on_error:
 
   return (ret == NO_ERROR
 	  && (ret = er_errid ()) == NO_ERROR) ? ER_FAILED : ret;
+}
+
+/*
+ * scan_open_index_key_info_scan () - Opens a scan for index key info
+ *
+ * return		   : Error code.
+ * thread_p (in)	   : Thread entry.
+ * scan_id (out)	   : Pointer where scan data is saved.
+ * val_list (in)	   : XASL values list.
+ * vd (in)		   : XASL values descriptors.
+ * indx_info (in)	   : Index info.
+ * cls_oid (in)		   : Class object identifier.
+ * hfid (in)		   : Heap file identifier.
+ * pr (in)		   : Scan predicate.
+ * output_val_list (in)	   : Output value pointers list.
+ * iscan_oid_order (in)	   : Index scan OID order.
+ * query_id (in)	   : Query identifier.
+ * key_info_values (in)	   : Array of value pointers to store key info.
+ * key_info_regu_list (in) : Regulator variable list for key info.
+ */
+int
+scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
+			       /* fields of SCAN_ID */
+			       VAL_LIST * val_list, VAL_DESCR * vd,
+			       /* fields of INDX_SCAN_ID */
+			       INDX_INFO * indx_info,
+			       OID * cls_oid,
+			       HFID * hfid,
+			       PRED_EXPR * pr,
+			       OUTPTR_LIST * output_val_list,
+			       bool iscan_oid_order,
+			       QUERY_ID query_id,
+			       DB_VALUE ** key_info_values,
+			       REGU_VARIABLE_LIST key_info_regu_list)
+{
+  int ret = NO_ERROR;
+  INDX_SCAN_ID *isidp = NULL;
+  BTID *btid = NULL;
+  VPID root_vpid;
+  PAGE_PTR root_page = NULL;
+  RECDES rec;
+  BTREE_ROOT_HEADER root_header;
+  BTREE_SCAN *bts = NULL;
+  int func_index_col_id;
+  DB_TYPE single_node_type = DB_TYPE_NULL;
+
+  scan_id->type = S_INDX_KEY_INFO_SCAN;
+
+  /* initialize SCAN_ID structure */
+  scan_init_scan_id (scan_id, 1, S_SELECT, false, false,
+		     QPROC_NO_SINGLE_INNER, NULL, val_list, vd);
+
+  /* read root_page page header info */
+  btid = &indx_info->indx_id.i.btid;
+
+  root_vpid.pageid = btid->root_pageid;
+  root_vpid.volid = btid->vfid.volid;
+
+  root_page = pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+			 PGBUF_UNCONDITIONAL_LATCH);
+  if (root_page == NULL)
+    {
+      return ER_FAILED;
+    }
+  if (spage_get_record (root_page, HEADER, &rec, PEEK) != S_SUCCESS)
+    {
+      pgbuf_unfix_and_init (thread_p, root_page);
+      return ER_FAILED;
+    }
+  btree_read_root_header (&rec, &root_header);
+  pgbuf_unfix_and_init (thread_p, root_page);
+
+  /* initialize INDEX_SCAN_ID structure */
+  isidp = &scan_id->s.isid;
+
+  /* index information */
+  isidp->indx_info = indx_info;
+
+  /* init allocated fields */
+  isidp->bt_num_attrs = 0;
+  isidp->bt_attr_ids = NULL;
+  isidp->vstr_ids = NULL;
+  isidp->oid_list.oidp = NULL;
+  isidp->copy_buf = NULL;
+  isidp->copy_buf_len = 0;
+
+  isidp->key_vals = NULL;
+
+  /* initialize key limits */
+  if (scan_init_index_key_limit (thread_p, isidp, &indx_info->key_info, vd) !=
+      NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  bts = &isidp->bt_scan;
+
+  /* index scan info */
+  BTREE_INIT_SCAN (bts);
+
+  /* construct BTID_INT structure */
+  bts->btid_int.sys_btid = btid;
+  if (btree_glean_root_header_info (thread_p,
+				    &root_header, &bts->btid_int) != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  /* attribute information of the index key */
+  if (heap_get_indexinfo_of_btid (thread_p, cls_oid,
+				  &indx_info->indx_id.i.btid, &isidp->bt_type,
+				  &isidp->bt_num_attrs, &isidp->bt_attr_ids,
+				  &isidp->bt_attrs_prefix_length, NULL,
+				  &func_index_col_id) != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  /* attribute information of the variable string attrs in index key */
+  isidp->num_vstr = 0;
+  isidp->vstr_ids = NULL;
+
+  if (prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
+    {
+      isidp->num_vstr = isidp->bt_num_attrs;	/* init to maximum */
+      isidp->vstr_ids = (ATTR_ID *) db_private_alloc (thread_p,
+						      isidp->num_vstr *
+						      sizeof (ATTR_ID));
+      if (isidp->vstr_ids == NULL)
+	{
+	  goto exit_on_error;
+	}
+    }
+
+  /* is a single range? */
+  isidp->one_range = true;
+
+  /* initial values */
+  isidp->curr_keyno = -1;
+  isidp->curr_oidno = -1;
+
+  /* OID buffer */
+  isidp->oid_list.oid_cnt = 0;
+  isidp->oid_list.oidp = NULL;
+  isidp->curr_oidp = NULL;
+
+  /* class object OID */
+  COPY_OID (&isidp->cls_oid, cls_oid);
+
+  /* heap file identifier */
+  isidp->hfid = *hfid;		/* bitwise copy */
+
+  /* flags */
+  /* do not reset hsidp->caches_inited here */
+  isidp->scancache_inited = false;
+
+  /* convert key values in the form of REGU_VARIABLE to the form of DB_VALUE */
+  isidp->key_cnt = indx_info->key_info.key_cnt;
+  if (isidp->key_cnt > 0)
+    {
+      bool need_copy_buf;
+
+      isidp->key_vals =
+	(KEY_VAL_RANGE *) db_private_alloc (thread_p, isidp->key_cnt *
+					    sizeof (KEY_VAL_RANGE));
+      if (isidp->key_vals == NULL)
+	{
+	  goto exit_on_error;
+	}
+
+      need_copy_buf = false;	/* init */
+
+      if (bts->btid_int.key_type == NULL ||
+	  bts->btid_int.key_type->type == NULL)
+	{
+	  goto exit_on_error;
+	}
+
+      /* check for the need of index key copy_buf */
+      if (TP_DOMAIN_TYPE (bts->btid_int.key_type) == DB_TYPE_MIDXKEY)
+	{
+	  /* found multi-column key-val */
+	  need_copy_buf = true;
+	}
+      else
+	{			/* single-column index */
+	  if (indx_info->key_info.key_ranges[0].range != EQ_NA)
+	    {
+	      /* found single-column key-range, not key-val */
+	      if (QSTR_IS_ANY_CHAR_OR_BIT
+		  (TP_DOMAIN_TYPE (bts->btid_int.key_type)))
+		{
+		  /* this type needs index key copy_buf */
+		  need_copy_buf = true;
+		}
+	    }
+	}
+
+      if (need_copy_buf)
+	{
+	  /* alloc index key copy_buf */
+	  isidp->copy_buf = (char *) db_private_alloc (thread_p,
+						       DBVAL_BUFSIZE);
+	  if (isidp->copy_buf == NULL)
+	    {
+	      goto exit_on_error;
+	    }
+	  isidp->copy_buf_len = DBVAL_BUFSIZE;
+	}
+    }
+  else
+    {
+      isidp->key_cnt = 0;
+      isidp->key_vals = NULL;
+    }
+
+  /* scan predicate */
+  scan_init_scan_pred (&isidp->scan_pred, NULL, pr,
+		       ((pr) ? eval_fnc (thread_p, pr,
+					 &single_node_type) : NULL));
+
+  isidp->iscan_oid_order = iscan_oid_order;
+  isidp->lock_hint = NULL_LOCK;
+
+  if (scan_init_indx_coverage (thread_p, false, NULL, NULL, vd, query_id,
+			       root_header.node.max_key_len,
+			       func_index_col_id,
+			       &(isidp->indx_cov)) != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  if (scan_init_iss (isidp) != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  /* initialize multiple range search optimization structure */
+  isidp->multi_range_opt.use = false;
+
+  isidp->duplicate_key_locked = false;
+
+  isidp->key_info_values = key_info_values;
+  isidp->key_info_regu_list = key_info_regu_list;
+
+  return ret;
+
+exit_on_error:
+
+  if (isidp->key_vals)
+    {
+      db_private_free_and_init (thread_p, isidp->key_vals);
+    }
+  if (isidp->bt_attr_ids)
+    {
+      db_private_free_and_init (thread_p, isidp->bt_attr_ids);
+    }
+  if (isidp->vstr_ids)
+    {
+      db_private_free_and_init (thread_p, isidp->vstr_ids);
+    }
+  if (isidp->oid_list.oidp)
+    {
+      scan_free_iscan_oid_buf_list (isidp->oid_list.oidp);
+      isidp->oid_list.oidp = NULL;
+    }
+  if (isidp->copy_buf)
+    {
+      db_private_free_and_init (thread_p, isidp->copy_buf);
+    }
+  if (isidp->indx_cov.type_list != NULL)
+    {
+      if (isidp->indx_cov.type_list->domp != NULL)
+	{
+	  db_private_free_and_init (thread_p,
+				    isidp->indx_cov.type_list->domp);
+	}
+      db_private_free_and_init (thread_p, isidp->indx_cov.type_list);
+    }
+  if (isidp->indx_cov.list_id != NULL)
+    {
+      QFILE_FREE_AND_INIT_LIST_ID (isidp->indx_cov.list_id);
+    }
+  if (isidp->indx_cov.tplrec != NULL)
+    {
+      if (isidp->indx_cov.tplrec->tpl != NULL)
+	{
+	  db_private_free_and_init (thread_p, isidp->indx_cov.tplrec->tpl);
+	}
+      db_private_free_and_init (thread_p, isidp->indx_cov.tplrec);
+    }
+  if (isidp->indx_cov.lsid != NULL)
+    {
+      db_private_free_and_init (thread_p, isidp->indx_cov.lsid);
+    }
+
+  return (ret == NO_ERROR
+	  && (ret = er_errid ()) == NO_ERROR) ? ER_FAILED : ret;
+}
+
+/*
+ * scan_open_index_node_info_scan () - Opens a scan on b-tree nodes.
+ *
+ * return		    : Error code.
+ * thread_p (in)	    : Thread entry.
+ * scan_id (out)	    : Scan data.
+ * val_list (in)	    : XASL value list.
+ * vd (in)		    : XASL value descriptors.
+ * indx_info (in)	    : Index info.
+ * pr (in)		    : Scan predicate.
+ * node_info_values (in)    : Array of value pointers to store b-tree node
+ *			      information.
+ * node_info_regu_list (in) : Regulator variable list.
+ */
+int
+scan_open_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
+				/* fields of SCAN_ID */
+				VAL_LIST * val_list, VAL_DESCR * vd,
+				/* fields of INDX_SCAN_ID */
+				INDX_INFO * indx_info,
+				PRED_EXPR * pr,
+				DB_VALUE ** node_info_values,
+				REGU_VARIABLE_LIST node_info_regu_list)
+{
+  INDEX_NODE_SCAN_ID *idx_nsid_p = NULL;
+  VPID root_vpid;
+  PAGE_PTR root_page = NULL;
+  RECDES rec;
+  BTREE_ROOT_HEADER root_header;
+  DB_TYPE single_node_type = DB_TYPE_NULL;
+  BTID *btid = NULL;
+
+  assert (scan_id != NULL);
+
+  scan_id->type = S_INDX_NODE_INFO_SCAN;
+
+  /* initialize SCAN_ID structure */
+  scan_init_scan_id (scan_id, 1, S_SELECT, false, false,
+		     QPROC_NO_SINGLE_INNER, NULL, val_list, vd);
+
+  idx_nsid_p = &scan_id->s.insid;
+  idx_nsid_p->indx_info = indx_info;
+
+  /* scan predicate */
+  scan_init_scan_pred (&idx_nsid_p->scan_pred, NULL, pr,
+		       ((pr) ? eval_fnc (thread_p, pr,
+					 &single_node_type) : NULL));
+
+  BTREE_NODE_SCAN_INIT (&idx_nsid_p->btns);
+
+  /* read root_page page header info */
+  btid = &indx_info->indx_id.i.btid;
+
+  root_vpid.pageid = btid->root_pageid;
+  root_vpid.volid = btid->vfid.volid;
+
+  root_page = pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+			 PGBUF_UNCONDITIONAL_LATCH);
+  if (root_page == NULL)
+    {
+      return ER_FAILED;
+    }
+  if (spage_get_record (root_page, HEADER, &rec, PEEK) != S_SUCCESS)
+    {
+      pgbuf_unfix_and_init (thread_p, root_page);
+      return ER_FAILED;
+    }
+  btree_read_root_header (&rec, &root_header);
+  pgbuf_unfix_and_init (thread_p, root_page);
+
+  /* construct BTID_INT structure */
+  idx_nsid_p->btns.btid_int.sys_btid = btid;
+  if (btree_glean_root_header_info (thread_p, &root_header,
+				    &idx_nsid_p->btns.btid_int) != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
+
+  idx_nsid_p->node_info_values = node_info_values;
+  idx_nsid_p->node_info_regu_list = node_info_regu_list;
+  idx_nsid_p->caches_inited = false;
+
+  return NO_ERROR;
 }
 
 /*
@@ -3657,13 +4042,14 @@ int
 scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 {
   int ret = NO_ERROR;
-  HEAP_SCAN_ID *hsidp;
-  INDX_SCAN_ID *isidp;
-  LLIST_SCAN_ID *llsidp;
-  SET_SCAN_ID *ssidp;
-  REGU_VALUES_SCAN_ID *rvsidp;
-  REGU_VALUE_LIST *regu_value_list;
-  REGU_VARIABLE_LIST list_node;
+  HEAP_SCAN_ID *hsidp = NULL;
+  INDX_SCAN_ID *isidp = NULL;
+  INDEX_NODE_SCAN_ID *insidp = NULL;
+  LLIST_SCAN_ID *llsidp = NULL;
+  SET_SCAN_ID *ssidp = NULL;
+  REGU_VALUES_SCAN_ID *rvsidp = NULL;
+  REGU_VALUE_LIST *regu_value_list = NULL;
+  REGU_VARIABLE_LIST list_node = NULL;
   MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
   switch (scan_id->type)
@@ -3727,7 +4113,7 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  if (hsidp->cache_recordinfo != NULL)
 	    {
 	      /* initialize cache_recordinfo values */
-	      for (i = 0; i < HEAP_RECORD_INFO_NUMBER; i++)
+	      for (i = 0; i < HEAP_RECORD_INFO_COUNT; i++)
 		{
 		  DB_MAKE_NULL (hsidp->cache_recordinfo[i]);
 		}
@@ -3835,6 +4221,38 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       isidp->one_range = false;
       break;
 
+    case S_INDX_KEY_INFO_SCAN:
+      isidp = &scan_id->s.isid;
+
+      if (!isidp->caches_inited)
+	{
+	  int i;
+	  for (i = 0; i < BTREE_KEY_INFO_COUNT; i++)
+	    {
+	      DB_MAKE_NULL (isidp->key_info_values[i]);
+	    }
+	}
+      isidp->scancache_inited = true;
+      isidp->oid_list.oid_cnt = 0;
+      isidp->curr_keyno = -1;
+      isidp->curr_oidno = -1;
+      BTREE_INIT_SCAN (&isidp->bt_scan);
+      break;
+
+    case S_INDX_NODE_INFO_SCAN:
+      insidp = &scan_id->s.insid;
+
+      if (!insidp->caches_inited)
+	{
+	  int i;
+	  for (i = 0; i < BTREE_NODE_INFO_COUNT; i++)
+	    {
+	      DB_MAKE_NULL (insidp->node_info_values[i]);
+	    }
+	  insidp->caches_inited = true;
+	}
+      BTREE_NODE_SCAN_INIT (&insidp->btns);
+      break;
     case S_LIST_SCAN:
 
       llsidp = &scan_id->s.llsid;
@@ -4132,6 +4550,15 @@ scan_next_scan_block (THREAD_ENTRY * thread_p, SCAN_ID * s_id)
 	{
 	  return ((s_id->position == S_BEFORE) ? S_SUCCESS : S_END);
 	}
+
+    case S_INDX_KEY_INFO_SCAN:
+    case S_INDX_NODE_INFO_SCAN:
+      if (s_id->grouped)
+	{
+	  assert (0);
+	  return S_ERROR;
+	}
+      return ((s_id->position == S_BEFORE) ? S_SUCCESS : S_END);
 
     case S_CLASS_ATTR_SCAN:
     case S_LIST_SCAN:
@@ -4530,6 +4957,7 @@ scan_next_scan_local (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   HEAP_SCAN_ID *hsidp = NULL;
   HEAP_PAGE_SCAN_ID *hpsidp = NULL;
   INDX_SCAN_ID *isidp = NULL;
+  INDEX_NODE_SCAN_ID *insidp = NULL;
   LLIST_SCAN_ID *llsidp = NULL;
   REGU_VALUES_SCAN_ID *rvsidp = NULL;
   SET_SCAN_ID *ssidp = NULL;
@@ -4901,7 +5329,7 @@ scan_next_scan_local (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
          the btree.  In particular, some of the instances that we are
          reading may have been deleted by the time we go to fetch them via
          heap_get ().  According to the semantics of UNCOMMITTED,
-         it is okay if they are deleted out from under us and
+         it is ok if they are deleted out from under us and
          we can ignore the SCAN_DOESNT_EXIST error. */
 
       isolation = logtb_find_current_isolation (thread_p);
@@ -5436,6 +5864,92 @@ scan_next_scan_local (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	}
       break;			/* cannot reach to this line */
 
+    case S_INDX_KEY_INFO_SCAN:
+      isidp = &scan_id->s.isid;
+
+      scan_init_filter_info (&data_filter, &isidp->scan_pred, NULL,
+			     scan_id->val_list, scan_id->vd, &isidp->cls_oid,
+			     0, NULL, NULL, NULL);
+
+      while (true)
+	{
+	  sp_scan =
+	    btree_get_next_key_info (thread_p,
+				     &isidp->indx_info->indx_id.i.btid,
+				     &isidp->bt_scan, 1, &isidp->cls_oid,
+				     isidp, isidp->key_info_values);
+
+	  if (sp_scan != S_SUCCESS)
+	    {
+	      return (sp_scan == S_END) ? S_END : S_ERROR;
+	    }
+
+	  ev_res = eval_data_filter (thread_p, NULL, NULL, &data_filter);
+	  if (ev_res == V_FALSE)
+	    {
+	      continue;
+	    }
+	  else if (ev_res == V_ERROR)
+	    {
+	      return S_ERROR;
+	    }
+
+	  if (isidp->key_info_regu_list != NULL && scan_id->val_list != NULL)
+	    {
+	      if (fetch_val_list (thread_p, isidp->key_info_regu_list,
+				  scan_id->vd, &isidp->cls_oid, NULL, NULL,
+				  PEEK) != NO_ERROR)
+		{
+		  return S_ERROR;
+		}
+	    }
+
+	  return S_SUCCESS;
+	}
+
+    case S_INDX_NODE_INFO_SCAN:
+      insidp = &scan_id->s.insid;
+
+      scan_init_filter_info (&data_filter, &insidp->scan_pred, NULL,
+			     scan_id->val_list, scan_id->vd, NULL,
+			     0, NULL, NULL, NULL);
+
+      while (true)
+	{
+	  sp_scan =
+	    btree_get_next_node_info (thread_p,
+				      &insidp->indx_info->indx_id.i.btid,
+				      &insidp->btns,
+				      insidp->node_info_values);
+	  if (sp_scan != S_SUCCESS)
+	    {
+	      return (sp_scan == S_END) ? S_END : S_ERROR;
+	    }
+
+	  ev_res = eval_data_filter (thread_p, NULL, NULL, &data_filter);
+	  if (ev_res == V_ERROR)
+	    {
+	      return S_ERROR;
+	    }
+	  else if (ev_res == V_FALSE)
+	    {
+	      continue;
+	    }
+
+	  if (insidp->node_info_regu_list != NULL
+	      && scan_id->val_list != NULL)
+	    {
+	      if (fetch_val_list (thread_p, insidp->node_info_regu_list,
+				  scan_id->vd, NULL, NULL, NULL, PEEK)
+		  != NO_ERROR)
+		{
+		  return S_ERROR;
+		}
+	    }
+
+	  return S_SUCCESS;
+	}
+
     case S_LIST_SCAN:
 
       llsidp = &scan_id->s.llsid;
@@ -5876,7 +6390,7 @@ scan_handle_single_scan (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
       break;
     }
 
-  /* maintain what is apparently suposed to be an invariant--
+  /* maintain what is apparently supposed to be an invariant--
    * S_END implies position is "after" the scan
    */
   if (result == S_END)

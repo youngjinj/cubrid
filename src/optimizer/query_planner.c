@@ -209,7 +209,7 @@ static int qo_generate_join_index_scan (QO_INFO *, JOIN_TYPE, QO_PLAN *,
 					BITSET *, BITSET *, BITSET *);
 static void qo_generate_seq_scan (QO_INFO *, QO_NODE *);
 static int qo_generate_index_scan (QO_INFO *, QO_NODE *,
-				   QO_NODE_INDEX_ENTRY *);
+				   QO_NODE_INDEX_ENTRY *, bool);
 static int qo_generate_sort_limit_plan (QO_ENV *, QO_INFO *, QO_PLAN *);
 static void qo_plan_add_to_free_list (QO_PLAN *, void *ignore);
 static void qo_nljoin_cost (QO_PLAN *);
@@ -8152,10 +8152,15 @@ qo_is_iscan (QO_PLAN * plan)
  *   infop(in): pointer to QO_INFO (environment info node which holds plans)
  *   nodep(in): pointer to QO_NODE (node in the join graph)
  *   ni_entryp(in): pointer to QO_NODE_INDEX_ENTRY (node index entry)
+ *   special_index_scan(in): true if index scan should be forced even when it
+ *			     cannot apply (e.g. because no index segments are
+ *			     used). This is used to generate an index scan
+ *			     when scanning for b-tree node or key info.
  */
 static int
 qo_generate_index_scan (QO_INFO * infop, QO_NODE * nodep,
-			QO_NODE_INDEX_ENTRY * ni_entryp)
+			QO_NODE_INDEX_ENTRY * ni_entryp,
+			bool special_index_scan)
 {
   QO_INDEX_ENTRY *index_entryp;
   BITSET_ITERATOR iter;
@@ -8216,11 +8221,13 @@ qo_generate_index_scan (QO_INFO * infop, QO_NODE * nodep,
 	   * two situations is true:
 	   *  - we have key filter terms and the index cover all segments
 	   *  - we have filter predicate and force index is used
+	   *  - a special index scan for b-tree key or node info
 	   */
 	  if ((bitset_cardinality (&(index_entryp->key_filter_terms))
 	       && index_entryp->cover_segments)
 	      || (index_entryp->constraints->filter_predicate
-		  && index_entryp->force))
+		  && index_entryp->force)
+	      || special_index_scan)
 	    {
 	      bitset_assign (&kf_terms, &(index_entryp->key_filter_terms));
 	      planp = qo_index_scan_new (infop, nodep, ni_entryp,
@@ -8493,7 +8500,7 @@ qo_generate_index_scan (QO_INFO * infop, QO_NODE * nodep,
 	  && ((index_entryp->cover_segments
 	       && bitset_cardinality (&(index_entryp->key_filter_terms)))
 	      || (index_entryp->constraints->filter_predicate
-		  && index_entryp->force)))
+		  && index_entryp->force) || special_index_scan))
 	{
 	  /* section added to support key filter terms for order by skipping
 	   * also when we do not have covering.
@@ -8645,6 +8652,7 @@ qo_search_planner (QO_PLANNER * planner)
   int have_range_terms = 0;
   int normal_index_plan_n;
   int start_column = 0;
+  bool special_index_scan = false;
 
   bitset_init (&nodes, planner->env);
   bitset_init (&subqueries, planner->env);
@@ -8763,6 +8771,14 @@ qo_search_planner (QO_PLANNER * planner)
 
       node_index = QO_NODE_INDEXES (node);
 
+      /* Set special_index_scan to true if spec if flagged as:
+       * 1. Scan for b-tree key info.
+       * 2. Scan for b-tree node info.
+       * These are special cases which need index scan forced.
+       */
+      special_index_scan =
+	PT_SPEC_SPECIAL_INDEX_SCAN (QO_NODE_ENTITY_SPEC (node));
+
       /*
        *  It is possible that this node will not have indexes.  This would
        *  happen (for instance) if the node represented a derived table.
@@ -8814,8 +8830,10 @@ qo_search_planner (QO_PLANNER * planner)
 #if 1
 	      /* Currently we do not consider the following optimization. */
 	      if ((have_range_terms == true)
-		  || (index_entry->constraints->filter_predicate &&
-		      index_entry->force))
+		  || (index_entry->force
+		      && index_entry->constraints->filter_predicate)
+		  /* Force index scan if special_index_scan is true */
+		  || special_index_scan)
 		/* Currently, CUBRID does not allow null values in index.
 		 * The filter index expression must contain at least one
 		 * term different than "is null". Otherwise, the index will
@@ -8843,8 +8861,14 @@ qo_search_planner (QO_PLANNER * planner)
 #endif
 		{
 		  normal_index_plan_n +=
-		    qo_generate_index_scan (info, node, ni_entry);
+		    qo_generate_index_scan (info, node, ni_entry,
+					    special_index_scan);
 		}
+
+	      /* If special_index_scan is true make sure an index scan was
+	       * generated.
+	       */
+	      assert (!special_index_scan || normal_index_plan_n > 0);
 
 	      /* if the index didn't normally skipped the order by, we try
 	       * the new plan, maybe this will be better.
@@ -10788,6 +10812,11 @@ qo_index_cardinality (QO_ENV * env, PT_NODE * attr)
 
   segp = lookup_seg (nodep, attr, env);
   if (segp == NULL)
+    {
+      return 0;
+    }
+
+  if (attr->info.name.meta_class == PT_RESERVED)
     {
       return 0;
     }

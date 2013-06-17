@@ -2748,9 +2748,12 @@ qo_get_xasl_index_info (QO_ENV * env, QO_PLAN * plan)
   else if (nterms <= 0 && nkfterms <= 0 &&
 	   bitset_cardinality (&(plan->sarged_terms)) == 0)
     {
-      if (qo_plan_filtered_index (plan))
+      if (qo_plan_filtered_index (plan)
+	  || PT_SPEC_SPECIAL_INDEX_SCAN (QO_NODE_ENTITY_SPEC
+				         (plan->plan_un.scan.node)))
 	{
 	  /* if scan filtered index do not return */
+	  /* if scan for key info do not return */
 	  ;
 	}
       else

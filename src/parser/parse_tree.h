@@ -664,24 +664,38 @@
 #define PT_IS_SPEC_FLAG_SET(spec_, flags_)		    \
   (((spec_)->info.spec.flag & (flags_)) != 0)
 
+#define PT_SPEC_SPECIAL_INDEX_SCAN(spec_)			    \
+  (((spec_)->info.spec.flag &				    \
+    (PT_SPEC_FLAG_KEY_INFO_SCAN | PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN)) != 0)
+
+/* Obtain reserved name type from spec flag */
+#define PT_SPEC_GET_RESERVED_NAME_TYPE(spec_)				\
+  (((spec_) == NULL || (spec_)->node_type != PT_SPEC			\
+    || (spec_)->info.spec.flag == 0) ?					\
+   /* is spec is NULL or not a PT_SPEC or flag is 0, return invalid */	\
+   RESERVED_NAME_INVALID :						\
+   /* else */								\
+   ((PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_RECORD_INFO_SCAN)) ?	\
+    /* if spec is flagged for record info */				\
+    RESERVED_NAME_RECORD_INFO :						\
+    /* else */								\
+    ((PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_PAGE_INFO_SCAN)) ?	\
+     /* if spec is flagged for page info */				\
+     RESERVED_NAME_PAGE_INFO :						\
+     /* else */								\
+     ((PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_KEY_INFO_SCAN)) ?	\
+      /* if spec is flagged for key info */				\
+      RESERVED_NAME_KEY_INFO :						\
+      /* else */							\
+      ((PT_IS_SPEC_FLAG_SET(spec_, PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN) ?	\
+	/* if spec is flagged for b-tree node info */			\
+	RESERVED_NAME_BTREE_NODE_INFO :					\
+	/* spec is not flagged for any type of reserved names */	\
+	RESERVED_NAME_INVALID))))))
+
 /* Check if according to spec flag should bind names as reserved */
 #define PT_SHOULD_BIND_RESERVED_NAME(spec_)				\
-  ((spec_) != NULL && (spec_)->node_type == PT_SPEC			\
-   && (PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_RECORD_INFO_SCAN	\
-				   | PT_SPEC_FLAG_PAGE_INFO_SCAN)))
-
-/* After resolving to a reserved name, check the binding is correct according
- * to spec flag
- */
-#define PT_CHECK_RESERVED_NAME_BIND(spec_, reserved_id)			\
-  ((PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_RECORD_INFO_SCAN)		\
-    && (reserved_id) >= RESERVED_FIRST_RECORD_INFO			\
-    && (prm_get_bool_value (PRM_ID_MVCC_ENABLED) ?			\
-        (reserved_id) <= RESERVED_LAST_RECORD_INFO :			\
-	(reserved_id) < RESERVED_FIRST_MVCC_INFO))			\
-   || (PT_IS_SPEC_FLAG_SET (spec_, PT_SPEC_FLAG_RECORD_INFO_SCAN)	\
-       && (reserved_id) >= RESERVED_FIRST_PAGE_INFO			\
-       && (reserved_id) <= RESERVED_LAST_PAGE_INFO))
+  (PT_SPEC_GET_RESERVED_NAME_TYPE (spec_) != RESERVED_NAME_INVALID)
 
 /*
  Enumerated types of parse tree statements
@@ -1122,13 +1136,16 @@ typedef enum
   PT_HINT_USE_UPDATE_IDX = 0x200000,	/* 0010 0000 0000 0000 0000 0000 */
   /* use index for merge update */
   PT_HINT_USE_INSERT_IDX = 0x400000,	/* 0100 0000 0000 0000 0000 0000 */
-  /* use index for merge delete */
-  PT_HINT_NO_SORT_LIMIT = 0x800000,	/* 1000 0000 0000 0000 0000 0000 */
   /* do not generate SORT-LIMIT plan */
-  PT_HINT_SELECT_RECORD_INFO = 0x1000000, /* 0001 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_NO_SORT_LIMIT = 0x800000,	/* 1000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_RECORD_INFO = 0x1000000,	/* 0001 0000 0000 0000 0000 0000 0000 */
   /* SELECT record info from tuple header instead of data */
-  PT_HINT_SELECT_PAGE_INFO = 0x2000000	/* 0010 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_PAGE_INFO = 0x2000000,	/* 0010 0000 0000 0000 0000 0000 0000 */
   /* SELECT page header information from heap file instead of record data */
+  PT_HINT_SELECT_KEY_INFO = 0x4000000,	/* 0100 0000 0000 0000 0000 0000 0000 */
+  /* SELECT key information from index b-tree instead of table record data */
+  PT_HINT_SELECT_BTREE_NODE_INFO = 0x8000000	/* 1000 0000 0000 0000 0000 0000 */
+    /* SELECT b-tree node information */
 } PT_HINT_ENUM;
 
 
@@ -1424,10 +1441,16 @@ typedef enum
   PT_SPEC_FLAG_RECORD_INFO_SCAN = 0x20,	/* spec will be scanned for record
 					 * information instead of record data
 					 */
-  PT_SPEC_FLAG_PAGE_INFO_SCAN = 0x40	/* spec's heap file will scanned page
+  PT_SPEC_FLAG_PAGE_INFO_SCAN = 0x40,	/* spec's heap file will scanned page
 					 * by page for page information.
 					 * records will not be scanned.
 					 */
+  PT_SPEC_FLAG_KEY_INFO_SCAN = 0x80,	/* one of the spec's indexes will be
+					 * scanned for key information.
+					 */
+  PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN = 0x100	/* one of the spec's indexes will
+						 * be scanned for b-tree node info
+						 */
 } PT_SPEC_FLAG;
 
 typedef enum
@@ -2257,12 +2280,15 @@ typedef enum
 {
   RESERVED_NAME_INVALID = -1,
   RESERVED_NAME_RECORD_INFO = 0,
-  RESERVED_NAME_PAGE_INFO
+  RESERVED_NAME_PAGE_INFO,
+  RESERVED_NAME_KEY_INFO,
+  RESERVED_NAME_BTREE_NODE_INFO
 } PT_RESERVED_NAME_TYPE;
 
 /* Enumeration of reserved name ids */
 typedef enum
 {
+  /* Reserved record info names */
   RESERVED_T_PAGEID = 0,
   RESERVED_T_SLOTID,
   RESERVED_T_VOLUMEID,
@@ -2281,6 +2307,7 @@ typedef enum
   RESERVED_T_MVCC_FLAGS,
   RESERVED_T_MVCC_NEXT_VERSION,
 
+  /* Reserved page info names */
   RESERVED_P_CLASS_OID,
   RESERVED_P_PREV_PAGEID,
   RESERVED_P_NEXT_PAGEID,
@@ -2295,6 +2322,24 @@ typedef enum
   RESERVED_P_UPDATE_BEST,
   RESERVED_P_LAST_MVCCID,
 
+  /* Reserved key info names */
+  RESERVED_KEY_VOLUMEID,
+  RESERVED_KEY_PAGEID,
+  RESERVED_KEY_SLOTID,
+  RESERVED_KEY_KEY,
+  RESERVED_KEY_OID_COUNT,
+  RESERVED_KEY_FIRST_OID,
+  RESERVED_KEY_OVERFLOW_KEY,
+  RESERVED_KEY_OVERFLOW_OIDS,
+
+  /* Reserved b-tree node info names */
+  RESERVED_BT_NODE_VOLUMEID,
+  RESERVED_BT_NODE_PAGEID,
+  RESERVED_BT_NODE_TYPE,
+  RESERVED_BT_NODE_KEY_COUNT,
+  RESERVED_BT_NODE_FIRST_KEY,
+  RESERVED_BT_NODE_LAST_KEY,
+
   /* leave this last to know how many reserved names are in
    * pt_Reserved_name_table
    */
@@ -2306,7 +2351,13 @@ typedef enum
   RESERVED_LAST_RECORD_INFO = RESERVED_T_MVCC_NEXT_VERSION,
 
   RESERVED_FIRST_PAGE_INFO = RESERVED_P_CLASS_OID,
-  RESERVED_LAST_PAGE_INFO = RESERVED_P_LAST_MVCCID
+  RESERVED_LAST_PAGE_INFO = RESERVED_P_LAST_MVCCID,
+
+  RESERVED_FIRST_KEY_INFO = RESERVED_KEY_VOLUMEID,
+  RESERVED_LAST_KEY_INFO = RESERVED_KEY_OVERFLOW_OIDS,
+
+  RESERVED_FIRST_BT_NODE_INFO = RESERVED_BT_NODE_VOLUMEID,
+  RESERVED_LAST_BT_NODE_INFO = RESERVED_BT_NODE_LAST_KEY
 } PT_RESERVED_NAME_ID;
 
 /* Reserved name info */
@@ -2322,22 +2373,28 @@ struct pt_reserved_name
 extern PT_RESERVED_NAME pt_Reserved_name_table[];
 
 /* Obtain reserved name type from id */
-#define PT_GET_RESERVED_NAME_TYPE(reserved_id, type)	      \
-  if ((reserved_id) >= RESERVED_FIRST_RECORD_INFO	      \
-      && (reserved_id) <= RESERVED_LAST_RECORD_INFO)	      \
-    {							      \
-      (type) = RESERVED_NAME_RECORD_INFO;		      \
-    }							      \
-  else if ((reserved_id) >= RESERVED_FIRST_PAGE_INFO	      \
-	   && (reserved_id) <= RESERVED_LAST_PAGE_INFO)	      \
-    {							      \
-      (type) = RESERVED_NAME_PAGE_INFO;			      \
-    }							      \
-  else							      \
-    {							      \
-      assert (0);					      \
-    }
-
+#define PT_GET_RESERVED_NAME_TYPE(reserved_id)		      \
+  (((reserved_id) >= RESERVED_FIRST_RECORD_INFO		      \
+    && (reserved_id) <= RESERVED_LAST_RECORD_INFO) ?	      \
+   /* If reserved_id belongs to record info */		      \
+   RESERVED_NAME_RECORD_INFO :				      \
+   /* else */						      \
+   (((reserved_id) >= RESERVED_FIRST_PAGE_INFO		      \
+     && (reserved_id) <= RESERVED_LAST_PAGE_INFO) ?	      \
+    /* If reserved_id belongs to page_info */		      \
+    RESERVED_NAME_PAGE_INFO :				      \
+    /* else */						      \
+    (((reserved_id) >= RESERVED_FIRST_KEY_INFO		      \
+      && (reserved_id) <= RESERVED_LAST_KEY_INFO) ?	      \
+     /* If reserved_id belongs to key info */		      \
+     RESERVED_NAME_KEY_INFO :				      \
+     /* else */						      \
+     (((reserved_id) >= RESERVED_FIRST_BT_NODE_INFO	      \
+      && (reserved_id) <= RESERVED_LAST_BT_NODE_INFO) ?	      \
+      /* If reserved_id belongs to b-tree node info */	      \
+      RESERVED_NAME_BTREE_NODE_INFO :			      \
+      /* else must be invalid */			      \
+      RESERVED_NAME_INVALID))))
 
 /* Get first and last id for reserved name type */
 #define PT_GET_RESERVED_NAME_FIRST_AND_LAST(type, first, last)   \
@@ -2358,11 +2415,25 @@ extern PT_RESERVED_NAME pt_Reserved_name_table[];
       (first) = RESERVED_FIRST_PAGE_INFO;		      \
       (last) = RESERVED_LAST_PAGE_INFO;			      \
       break;						      \
+    case RESERVED_NAME_KEY_INFO:			      \
+      (first) = RESERVED_FIRST_KEY_INFO;		      \
+      (last) = RESERVED_LAST_KEY_INFO;			      \
+      break;						      \
+    case RESERVED_NAME_BTREE_NODE_INFO:			      \
+      (first) = RESERVED_FIRST_BT_NODE_INFO;		      \
+      (last) = RESERVED_LAST_BT_NODE_INFO;		      \
+      break;						      \
     default:						      \
       assert (0);					      \
       break;						      \
     }
 
+/* After resolving to a reserved name, check the binding is correct according
+ * to spec flag
+ */
+#define PT_CHECK_RESERVED_NAME_BIND(spec_, reserved_id)			\
+  (PT_SPEC_GET_RESERVED_NAME_TYPE (spec_)				\
+   == PT_GET_RESERVED_NAME_TYPE (reserved_id))
 
 /* Info for Names
   This includes identifiers

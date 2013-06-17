@@ -5174,14 +5174,25 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
       spec->s.cls_node.cache_rest = cache_rest;
       spec->s.cls_node.schema_type = schema_type;
       spec->s.cls_node.cache_reserved = cache_recordinfo;
-      spec->s.cls_node.num_attrs_reserved = 0;
       if (access == SEQUENTIAL_RECORD_INFO)
 	{
-	  spec->s.cls_node.num_attrs_reserved = HEAP_RECORD_INFO_NUMBER;
+	  spec->s.cls_node.num_attrs_reserved = HEAP_RECORD_INFO_COUNT;
 	}
       else if (access == SEQUENTIAL_PAGE_SCAN)
 	{
-	  spec->s.cls_node.num_attrs_reserved = HEAP_PAGE_INFO_NUMBER;
+	  spec->s.cls_node.num_attrs_reserved = HEAP_PAGE_INFO_COUNT;
+	}
+      else if (access == INDEX_KEY_INFO)
+	{
+	  spec->s.cls_node.num_attrs_reserved = BTREE_KEY_INFO_COUNT;
+	}
+      else if (access == INDEX_NODE_INFO)
+	{
+	  spec->s.cls_node.num_attrs_reserved = BTREE_NODE_INFO_COUNT;
+	}
+      else
+	{
+	  spec->s.cls_node.num_attrs_reserved = 0;
 	}
       spec->s.cls_node.cls_regu_list_reserved = reserved_val_list;
     }
@@ -12197,6 +12208,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 
 	  if (index_pred == NULL)
 	    {
+	      /* Heap scan */
 	      TARGET_TYPE scan_type;
 	      ACCESS_METHOD access_method = SEQUENTIAL;
 
@@ -12254,8 +12266,8 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 		    }
 		}
 
-	      symbols->current_class = (scan_type == TARGET_CLASS_ATTR)
-		? NULL : class_;
+	      symbols->current_class =
+		(scan_type == TARGET_CLASS_ATTR) ? NULL : class_;
 	      symbols->cache_attrinfo = cache_pred;
 	      symbols->reserved_values = db_values_array_p;
 
@@ -12313,8 +12325,82 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 						  db_values_array_p,
 						  regu_attributes_reserved);
 	    }
+	  else if (PT_SPEC_SPECIAL_INDEX_SCAN (spec))
+	    {
+	      /* Index scan for key info */
+	      PT_RESERVED_NAME_TYPE reserved_type = RESERVED_NAME_INVALID;
+	      ACCESS_METHOD access_method;
+
+	      if (pt_split_attrs (parser, table_info, where_part, &pred_attrs,
+				  &rest_attrs, &reserved_attrs, &pred_offsets,
+				  &rest_offsets, &reserved_offsets)
+		  != NO_ERROR)
+		{
+		  return NULL;
+		}
+	      /* pred_attrs and rest_attrs should have only class attributes.
+	       * key info scan only allows selecting reserved key info names.
+	       */
+	      assert (pred_attrs == NULL && rest_attrs == NULL
+		      && reserved_attrs != NULL);
+
+	      if (PT_IS_SPEC_FLAG_SET (spec, PT_SPEC_FLAG_KEY_INFO_SCAN))
+		{
+		  reserved_type = RESERVED_NAME_KEY_INFO;
+		  access_method = INDEX_KEY_INFO;
+		}
+	      else if (PT_IS_SPEC_FLAG_SET
+		       (spec, PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN))
+		{
+		  reserved_type = RESERVED_NAME_BTREE_NODE_INFO;
+		  access_method = INDEX_NODE_INFO;
+		}
+	      else
+		{
+		  /* Should never happen */
+		  assert (0);
+		}
+	      db_values_array_p =
+		pt_make_reserved_value_list (parser, reserved_type);
+
+	      symbols->current_class = class_;
+	      symbols->reserved_values = db_values_array_p;
+
+	      where = pt_to_pred_expr (parser, where_part);
+
+	      output_val_list = pt_make_outlist_from_vallist (parser,
+							      table_info->
+							      value_list);
+
+	      regu_attributes_pred = NULL;
+	      regu_attributes_rest = NULL;
+	      regu_attributes_reserved =
+		pt_to_regu_variable_list (parser, reserved_attrs,
+					  UNBOX_AS_VALUE,
+					  table_info->value_list,
+					  reserved_offsets);
+
+	      parser_free_tree (parser, reserved_attrs);
+	      free_and_init (reserved_offsets);
+
+	      index_info = pt_to_index_info (parser,
+					     class_->info.name.db_object,
+					     index_pred);
+	      access = pt_make_class_access_spec (parser, flat,
+						  class_->info.name.db_object,
+						  TARGET_CLASS,
+						  access_method,
+						  spec->info.spec.lock_hint,
+						  index_info, NULL, where,
+						  NULL, NULL, NULL,
+						  output_val_list, NULL, NULL,
+						  NULL, NULL, NO_SCHEMA,
+						  db_values_array_p,
+						  regu_attributes_reserved);
+	    }
 	  else
 	    {
+	      /* Index scan */
 	      /* for index with prefix length */
 	      PT_NODE *where_part_save = NULL, *where_key_part_save = NULL;
 	      PT_NODE *ipl_where_part = NULL;
@@ -24273,6 +24359,38 @@ pt_reserved_id_to_valuelist_index (PARSER_CONTEXT * parser,
       return HEAP_PAGE_INFO_UPDATE_BEST;
     case RESERVED_P_LAST_MVCCID:
       return HEAP_PAGE_INFO_LAST_MVCCID;
+
+      /* Key info names */
+    case RESERVED_KEY_VOLUMEID:
+      return BTREE_KEY_INFO_VOLUMEID;
+    case RESERVED_KEY_PAGEID:
+      return BTREE_KEY_INFO_PAGEID;
+    case RESERVED_KEY_SLOTID:
+      return BTREE_KEY_INFO_SLOTID;
+    case RESERVED_KEY_KEY:
+      return BTREE_KEY_INFO_KEY;
+    case RESERVED_KEY_OID_COUNT:
+      return BTREE_KEY_INFO_OID_COUNT;
+    case RESERVED_KEY_FIRST_OID:
+      return BTREE_KEY_INFO_FIRST_OID;
+    case RESERVED_KEY_OVERFLOW_KEY:
+      return BTREE_KEY_INFO_OVERFLOW_KEY;
+    case RESERVED_KEY_OVERFLOW_OIDS:
+      return BTREE_KEY_INFO_OVERFLOW_OIDS;
+
+      /* B-tree node info names */
+    case RESERVED_BT_NODE_VOLUMEID:
+      return BTREE_NODE_INFO_VOLUMEID;
+    case RESERVED_BT_NODE_PAGEID:
+      return BTREE_NODE_INFO_PAGEID;
+    case RESERVED_BT_NODE_TYPE:
+      return BTREE_NODE_INFO_NODE_TYPE;
+    case RESERVED_BT_NODE_KEY_COUNT:
+      return BTREE_NODE_INFO_KEY_COUNT;
+    case RESERVED_BT_NODE_FIRST_KEY:
+      return BTREE_NODE_INFO_FIRST_KEY;
+    case RESERVED_BT_NODE_LAST_KEY:
+      return BTREE_NODE_INFO_LAST_KEY;
 
     default:
       /* unknown reserved id or not handled */

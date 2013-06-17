@@ -2066,10 +2066,11 @@ static int
 qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 			      ACCESS_SPEC_TYPE * list, int final)
 {
-  ACCESS_SPEC_TYPE *p;
-  HEAP_SCAN_ID *hsidp;
-  HEAP_PAGE_SCAN_ID *hpsidp;
-  INDX_SCAN_ID *isidp;
+  ACCESS_SPEC_TYPE *p = NULL;
+  HEAP_SCAN_ID *hsidp = NULL;
+  HEAP_PAGE_SCAN_ID *hpsidp = NULL;
+  INDX_SCAN_ID *isidp = NULL;
+  INDEX_NODE_SCAN_ID *insidp = NULL;
   int pg_cnt;
 
   /* I'm not sure this access structure could be anymore complicated
@@ -2109,7 +2110,7 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 	      heap_attrinfo_end (thread_p, hsidp->rest_attrs.attr_cache);
 	      if (hsidp->cache_recordinfo != NULL)
 		{
-		  for (i = 0; i < HEAP_RECORD_INFO_NUMBER; i++)
+		  for (i = 0; i < HEAP_RECORD_INFO_COUNT; i++)
 		    {
 		      db_value_clear (hsidp->cache_recordinfo[i]);
 		    }
@@ -2122,7 +2123,7 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 	  if (hpsidp->cache_page_info != NULL)
 	    {
 	      int i;
-	      for (i = 0; i < HEAP_PAGE_INFO_NUMBER; i++)
+	      for (i = 0; i < HEAP_PAGE_INFO_COUNT; i++)
 		{
 		  db_value_clear (hpsidp->cache_page_info[i]);
 		}
@@ -2165,6 +2166,35 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 	      heap_attrinfo_end (thread_p, isidp->pred_attrs.attr_cache);
 	      heap_attrinfo_end (thread_p, isidp->rest_attrs.attr_cache);
 	      isidp->caches_inited = false;
+	    }
+	  break;
+	case S_INDX_KEY_INFO_SCAN:
+	  isidp = &p->s_id.s.isid;
+	  pg_cnt +=
+	    qexec_clear_regu_list (xasl_p, isidp->key_info_regu_list, final);
+	  if (isidp->caches_inited)
+	    {
+	      int i;
+	      for (i = 0; i < BTREE_KEY_INFO_COUNT; i++)
+		{
+		  db_value_clear (isidp->key_info_values[i]);
+		}
+	      isidp->caches_inited = false;
+	    }
+	  break;
+	case S_INDX_NODE_INFO_SCAN:
+	  insidp = &p->s_id.s.insid;
+	  pg_cnt +=
+	    qexec_clear_regu_list (xasl_p, insidp->node_info_regu_list,
+				   final);
+	  if (insidp->caches_inited)
+	    {
+	      int i;
+	      for (i = 0; i < BTREE_NODE_INFO_COUNT; i++)
+		{
+		  db_value_clear (insidp->node_info_values[i]);
+		}
+	      insidp->caches_inited = false;
 	    }
 	  break;
 	case S_LIST_SCAN:
@@ -6464,6 +6494,16 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 	  scan_type = S_INDX_SCAN;
 	  indx_info = curr_spec->indexptr;
 	}
+      else if (curr_spec->access == INDEX_KEY_INFO)
+	{
+	  scan_type = S_INDX_KEY_INFO_SCAN;
+	  indx_info = curr_spec->indexptr;
+	}
+      else if (curr_spec->access == INDEX_NODE_INFO)
+	{
+	  scan_type = S_INDX_NODE_INFO_SCAN;
+	  indx_info = curr_spec->indexptr;
+	}
       else
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE,
@@ -6515,6 +6555,43 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 	    {
 	      goto exit_on_error;
 	    }
+	}
+      else if (scan_type == S_INDX_KEY_INFO_SCAN)
+	{
+	  if (scan_open_index_key_info_scan (thread_p, s_id, val_list, vd,
+					     indx_info,
+					     &ACCESS_SPEC_CLS_OID (curr_spec),
+					     &ACCESS_SPEC_HFID (curr_spec),
+					     curr_spec->where_pred,
+					     curr_spec->s.cls_node.
+					     cls_output_val_list,
+					     iscan_oid_order, query_id,
+					     curr_spec->s.cls_node.
+					     cache_reserved,
+					     curr_spec->s.cls_node.
+					     cls_regu_list_reserved)
+	      != NO_ERROR)
+	    {
+	      goto exit_on_error;
+	    }
+	  /* monitor */
+	  mnt_qm_iscans (thread_p);
+	}
+      else if (scan_type == S_INDX_NODE_INFO_SCAN)
+	{
+	  if (scan_open_index_node_info_scan (thread_p, s_id, val_list, vd,
+					      indx_info,
+					      curr_spec->where_pred,
+					      curr_spec->s.cls_node.
+					      cache_reserved,
+					      curr_spec->s.cls_node.
+					      cls_regu_list_reserved)
+	      != NO_ERROR)
+	    {
+	      goto exit_on_error;
+	    }
+	  /* monitor */
+	  mnt_qm_iscans (thread_p);
 	}
       else			/* S_INDX_SCAN */
 	{
@@ -6689,7 +6766,7 @@ qexec_close_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec)
 	    {
 	      mnt_qm_sscans (thread_p);
 	    }
-	  else if (curr_spec->access == INDEX)
+	  else if (IS_ANY_INDEX_ACCESS (curr_spec->access))
 	    {
 	      mnt_qm_iscans (thread_p);
 	    }
@@ -7435,10 +7512,13 @@ qexec_prune_spec (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec,
 	{
 	  lock = X_LOCK;
 	}
+      else if (IS_ANY_INDEX_ACCESS (spec->access))
+	{
+	  lock = IX_LOCK;
+	}
       else
 	{
-	  assert (spec->access == INDEX);
-	  lock = IX_LOCK;
+	  assert (0);
 	}
     }
 
@@ -7529,7 +7609,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
       /* reset back to root class */
       COPY_OID (&class_oid, &ACCESS_SPEC_CLS_OID (spec));
       HFID_COPY (&class_hfid, &ACCESS_SPEC_HFID (spec));
-      if (spec->access == INDEX)
+      if (IS_ANY_INDEX_ACCESS (spec->access))
 	{
 	  index_id = spec->indx_id;
 	}
@@ -7538,7 +7618,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
     {
       COPY_OID (&class_oid, &spec->curent->oid);
       HFID_COPY (&class_hfid, &spec->curent->hfid);
-      if (spec->access == INDEX)
+      if (IS_ANY_INDEX_ACCESS (spec->access))
 	{
 	  index_id = spec->curent->indx_id;
 	}
@@ -7557,7 +7637,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 	  heap_attrinfo_end (thread_p, hsidp->rest_attrs.attr_cache);
 	  if (hsidp->cache_recordinfo != NULL)
 	    {
-	      for (i = 0; i < HEAP_RECORD_INFO_NUMBER; i++)
+	      for (i = 0; i < HEAP_RECORD_INFO_COUNT; i++)
 		{
 		  db_value_clear (hsidp->cache_recordinfo[i]);
 		}
@@ -7591,7 +7671,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 
       if (hpsidp->cache_page_info != NULL)
 	{
-	  for (i = 0; i < HEAP_PAGE_INFO_NUMBER; i++)
+	  for (i = 0; i < HEAP_PAGE_INFO_COUNT; i++)
 	    {
 	      db_value_clear (hpsidp->cache_page_info[i]);
 	    }
@@ -13065,7 +13145,7 @@ qexec_execute_mainblock (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		  for (; specp; specp = specp->next)
 		    {
 		      if (specp->type == TARGET_CLASS
-			  && specp->access == INDEX)
+			  && IS_ANY_INDEX_ACCESS (specp->access))
 			{
 			  fixed_scan_flag = false;
 			  break;
@@ -13079,7 +13159,7 @@ qexec_execute_mainblock (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		  if (specp)
 		    {
 		      if (specp->type == TARGET_CLASS
-			  && specp->access == INDEX)
+			  && IS_ANY_INDEX_ACCESS (specp->access))
 			{
 			  fixed_scan_flag = false;
 			  break;
@@ -13139,7 +13219,7 @@ qexec_execute_mainblock (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		       */
 		      if (specp->grouped_scan
 			  && specp->type == TARGET_CLASS
-			  && specp->access == INDEX
+			  && IS_ANY_INDEX_ACCESS (specp->access)
 			  && specp->indexptr->key_info.is_constant == false)
 			{
 			  specp->grouped_scan = false;
@@ -13191,11 +13271,9 @@ qexec_execute_mainblock (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		      else
 			{
 			  if (specp->type == TARGET_CLASS
-			      && specp->access == INDEX
-			      &&
-			      (qfile_is_sort_list_covered
-			       (xptr->after_iscan_list,
-				xptr->orderby_list) == true))
+			      && IS_ANY_INDEX_ACCESS (specp->access)
+			      && qfile_is_sort_list_covered
+			      (xptr->after_iscan_list, xptr->orderby_list))
 			    {
 			      specp->grouped_scan = false;
 			      iscan_oid_order = false;

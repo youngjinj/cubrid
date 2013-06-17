@@ -54,7 +54,11 @@ typedef enum
 				 * through all slots even if they do not
 				 * contain data.
 				 */
-  S_HEAP_PAGE_SCAN		/* scans heap pages and queries for page information */
+  S_HEAP_PAGE_SCAN,		/* scans heap pages and queries for page
+				 * information
+				 */
+  S_INDX_KEY_INFO_SCAN,		/* scans b-tree and queries for key info */
+  S_INDX_NODE_INFO_SCAN		/* scans b-tree nodes for info */
 } SCAN_TYPE;
 
 typedef struct heap_scan_id HEAP_SCAN_ID;
@@ -210,9 +214,23 @@ struct indx_scan_id
   DB_BIGINT key_limit_upper;	/* upper key limit */
   INDX_COV indx_cov;		/* index covering information */
   MULTI_RANGE_OPT multi_range_opt;	/* optimization for multiple range
-					 * search*/
+					 * search
+					 */
   INDEX_SKIP_SCAN iss;		/* index skip scan structure */
   bool duplicate_key_locked;	/* true if duplicate key have been scanned */
+  DB_VALUE **key_info_values;	/* Used for index key info scan */
+  REGU_VARIABLE_LIST key_info_regu_list;	/* regulator variable list */
+};
+
+typedef struct index_node_scan_id INDEX_NODE_SCAN_ID;
+struct index_node_scan_id
+{
+  INDX_INFO *indx_info;		/* index information */
+  SCAN_PRED scan_pred;		/* scan predicates */
+  BTREE_NODE_SCAN btns;
+  bool caches_inited;		/* are the caches initialized?? */
+  DB_VALUE **node_info_values;	/* Used to store information about b-tree node */
+  REGU_VARIABLE_LIST node_info_regu_list;	/* regulator variable list */
 };
 
 typedef struct llist_scan_id LLIST_SCAN_ID;
@@ -298,6 +316,7 @@ struct scan_id_struct
     HEAP_PAGE_SCAN_ID hpsid;	/* Scan heap pages without going through
 				 * records */
     INDX_SCAN_ID isid;		/* Indexed Heap File Scan Identifier */
+    INDEX_NODE_SCAN_ID insid;	/* Scan b-tree nodes */
     SET_SCAN_ID ssid;		/* Set Scan Identifier */
     VA_SCAN_ID vaid;		/* Value Array Identifier */
     REGU_VALUES_SCAN_ID rvsid;	/* regu_variable list identifier */
@@ -392,6 +411,32 @@ extern int scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				 ATTR_ID * attrids_rest,
 				 HEAP_CACHE_ATTRINFO * cache_rest,
 				 bool iscan_oid_order, QUERY_ID query_id);
+extern int scan_open_index_key_info_scan (THREAD_ENTRY * thread_p,
+					  SCAN_ID * scan_id,
+					  /* fields of SCAN_ID */
+					  VAL_LIST * val_list, VAL_DESCR * vd,
+					  /* fields of INDX_SCAN_ID */
+					  INDX_INFO * indx_info,
+					  OID * cls_oid,
+					  HFID * hfid,
+					  PRED_EXPR * pr,
+					  OUTPTR_LIST * output_val_list,
+					  bool iscan_oid_order,
+					  QUERY_ID query_id,
+					  DB_VALUE ** key_info_values,
+					  REGU_VARIABLE_LIST
+					  key_info_regu_list);
+extern int scan_open_index_node_info_scan (THREAD_ENTRY * thread_p,
+					   SCAN_ID * scan_id,
+					   /* fields of SCAN_ID */
+					   VAL_LIST * val_list,
+					   VAL_DESCR * vd,
+					   /* fields of INDX_SCAN_ID */
+					   INDX_INFO * indx_info,
+					   PRED_EXPR * pr,
+					   DB_VALUE ** node_info_values,
+					   REGU_VARIABLE_LIST
+					   node_info_regu_list);
 extern int scan_open_list_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				/* fields of SCAN_ID */
 				int grouped,

@@ -2228,7 +2228,6 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
   int copyarea_length;
   SCAN_CODE scan = S_ERROR;
   int error_code = NO_ERROR;
-  HEAP_SCANCACHE scan_cache;
   MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
   if (class_oid == NULL)
@@ -2321,7 +2320,7 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
   copyarea_length = DB_PAGESIZE;
 
   error_code =
-    heap_scancache_start (thread_p, &nxobj.area_scancache, NULL, NULL, true,
+    heap_scancache_start (thread_p, &nxobj.area_scancache, NULL, NULL, false,
 			  false, LOCKHINT_NONE, mvcc_snapshot);
   if (error_code != NO_ERROR)
     {
@@ -2337,7 +2336,7 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
 	locator_allocate_copy_area_by_length (copyarea_length);
       if (nxobj.comm_area == NULL)
 	{
-	  heap_scancache_end (thread_p, &scan_cache);
+	  heap_scancache_end (thread_p, &nxobj.area_scancache);
 	  nxobj.mobjs = NULL;
 	  error_code = ER_FAILED;
 	  goto error;
@@ -2368,7 +2367,7 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
 
       if (scan != S_DOESNT_FIT)
 	{
-	  heap_scancache_end (thread_p, &scan_cache);
+	  heap_scancache_end (thread_p, &nxobj.area_scancache);
 	  nxobj.comm_area = *fetch_area = NULL;
 	  error_code = ER_FAILED;
 	  goto error;
@@ -2388,7 +2387,6 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
   error_code = heap_scancache_end (thread_p, &nxobj.area_scancache);
   if (error_code != NO_ERROR)
     {
-      heap_scancache_end (thread_p, &scan_cache);
       locator_free_copy_area (nxobj.comm_area);
       *fetch_area = NULL;
       error_code = ER_FAILED;

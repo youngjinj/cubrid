@@ -475,7 +475,7 @@ qdump_print_access_spec (ACCESS_SPEC_TYPE * spec_list_p)
 
   fprintf (foutput, ",%s", qdump_access_method_string (spec_list_p->access));
 
-  if (spec_list_p->access == INDEX)
+  if (IS_ANY_INDEX_ACCESS (spec_list_p->access))
     {
       if (qdump_print_index (spec_list_p->indexptr) == false)
 	{

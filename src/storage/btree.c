@@ -4324,6 +4324,46 @@ exit_on_error:
 }
 
 /*
+ * xbtree_get_key_type () - Obtains index key type.
+ *
+ * return	  : Error code.
+ * thread_p (in)  : Thread entry
+ * btid (in)	  : B-tree identifier.
+ * key_type (out) : Index key type.
+ */
+int
+xbtree_get_key_type (THREAD_ENTRY * thread_p, BTID btid,
+		     TP_DOMAIN ** key_type)
+{
+  VPID root_vpid;
+  PAGE_PTR root_page;
+  RECDES rec;
+  BTREE_ROOT_HEADER root_header;
+
+  root_vpid.pageid = btid.root_pageid;
+  root_vpid.volid = btid.vfid.volid;
+
+  assert (key_type != NULL);
+  *key_type = NULL;
+
+  root_page = pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+			 PGBUF_UNCONDITIONAL_LATCH);
+  if (root_page == NULL)
+    {
+      return ER_FAILED;
+    }
+  if (spage_get_record (root_page, HEADER, &rec, PEEK) != S_SUCCESS)
+    {
+      return ER_FAILED;
+    }
+  pgbuf_unfix_and_init (thread_p, root_page);
+
+  btree_read_root_header (&rec, &root_header);
+  *key_type = root_header.key_type;
+  return NO_ERROR;
+}
+
+/*
  * btree_check_page_key () - Check (verify) page
  *   return: either: DISK_INVALID, DISK_VALID, DISK_ERROR
  *   btid(in):
@@ -14297,6 +14337,19 @@ btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
   int i;
   int ret = NO_ERROR;
   DB_MIDXKEY *midxkey;
+  KEY_VAL_RANGE inf_key_val_range;
+
+  if (key_val_range == NULL)
+    {
+      /* NULL key_val_range argument means a full range scan */
+      DB_MAKE_NULL (&inf_key_val_range.key1);
+      DB_MAKE_NULL (&inf_key_val_range.key2);
+      inf_key_val_range.range = INF_INF;
+      inf_key_val_range.num_index_term = 0;
+      inf_key_val_range.is_truncated = false;
+
+      key_val_range = &inf_key_val_range;
+    }
 
   /* initialize page related fields */
   /* previous leaf page, current leaf page, overflow page */
@@ -16672,6 +16725,182 @@ btree_make_pseudo_oid (int p, short s, short v, BTID * btid, OID * oid)
   oid->slotid = s + ((v & 0x0f) << 8) + (catp << 12) + (cb << 13);
 
   assert (oid->volid < NULL_VOLID);
+}
+
+/*
+ * btree_get_next_key_info () - Advance to next key in b-tree and obtain
+ *				information.
+ *
+ * return		: Scan code.
+ * thread_p (in)	: Thread entry.
+ * btid (in)		: B-tree identifier.
+ * bts (in)		: B-tree scan.
+ * num_classes (in)	: Number of class in class_oid_ptr.
+ * class_oids_ptr (in)	: Class Object identifiers.
+ * index_scan_id_p (in) : Index scan data.
+ * key_info (out)	: Array of value pointers to store key information.
+ *
+ * TODO: Handle unique on hierarchy indexes.
+ */
+SCAN_CODE
+btree_get_next_key_info (THREAD_ENTRY * thread_p,
+			 BTID * btid,
+			 BTREE_SCAN * bts,
+			 int num_classes,
+			 OID * class_oids_ptr,
+			 INDX_SCAN_ID * index_scan_id_p, DB_VALUE ** key_info)
+{
+  int error_code = NO_ERROR;
+  SCAN_CODE result = S_SUCCESS;
+  int oid_size;
+  RECDES rec;
+  LEAF_REC leaf_pnt;
+  OID class_oid, oid;
+  int offset;
+
+#if defined(BTREE_DEBUG)
+  if (BTREE_INVALID_INDEX_ID (btid))
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BTREE_INVALID_INDEX_ID,
+	      3, btid->vfid.fileid, btid->vfid.volid, btid->root_pageid);
+      return -1;
+    }
+#endif /* BTREE_DEBUG */
+
+  OID_SET_NULL (&class_oid);
+  rec.data = NULL;
+
+  /* initialize key filter */
+  bts->key_filter = NULL;
+
+  /* copy use desc index information in the BTS to have it available in
+   * the b-tree functions.
+   */
+  if (index_scan_id_p->indx_info)
+    {
+      bts->use_desc_index = index_scan_id_p->indx_info->use_desc_index;
+    }
+  else
+    {
+      bts->use_desc_index = 0;
+    }
+
+  if (bts->C_vpid.pageid == NULL_PAGEID)
+    {
+      /* first btree_get_next_key_info call, initialize bts */
+      error_code =
+	btree_initialize_bts (thread_p, bts, btid, 1,
+			      LOCKHINT_READ_UNCOMMITTED, class_oids_ptr, NULL,
+			      NULL, false, index_scan_id_p->copy_buf,
+			      index_scan_id_p->copy_buf_len);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+      error_code = btree_prepare_first_search (thread_p, bts);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+      /* search is positioned on the first key */
+    }
+  else
+    {
+      /* resume search */
+      mnt_bt_resumes (thread_p);
+
+      error_code = btree_prepare_next_search (thread_p, bts);
+      /* go to next key */
+      btree_find_next_index_record (thread_p, bts, bts->use_desc_index);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+    }
+
+  oid_size =
+    BTREE_IS_UNIQUE (&(bts->btid_int)) ? 2 * OR_OID_SIZE : OR_OID_SIZE;
+
+  if (bts->C_vpid.pageid == NULL_PAGEID)
+    {
+      /* Reached the end of leaf level */
+      result = S_END;
+      goto end;
+    }
+
+  /* C_page should be already loaded */
+  assert (bts->C_page != NULL);
+  if (spage_get_record (bts->C_page, bts->slot_id, &rec, PEEK) != S_SUCCESS)
+    {
+      goto error;
+    }
+
+  btree_clear_key_value (&bts->clear_cur_key, &bts->cur_key);
+
+  /* Read key record */
+  (void) btree_read_record (thread_p, &bts->btid_int, &rec, &bts->cur_key,
+			    (void *) &leaf_pnt, BTREE_LEAF_NODE,
+			    &bts->clear_cur_key, &offset, COPY_KEY_VALUE);
+
+  /* TODO: Fill the rest of key information here */
+  /* TODO: Do we have to get all oids or should we just count them ?
+   * Or maybe select only the first OID? Or a maximum number of OIDs...
+   */
+
+  DB_MAKE_INT (key_info[BTREE_KEY_INFO_VOLUMEID], bts->C_vpid.volid);
+  DB_MAKE_INT (key_info[BTREE_KEY_INFO_PAGEID], bts->C_vpid.pageid);
+  DB_MAKE_INT (key_info[BTREE_KEY_INFO_SLOTID], bts->slot_id);
+
+  /* Get key */
+  db_value_clear (key_info[BTREE_KEY_INFO_KEY]);
+  db_value_clone (&bts->cur_key, key_info[BTREE_KEY_INFO_KEY]);
+
+  /* Get overflow key and overflow oids */
+  db_value_clear (key_info[BTREE_KEY_INFO_OVERFLOW_KEY]);
+  DB_MAKE_STRING (key_info[BTREE_KEY_INFO_OVERFLOW_KEY],
+		  btree_leaf_is_flaged (&rec,
+					BTREE_LEAF_RECORD_OVERFLOW_KEY) ?
+		  "true" : "false");
+  db_value_clear (key_info[BTREE_KEY_INFO_OVERFLOW_OIDS]);
+  DB_MAKE_STRING (key_info[BTREE_KEY_INFO_OVERFLOW_OIDS],
+		  btree_leaf_is_flaged (&rec,
+					BTREE_LEAF_RECORD_OVERFLOW_OIDS) ?
+		  "true" : "false");
+
+  /* Get OIDs count -> For now ignore the overflow OIDs */
+  DB_MAKE_INT (key_info[BTREE_KEY_INFO_OID_COUNT],
+	       btree_leaf_get_num_oids (&rec, offset, BTREE_LEAF_NODE,
+					oid_size));
+
+  /* Get OIDs -> For now just the first OID */
+  (void) btree_leaf_get_oid_from_oidptr (bts, rec.data, offset,
+					 BTREE_LEAF_NODE, &oid, &class_oid);
+  DB_MAKE_OID (key_info[BTREE_KEY_INFO_FIRST_OID], &oid);
+
+end:
+  if (bts->C_page != NULL)
+    {
+#if defined (SERVER_MODE)
+      LSA_COPY (&bts->cur_leaf_lsa, pgbuf_get_lsa (bts->C_page));
+#endif /* SERVER_MODE */
+      pgbuf_unfix_and_init (thread_p, bts->C_page);
+    }
+
+  if (bts->O_page != NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, bts->C_page);
+    }
+
+  if (bts->P_page != NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, bts->P_page);
+    }
+
+  return result;
+
+error:
+  result = S_ERROR;
+  goto end;
 }
 
 /*
@@ -19955,6 +20184,160 @@ btree_verify_leaf_node (THREAD_ENTRY * thread_p, BTID_INT * btid,
   return NO_ERROR;
 }
 #endif
+
+
+/*
+ * btree_get_next_node_info () - Scans b-tree node by node and obtains info.
+ *
+ * return	  : Scan code.
+ * thread_p (in)  : Thread entry.
+ * btid (in)	  : B-tree identifier.
+ * btns (in)	  : B-tree node scan data.
+ * node_info (in) : Array of value pointers to store b-tree node information.
+ */
+SCAN_CODE
+btree_get_next_node_info (THREAD_ENTRY * thread_p, BTID * btid,
+			  BTREE_NODE_SCAN * btns, DB_VALUE ** node_info)
+{
+  RECDES rec;
+  SCAN_CODE result;
+  char *header_ptr = NULL;
+  BTREE_NODE_TYPE node_type;
+  BTREE_NODE_SCAN_QUEUE_ITEM *new_item = NULL, *crt_item = NULL;
+  int key_cnt, i;
+  NON_LEAF_REC nleaf;
+  LEAF_REC leaf_pnt;
+  void *rec_header = NULL;
+  DB_VALUE key_value;
+  bool clear_key = false;
+  int dummy;
+
+  assert (btns->crt_page == NULL);
+
+  if (BTREE_NODE_SCAN_IS_QUEUE_EMPTY (btns))
+    {
+      if (!btns->first_call)
+	{
+	  /* Finished scanning for b-tree pages */
+	  result = S_END;
+	  goto end;
+	}
+
+      /* First call */
+
+      /* Add root page to queue */
+      new_item =
+	(BTREE_NODE_SCAN_QUEUE_ITEM *)
+	malloc (sizeof (BTREE_NODE_SCAN_QUEUE_ITEM));
+      if (new_item == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, sizeof (BTREE_NODE_SCAN_QUEUE_ITEM));
+	  goto error;
+	}
+      new_item->crt_vpid.pageid = btid->root_pageid;
+      new_item->crt_vpid.volid = btid->vfid.volid;
+      new_item->next = NULL;
+      BTREE_NODE_SCAN_ADD_PAGE_TO_QUEUE (btns, new_item);
+
+      btns->first_call = false;
+    }
+
+  BTREE_NODE_SCAN_POP_PAGE_FROM_QUEUE (btns, crt_item);
+  btns->crt_vpid = crt_item->crt_vpid;
+  btns->crt_page =
+    pgbuf_fix (thread_p, &btns->crt_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+	       PGBUF_UNCONDITIONAL_LATCH);
+  if (btns->crt_page == NULL)
+    {
+      goto error;
+    }
+
+  btree_get_header_ptr (btns->crt_page, &header_ptr);
+  node_type = BTREE_GET_NODE_TYPE (header_ptr);
+  key_cnt = btree_get_node_key_cnt (btns->crt_page);
+  rec_header =
+    (node_type == BTREE_NON_LEAF_NODE) ? (void *) &nleaf : (void *) &leaf_pnt;
+
+  if (node_type == BTREE_NON_LEAF_NODE)
+    {
+      /* Add children to queue */
+      for (i = 1; i <= key_cnt; i++)
+	{
+	  if (spage_get_record (btns->crt_page, i, &rec, PEEK) != S_SUCCESS)
+	    {
+	      goto error;
+	    }
+	  btree_read_fixed_portion_of_non_leaf_record (&rec, &nleaf);
+	  new_item =
+	    (BTREE_NODE_SCAN_QUEUE_ITEM *)
+	    malloc (sizeof (BTREE_NODE_SCAN_QUEUE_ITEM));
+	  if (new_item == NULL)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_OUT_OF_VIRTUAL_MEMORY, 1,
+		      sizeof (BTREE_NODE_SCAN_QUEUE_ITEM));
+	      goto error;
+	    }
+	  new_item->crt_vpid.pageid = nleaf.pnt.pageid;
+	  new_item->crt_vpid.volid = nleaf.pnt.volid;
+	  new_item->next = NULL;
+	  BTREE_NODE_SCAN_ADD_PAGE_TO_QUEUE (btns, new_item);
+	}
+    }
+
+  /* Get b-tree page info */
+
+  /* Get volume id and page id */
+  DB_MAKE_INT (node_info[BTREE_NODE_INFO_VOLUMEID], btns->crt_vpid.volid);
+  DB_MAKE_INT (node_info[BTREE_NODE_INFO_PAGEID], btns->crt_vpid.pageid);
+
+  /* Get node type */
+  db_value_clear (node_info[BTREE_NODE_INFO_NODE_TYPE]);
+  DB_MAKE_STRING (node_info[BTREE_NODE_INFO_NODE_TYPE],
+		  (node_type == BTREE_NON_LEAF_NODE) ? "non-leaf" : "leaf");
+
+  /* Get key count */
+  DB_MAKE_INT (node_info[BTREE_NODE_INFO_KEY_COUNT], key_cnt);
+
+  /* Get first key */
+  if (spage_get_record (btns->crt_page, 1, &rec, PEEK) != S_SUCCESS)
+    {
+      goto error;
+    }
+  btree_read_record (thread_p, &btns->btid_int, &rec, &key_value, rec_header,
+		     node_type, &clear_key, &dummy, PEEK_KEY_VALUE);
+  db_value_clear (node_info[BTREE_NODE_INFO_FIRST_KEY]);
+  db_value_clone (&key_value, node_info[BTREE_NODE_INFO_FIRST_KEY]);
+
+  /* Get last key */
+  if (spage_get_record (btns->crt_page, key_cnt, &rec, PEEK) != S_SUCCESS)
+    {
+      goto error;
+    }
+  btree_read_record (thread_p, &btns->btid_int, &rec, &key_value, rec_header,
+		     node_type, &clear_key, &dummy, PEEK_KEY_VALUE);
+  db_value_clear (node_info[BTREE_NODE_INFO_LAST_KEY]);
+  db_value_clone (&key_value, node_info[BTREE_NODE_INFO_LAST_KEY]);
+
+  result = S_SUCCESS;
+
+end:
+  if (btns->crt_page != NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, btns->crt_page);
+    }
+
+  if (crt_item != NULL)
+    {
+      free_and_init (crt_item);
+    }
+  return result;
+
+error:
+  result = S_ERROR;
+  goto end;
+}
 
 /*
  * btree_range_search () -

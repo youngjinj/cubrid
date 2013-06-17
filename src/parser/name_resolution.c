@@ -43,6 +43,7 @@
 #include "schema_manager.h"
 #include "transform.h"
 #include "execute_statement.h"
+#include "network_interface_cl.h"
 
 /* this must be the last header file included!!! */
 #include "dbval.h"
@@ -75,6 +76,13 @@ struct pt_bind_names_arg
   SCOPES *scopes;
   PT_EXTRA_SPECS_FRAME *spec_frames;
   SEMANTIC_CHK_INFO *sc_info;
+};
+
+typedef struct pt_bind_names_data_type PT_BIND_NAMES_DATA_TYPE;
+struct pt_bind_names_data_type
+{
+  PT_TYPE_ENUM type_enum;
+  PT_NODE *data_type;
 };
 
 static PT_NODE *pt_bind_parameter (PARSER_CONTEXT * parser,
@@ -212,6 +220,9 @@ static PT_NODE *pt_resolve_star_reserved_names (PARSER_CONTEXT * parser,
 						PT_NODE * from);
 static PT_NODE *pt_bind_reserved_name (PARSER_CONTEXT * parser,
 				       PT_NODE * in_node, PT_NODE * spec);
+static PT_NODE *pt_set_reserved_name_key_type (PARSER_CONTEXT * parser,
+					       PT_NODE * node, void *arg,
+					       int *continue_walk);
 
 /*
  * pt_undef_names_pre () - Set error if name matching spec is found. Used in
@@ -612,7 +623,7 @@ pt_bind_reserved_name (PARSER_CONTEXT * parser, PT_NODE * in_node,
 	  reserved_name->info.name.reserved_id = i;
 	  reserved_name->type_enum =
 	    pt_db_to_type_enum (pt_Reserved_name_table[i].type);
-	  if (i == RESERVED_T_MVCC_NEXT_VERSION)
+	  if (reserved_name->type_enum == PT_TYPE_OBJECT)
 	    {
 	      reserved_name->data_type =
 		pt_domain_to_data_type
@@ -1414,6 +1425,78 @@ pt_bind_names_post (PARSER_CONTEXT * parser,
       pt_mark_function_index_expression (parser, node, bind_arg);
       break;
 
+    case PT_SELECT:
+      if (PT_SPEC_SPECIAL_INDEX_SCAN (node->info.query.q.select.from))
+	{
+	  /* This is a hack to determine type for index key attributes which
+	   * may be different index. Obtain index info and update type_enum
+	   * and data type for all references to index keys.
+	   */
+	  PT_NODE *spec = node->info.query.q.select.from;
+	  DB_OBJECT *obj = spec->info.spec.entity_name->info.name.db_object;
+	  PT_NODE *index = node->info.query.q.select.using_index;
+	  SM_CLASS *class_ = NULL;
+	  SM_CLASS_CONSTRAINT *cons = NULL;
+	  TP_DOMAIN *key_domain;
+	  PT_BIND_NAMES_DATA_TYPE key_type;
+
+	  /* Get class object */
+	  if (au_fetch_class_force (obj, &class_, AU_FETCH_READ) != NO_ERROR)
+	    {
+	      PT_INTERNAL_ERROR (parser, "Error obtaining SM_CLASS");
+	      parser_free_tree (parser, node);
+	      return NULL;
+	    }
+	  /* Get index */
+	  cons =
+	    classobj_find_class_index (class_, index->info.name.original);
+	  if (cons == NULL)
+	    {
+	      PT_INTERNAL_ERROR (parser,
+				 "Hint argument should be the name of a"
+				 "valid index");
+	      parser_free_tree (parser, node);
+	      return NULL;
+	    }
+	  /* Get key type for index */
+	  if (btree_get_index_key_type (cons->index_btid, &key_domain)
+	      != NO_ERROR)
+	    {
+	      PT_INTERNAL_ERROR (parser, "Error obtaining index key type");
+	      parser_free_tree (parser, node);
+	      return NULL;
+	    }
+	  
+	  if (key_domain == NULL)
+	    {
+	      /* do nothing */
+	      return node;
+	    }
+
+	  /* Generate one data_type sample */
+	  key_type.type_enum =
+	    pt_db_to_type_enum (TP_DOMAIN_TYPE (key_domain));
+	  key_type.data_type =
+	    pt_domain_to_data_type (parser, key_domain);
+	  if (key_type.data_type == NULL)
+	    {
+	      PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	      parser_free_tree (parser, node);
+	      return NULL;
+	    }
+
+	  /* Walk parse tree and change type enum for all RESERVED_KEY_KEY
+	   * name nodes.
+	   */
+	  node =
+	    parser_walk_tree (parser, node, pt_set_reserved_name_key_type,
+			      &key_type, NULL, NULL);
+
+	  parser_free_tree (parser, key_type.data_type);
+	}
+      break;
+
     default:
       break;
     }
@@ -1782,20 +1865,58 @@ pt_bind_names (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
       if (node->info.query.q.select.from != NULL
 	  && node->info.query.q.select.from->next == NULL)
 	{
-	  if ((node->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
-	       != 0)
+	  if (node->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
 	    {
 	      /* mark spec to scan for record info */
 	      node->info.query.q.select.from->info.spec.flag |=
 		PT_SPEC_FLAG_RECORD_INFO_SCAN;
 	    }
-	  else
-	    if ((node->info.query.q.select.
-		 hint & PT_HINT_SELECT_PAGE_INFO))
+	  else if (node->info.query.q.select.hint & PT_HINT_SELECT_PAGE_INFO)
 	    {
 	      /* mark spec to scan for heap page headers */
 	      node->info.query.q.select.from->info.spec.flag |=
 		PT_SPEC_FLAG_PAGE_INFO_SCAN;
+	    }
+	  else if (node->info.query.q.select.hint & PT_HINT_SELECT_KEY_INFO)
+	    {
+	      PT_NODE *using_index = node->info.query.q.select.using_index;
+	      if (using_index == NULL || !PT_IS_NAME_NODE (using_index))
+		{
+		  assert (0);
+		  PT_INTERNAL_ERROR (parser,
+				     "Invalid usage of SELECT_KEY_INFO hint");
+		  parser_free_tree (parser, node);
+		  node = NULL;
+		  goto select_end;
+		}
+	      /* using_index is just a name, mark as index name */
+	      using_index->info.name.meta_class = PT_INDEX_NAME;
+	      using_index->etc = (void *) PT_IDX_HINT_FORCE;
+
+	      /* mark spec to scan for index key info */
+	      node->info.query.q.select.from->info.spec.flag |=
+		PT_SPEC_FLAG_KEY_INFO_SCAN;
+	    }
+	  else if (node->info.query.q.select.hint
+		   & PT_HINT_SELECT_BTREE_NODE_INFO)
+	    {
+	      PT_NODE *using_index = node->info.query.q.select.using_index;
+	      if (using_index == NULL || !PT_IS_NAME_NODE (using_index))
+		{
+		  assert (0);
+		  PT_INTERNAL_ERROR (parser,
+				     "Invalid usage of SELECT_KEY_INFO hint");
+		  parser_free_tree (parser, node);
+		  node = NULL;
+		  goto select_end;
+		}
+	      /* using_index is just a name, mark as index name */
+	      using_index->info.name.meta_class = PT_INDEX_NAME;
+	      using_index->etc = (void *) PT_IDX_HINT_FORCE;
+
+	      /* mark spec to scan for index key info */
+	      node->info.query.q.select.from->info.spec.flag |=
+		PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN;
 	    }
 	}
 
@@ -4124,6 +4245,7 @@ pt_domain_to_data_type (PARSER_CONTEXT * parser, DB_DOMAIN * domain)
     case PT_TYPE_SET:
     case PT_TYPE_SEQUENCE:
     case PT_TYPE_MULTISET:
+    case PT_TYPE_MIDXKEY:
       /* set of what? */
       dom = (DB_DOMAIN *) db_domain_set (domain);
       /* make list of types in set */
@@ -6253,6 +6375,7 @@ pt_resolve_star_reserved_names (PARSER_CONTEXT * parser, PT_NODE * from)
   PT_NODE *reserved_names = NULL;
   PT_NODE *new_name = NULL;
   int i, start, end;
+  PT_RESERVED_NAME_TYPE reserved_name_type;
 
   if (parser == NULL && from == NULL || from->node_type != PT_SPEC)
     {
@@ -6260,28 +6383,14 @@ pt_resolve_star_reserved_names (PARSER_CONTEXT * parser, PT_NODE * from)
       return NULL;
     }
 
-  if (PT_IS_SPEC_FLAG_SET (from, PT_SPEC_FLAG_RECORD_INFO_SCAN))
-    {
-      start = RESERVED_FIRST_RECORD_INFO;
-      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-	{
-	  end = RESERVED_LAST_RECORD_INFO;
-	}
-      else
-	{
-	  /* stop before MVCC info */
-	  end = RESERVED_FIRST_MVCC_INFO - 1;
-	}
-    }
-  else if (PT_IS_SPEC_FLAG_SET (from, PT_SPEC_FLAG_PAGE_INFO_SCAN))
-    {
-      start = RESERVED_FIRST_PAGE_INFO;
-      end = RESERVED_LAST_PAGE_INFO;
-    }
-  else
+  reserved_name_type = PT_SPEC_GET_RESERVED_NAME_TYPE (from);
+  if (reserved_name_type == RESERVED_NAME_INVALID)
     {
       assert (0);
+      return NULL;
     }
+
+  PT_GET_RESERVED_NAME_FIRST_AND_LAST (reserved_name_type, start, end);
 
   for (i = start; i <= end; i++)
     {
@@ -6304,7 +6413,7 @@ pt_resolve_star_reserved_names (PARSER_CONTEXT * parser, PT_NODE * from)
       /* set type enum to the expected type */
       new_name->type_enum =
 	pt_db_to_type_enum (pt_Reserved_name_table[i].type);
-      if (i == RESERVED_T_MVCC_NEXT_VERSION)
+      if (new_name->type_enum == DB_TYPE_OBJECT)
 	{
 	  new_name->data_type =
 	    pt_domain_to_data_type
@@ -8464,4 +8573,41 @@ pt_resolve_partition_spec (PARSER_CONTEXT * parser, PT_NODE * spec,
     }
 
   return spec;
+}
+
+/*
+ * pt_set_reserved_name_key_type () - When scanning for index key and node
+ *				      info, keys are selected from index.
+ *				      This function is supposed to resolve
+ *				      data type for such attributes.
+ *
+ * return	      : Original node with updated type_enum. 
+ * parser (in)	      : Parser context.
+ * node (in)	      : Parse tree node.
+ * arg (in)	      : Index key data type.
+ * continue_walk (in) : Continue walk.
+ */
+static PT_NODE *
+pt_set_reserved_name_key_type (PARSER_CONTEXT * parser, PT_NODE * node,
+			       void *arg, int *continue_walk)
+{
+  PT_BIND_NAMES_DATA_TYPE *key_type = (PT_BIND_NAMES_DATA_TYPE *) arg;
+
+  if (node != NULL && node->node_type == PT_NAME
+      && node->info.name.meta_class == PT_RESERVED
+      && (node->info.name.reserved_id == RESERVED_KEY_KEY
+	  || node->info.name.reserved_id == RESERVED_BT_NODE_FIRST_KEY
+	  || node->info.name.reserved_id == RESERVED_BT_NODE_LAST_KEY))
+    {
+      /* Set key type */
+      node->data_type = parser_copy_tree_list (parser, key_type->data_type);
+      if (node->data_type == NULL)
+	{
+	  PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+		     MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	  *continue_walk = PT_STOP_WALK;
+	}
+      node->type_enum = key_type->type_enum;
+    }
+  return node;
 }

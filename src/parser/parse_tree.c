@@ -85,6 +85,7 @@ struct parser_string_block
 
 /* Global reserved name table including info for each reserved name */
 PT_RESERVED_NAME pt_Reserved_name_table[] = {
+
   /* record info attributes */
   {"t_pageid", RESERVED_T_PAGEID, DB_TYPE_INTEGER}
   ,
@@ -115,8 +116,9 @@ PT_RESERVED_NAME pt_Reserved_name_table[] = {
   {"t_flags", RESERVED_T_MVCC_FLAGS, DB_TYPE_INTEGER}
   ,
   {"t_next_version", RESERVED_T_MVCC_NEXT_VERSION, DB_TYPE_OBJECT}
-  ,
+
   /* page header info attributes */
+  ,
   {"p_class_oid", RESERVED_P_CLASS_OID, DB_TYPE_OBJECT}
   ,
   {"p_prev_pageid", RESERVED_P_PREV_PAGEID, DB_TYPE_INTEGER}
@@ -142,6 +144,40 @@ PT_RESERVED_NAME pt_Reserved_name_table[] = {
   {"p_update_best", RESERVED_P_UPDATE_BEST, DB_TYPE_INTEGER}
   ,
   {"p_last_mvccid", RESERVED_P_LAST_MVCCID, DB_TYPE_INTEGER}
+
+  /* key info attributes */
+  ,
+  {"key_volumeid", RESERVED_KEY_VOLUMEID, DB_TYPE_INTEGER}
+  ,
+  {"key_pageid", RESERVED_KEY_PAGEID, DB_TYPE_INTEGER}
+  ,
+  {"key_slotid", RESERVED_KEY_SLOTID, DB_TYPE_INTEGER}
+  ,
+  {"key_key", RESERVED_KEY_KEY, DB_TYPE_NULL}	/* Types should be determined at
+						 * compilation
+						 */
+  ,
+  {"key_oid_count", RESERVED_KEY_OID_COUNT, DB_TYPE_INTEGER}
+  ,
+  {"key_first_oid", RESERVED_KEY_FIRST_OID, DB_TYPE_OBJECT}
+  ,
+  {"key_overflow_key", RESERVED_KEY_OVERFLOW_KEY, DB_TYPE_STRING}
+  ,
+  {"key_overflow_oids", RESERVED_KEY_OVERFLOW_OIDS, DB_TYPE_STRING}
+
+  /* B-tree node info */
+  ,
+  {"bt_node_volumeid", RESERVED_BT_NODE_VOLUMEID, DB_TYPE_INTEGER}
+  ,
+  {"bt_node_pageid", RESERVED_BT_NODE_PAGEID, DB_TYPE_INTEGER}
+  ,
+  {"bt_node_type", RESERVED_BT_NODE_TYPE, DB_TYPE_STRING}
+  ,
+  {"bt_node_key_count", RESERVED_BT_NODE_KEY_COUNT, DB_TYPE_INTEGER}
+  ,
+  {"bt_node_first_key", RESERVED_BT_NODE_FIRST_KEY, DB_TYPE_NULL}
+  ,
+  {"bt_node_last_key", RESERVED_BT_NODE_LAST_KEY, DB_TYPE_NULL}
 };
 
 #if defined(SERVER_MODE)

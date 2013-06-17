@@ -7998,6 +7998,62 @@ sbtree_get_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 }
 
 /*
+ * sbtree_get_key_type () - Obtains key type from index b-tree.
+ *
+ * return : 
+ * thread_p (in) :
+ * rid (in) :
+ * request (in) :
+ * int reqlen (in) :
+ */
+void
+sbtree_get_key_type (THREAD_ENTRY * thread_p, unsigned int rid,
+		     char *request, int reqlen)
+{
+  BTID btid;
+  int error;
+  OR_ALIGNED_BUF (OR_INT_SIZE * 2) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  char *reply_data = NULL;
+  char *ptr;
+  int reply_data_size;
+  TP_DOMAIN *key_type = NULL;
+
+  /* Unpack BTID */
+  ptr = or_unpack_btid (request, &btid);
+  assert_release (!BTID_IS_NULL (&btid));
+
+  /* Get key type */
+  error = xbtree_get_key_type (thread_p, btid, &key_type);
+  if (error != NO_ERROR && er_errid () != NO_ERROR)
+    {
+      return_error_to_client (thread_p, rid);
+    }
+
+  /* Send key type to client */
+  reply_data_size = or_packed_domain_size (key_type, 0);
+  reply_data = (char *) malloc (reply_data_size);
+  if (reply_data == NULL)
+    {
+      error = ER_OUT_OF_VIRTUAL_MEMORY;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, reply_data_size);
+      reply_data_size = 0;
+    }
+  else
+    {
+      (void) or_pack_domain (reply_data, key_type, 0, 0);
+    }
+  ptr = or_pack_int (reply, reply_data_size);
+  ptr = or_pack_int (ptr, error);
+
+  css_send_reply_and_data_to_client (thread_p->conn_entry, rid, reply,
+				     OR_ALIGNED_BUF_SIZE (a_reply),
+				     reply_data, reply_data_size);
+
+  free_and_init (reply_data);
+}
+
+/*
  * sqp_get_server_info -
  *
  * return:

@@ -9272,6 +9272,71 @@ btree_get_statistics (BTID * btid, BTREE_STATS * stat_info)
 }
 
 /*
+ * btree_get_index_key_type () - Get index key type.
+ *
+ * return	    : Error code.
+ * btid (in)	    : Index b-tree identifier.
+ * key_type_p (out) : Index key type.
+ */
+int
+btree_get_index_key_type (BTID btid, TP_DOMAIN ** key_type_p)
+{
+#if defined(CS_MODE)
+  int error;
+  OR_ALIGNED_BUF (OR_BTID_ALIGNED_SIZE) a_request;
+  char *request;
+  OR_ALIGNED_BUF (OR_INT_SIZE * 2) a_reply;
+  char *reply = NULL;
+  char *ptr = NULL;
+  char *reply_data = NULL;
+  int reply_data_size = 0;
+  int dummy;
+
+  request = OR_ALIGNED_BUF_START (a_request);
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  /* Send BTID to server */
+  ptr = or_pack_btid (request, &btid);
+
+  error = net_client_request2 (NET_SERVER_BTREE_GET_KEY_TYPE,
+			       request, OR_ALIGNED_BUF_SIZE (a_request),
+			       reply, OR_ALIGNED_BUF_SIZE (a_reply),
+			       NULL, 0, &reply_data, &reply_data_size);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+  ptr = or_unpack_int (reply, &reply_data_size);
+  ptr = or_unpack_int (ptr, &error);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+  if (reply_data != NULL)
+    {
+      /* Obtain key type from server */
+      (void) or_unpack_domain (reply_data, key_type_p, &dummy);
+    }
+  free_and_init (reply_data);
+
+  return error;
+#else /* CS_MODE */
+  int error = NO_ERROR;
+
+  ENTER_SERVER ();
+
+  assert_release (!BTID_IS_NULL (&btid));
+  assert_release (key_type_p != NULL);
+
+  error = xbtree_get_key_type (NULL, btid, key_type_p);
+
+  EXIT_SERVER ();
+
+  return error;
+#endif /* !CS_MODE */
+}
+
+/*
  * db_local_transaction_id -
  *
  * return:
