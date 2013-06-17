@@ -1400,16 +1400,41 @@
 
 #define ER_DATA_IS_TRUNCATED_TO_PRECISION           -1111
 
-#define ER_CHAR_CONV_NO_MATCH			    -1112
+#define ER_CHAR_CONV_NO_MATCH                       -1112
 
-#define ER_BINARY_HEAP_OUT_OF_RANGE		    -1113
+#define ER_BINARY_HEAP_OUT_OF_RANGE                 -1113
 
 #define ER_ARG_OUT_OF_RANGE                         -1114
 
 #define ER_LOG_STARTED_TO_UPDATE_STATISTICS         -1115
 #define ER_LOG_FINISHED_TO_UPDATE_STATISTICS        -1116
 
-#define ER_LAST_ERROR                               -1117
+#define ER_ALTER_CHANGE_ATTR_TO_FROM_SHARED_NOT_ALLOWED  -1117
+
+#define ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN  -1118
+
+#define ER_FILE_INCONSISTENT_PAGE_ALLOCED           -1119
+#define ER_FILE_INCONSISTENT_PAGE_NOT_ALLOCED       -1120
+
+#define ER_NOT_NULL_DOES_NOT_ALLOW_NULL_VALUE	    -1121
+
+#define ER_NET_DATA_RECEIVE_TIMEDOUT                -1122
+
+#define ER_CSS_PTHREAD_COND_TIMEDOUT                -1123
+
+#define ER_QUERY_EXECUTION_ERROR                    -1124
+
+#define ER_LOG_RECOVERY_STARTED                     -1128
+
+#define ER_LOG_RECOVERY_FINISHED                    -1129
+
+#define ER_LK_ROLLBACK_ON_LOCK_ESCALATION	    -1130
+
+#define ER_SP_INVALID_HEADER	                    -1131
+
+#define ER_LAST_ERROR                               -1132
+
+
 
 #define DB_TRUE 1
 #define DB_FALSE 0

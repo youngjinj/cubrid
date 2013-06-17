@@ -1183,7 +1183,22 @@ $ LOADDB
 1114 Argument '%s' is out of range.
 1115 통계정보 갱신이 시작되었습니다. (class "%1$s", oid : %2$d|%3$d|%4$d)
 1116 통계정보 갱신이 완료되었습니다. (class "%1$s", oid : %2$d|%3$d|%4$d, error code : %5$d)
-1117 마지막 에러
+1117 Cannot change attribute "%1$s". CUBRID cannot change an attribute as a SHARED and vice versa.
+1118 The argument of "%1$s" can not be coerced to desired domain "%2$s".
+1119 내부 에러: 볼륨 "%2$s"의 페이지 테이블에 할당된 %1$d번 페이지가 어떤 파일에도 속해있지 않습니다.
+1120 내부 에러: 볼륨 "%2$s"의 %1$d번 페이지가 현재 사용중이지만 볼륨의 페이지 테이블에는 할당되어 있지 않습니다.
+1121 NOT NULL 제약조건은 NULL 값을 허용하지 않습니다.
+1122 데이터 수신 중 timeout 발생.
+1123 pthread_cond_timedwait() timeout 발생.
+1124 질의 실행 에러. ERROR_CODE = %1$d, /* SQL_ID: %2$s */ %3$s
+1125 사용하지 않는 에러코드입니다.
+1126 사용하지 않는 에러코드입니다.
+1127 사용하지 않는 에러코드입니다.
+1128 로그 복구가 시작되었습니다. 적용될 로그 개수: %1$lld. 로그 페이지: %2$lld ~ %3$lld.
+1129 로그 복구가 완료되었습니다.
+1130 락 횟수가 %1$d 를 초과하여 트랜잭션이 취소되었습니다.
+1131 내부 에러: The page %1$d of volume "%2$s" may be corrupted.\n%3$s
+1132 마지막 에러
 
 $set 6 MSGCAT_SET_INTERNAL
 1 에러 서브 시스템에 에러 발생(라인 %d):
@@ -1608,6 +1623,11 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 273 Only one table within a view can be updated.
 274 Multiple insert targets not allowed.
 275 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
+276 ORDER BY is not allowed in function MEDIAN.
+277 The arguments of the function '%s' must be constant.
+278 Function '%s' must have ORDER BY clause.
+279 For function '%s', the number of arguments does not match the number of ORDER BY columns.
+280 For function '%s', the ORDER BY clause is invalid.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 가상 메모리 없음: %d 바이트를 할당할 수 없습니다.

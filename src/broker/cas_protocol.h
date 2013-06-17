@@ -53,6 +53,7 @@ extern "C"
 #define SRV_CON_DBPASSWD_SIZE		32
 #define SRV_CON_URL_SIZE                512
 #define SRV_CON_DBSESS_ID_SIZE		20
+#define SRV_CON_VER_STR_MAX_SIZE        20
 
 #define SRV_CON_DB_INFO_SIZE \
         (SRV_CON_DBNAME_SIZE + SRV_CON_DBUSER_SIZE + SRV_CON_DBPASSWD_SIZE + \
@@ -103,7 +104,7 @@ extern "C"
 #define BROKER_INFO_SIZE			8
 #define BROKER_RENEWED_ERROR_CODE		0x80
 #define BROKER_SUPPORT_HOLDABLE_RESULT          0x40
-#define BROKER_RECONNECT_DOWN_SERVER            0x20
+#define BROKER_RECONNECT_WHEN_SERVER_DOWN       0x20
 
 /* For backward compatibility */
 #define BROKER_INFO_MAJOR_VERSION               (BROKER_INFO_PROTO_VERSION)
@@ -295,6 +296,32 @@ extern "C"
                       (DRIVER_INFO)[SRV_CON_MSG_IDX_MINOR_VER], \
                       (DRIVER_INFO)[SRV_CON_MSG_IDX_PATCH_VER])
 
+/* For backward compatibility */
+#define CAS_VER_TO_MAJOR(VER)    ((int) (((VER) >> 16) & 0xFF))
+#define CAS_VER_TO_MINOR(VER)    ((int) (((VER) >> 8) & 0xFF))
+#define CAS_VER_TO_PATCH(VER)    ((int) ((VER) & 0xFF))
+#define CAS_PROTO_TO_VER_STR(MSG_P, VER)			\
+	do {							\
+            switch (VER)					\
+              {							\
+            case PROTOCOL_V1:					\
+                *((char **) (MSG_P)) = (char *) "8.4.1";	\
+                break;						\
+            case PROTOCOL_V2:					\
+                *((char **) (MSG_P)) = (char *) "9.0.0";	\
+                break;						\
+            case PROTOCOL_V3:					\
+                *((char **) (MSG_P)) = (char *) "8.4.3";	\
+                break;						\
+            case PROTOCOL_V4:					\
+                *((char **) (MSG_P)) = (char *) "9.1.0";	\
+                break;						\
+            default:						\
+                *((char **) (MSG_P)) = (char *) "";		\
+                break;						\
+              }							\
+	} while (0)
+
   typedef int T_BROKER_VERSION;
 
   extern const char *cas_bi_get_broker_info (void);
@@ -311,9 +338,9 @@ extern "C"
   extern void cas_bi_set_renewed_error_code (const bool renewed_error_code);
   extern bool cas_bi_get_renewed_error_code (void);
   extern bool cas_di_understand_renewed_error_code (const char *driver_info);
-  extern bool cas_di_understand_reconnect_down_server (const char *driver_info);
-  extern void cas_bi_make_broker_info (char *broker_info,
-				       char dbms_type,
+  extern bool cas_di_understand_reconnect_when_server_down (const char
+						       *driver_info);
+  extern void cas_bi_make_broker_info (char *broker_info, char dbms_type,
 				       char statement_pooling,
 				       char cci_pconnect);
 #ifdef __cplusplus

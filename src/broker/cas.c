@@ -116,6 +116,9 @@ static int net_read_process (SOCKET proxy_sock_fd,
 			     MSG_HEADER * client_msg_header,
 			     T_REQ_INFO * req_info);
 static int get_graceful_down_timeout ();
+#if !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL)
+static void set_db_parameter (void);
+#endif /* !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL) */
 #else
 static int net_read_int_keep_con_auto (SOCKET clt_sock_fd,
 				       MSG_HEADER * client_msg_header,
@@ -143,8 +146,6 @@ T_APPL_SERVER_INFO *as_info;
 #if defined(CUBRID_SHARD)
 int shm_proxy_id = -1;
 int shm_shard_id = -1;
-char *shm_as_cp = NULL;
-T_SHARD_INFO *shard_info_p = NULL;
 #endif /* CUBRID_SHARD */
 
 struct timeval tran_start_time;
@@ -549,15 +550,19 @@ conn_retry:
   gettimeofday (&cas_start_time, NULL);
 
 #if defined(CAS_FOR_ORACLE) || defined(CAS_FOR_MYSQL)
-  snprintf (db_name, MAX_HA_DBNAME_LENGTH, "%s", shard_info_p->db_name);
+  snprintf (db_name, MAX_HA_DBNAME_LENGTH, "%s",
+	    shm_appl->shard_conn_info[shm_shard_id].db_name);
 #else
   snprintf (db_name, MAX_HA_DBNAME_LENGTH, "%s@%s",
-	    shard_info_p->db_name, shard_info_p->db_conn_info);
+	    shm_appl->shard_conn_info[shm_shard_id].db_name,
+	    shm_appl->shard_conn_info[shm_shard_id].db_host);
 #endif /* CAS_FOR_ORACLE || CAS_FOR_MYSQL */
-  strncpy (db_user, shard_info_p->db_user, SRV_CON_DBUSER_SIZE - 1);
+  strncpy (db_user, shm_appl->shard_conn_info[shm_shard_id].db_user,
+	   SRV_CON_DBUSER_SIZE - 1);
   db_user[SRV_CON_DBUSER_SIZE - 1] = '\0';
 
-  strncpy (db_passwd, shard_info_p->db_password, SRV_CON_DBPASSWD_SIZE - 1);
+  strncpy (db_passwd, shm_appl->shard_conn_info[shm_shard_id].db_password,
+	   SRV_CON_DBPASSWD_SIZE - 1);
   db_passwd[SRV_CON_DBPASSWD_SIZE - 1] = '\0';
 
   /* SHARD DO NOT SUPPORT SESSION */
@@ -1055,6 +1060,7 @@ main (int argc, char *argv[])
 	  }
 	else
 	  {
+	    char len;
 	    unsigned char *ip_addr;
 	    char *db_err_msg = NULL, *url;
 	    struct timeval cas_start_time;
@@ -1105,6 +1111,48 @@ main (int argc, char *argv[])
 		 */
 		db_sessionid = NULL;
 	      }
+	    as_info->driver_version[0] = '\0';
+	    if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (req_info.client_version,
+						     PROTOCOL_V5))
+	      {
+		len = *(url + strlen (url) + 1);
+		if (len > 0 && len < SRV_CON_VER_STR_MAX_SIZE)
+		  {
+		    memcpy (as_info->driver_version, url + strlen (url) + 2,
+			    (int) len);
+		    as_info->driver_version[len + 1] = '\0';
+		  }
+		else
+		  {
+		    snprintf (as_info->driver_version,
+			      SRV_CON_VER_STR_MAX_SIZE, "PROTOCOL V%d",
+			      (int) (CAS_PROTO_VER_MASK & req_info.
+				     client_version));
+		  }
+	      }
+	    else
+	      if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL
+		  (req_info.client_version, PROTOCOL_V1))
+	      {
+		char *ver;
+
+		CAS_PROTO_TO_VER_STR (&ver,
+				      (int) (CAS_PROTO_VER_MASK & req_info.
+					     client_version));
+
+		strncpy (as_info->driver_version, ver,
+			 SRV_CON_VER_STR_MAX_SIZE);
+	      }
+	    else
+	      {
+		snprintf (as_info->driver_version,
+			  SRV_CON_VER_STR_MAX_SIZE, "%d.%d.%d",
+			  CAS_VER_TO_MAJOR (req_info.client_version),
+			  CAS_VER_TO_MINOR (req_info.client_version),
+			  CAS_VER_TO_PATCH (req_info.client_version));
+	      }
+	    cas_log_write_and_end (0, false, "CLIENT VERSION %s",
+				   as_info->driver_version);
 #if !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL)
 	    cas_set_session_id (req_info.client_version, db_sessionid);
 #endif /* !CAS_FOR_ORACLE && !CAS_FOR_MYSQL */
@@ -1165,24 +1213,34 @@ main (int argc, char *argv[])
 
 	    err_code =
 	      ux_database_connect (db_name, db_user, db_passwd, &db_err_msg);
+
 	    if (err_code < 0)
 	      {
+		char msg_buf[LINE_MAX];
+
+		net_write_error (client_sock_fd, req_info.client_version,
+				 req_info.driver_info,
+				 cas_info, cas_info_size,
+				 err_info.err_indicator,
+				 err_info.err_number, db_err_msg);
+
 		if (db_err_msg == NULL)
 		  {
-		    net_write_error (client_sock_fd, req_info.client_version,
-				     req_info.driver_info,
-				     cas_info, cas_info_size,
-				     err_info.err_indicator,
-				     err_info.err_number, NULL);
+		    snprintf (msg_buf, LINE_MAX,
+			      "connect db %s user %s url %s, error:%d.",
+			      db_name, db_user, url, err_info.err_number);
 		  }
 		else
 		  {
-		    net_write_error (client_sock_fd, req_info.client_version,
-				     req_info.driver_info,
-				     cas_info, cas_info_size,
-				     err_info.err_indicator,
-				     err_info.err_number, db_err_msg);
+		    snprintf (msg_buf, LINE_MAX,
+			      "connect db %s user %s url %s, error:%d, %s",
+			      db_name, db_user, url, err_info.err_number,
+			      db_err_msg);
 		  }
+
+		cas_log_write_and_end (0, false, msg_buf);
+		cas_slow_log_write_and_end (NULL, 0, msg_buf);
+
 		CLOSE_SOCKET (client_sock_fd);
 		FREE_MEM (db_err_msg);
 
@@ -1698,6 +1756,12 @@ process_request (SOCKET sock_fd, T_NET_BUF * net_buf, T_REQ_INFO * req_info)
 #endif /* !WINDOWS */
 #endif /* !CAS_FOR_ORACLE && !CAS_FOR_MYSQL) */
 
+#if !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL)
+#if defined(CUBRID_SHARD)
+  set_db_parameter ();
+#endif /* CUBRID_SHARD */
+#endif /* !CAS_FOR_ORACLE && !CAS_FOR_MYSQL) */
+
   if (shm_appl->session_timeout < 0)
     net_timeout_set (NET_DEFAULT_TIMEOUT);
   else
@@ -1838,7 +1902,7 @@ process_request (SOCKET sock_fd, T_NET_BUF * net_buf, T_REQ_INFO * req_info)
   /* retry to prepare or execute after db server is restarted */
   if (old_con_status == CON_STATUS_OUT_TRAN
       && ER_IS_SERVER_DOWN_ERROR (err_info.err_number)
-      && cas_di_understand_reconnect_down_server (req_info->driver_info)
+      && cas_di_understand_reconnect_when_server_down (req_info->driver_info)
       && (func_code == CAS_FC_PREPARE
 	  || func_code == CAS_FC_EXECUTE
 	  || func_code == CAS_FC_EXECUTE_ARRAY
@@ -2276,6 +2340,8 @@ net_read_process (SOCKET proxy_sock_fd,
 	  req_info->client_version = as_info->clt_version;
 	  memcpy (req_info->driver_info, as_info->driver_info,
 		  SRV_CON_CLIENT_INFO_SIZE);
+	  cas_log_write_and_end (0, false, "CLIENT VERSION %s",
+				 as_info->driver_version);
 	}
     }
 
@@ -2616,8 +2682,7 @@ cas_init_shm (void)
 {
   char *p;
   int as_shm_key;
-  int pxy_id, shd_id, as_id;
-  T_PROXY_INFO *proxy_info_p;
+  int pxy_id, shd_id, shard_cas_id, as_id;
 
   p = getenv (APPL_SERVER_SHM_KEY_STR);
   if (p == NULL)
@@ -2625,6 +2690,7 @@ cas_init_shm (void)
       goto return_error;
     }
   as_shm_key = strtoul (p, NULL, 10);
+
   SHARD_ERR ("<CAS> APPL_SERVER_SHM_KEY_STR:[%d:%x]\n", as_shm_key,
 	     as_shm_key);
 
@@ -2634,6 +2700,7 @@ cas_init_shm (void)
       goto return_error;
     }
   pxy_id = strtoul (p, NULL, 10);
+
   SHARD_ERR ("<CAS> PROXY_ID_ENV_STR:[%d]\n", pxy_id);
   shm_proxy_id = pxy_id;
 
@@ -2643,8 +2710,19 @@ cas_init_shm (void)
       goto return_error;
     }
   shd_id = strtoul (p, NULL, 10);
+
   SHARD_ERR ("<CAS> SHARD_ID_ENV_STR:[%d]\n", shd_id);
   shm_shard_id = shd_id;
+
+  p = getenv (SHARD_CAS_ID_ENV_STR);
+  if (p == NULL)
+    {
+      goto return_error;
+    }
+  shard_cas_id = strtoul (p, NULL, 10);
+
+  SHARD_ERR ("<CAS> SHARD_CAS_ID_ENV_STR:[%d]\n", shard_cas_id);
+  shm_as_index = shard_cas_id;
 
   p = getenv (AS_ID_ENV_STR);
   if (p == NULL)
@@ -2652,52 +2730,34 @@ cas_init_shm (void)
       goto return_error;
     }
   as_id = strtoul (p, NULL, 10);
+
   SHARD_ERR ("<CAS> AS_ID_ENV_STR:[%d]\n", as_id);
-  shm_as_index = as_id;
 
-  shm_as_cp =
-    (char *) uw_shm_open (as_shm_key, SHM_APPL_SERVER, SHM_MODE_ADMIN);
-  if (shm_as_cp == NULL)
-    {
-      goto return_error;
-    }
+  shm_appl =
+    (T_SHM_APPL_SERVER *) uw_shm_open (as_shm_key, SHM_APPL_SERVER,
+				       SHM_MODE_ADMIN);
 
-  shm_appl = shard_shm_get_appl_server (shm_as_cp);
   if (shm_appl == NULL)
     {
       goto return_error;
     }
 
-  proxy_info_p = shard_shm_get_proxy_info (shm_as_cp, shm_proxy_id);
-  if (proxy_info_p == NULL)
-    {
-      goto return_error;
-    }
+  as_info = &shm_appl->as_info[as_id];
 
-  shard_info_p = shard_shm_find_shard_info (proxy_info_p, shm_shard_id);
-  if (shard_info_p == NULL)
-    {
-      goto return_error;
-    }
+  return 0;
 
-  as_info = shard_shm_get_as_info (proxy_info_p, shm_shard_id, as_id);
-  if (as_info == NULL)
-    {
-      goto return_error;
-    }
 
 #if 1
   /* SHARD TODO : tuning cur_keep_con parameter */
   as_info->cur_keep_con = 1;
 #endif
-
   return 0;
 return_error:
 
-  if (shm_as_cp)
+  if (shm_appl)
     {
-      uw_shm_detach (shm_as_cp);
-      shm_as_cp = NULL;
+      uw_shm_detach (shm_appl);
+      shm_appl = NULL;
     }
 
   return -1;
@@ -2706,11 +2766,49 @@ return_error:
 static int
 get_graceful_down_timeout ()
 {
-  if (shm_as_index < shard_info_p->min_appl_server)
+  if (as_info->graceful_down_flag)
     {
-      return -1;
+      return 1 * 60;		/* 1 min */
     }
 
-  return 1 * 60;		/* 1 min */
+  return -1;
 }
+
+#if !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL)
+static void
+set_db_parameter (void)
+{
+  int cur_isolation_level;
+  int cur_lock_timeout;
+  int isolation_level = as_info->isolation_level;
+  int lock_timeout = as_info->lock_timeout;
+
+  if (isolation_level == CAS_USE_DEFAULT_DB_PARAM)
+    {
+      isolation_level = cas_default_isolation_level;
+    }
+
+  if (lock_timeout == CAS_USE_DEFAULT_DB_PARAM)
+    {
+      lock_timeout = cas_default_lock_timeout;
+    }
+
+  ux_get_tran_setting (&cur_lock_timeout, &cur_isolation_level);
+  if (cur_lock_timeout != lock_timeout)
+    {
+      ux_set_lock_timeout (lock_timeout);
+
+      cas_log_write_and_end (0, false, "set_db_parameter lock_timeout %d",
+			     lock_timeout);
+    }
+
+  if (cur_isolation_level != isolation_level)
+    {
+      ux_set_isolation_level (isolation_level, NULL);
+
+      cas_log_write_and_end (0, false, "set_db_parameter isolation_level %d",
+			     isolation_level);
+    }
+}
+#endif /* !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL) */
 #endif /* CUBRID_SHARD */

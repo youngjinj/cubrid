@@ -388,6 +388,7 @@ do_evaluate_default_expr (PARSER_CONTEXT * parser, PT_NODE * class_name)
   int error;
   TP_DOMAIN_STATUS dom_status;
   char *user_name;
+  DB_DATETIME *datetime;
 
   assert (class_name->node_type == PT_NAME);
 
@@ -406,9 +407,17 @@ do_evaluate_default_expr (PARSER_CONTEXT * parser, PT_NODE * class_name)
 	  switch (att->default_value.default_expr)
 	    {
 	    case DB_DEFAULT_SYSDATE:
-	      error = db_value_put_encoded_date (&att->default_value.value,
-						 DB_GET_DATE (&parser->
-							      sys_datetime));
+	      if (DB_IS_NULL (&parser->sys_datetime))
+		{
+		  db_make_null (&att->default_value.value);
+		}
+	      else
+		{
+		  datetime = DB_GET_DATETIME (&parser->sys_datetime);
+		  error =
+		    db_value_put_encoded_date (&att->default_value.value,
+					       &datetime->date);
+		}
 	      break;
 	    case DB_DEFAULT_SYSDATETIME:
 	      error = pr_clone_value (&parser->sys_datetime,
@@ -3195,7 +3204,7 @@ do_execute_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
       err = do_check_delete_trigger (parser, statement, do_execute_delete);
       break;
     case PT_INSERT:
-      err = do_execute_insert (parser, statement);
+      err = do_check_insert_trigger (parser, statement, do_execute_insert);
       break;
     case PT_UPDATE:
       err = do_check_update_trigger (parser, statement, do_execute_update);
@@ -10084,7 +10093,7 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
 	{
 	  pt_free_statement_xasl_id (node);
 	}
-      if (err == NO_ERROR)
+      if (err == NO_ERROR && parent != NULL)
 	{
 	  /* set cannot_prepare to parent */
 	  parent->cannot_prepare = 1;
@@ -13304,7 +13313,7 @@ do_execute_insert (PARSER_CONTEXT * parser, PT_NODE * statement)
 
   if (statement->xasl_id == NULL)
     {
-      return do_check_insert_trigger (parser, statement, do_insert);
+      return do_insert (parser, statement);
     }
 
   flat = statement->info.insert.spec->info.spec.flat_entity_list;
@@ -13912,22 +13921,14 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
       else if (stream.xasl_id != NULL)
 	{
 	  /* check xasl header */
-	  if (stream.xasl_header->xasl_flag & MRO_CANDIDATE)
+	  if (pt_recompile_for_limit_optimizations (parser, statement,
+						    stream.xasl_header->
+						    xasl_flag))
 	    {
-	      /* multi range optimization checks */
-	      bool good_limit =
-		pt_check_ordby_num_for_multi_range_opt (parser, statement,
-							NULL, NULL);
-	      bool mro_used = (stream.xasl_header->xasl_flag & MRO_IS_USED);
-	      if ((good_limit && !mro_used) || (!good_limit && mro_used))
-		{
-		  /* drop cached xasl and prepare again */
-		  err =
-		    qmgr_drop_query_plan (context.sql_hash_text,
+	      err = qmgr_drop_query_plan (context.sql_hash_text,
 					  ws_identifier (db_get_user ()),
 					  NULL, true);
-		  stream.xasl_id = NULL;
-		}
+	      stream.xasl_id = NULL;
 	    }
 	}
     }

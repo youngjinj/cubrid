@@ -78,6 +78,16 @@ typedef enum
   TRANDUMP_FULL_INFO
 } TRANDUMP_LEVEL;
 
+typedef enum
+{
+  SORT_COLUMN_TYPE_INT,
+  SORT_COLUMN_TYPE_FLOAT,
+  SORT_COLUMN_TYPE_STR,
+} SORT_COLUMN_TYPE;
+
+static int tranlist_Sort_column = 0;
+static bool tranlist_Sort_desc = false;
+
 static bool is_Sigint_caught = false;
 #if defined(WINDOWS)
 static BOOL WINAPI intr_handler (int sig_no);
@@ -91,6 +101,7 @@ static int spacedb_get_size_str (char *buf, UINT64 num_pages,
 static void print_timestamp (FILE * outfp);
 static int print_tran_entry (const ONE_TRAN_INFO * tran_info,
 			     TRANDUMP_LEVEL dump_level);
+static int tranlist_cmp_f (const void *p1, const void *p2);
 
 /*
  * backupdb() - backupdb main routine
@@ -193,8 +204,7 @@ backupdb (UTIL_FUNCTION_ARG * arg)
 	  backup_path = real_pathbuf;
 	}
 
-      if (stat (backup_path, &st_buf) != 0
-	  || S_ISDIR (st_buf.st_mode) != true)
+      if (stat (backup_path, &st_buf) != 0 || !S_ISDIR (st_buf.st_mode))
 	{
 	  fprintf (stderr, msgcat_message (MSGCAT_CATALOG_UTILS,
 					   MSGCAT_UTIL_SET_BACKUPDB,
@@ -324,7 +334,7 @@ addvoldb (UTIL_FUNCTION_ARG * arg)
   DBDEF_VOL_EXT_INFO ext_info;
 
   ext_info.overwrite = false;
-  ext_info.npages = 0;
+  ext_info.max_npages = 0;
   if (utility_get_option_string_table_size (arg_map) < 1)
     {
       goto print_addvol_usage;
@@ -343,7 +353,7 @@ addvoldb (UTIL_FUNCTION_ARG * arg)
   if (volext_npages_string)
     {
       util_print_deprecated ("number-of-pages");
-      ext_info.npages = atoi (volext_npages_string);
+      ext_info.max_npages = atoi (volext_npages_string);
     }
 
   volext_size_str = utility_get_option_string_value (arg_map,
@@ -462,17 +472,17 @@ addvoldb (UTIL_FUNCTION_ARG * arg)
 	  volext_size = prm_get_size_value (PRM_ID_DB_VOLUME_SIZE);
 	}
 
-      if (ext_info.npages == 0)
+      if (ext_info.max_npages == 0)
 	{
-	  ext_info.npages = (int) (volext_size / IO_PAGESIZE);
+	  ext_info.max_npages = (int) (volext_size / IO_PAGESIZE);
 	}
 
-      if (ext_info.npages <= 0)
+      if (ext_info.max_npages <= 0)
 	{
 	  fprintf (stderr, msgcat_message (MSGCAT_CATALOG_UTILS,
 					   MSGCAT_UTIL_SET_ADDVOLDB,
 					   ADDVOLDB_MSG_BAD_NPAGES),
-		   ext_info.npages);
+		   ext_info.max_npages);
 	  db_shutdown ();
 	  goto error_exit;
 	}
@@ -811,6 +821,7 @@ spacedb (UTIL_FUNCTION_ARG * arg)
   T_SPACEDB_SIZE_UNIT size_unit_type;
   int vol_ntotal_pages;
   int vol_nfree_pages;
+  int vol_nmax_pages;
   char vol_label[PATH_MAX];
   UINT64 db_ntotal_pages, db_nfree_pages;
   UINT64 db_summarize_ntotal_pages[SPACEDB_NUM_VOL_PURPOSE];
@@ -957,8 +968,11 @@ spacedb (UTIL_FUNCTION_ARG * arg)
 
   for (i = 0; i < nvols; i++)
     {
-      if (db_purpose_totalpgs_freepgs (i, &vol_purpose, &vol_ntotal_pages,
-				       &vol_nfree_pages) != NULL_VOLID)
+      if (disk_get_purpose_and_total_free_numpages (i, &vol_purpose,
+						    &vol_ntotal_pages,
+						    &vol_nfree_pages,
+						    &vol_nmax_pages) !=
+	  NULL_VOLID)
 	{
 	  db_ntotal_pages += vol_ntotal_pages;
 	  db_nfree_pages += vol_nfree_pages;
@@ -1035,9 +1049,12 @@ spacedb (UTIL_FUNCTION_ARG * arg)
 
   for (i = 0; i < nvols; i++)
     {
-      if (db_purpose_totalpgs_freepgs ((temp_volid + i), &vol_purpose,
-				       &vol_ntotal_pages,
-				       &vol_nfree_pages) != NULL_VOLID)
+      if (disk_get_purpose_and_total_free_numpages ((temp_volid + i),
+						    &vol_purpose,
+						    &vol_ntotal_pages,
+						    &vol_nfree_pages,
+						    &vol_nmax_pages) !=
+	  NULL_VOLID)
 	{
 	  db_ntotal_pages += vol_ntotal_pages;
 	  db_nfree_pages += vol_nfree_pages;
@@ -1809,6 +1826,10 @@ tranlist (UTIL_FUNCTION_ARG * arg)
   password =
     utility_get_option_string_value (arg_map, TRANLIST_PASSWORD_S, 0);
   is_summary = utility_get_option_bool_value (arg_map, TRANLIST_SUMMARY_S);
+  tranlist_Sort_column =
+    utility_get_option_int_value (arg_map, TRANLIST_SORT_KEY_S);
+  tranlist_Sort_desc =
+    utility_get_option_bool_value (arg_map, TRANLIST_REVERSE_S);
 
   if (username == NULL)
     {
@@ -1818,6 +1839,18 @@ tranlist (UTIL_FUNCTION_ARG * arg)
 
   if (check_database_name (database_name) != NO_ERROR)
     {
+      goto error_exit;
+    }
+
+  if (tranlist_Sort_column > 10 || tranlist_Sort_column < 0
+      || (is_summary && tranlist_Sort_column > 5))
+    {
+      fprintf (stderr,
+	       msgcat_message (MSGCAT_CATALOG_UTILS,
+			       MSGCAT_UTIL_SET_TRANLIST,
+			       TRANLIST_MSG_INVALID_SORT_KEY),
+	       tranlist_Sort_column);
+
       goto error_exit;
     }
 
@@ -1894,6 +1927,12 @@ tranlist (UTIL_FUNCTION_ARG * arg)
   if (is_summary)
     {
       dump_level = TRANDUMP_SUMMARY;
+    }
+
+  if (tranlist_Sort_column > 0 || tranlist_Sort_desc == true)
+    {
+      qsort ((void *) info->tran, info->num_trans,
+	     sizeof (ONE_TRAN_INFO), tranlist_cmp_f);
     }
 
   (void) dump_trantb (info, dump_level);
@@ -2776,6 +2815,7 @@ copylogdb (UTIL_FUNCTION_ARG * arg)
   int mode = -1;
   int error = NO_ERROR;
   int retried = 0, sleep_nsecs = 1;
+  bool need_er_reinit = false;
 #if !defined(WINDOWS)
   char *binary_name;
   char executable_path[PATH_MAX];
@@ -2867,7 +2907,7 @@ copylogdb (UTIL_FUNCTION_ARG * arg)
       goto error_exit;
     }
 
-  if (prm_get_integer_value (PRM_ID_HA_MODE))
+  if (prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF)
     {
       error = hb_process_init (database_name, log_path, true);
       if (error != NO_ERROR)
@@ -2888,6 +2928,12 @@ retry:
 	  fprintf (stderr, "%s\n", db_error_string (3));
 	}
       goto error_exit;
+    }
+
+  if (need_er_reinit)
+    {
+      er_init (er_msg_file, ER_NEVER_EXIT);
+      need_er_reinit = false;
     }
 
   /* initialize system parameters */
@@ -2949,6 +2995,7 @@ error_exit:
 	{
 	  sleep_nsecs = 1;
 	}
+      need_er_reinit = true;
       ++retried;
 
       er_init (er_msg_file, ER_NEVER_EXIT);
@@ -2991,6 +3038,7 @@ applylogdb (UTIL_FUNCTION_ARG * arg)
   int max_mem_size = 0;
   int error = NO_ERROR;
   int retried = 0, sleep_nsecs = 1;
+  bool need_er_reinit = false;
 #if !defined(WINDOWS)
   char *binary_name;
   char executable_path[PATH_MAX];
@@ -3064,7 +3112,7 @@ applylogdb (UTIL_FUNCTION_ARG * arg)
       goto error_exit;
     }
 
-  if (prm_get_integer_value (PRM_ID_HA_MODE))
+  if (prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF)
     {
       /* initialize heartbeat */
       error = hb_process_init (database_name, log_path, false);
@@ -3084,6 +3132,13 @@ retry:
       fprintf (stderr, "%s\n", db_error_string (3));
       goto error_exit;
     }
+
+  if (need_er_reinit)
+    {
+      er_init (er_msg_file, ER_NEVER_EXIT);
+      need_er_reinit = false;
+    }
+
   /* set lock timeout to infinite */
   db_set_lock_timeout (-1);
 
@@ -3133,7 +3188,8 @@ error_exit:
   if (error == ER_NET_SERVER_CRASHED
       || error == ER_NET_CANT_CONNECT_SERVER
       || error == ERR_CSS_TCP_CANNOT_CONNECT_TO_MASTER
-      || error == ER_BO_CONNECT_FAILED || error == ER_NET_SERVER_COMM_ERROR)
+      || error == ER_BO_CONNECT_FAILED || error == ER_NET_SERVER_COMM_ERROR
+      || error == ER_LC_PARTIALLY_FAILED_TO_FLUSH)
     {
       (void) sleep (sleep_nsecs);
       /* sleep 1, 2, 4, 8, etc; don't wait for more than 10 sec */
@@ -3141,8 +3197,8 @@ error_exit:
 	{
 	  sleep_nsecs = 1;
 	}
+      need_er_reinit = true;
       ++retried;
-      er_init (er_msg_file, ER_NEVER_EXIT);
       goto retry;
     }
 
@@ -3516,4 +3572,130 @@ intr_handler (int sig_no)
 
   return FALSE;
 #endif /* WINDOWS */
+}
+
+/*
+ * tranlist_cmp_f() - qsort compare function used in tranlist().
+ *   return:
+ */
+static int
+tranlist_cmp_f (const void *p1, const void *p2)
+{
+  int ret;
+  SORT_COLUMN_TYPE column_type;
+  const ONE_TRAN_INFO *info1, *info2;
+  const char *str_key1 = NULL, *str_key2 = NULL;
+  double number_key1 = 0, number_key2 = 0;
+
+  info1 = (ONE_TRAN_INFO *) p1;
+  info2 = (ONE_TRAN_INFO *) p2;
+
+  switch (tranlist_Sort_column)
+    {
+    case 0:
+    case 1:
+      number_key1 = info1->tran_index;
+      number_key2 = info2->tran_index;
+      column_type = SORT_COLUMN_TYPE_INT;
+      break;
+    case 2:
+      str_key1 = info1->db_user;
+      str_key2 = info2->db_user;
+      column_type = SORT_COLUMN_TYPE_STR;
+      break;
+    case 3:
+      str_key1 = info1->host_name;
+      str_key2 = info2->host_name;
+      column_type = SORT_COLUMN_TYPE_STR;
+      break;
+    case 4:
+      number_key1 = info1->process_id;
+      number_key2 = info2->process_id;
+      column_type = SORT_COLUMN_TYPE_INT;
+      break;
+    case 5:
+      str_key1 = info1->program_name;
+      str_key2 = info2->program_name;
+      column_type = SORT_COLUMN_TYPE_STR;
+      break;
+    case 6:
+      number_key1 = info1->query_exec_info.query_time;
+      number_key2 = info2->query_exec_info.query_time;
+      column_type = SORT_COLUMN_TYPE_FLOAT;
+      break;
+    case 7:
+      number_key1 = info1->query_exec_info.tran_time;
+      number_key2 = info2->query_exec_info.tran_time;
+      column_type = SORT_COLUMN_TYPE_FLOAT;
+      break;
+    case 8:
+      str_key1 = info1->query_exec_info.wait_for_tran_index_string;
+      str_key2 = info2->query_exec_info.wait_for_tran_index_string;
+      column_type = SORT_COLUMN_TYPE_STR;
+      break;
+    case 9:
+      str_key1 = info1->query_exec_info.sql_id;
+      str_key2 = info2->query_exec_info.sql_id;
+      column_type = SORT_COLUMN_TYPE_STR;
+      break;
+    case 10:
+      str_key1 = info1->query_exec_info.query_stmt;
+      str_key2 = info2->query_exec_info.query_stmt;
+      column_type = SORT_COLUMN_TYPE_STR;
+      break;
+    default:
+      assert (0);
+      return 0;
+    }
+
+  switch (column_type)
+    {
+    case SORT_COLUMN_TYPE_INT:
+    case SORT_COLUMN_TYPE_FLOAT:
+      {
+	if (number_key1 == number_key2)
+	  {
+	    ret = 0;
+	  }
+	else if (number_key1 > number_key2)
+	  {
+	    ret = 1;
+	  }
+	else
+	  {
+	    ret = -1;
+	  }
+      }
+      break;
+    case SORT_COLUMN_TYPE_STR:
+      {
+	if (str_key1 == NULL && str_key2 == NULL)
+	  {
+	    ret = 0;
+	  }
+	else if (str_key1 == NULL && str_key2 != NULL)
+	  {
+	    ret = -1;
+	  }
+	else if (str_key1 != NULL && str_key2 == NULL)
+	  {
+	    ret = 1;
+	  }
+	else
+	  {
+	    ret = strcmp (str_key1, str_key2);
+	  }
+      }
+      break;
+    default:
+      assert (0);
+      ret = 0;
+    }
+
+  if (tranlist_Sort_desc == true)
+    {
+      ret *= (-1);
+    }
+
+  return ret;
 }

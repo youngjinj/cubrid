@@ -155,7 +155,7 @@
      PTR_OP = 372,
      PUBLIC_ = 373,
      READ = 374,
-     READ_ONLY = 375,
+     READ_ONLY_ = 375,
      REAL = 376,
      REAL_LIT = 377,
      REGISTER_ = 378,
@@ -400,7 +400,7 @@ typedef union YYSTYPE
   void *ptr;
   int number;
 }
-/* Line 2616 of glr.c.  */
+/* Line 2604 of glr.c.  */
 #line 405 "../../src/executables/esql_grammar.h"
 	YYSTYPE;
 # define YYSTYPE_IS_DECLARED 1

@@ -94,8 +94,6 @@ int wsa_initialize ();
 /************************************************************************
  * PRIVATE DEFINITIONS							*
  ************************************************************************/
-#define MAKE_STRI(x) #x
-#define MAKE_STR(x) MAKE_STRI(x)
 
 #ifdef CCI_DEBUG
 #define CCI_DEBUG_PRINT(DEBUG_MSG_FUNC)		DEBUG_MSG_FUNC
@@ -713,38 +711,33 @@ cci_disconnect (int mapped_conn_id, T_CCI_ERROR * err_buf)
 			  con_handle->id);
 	}
       cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK);
-      map_close_otc (mapped_conn_id);
+
+      get_last_error (con_handle, err_buf);
+      con_handle->used = false;
+      hm_release_connection (mapped_conn_id, &con_handle);
     }
   else if (con_handle->broker_info[BROKER_INFO_CCI_PCONNECT]
 	   && hm_put_con_to_pool (con_handle->id) >= 0)
     {
       cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK);
-      map_close_otc (mapped_conn_id);
       API_ELOG (con_handle, 0);
+
+      get_last_error (con_handle, err_buf);
+      con_handle->used = false;
+      hm_release_connection (mapped_conn_id, &con_handle);
     }
   else
     {
       error = qe_con_close (con_handle);
       API_ELOG (con_handle, error);
 
-      if (error >= 0)
-	{
-	  map_close_otc (mapped_conn_id);
-	  set_error_buffer (&(con_handle->err_buf), error, NULL);
-	  get_last_error (con_handle, err_buf);
-
-	  MUTEX_LOCK (con_handle_table_mutex);
-	  error = hm_con_handle_free (con_handle);
-	  MUTEX_UNLOCK (con_handle_table_mutex);
-	  con_handle = NULL;
-	}
-    }
-
-  if (con_handle != NULL)
-    {
       set_error_buffer (&(con_handle->err_buf), error, NULL);
       get_last_error (con_handle, err_buf);
       con_handle->used = false;
+
+      MUTEX_LOCK (con_handle_table_mutex);
+      hm_delete_connection (mapped_conn_id, &con_handle);
+      MUTEX_UNLOCK (con_handle_table_mutex);
     }
 
   return error;
@@ -937,7 +930,7 @@ cci_prepare (int mapped_conn_id, char *sql_stmt, char flag,
     {
       if (IS_OUT_TRAN (con_handle) || is_first_prepare_in_tran == true)
 	{
-	  if (!hm_broker_reconnect_down_server (con_handle)
+	  if (!hm_broker_reconnect_when_server_down (con_handle)
 	      || IS_ER_COMMUNICATION (error))
 	    {
 	      if (reset_connect (con_handle, req_handle) != CCI_ER_NO_ERROR)
@@ -1366,7 +1359,7 @@ cci_execute (int mapped_stmt_id, char flag, int max_col_size,
     {
       if (IS_OUT_TRAN (con_handle) || is_first_exec_in_tran == true)
 	{
-	  if (!hm_broker_reconnect_down_server (con_handle)
+	  if (!hm_broker_reconnect_when_server_down (con_handle)
 	      || IS_ER_COMMUNICATION (error))
 	    {
 	      if (reset_connect (con_handle, req_handle) != CCI_ER_NO_ERROR)
@@ -1540,7 +1533,7 @@ cci_prepare_and_execute (int mapped_conn_id, char *sql_stmt,
     {
       if (IS_OUT_TRAN (con_handle) || is_first_prepare_in_tran == true)
 	{
-	  if (!hm_broker_reconnect_down_server (con_handle)
+	  if (!hm_broker_reconnect_when_server_down (con_handle)
 	      || IS_ER_COMMUNICATION (error))
 	    {
 	      if (reset_connect (con_handle, req_handle) != CCI_ER_NO_ERROR)
@@ -1737,7 +1730,7 @@ cci_execute_array (int mapped_stmt_id, T_CCI_QUERY_RESULT ** qr,
     {
       if (IS_OUT_TRAN (con_handle) || is_first_exec_in_tran == true)
 	{
-	  if (!hm_broker_reconnect_down_server (con_handle)
+	  if (!hm_broker_reconnect_when_server_down (con_handle)
 	      || IS_ER_COMMUNICATION (error))
 	    {
 	      if (reset_connect (con_handle, req_handle) != CCI_ER_NO_ERROR)
@@ -2144,8 +2137,8 @@ cci_close_req_handle (int mapped_stmt_id)
 
 cci_close_req_handle_end:
   API_ELOG (con_handle, error);
-  map_close_ots (mapped_stmt_id);
   con_handle->used = false;
+  hm_release_statement (mapped_stmt_id, &con_handle, &req_handle);
 
   return error;
 }
@@ -4251,9 +4244,6 @@ cci_get_err_msg_internal (int error)
     case CCI_ER_REQ_HANDLE:
       return "Cannot allocate request handle";
 
-    case CCI_ER_RESULT_SET_CLOSED:
-      return "Result set is closed";
-
     case CCI_ER_INVALID_CURSOR_POS:
       return "Invalid cursor position";
 
@@ -4290,11 +4280,35 @@ cci_get_err_msg_internal (int error)
     case CCI_ER_INVALID_URL:
       return "Invalid url string";
 
+    case CCI_ER_INVALID_LOB_READ_POS:
+      return "Invalid lob read position";
+
     case CCI_ER_INVALID_LOB_HANDLE:
       return "Invalid lob handle";
 
-    case CCI_ER_INVALID_LOB_READ_POS:
-      return "Invalid lob read position";
+    case CCI_ER_NO_PROPERTY:
+      return "Cannot find a property";
+
+    case CCI_ER_PROPERTY_TYPE:
+      return "Invalid property type";
+
+    case CCI_ER_INVALID_DATASOURCE:
+      return "Invalid CCI datasource";
+
+    case CCI_ER_DATASOURCE_TIMEOUT:
+      return "All connections are used";
+
+    case CCI_ER_DATASOURCE_TIMEDWAIT:
+      return "pthread_cond_timedwait error";
+
+    case CCI_ER_LOGIN_TIMEOUT:
+      return "Connection timed out";
+
+    case CCI_ER_QUERY_TIMEOUT:
+      return "Request timed out";
+
+    case CCI_ER_RESULT_SET_CLOSED:
+      return "Result set is closed";
 
     case CCI_ER_INVALID_HOLDABILITY:
       return "Invalid holdability mode. The only accepted values are 0 or 1";
@@ -5009,7 +5023,7 @@ connect_prepare_again (T_CON_HANDLE * con_handle, T_REQ_HANDLE * req_handle,
     {
       if (IS_OUT_TRAN (con_handle) || is_first_prepare_in_tran == true)
 	{
-	  if (!hm_broker_reconnect_down_server (con_handle)
+	  if (!hm_broker_reconnect_when_server_down (con_handle)
 	      || IS_ER_COMMUNICATION (error))
 	    {
 	      if (reset_connect (con_handle, req_handle) != CCI_ER_NO_ERROR)
@@ -5224,7 +5238,8 @@ cci_property_get_int (T_CCI_PROPERTIES * prop, T_CCI_DATASOURCE_KEY key,
   tmp = cci_property_get (prop, datasource_key[key]);
   if (tmp == NULL)
     {
-      set_error_buffer (err_buf, CCI_ER_NO_PROPERTY, NULL);
+      set_error_buffer (err_buf, CCI_ER_NO_PROPERTY,
+			"Could not found integer property");
       *out_value = default_value;
     }
   else
@@ -5268,7 +5283,8 @@ cci_property_get_bool_internal (T_CCI_PROPERTIES * prop,
   tmp = cci_property_get (prop, datasource_key[key]);
   if (tmp == NULL)
     {
-      set_error_buffer (err_buf, CCI_ER_NO_PROPERTY, NULL);
+      set_error_buffer (err_buf, CCI_ER_NO_PROPERTY,
+			"Could not found boolean property");
       *out_value = default_value;
     }
   else
@@ -5365,7 +5381,8 @@ cci_property_get_isolation (T_CCI_PROPERTIES * prop,
   tmp = cci_property_get (prop, datasource_key[key]);
   if (tmp == NULL)
     {
-      set_error_buffer (err_buf, CCI_ER_NO_PROPERTY, NULL);
+      set_error_buffer (err_buf, CCI_ER_NO_PROPERTY,
+			"Could not found isolation property");
       *out_value = default_value;
     }
   else
@@ -5846,8 +5863,7 @@ cci_datasource_borrow (T_CCI_DATASOURCE * ds, T_CCI_ERROR * err_buf)
 				      (pthread_mutex_t *) ds->mutex, &ts);
 	  if (r == ETIMEDOUT)
 	    {
-	      set_error_buffer (err_buf, CCI_ER_DATASOURCE_TIMEOUT,
-				"All connections are used");
+	      set_error_buffer (err_buf, CCI_ER_DATASOURCE_TIMEOUT, NULL);
 	      pthread_mutex_unlock ((pthread_mutex_t *) ds->mutex);
 	      return CCI_ER_DATASOURCE_TIMEOUT;
 	    }
@@ -5878,8 +5894,7 @@ cci_datasource_borrow (T_CCI_DATASOURCE * ds, T_CCI_ERROR * err_buf)
 
   if (id < 0)
     {
-      set_error_buffer (err_buf, CCI_ER_DATASOURCE_TIMEOUT,
-			"All connections are used");
+      set_error_buffer (err_buf, CCI_ER_DATASOURCE_TIMEOUT, NULL);
       return CCI_ER_DATASOURCE_TIMEOUT;
     }
   else
@@ -5979,9 +5994,10 @@ cci_datasource_release (T_CCI_DATASOURCE * ds, T_CCI_CONN mapped_conn_id,
 
   ret = cci_datasource_release_internal (ds, con_handle);
   cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK);
-  map_close_otc (mapped_conn_id);
+
   get_last_error (con_handle, err_buf);
   con_handle->used = false;
+  hm_release_connection (mapped_conn_id, &con_handle);
 
   return ret;
 }

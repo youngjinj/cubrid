@@ -106,6 +106,12 @@ extern int proxy_io_make_no_error (char *driver_info, char **buffer);
 extern int proxy_io_make_con_close_ok (char *driver_info, char **buffer);
 extern int proxy_io_make_end_tran_ok (char *driver_info, char **buffer);
 extern int proxy_io_make_check_cas_ok (char *driver_info, char **buffer);
+extern int proxy_io_make_set_db_parameter_ok (char *driver_info,
+					      char **buffer);
+extern int proxy_io_make_ex_get_isolation_level (char *driver_info,
+						 char **buffer, void *argv);
+extern int proxy_io_make_ex_get_lock_timeout (char *driver_info,
+					      char **buffer, void *argv);
 
 extern int proxy_io_make_end_tran_request (char *driver_info,
 					   char **buffer, bool commit);
@@ -155,9 +161,9 @@ extern void proxy_cas_io_free_by_ctx (int shard_id, int cas_id, int ctx_cid,
 extern T_CAS_IO *proxy_cas_find_io_by_ctx (int shard_id, int cas_id,
 					   int ctx_cid, unsigned int ctx_uid);
 
-extern T_CAS_IO *proxy_cas_alloc_by_ctx (int shard_id, int cas_id,
-					 int ctx_cid, unsigned int ctx_uid,
-					 int timeout);
+extern T_CAS_IO *proxy_cas_alloc_by_ctx (int client_id, int shard_id,
+					 int cas_id, int ctx_cid,
+					 unsigned int ctx_uid, int timeout);
 extern void proxy_cas_release_by_ctx (int shard_id, int cas_id, int ctx_cid,
 				      unsigned int ctx_uid);
 extern int proxy_cas_io_write (T_CAS_IO * cas_io_p, T_PROXY_EVENT * event_p);

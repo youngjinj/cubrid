@@ -294,6 +294,13 @@ extern "C"
   extern T_CCI_ERROR_CODE hm_get_statement (int statement_id,
 					    T_CON_HANDLE ** connection,
 					    T_REQ_HANDLE ** statement);
+  extern T_CCI_ERROR_CODE hm_release_connection (int connection_id,
+						 T_CON_HANDLE ** connection);
+  extern T_CCI_ERROR_CODE hm_delete_connection (int connection_id,
+						T_CON_HANDLE ** connection);
+  extern T_CCI_ERROR_CODE hm_release_statement (int statement_id,
+						T_CON_HANDLE ** connection,
+						T_REQ_HANDLE ** statement);
   extern void hm_req_handle_fetch_buf_free (T_REQ_HANDLE * req_handle);
   extern int hm_conv_value_buf_alloc (T_VALUE_BUF * val_buf, int size);
 
@@ -312,8 +319,14 @@ extern "C"
   extern T_BROKER_VERSION hm_get_broker_version (T_CON_HANDLE * con_handle);
   extern bool hm_broker_understand_renewed_error_code (T_CON_HANDLE *
 						       con_handle);
+  extern bool hm_broker_understand_the_protocol (T_BROKER_VERSION
+						 broker_version, int require);
+  extern bool hm_broker_match_the_protocol (T_BROKER_VERSION broker_version,
+					    int require);
+
   extern bool hm_broker_support_holdable_result (T_CON_HANDLE * con_handle);
-  extern bool hm_broker_reconnect_down_server (T_CON_HANDLE * con_handle);
+  extern bool hm_broker_reconnect_when_server_down (T_CON_HANDLE *
+						    con_handle);
 
   extern void hm_set_con_handle_holdable (T_CON_HANDLE * con_handle,
 					  int holdable);

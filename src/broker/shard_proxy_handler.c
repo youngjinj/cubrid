@@ -46,7 +46,6 @@
 #define PROXY_MAX_IGNORE_TIMER_CHECK 	10
 #define PROXY_TIMER_CHECK_INTERVAL 	1	/* sec */
 
-extern char *shm_as_cp;
 extern T_SHM_APPL_SERVER *shm_as_p;
 extern T_SHM_PROXY *shm_proxy_p;
 extern T_PROXY_INFO *proxy_info_p;
@@ -79,8 +78,8 @@ static T_PROXY_CLIENT_FUNC proxy_client_fn_table[] = {
   fn_proxy_client_end_tran,	/* fn_end_tran */
   fn_proxy_client_prepare,	/* fn_prepare */
   fn_proxy_client_execute,	/* fn_execute */
-  fn_proxy_client_not_supported,	/* fn_get_db_parameter */
-  fn_proxy_client_not_supported,	/* fn_set_db_parameter */
+  fn_proxy_client_get_db_parameter,	/* fn_get_db_parameter */
+  fn_proxy_client_set_db_parameter,	/* fn_set_db_parameter */
   fn_proxy_client_close_req_handle,	/* fn_close_req_handle */
   fn_proxy_client_cursor,	/* fn_cursor */
   fn_proxy_client_fetch,	/* fn_fetch */
@@ -259,7 +258,7 @@ proxy_handler_is_cas_in_tran (int shard_id, int cas_id)
   assert (shard_id >= 0);
   assert (cas_id >= 0);
 
-  as_info = shard_shm_get_as_info (proxy_info_p, shard_id, cas_id);
+  as_info = shard_shm_get_as_info (proxy_info_p, shm_as_p, shard_id, cas_id);
   if (as_info)
     {
       return (as_info->con_status == CON_STATUS_IN_TRAN
@@ -315,12 +314,20 @@ proxy_context_send_error (T_PROXY_CONTEXT * ctx_p)
   int error;
   char *error_msg = NULL;
   T_PROXY_EVENT *event_p;
+  T_CLIENT_INFO *client_info_p = NULL;
   char *driver_info;
 
   ENTER_FUNC ();
 
   assert (ctx_p->error_ind != CAS_NO_ERROR);
   assert (ctx_p->error_code != CAS_NO_ERROR);
+
+  /* reset request and response timeout */
+  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_p->client_id);
+  if (client_info_p != NULL)
+    {
+      shard_shm_init_client_info_request (client_info_p);
+    }
 
   driver_info = proxy_get_driver_info_by_ctx (ctx_p);
 
@@ -830,16 +837,17 @@ proxy_handler_process_client_wakeup_by_shard (T_PROXY_EVENT * event_p)
   /* set in_tran, shard/cas */
   proxy_context_set_in_tran (ctx_p, event_p->shard_id, event_p->cas_id);
 
-  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_p->cid);
+  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_p->client_id);
   if (client_info_p == NULL)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		 "Unable to find cilent info in shared memory. "
 		 "(context id:%d, context uid:%d)", ctx_p->cid, ctx_p->uid);
     }
-  else if (shard_shm_set_as_client_info (proxy_info_p, event_p->shard_id,
-					 event_p->cas_id,
+  else if (shard_shm_set_as_client_info (proxy_info_p, shm_as_p,
+					 event_p->shard_id, event_p->cas_id,
 					 client_info_p->client_ip,
+					 client_info_p->driver_info,
 					 client_info_p->driver_info) == false)
     {
 
@@ -1204,9 +1212,9 @@ proxy_context_clear (T_PROXY_CONTEXT * ctx_p)
 	}
       else if (ctx_p->prepared_stmt->stmt_type != SHARD_STMT_TYPE_PREPARED)
 	{
-	  /* 
+	  /*
 	   * shcema info server handle can't be shared with other context
-	   * so, we can free statement at this time. 
+	   * so, we can free statement at this time.
 	   */
 
 	  shard_stmt_free (ctx_p->prepared_stmt);
@@ -1285,6 +1293,8 @@ proxy_context_new (void)
 static void
 proxy_context_free_client (T_PROXY_CONTEXT * ctx_p)
 {
+  T_CLIENT_INFO *client_info_p = NULL;
+
   ENTER_FUNC ();
 
   assert (ctx_p);
@@ -1296,6 +1306,12 @@ proxy_context_free_client (T_PROXY_CONTEXT * ctx_p)
 		 ctx_p->client_id, proxy_str_context (ctx_p));
       EXIT_FUNC ();
       return;
+    }
+
+  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_p->client_id);
+  if (client_info_p != NULL)
+    {
+      shard_shm_init_client_info (client_info_p);
     }
 
   proxy_client_io_free_by_ctx (ctx_p->client_id, ctx_p->cid, ctx_p->uid);
@@ -1655,8 +1671,9 @@ proxy_wakeup_context_by_shard (T_WAIT_CONTEXT * waiter_p,
      ctx_p->uid, shard_id, cas_id);
 
   cas_io_p =
-    proxy_cas_alloc_by_ctx (shard_id, cas_id, waiter_p->ctx_cid,
-			    waiter_p->ctx_uid, ctx_p->wait_timeout);
+    proxy_cas_alloc_by_ctx (ctx_p->client_id, shard_id, cas_id,
+			    waiter_p->ctx_cid, waiter_p->ctx_uid,
+			    ctx_p->wait_timeout);
   if (cas_io_p == NULL)
     {
       PROXY_DEBUG_LOG ("failed to proxy_cas_alloc_by_ctx. "
@@ -1815,6 +1832,33 @@ proxy_event_new_with_rsp (char *driver_info,
 			  T_PROXY_EVENT_FUNC resp_func)
 {
   return proxy_event_new_with_req (driver_info, type, from, resp_func);
+}
+
+T_PROXY_EVENT *
+proxy_event_new_with_rsp_ex (char *driver_info,
+			     unsigned int type, int from,
+			     T_PROXY_EVENT_FUNC_EX resp_func, void *argv)
+{
+  T_PROXY_EVENT *event_p;
+  char *msg = NULL;
+  int length;
+
+  event_p = proxy_event_new (type, from);
+  if (event_p == NULL)
+    {
+      return NULL;
+    }
+
+  length = resp_func (driver_info, &msg, argv);
+  if (length <= 0)
+    {
+      proxy_event_free (event_p);
+      return NULL;
+    }
+
+  proxy_event_set_buffer (event_p, msg, length);
+
+  return event_p;
 }
 
 T_PROXY_EVENT *

@@ -20,6 +20,10 @@ Changelog
     Add -r ignore revision option
   2009-07-30 xkyu
     Fix to allow space in source path
+  2013-06-11 xkyu
+    Add --jira and --confurl option
+  2013-06-14 xkyu
+    Change default output file name when --jira option is given
 '''
 
 import os
@@ -29,6 +33,8 @@ import getopt
 import shutil
 import tarfile
 import time
+import ConfigParser
+import subprocess
 
 verbose = False
 revision = False
@@ -256,29 +262,42 @@ def usage ():
   print '  %s [options] [files...]' % (os.path.basename (sys.argv[0]))
   print '    -h , --help      : print usage'
   print '    -d , --tempdir   : temporary output path [default: "CODE_REVIEW"]'
-  print '    -o , --output    : output file [default: "CODE_REVIEW.creview"]'
+  print '    -o , --output    : output file [default: "CODE_REVIEW.creview" or "<JIRA_ID>.creview"]'
   print '    -n , --nochange  : do not change(indent,mode) working copy files'
   print '    -y , --yes       : automatic yes to all prompts, nerver prompt'
   print '    -v , --verbose   : turn on verbose mode'
   print '    -r , --revision  : revision ignore mode'
+  print '    -j , --jira      : related JIRA ID for attachment'
+  print '         --confurl   : retrieve initial config file from URL and exit'
   print '    files...         : files or paths to review (default: .)'
   
   
 def main ():
   try:
-    opts, args = getopt.getopt (sys.argv[1:], "hd:o:vnyr",["help", "tempdir=", "output=", "verbose", "nochange", "yes", "revision"])
+    opts, args = getopt.getopt (sys.argv[1:], "hd:o:vnyrj:",["help", "tempdir=", "output=", "verbose", "nochange", "yes", "revision", "jira=", "confurl="])
   except getopt.GetoptError:
     print 'get option error.'
     usage ()
     sys.exit (2)
 
   path = "CODE_REVIEW"
-  crfile = "CODE_REVIEW.creview"
+  crfile = ""
   inputfiles = []
+  jira_id = None
+  jira_project = ''
   global verbose
   global nochange
   global forceyes
   global revision
+
+  config = ConfigParser.ConfigParser({'force_yes': forceyes, 'verbose': verbose})
+  try:
+    config.read(['.mkcreview.conf', os.path.expanduser('~/.mkcreview.conf')])
+    forceyes = config.getboolean('mkcreview', 'force_yes')
+    verbose = config.getboolean('mkcreview', 'verbose')
+    jira_project = config.get('jira', 'jira_project')
+  except:
+    pass
 
   for o, a in opts:
     if o in ("-v", "--verbose"):
@@ -297,6 +316,26 @@ def main ():
       forceyes = True
     if o in ("-r", "--revision"):
       revision = True
+    if o in ("-j", "--jira"):
+      jira_id = a.upper()
+      if not jira_id.startswith(jira_project.upper()):
+        jira_id = jira_project.upper() + '-' + jira_id
+      if not crfile:
+        crfile = jira_id.lower()
+    if o in ("--confurl"):
+      import urllib
+      try:
+        urllib.urlretrieve(a, os.path.expanduser('~/.mkcreview.conf'))
+      except:
+        print >> sys.stderr, "Cannot get config file from %s. Aborted" % (a)
+        sys.exit (2)
+      else:
+        print "The config file has been retrieved. Exit now"
+        print "(Run %s without --confurl option to create code review file.)" % (os.path.basename (sys.argv[0]))
+        sys.exit (0)
+
+  if not crfile.endswith('.creview'):
+    crfile += '.creview'
 
   # get code review filename
   if len (args) > 0:
@@ -329,6 +368,20 @@ def main ():
     print >> sys.stderr, "Cannot create code review files."
     sys.exit (2)
       
+  if jira_id:
+    try:
+      jira_cmd = config.get('jira', 'jira_cmd', 0, {'filename': crfile, 'jira_id': jira_id})
+    except ConfigParser.Error:
+      print >> sys.stderr, "JIRA config error. check your .mkcreview.conf file"
+    else:
+      p = subprocess.Popen(jira_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+      if p.wait() != 0:
+        print >> sys.stderr, "Cannot attach %s to %s. (error = %s)" % (crfile, jira_id, p.communicate()[1].strip())
+      else:
+        result = p.communicate()[0]
+        print "%s is attached to %s" % (crfile, jira_id)
+
+
   # cleanup something...
   cleanupSomething (path)
 

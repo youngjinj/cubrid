@@ -52,8 +52,8 @@
 #include "ini_parser.h"
 
 #define DEFAULT_ADMIN_LOG_FILE		"log/broker/cubrid_broker.log"
-#define DEFAULT_SESSION_TIMEOUT		300	/* seconds */
-#define DEFAULT_MAX_QUERY_TIMEOUT       0	/* seconds */
+#define DEFAULT_SESSION_TIMEOUT		"5min"
+#define DEFAULT_MAX_QUERY_TIMEOUT       "0"
 #define DEFAULT_JOB_QUEUE_SIZE		500
 #define DEFAULT_APPL_SERVER		"CAS"
 #define DEFAULT_EMPTY_STRING		"\0"
@@ -68,7 +68,7 @@
 #if defined(CUBRID_SHARD)
 #define DEFAULT_PROXY_LOG_MODE		"ERROR"
 #define DEFAULT_SHARD_KEY_MODULAR	256
-#define DEFAULT_PROXY_TIMEOUT 		30	/* sec */
+#define DEFAULT_PROXY_TIMEOUT 		"30s"
 #endif /* CUBRID_SHARD */
 
 #define	TRUE	1
@@ -228,7 +228,7 @@ check_port_number (T_BROKER_INFO * br_info, int num_brs)
  *   path(in/out):
  */
 void
-dir_repath (char *path)
+dir_repath (char *path, size_t path_len)
 {
   char tmp_str[PATH_MAX];
 
@@ -239,8 +239,8 @@ dir_repath (char *path)
       return;
     }
 
-  strcpy (tmp_str, path);
-  snprintf (path, PATH_MAX, "%s/%s", get_cubrid_home (), tmp_str);
+  strncpy (tmp_str, path, PATH_MAX);
+  snprintf (path, path_len, "%s/%s", get_cubrid_home (), tmp_str);
 }
 
 /*
@@ -300,8 +300,10 @@ broker_config_read_internal (const char *conf_file,
 #define PRINTERROR(...)	fprintf(stderr, __VA_ARGS__)
 #endif /* !_UC_ADMIN_SO_ */
   int num_brs = 0;
+  int num_proxy = 0;
   int i, j;
-  int master_shm_id = 0, error_flag;
+  int master_shm_id = 0, proxy_shm_id = 0;
+  int error_flag;
 #if defined (WINDOWS)
   char appl_server_port_assigned[MAX_BROKER_NUM];
 #endif
@@ -314,6 +316,8 @@ broker_config_read_internal (const char *conf_file,
 #if defined(CUBRID_SHARD)
   char library_name[PATH_MAX];
 #endif
+  char size_str[LINE_MAX];
+  char time_str[LINE_MAX];
 
   ini = ini_parser_load (conf_file);
   if (ini == NULL)
@@ -346,7 +350,7 @@ broker_config_read_internal (const char *conf_file,
     {
       ini_string = ini_getstr (ini, SECTION_NAME, "ADMIN_LOG_FILE",
 			       DEFAULT_ADMIN_LOG_FILE, &lineno);
-      MAKE_FILEPATH (admin_log_file, ini_string);
+      MAKE_FILEPATH (admin_log_file, ini_string, CONF_LOG_FILE_LEN);
     }
 
   if (acl_flag != NULL)
@@ -367,7 +371,7 @@ broker_config_read_internal (const char *conf_file,
     {
       ini_string = ini_getstr (ini, SECTION_NAME, "ACCESS_CONTROL_FILE", "",
 			       &lineno);
-      MAKE_FILEPATH (acl_file, ini_string);
+      MAKE_FILEPATH (acl_file, ini_string, CONF_LOG_FILE_LEN);
     }
 
   for (i = 0; i < ini->nsec; i++)
@@ -432,10 +436,21 @@ broker_config_read_internal (const char *conf_file,
 	ini_getuint (ini, sec_name, "MIN_NUM_APPL_SERVER",
 		     DEFAULT_AS_MIN_NUM, &lineno);
       br_info[num_brs].appl_server_num = br_info[num_brs].appl_server_min_num;
+      if (br_info[num_brs].appl_server_min_num > APPL_SERVER_NUM_LIMIT)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
 
       br_info[num_brs].appl_server_max_num =
 	ini_getuint (ini, sec_name, "MAX_NUM_APPL_SERVER",
 		     DEFAULT_AS_MAX_NUM, &lineno);
+      if (br_info[num_brs].appl_server_max_num > APPL_SERVER_NUM_LIMIT)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
 
 #if defined (WINDOWS)
       tmp_int = ini_getint (ini, sec_name, "APPL_SERVER_PORT", -1, &lineno);
@@ -453,35 +468,53 @@ broker_config_read_internal (const char *conf_file,
       br_info[num_brs].appl_server_shm_id =
 	ini_gethex (ini, sec_name, "APPL_SERVER_SHM_ID", 0, &lineno);
 
+      strncpy (size_str,
+	       ini_getstr (ini, sec_name, "APPL_SERVER_MAX_SIZE",
+			   DEFAULT_SERVER_MAX_SIZE, &lineno),
+	       sizeof (size_str));
       br_info[num_brs].appl_server_max_size =
-	ini_getint (ini, sec_name, "APPL_SERVER_MAX_SIZE",
-		    DEFAULT_SERVER_MAX_SIZE, &lineno);
-      br_info[num_brs].appl_server_max_size *= ONE_K;	/* K bytes */
-
-      br_info[num_brs].appl_server_hard_limit =
-	ini_getint (ini, sec_name, "APPL_SERVER_MAX_SIZE_HARD_LIMIT",
-		    DEFAULT_SERVER_HARD_LIMIT, &lineno);
-      if (br_info[num_brs].appl_server_hard_limit <= 0
-	  || br_info[num_brs].appl_server_hard_limit > INT_MAX / ONE_K)
+	(int) ut_size_string_to_kbyte (size_str, "M");
+      if (br_info[num_brs].appl_server_max_size < 0)
 	{
-	  errcode = PARAM_BAD_RANGE;
+	  errcode = PARAM_BAD_VALUE;
 	  goto conf_error;
 	}
-      br_info[num_brs].appl_server_hard_limit *= ONE_K;	/* K bytes */
 
+      strncpy (size_str,
+	       ini_getstr (ini, sec_name, "APPL_SERVER_MAX_SIZE_HARD_LIMIT",
+			   DEFAULT_SERVER_HARD_LIMIT, &lineno),
+	       sizeof (size_str));
+      br_info[num_brs].appl_server_hard_limit =
+	(int) ut_size_string_to_kbyte (size_str, "M");
+      if (br_info[num_brs].appl_server_hard_limit <= 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "SESSION_TIMEOUT",
+			   DEFAULT_SESSION_TIMEOUT, &lineno),
+	       sizeof (time_str));
       br_info[num_brs].session_timeout =
-	ini_getint (ini, sec_name, "SESSION_TIMEOUT",
-		    DEFAULT_SESSION_TIMEOUT, &lineno);
+	(int) ut_time_string_to_sec (time_str, "sec");
+      if (br_info[num_brs].session_timeout < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
 
       ini_string = ini_getstr (ini, sec_name, "LOG_DIR",
 			       DEFAULT_LOG_DIR, &lineno);
-      MAKE_FILEPATH (br_info[num_brs].log_dir, ini_string);
+      MAKE_FILEPATH (br_info[num_brs].log_dir, ini_string, CONF_LOG_FILE_LEN);
       ini_string = ini_getstr (ini, sec_name, "SLOW_LOG_DIR",
 			       DEFAULT_SLOW_LOG_DIR, &lineno);
-      MAKE_FILEPATH (br_info[num_brs].slow_log_dir, ini_string);
-      ini_string = ini_getstr (ini, sec_name, "ERROR_LOG_DIR",
-			       DEFAULT_ERR_DIR, &lineno);
-      MAKE_FILEPATH (br_info[num_brs].err_log_dir, ini_string);
+      MAKE_FILEPATH (br_info[num_brs].slow_log_dir, ini_string,
+		     CONF_LOG_FILE_LEN);
+      ini_string =
+	ini_getstr (ini, sec_name, "ERROR_LOG_DIR", DEFAULT_ERR_DIR, &lineno);
+      MAKE_FILEPATH (br_info[num_brs].err_log_dir, ini_string,
+		     CONF_LOG_FILE_LEN);
 
 #if !defined(CUBRID_SHARD)
       strcpy (br_info[num_brs].access_log_file, CUBRID_BASE_DIR);
@@ -535,37 +568,48 @@ broker_config_read_internal (const char *conf_file,
 			 SQL_LOG2_MAX, &lineno);
 #endif
 
+      strncpy (size_str,
+	       ini_getstr (ini, sec_name, "SQL_LOG_MAX_SIZE",
+			   DEFAULT_SQL_LOG_MAX_SIZE, &lineno),
+	       sizeof (size_str));
       br_info[num_brs].sql_log_max_size =
-	ini_getuint_max (ini, sec_name, "SQL_LOG_MAX_SIZE",
-			 DEFAULT_SQL_LOG_MAX_SIZE, MAX_SQL_LOG_MAX_SIZE,
-			 &lineno);
-
-      tmp_float = ini_getfloat (ini, sec_name, "LONG_QUERY_TIME",
-				(float) DEFAULT_LONG_QUERY_TIME, &lineno);
-      if (tmp_float <= 0)
+	(int) ut_size_string_to_kbyte (size_str, "K");
+      if (br_info[num_brs].sql_log_max_size < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
 	  goto conf_error;
 	}
-      else
+      else if (br_info[num_brs].sql_log_max_size > MAX_SQL_LOG_MAX_SIZE)
 	{
-	  /* change float to msec */
-	  br_info[num_brs].long_query_time = (int) (tmp_float * 1000.0);
+	  errcode = PARAM_BAD_RANGE;
+	  goto conf_error;
 	}
 
-      tmp_float = ini_getfloat (ini, sec_name, "LONG_TRANSACTION_TIME",
-				(float) DEFAULT_LONG_TRANSACTION_TIME,
-				&lineno);
-      if (tmp_float <= 0)
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "LONG_QUERY_TIME",
+			   DEFAULT_LONG_QUERY_TIME, &lineno),
+	       sizeof (time_str));
+      tmp_float = (float) ut_time_string_to_sec (time_str, "sec");
+      if (tmp_float < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
 	  goto conf_error;
 	}
-      else
+      /* change float to msec */
+      br_info[num_brs].long_query_time = (int) (tmp_float * 1000.0);
+
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "LONG_TRANSACTION_TIME",
+			   DEFAULT_LONG_TRANSACTION_TIME, &lineno),
+	       sizeof (time_str));
+      tmp_float = (float) ut_time_string_to_sec (time_str, "sec");
+      if (tmp_float < 0)
 	{
-	  /* change float to msec */
-	  br_info[num_brs].long_transaction_time = (int) (tmp_float * 1000.0);
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
 	}
+      /* change float to msec */
+      br_info[num_brs].long_transaction_time = (int) (tmp_float * 1000.0);
 
       br_info[num_brs].auto_add_appl_server =
 	conf_get_value_table_on_off (ini_getstr (ini, sec_name,
@@ -581,9 +625,16 @@ broker_config_read_internal (const char *conf_file,
 	ini_getuint_max (ini, sec_name, "JOB_QUEUE_SIZE",
 			 DEFAULT_JOB_QUEUE_SIZE, JOB_QUEUE_MAX_SIZE, &lineno);
 
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "TIME_TO_KILL",
+			   DEFAULT_TIME_TO_KILL, &lineno), sizeof (time_str));
       br_info[num_brs].time_to_kill =
-	ini_getuint (ini, sec_name, "TIME_TO_KILL", DEFAULT_TIME_TO_KILL,
-		     &lineno);
+	(int) ut_time_string_to_sec (time_str, "sec");
+      if (br_info[num_brs].time_to_kill < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
 
       br_info[num_brs].access_log =
 	conf_get_value_table_on_off (ini_getstr (ini, sec_name, "ACCESS_LOG",
@@ -596,7 +647,8 @@ broker_config_read_internal (const char *conf_file,
 
       ini_string = ini_getstr (ini, sec_name, "ACCESS_LIST",
 			       DEFAULT_EMPTY_STRING, &lineno);
-      MAKE_FILEPATH (br_info[num_brs].acl_file, ini_string);
+      MAKE_FILEPATH (br_info[num_brs].acl_file, ini_string,
+		     CONF_LOG_FILE_LEN);
 
       br_info[num_brs].max_string_length =
 	ini_getint (ini, sec_name, "MAX_STRING_LENGTH", -1, &lineno);
@@ -711,13 +763,20 @@ broker_config_read_internal (const char *conf_file,
 	  goto conf_error;
 	}
 
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "MAX_QUERY_TIMEOUT",
+			   DEFAULT_MAX_QUERY_TIMEOUT, &lineno),
+	       sizeof (time_str));
       br_info[num_brs].query_timeout =
-	ini_getint (ini, sec_name, "MAX_QUERY_TIMEOUT",
-		    DEFAULT_MAX_QUERY_TIMEOUT, &lineno);
-      if (br_info[num_brs].query_timeout < 0
-	  || br_info[num_brs].query_timeout > MAX_QUERY_TIMEOUT_LIMIT)
+	(int) ut_time_string_to_sec (time_str, "sec");
+      if (br_info[num_brs].query_timeout < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+      else if (br_info[num_brs].query_timeout > MAX_QUERY_TIMEOUT_LIMIT)
+	{
+	  errcode = PARAM_BAD_RANGE;
 	  goto conf_error;
 	}
 
@@ -740,6 +799,24 @@ broker_config_read_internal (const char *conf_file,
 	}
 #if defined(CUBRID_SHARD)
       /* SHARD PHASE0 */
+
+      proxy_shm_id =
+	ini_gethex (ini, sec_name, "METADATA_SHM_ID", 0, &lineno);
+
+      br_info[num_brs].proxy_shm_id =
+	ini_gethex (ini, sec_name, "PROXY_SHM_ID", 0, &lineno);
+
+      if (br_info[num_brs].proxy_shm_id == 0)
+	{
+	  br_info[num_brs].proxy_shm_id = proxy_shm_id;
+	}
+
+      if (br_info[num_brs].proxy_shm_id == 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
       strncpy (br_info[num_brs].shard_db_name,
 	       ini_getstr (ini, sec_name, "SHARD_DB_NAME",
 			   DEFAULT_EMPTY_STRING, &lineno),
@@ -765,13 +842,22 @@ broker_config_read_internal (const char *conf_file,
 			   DEFAULT_EMPTY_STRING, &lineno),
 	       sizeof (br_info[num_brs].shard_db_password));
 
-      br_info[num_brs].min_num_proxy =
-	ini_getuint (ini, sec_name, "MIN_NUM_PROXY",
-		     DEFAULT_MIN_NUM_PROXY, &lineno);
+      num_proxy = ini_getuint (ini, sec_name, "MAX_NUM_PROXY",
+			       DEFAULT_MAX_NUM_PROXY, &lineno);
 
-      br_info[num_brs].max_num_proxy =
-	ini_getuint (ini, sec_name, "MAX_NUM_PROXY",
+      br_info[num_brs].num_proxy =
+	ini_getuint (ini, sec_name, "NUM_PROXY",
 		     DEFAULT_MAX_NUM_PROXY, &lineno);
+      if (num_proxy > br_info[num_brs].num_proxy)
+	{
+	  br_info[num_brs].num_proxy = num_proxy;
+	}
+
+      if (br_info[num_brs].num_proxy > MAX_PROXY_NUM)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
 
       strcpy (br_info[num_brs].proxy_log_dir,
 	      ini_getstr (ini, sec_name, "PROXY_LOG_DIR",
@@ -790,10 +876,8 @@ broker_config_read_internal (const char *conf_file,
       br_info[num_brs].max_client =
 	ini_getuint (ini, sec_name, "MAX_CLIENT",
 		     DEFAULT_MAX_CLIENT, &lineno);
-
-      br_info[num_brs].metadata_shm_id =
-	ini_gethex (ini, sec_name, "METADATA_SHM_ID", 0, &lineno);
-      if (br_info[num_brs].metadata_shm_id == 0)
+      if (br_info[num_brs].max_client >
+	  CLIENT_INFO_SIZE_LIMIT * br_info[num_brs].num_proxy)
 	{
 	  errcode = PARAM_BAD_VALUE;
 	  goto conf_error;
@@ -846,10 +930,22 @@ broker_config_read_internal (const char *conf_file,
 	      ini_getstr (ini, sec_name, "SHARD_KEY_FUNCTION_NAME",
 			  DEFAULT_EMPTY_STRING, &lineno));
 
+      strncpy (size_str,
+	       ini_getstr (ini, sec_name, "PROXY_LOG_MAX_SIZE",
+			   DEFAULT_PROXY_LOG_MAX_SIZE, &lineno),
+	       sizeof (size_str));
       br_info[num_brs].proxy_log_max_size =
-	ini_getuint_max (ini, sec_name, "PROXY_LOG_MAX_SIZE",
-			 DEFAULT_PROXY_LOG_MAX_SIZE, MAX_PROXY_LOG_MAX_SIZE,
-			 &lineno);
+	(int) ut_size_string_to_kbyte (size_str, "K");
+      if (br_info[num_brs].proxy_log_max_size < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+      else if (br_info[num_brs].proxy_log_max_size > MAX_PROXY_LOG_MAX_SIZE)
+	{
+	  errcode = PARAM_BAD_RANGE;
+	  goto conf_error;
+	}
 
       br_info[num_brs].proxy_max_prepared_stmt_count =
 	ini_getint (ini, sec_name, "PROXY_MAX_PREPARED_STMT_COUNT",
@@ -870,13 +966,20 @@ broker_config_read_internal (const char *conf_file,
 	  goto conf_error;
 	}
 
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "PROXY_TIMEOUT",
+			   DEFAULT_PROXY_TIMEOUT, &lineno),
+	       sizeof (time_str));
       br_info[num_brs].proxy_timeout =
-	ini_getint (ini, sec_name, "PROXY_TIMEOUT", DEFAULT_PROXY_TIMEOUT,
-		    &lineno);
-      if (br_info[num_brs].proxy_timeout < 0
-	  || br_info[num_brs].proxy_timeout > MAX_PROXY_TIMEOUT_LIMIT)
+	(int) ut_time_string_to_sec (time_str, "sec");
+      if (br_info[num_brs].proxy_timeout < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+      else if (br_info[num_brs].proxy_timeout > MAX_PROXY_TIMEOUT_LIMIT)
+	{
+	  errcode = PARAM_BAD_RANGE;
 	  goto conf_error;
 	}
 #endif /* CUBRID_SHARD */
@@ -962,24 +1065,24 @@ broker_config_read_internal (const char *conf_file,
       for (i = 0; i < num_brs; i++)
 	{
 #if !defined(CUBRID_SHARD)
-	  dir_repath (br_info[i].access_log_file);
+	  dir_repath (br_info[i].access_log_file, CONF_LOG_FILE_LEN);
 #endif /* CUBRID_SHARD */
-	  dir_repath (br_info[i].error_log_file);
+	  dir_repath (br_info[i].error_log_file, CONF_LOG_FILE_LEN);
 	  if (br_info[i].source_env[0] != '\0')
 	    {
-	      dir_repath (br_info[i].source_env);
+	      dir_repath (br_info[i].source_env, CONF_LOG_FILE_LEN);
 	    }
 	  if (br_info[i].acl_file[0] != '\0')
 	    {
-	      dir_repath (br_info[i].acl_file);
+	      dir_repath (br_info[i].acl_file, CONF_LOG_FILE_LEN);
 	    }
 #if defined(CUBRID_SHARD)
-	  dir_repath (br_info[i].proxy_log_dir);
+	  dir_repath (br_info[i].proxy_log_dir, CONF_LOG_FILE_LEN);
 #endif /* CUBRID_SHARD */
 	}
       if (admin_log_file != NULL)
 	{
-	  dir_repath (admin_log_file);
+	  dir_repath (admin_log_file, CONF_LOG_FILE_LEN);
 	}
     }
 
@@ -1295,8 +1398,7 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
       fprintf (fp, "SHARD_DB_PASSWORD\t\t=%s\n",
 	       br_info[i].shard_db_password);
 
-      fprintf (fp, "MIN_NUM_PROXY\t\t=%d\n", br_info[i].min_num_proxy);
-      fprintf (fp, "MAX_NUM_PROXY\t\t=%d\n", br_info[i].max_num_proxy);
+      fprintf (fp, "NUM_PROXY\t\t=%d\n", br_info[i].num_proxy);
       fprintf (fp, "PROXY_LOG_DIR\t\t=%s\n", br_info[i].proxy_log_dir);
       tmp_str =
 	get_conf_string (br_info[i].proxy_log_mode, tbl_proxy_log_mode);
@@ -1306,7 +1408,6 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 	}
       fprintf (fp, "MAX_CLIENT\t\t=%d\n", br_info[i].max_client);
 
-      fprintf (fp, "METADATA_SHM_ID\t\t=%x\n", br_info[i].metadata_shm_id);
       fprintf (fp, "SHARD_CONNECTION_FILE\t\t=%s\n",
 	       br_info[i].shard_connection_file);
       fprintf (fp, "SHARD_KEY_FILE\t\t=%s\n", br_info[i].shard_key_file);
@@ -1327,9 +1428,10 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 	  fprintf (fp, "IGNORE_SHARD_HINT\t\t=%s\n", tmp_str);
 	}
       fprintf (fp, "PROXY_TIMEOUT\t\t=%d\n", br_info[i].proxy_timeout);
+      fprintf (fp, "PROXY_SHM_ID\t\t=%d\n", br_info[i].proxy_shm_id);
 
-      shard_metadata_dump (fp, br_info[i].metadata_shm_id);
-      shard_shm_dump_appl_server (fp, br_info[i].appl_server_shm_id);
+      shard_metadata_dump (fp, br_info[i].proxy_shm_id);
+      shard_shm_dump_appl_server (fp, br_info[i].proxy_shm_id);
 #endif /* CUBRID_SHARD */
 
       fprintf (fp, "\n");

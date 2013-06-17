@@ -1077,7 +1077,8 @@ typedef enum
 
   PT_NULLS_DEFAULT,
   PT_NULLS_FIRST,
-  PT_NULLS_LAST
+  PT_NULLS_LAST,
+  PT_CONSTRAINT_NAME
 } PT_MISC_TYPE;
 
 /* Enumerated join type */
@@ -1122,9 +1123,11 @@ typedef enum
   /* use index for merge update */
   PT_HINT_USE_INSERT_IDX = 0x400000,	/* 0100 0000 0000 0000 0000 0000 */
   /* use index for merge delete */
-  PT_HINT_SELECT_RECORD_INFO = 0x800000,	/* 1000 0000 0000 0000 0000 0000 */
+  PT_HINT_NO_SORT_LIMIT = 0x800000,	/* 1000 0000 0000 0000 0000 0000 */
+  /* do not generate SORT-LIMIT plan */
+  PT_HINT_SELECT_RECORD_INFO = 0x1000000, /* 0001 0000 0000 0000 0000 0000 0000 */
   /* SELECT record info from tuple header instead of data */
-  PT_HINT_SELECT_PAGE_INFO = 0x1000000,	/* 0001 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_PAGE_INFO = 0x2000000	/* 0010 0000 0000 0000 0000 0000 0000 */
   /* SELECT page header information from heap file instead of record data */
 } PT_HINT_ENUM;
 
@@ -1180,7 +1183,10 @@ typedef enum
   PT_CHANGE_ATTR,
   PT_CHANGE_AUTO_INCREMENT,
   PT_CHANGE_OWNER,
-  PT_CHANGE_COLLATION
+  PT_CHANGE_COLLATION,
+  PT_RENAME_CONSTRAINT,
+  PT_RENAME_INDEX,
+  PT_REBUILD_INDEX
 } PT_ALTER_CODE;
 
 /* Codes for trigger event type */
@@ -1803,10 +1809,13 @@ struct pt_index_info
   PT_NODE *indexed_class;	/* PT_SPEC */
   PT_NODE *column_names;	/* PT_SORT_SPEC (list) */
   PT_NODE *index_name;		/* PT_NAME */
+  PT_NODE *new_name;		/* PT_NAME */
   PT_NODE *prefix_length;	/* PT_NAME */
   PT_NODE *where;		/* PT_EXPR */
   PT_NODE *function_expr;	/* PT_EXPR - expression to be used in a
 				 * function index */
+  PT_ALTER_CODE code;
+
   int func_pos;			/* the position of the expression in the
 				 * function index's column list */
   int func_no_args;		/* number of arguments in the function index
@@ -2285,6 +2294,7 @@ typedef enum
   RESERVED_P_IS_SAVING,
   RESERVED_P_UPDATE_BEST,
   RESERVED_P_LAST_MVCCID,
+
   /* leave this last to know how many reserved names are in
    * pt_Reserved_name_table
    */
@@ -2327,6 +2337,7 @@ extern PT_RESERVED_NAME pt_Reserved_name_table[];
     {							      \
       assert (0);					      \
     }
+
 
 /* Get first and last id for reserved name type */
 #define PT_GET_RESERVED_NAME_FIRST_AND_LAST(type, first, last)   \
@@ -2483,6 +2494,7 @@ struct pt_union_info
   PT_NODE *arg1;		/* PT_SELECT_EXPR 1st argument */
   PT_NODE *arg2;		/* PT_SELECT_EXPR 2nd argument */
   PT_NODE *select_list;		/* select list of UNION query */
+  unsigned is_leaf_node:1;
 };
 
 /* Info for an SAVEPOINT node */

@@ -7234,7 +7234,6 @@ qo_find_node_indexes (QO_ENV * env, QO_NODE * nodep)
       return;			/* no classes, nothing to do process */
     }
 
-
   /* for each class in the hierarachy, search the class constraint cache
      looking for applicable indexes(UNIQUE and INDEX constraint) */
   for (i = 0; i < class_infop->n; i++)
@@ -8589,7 +8588,7 @@ static void
 qo_discover_sort_limit_nodes (QO_ENV * env)
 {
   PT_NODE *query, *orderby, *sort_col, *select_list, *col, *save_next;
-  int i, pos_spec;
+  int i, pos_spec, limit_max_count;
   QO_NODE *node;
   BITSET order_nodes, dep_nodes, expr_segs, tmp_bitset;
   BITSET_ITERATOR bi;
@@ -8597,14 +8596,24 @@ qo_discover_sort_limit_nodes (QO_ENV * env)
   bitset_init (&order_nodes, env);
   bitset_init (&QO_ENV_SORT_LIMIT_NODES (env), env);
 
-  if (pt_get_query_limit_value (QO_ENV_PARSER (env), QO_ENV_PT_TREE (env),
-				&QO_ENV_LIMIT_VALUE (env)) != NO_ERROR)
+  query = QO_ENV_PT_TREE (env);
+  if (!PT_IS_SELECT (query))
     {
-      /* unusable limit */
+      goto abandon_stop_limit;
+    }
+  if (query->info.query.all_distinct != PT_ALL
+      || query->info.query.q.select.group_by != NULL
+      || query->info.query.q.select.connect_by != NULL)
+    {
+      goto abandon_stop_limit;
+    }
+  if (query->info.query.q.select.hint & PT_HINT_NO_SORT_LIMIT)
+    {
       goto abandon_stop_limit;
     }
 
-  if (DB_IS_NULL (&QO_ENV_LIMIT_VALUE (env)))
+  if (pt_get_query_limit_value (QO_ENV_PARSER (env), QO_ENV_PT_TREE (env),
+				&QO_ENV_LIMIT_VALUE (env)) != NO_ERROR)
     {
       /* unusable limit */
       goto abandon_stop_limit;
@@ -8623,26 +8632,13 @@ qo_discover_sort_limit_nodes (QO_ENV * env)
       goto abandon_stop_limit;
     }
 
-  query = QO_ENV_PT_TREE (env);
-  if (!PT_IS_SELECT (query))
-    {
-      goto abandon_stop_limit;
-    }
-  if (query->info.query.all_distinct != PT_ALL
-      || query->info.query.q.select.group_by != NULL
-      || query->info.query.q.select.connect_by != NULL)
-    {
-      goto abandon_stop_limit;
-    }
-
   orderby = query->info.query.order_by;
   if (orderby == NULL)
     {
       goto abandon_stop_limit;
     }
 
-  /* Assume we can use STOP-LIMIT plans until proven otherwise */
-  env->use_sort_limit = true;
+  env->use_sort_limit = QO_SL_INVALID;
 
   /* Start by assuming that evaluation of the limit clause depends on all
    * nodes in the query. Since we only have one partition, we can get the
@@ -8721,6 +8717,42 @@ qo_discover_sort_limit_nodes (QO_ENV * env)
       bitset_delset (&dep_nodes);
     }
 
+  if (bitset_cardinality (&env->sort_limit_nodes) == env->Nnodes)
+    {
+      /* There is no subset of nodes on which we can apply SORT_LIMIT so 
+       * abandon this optimization
+       */
+      goto abandon_stop_limit;
+    }
+
+  bitset_delset (&order_nodes);
+
+  /* In order to create a SORT-LIMIT plan, the query must have a valid limit.
+   * All other conditions for creating the plan have been met. */
+  if (DB_IS_NULL (&QO_ENV_LIMIT_VALUE (env)))
+    {
+      /* Cannot make a decision at this point. Go ahead with query compilation
+       * as if this optimization does not apply. The query will be recompiled
+       * once a valid limit is supplied.
+       */
+      goto sort_limit_possible;
+    }
+
+  limit_max_count = prm_get_integer_value (PRM_ID_SORT_LIMIT_MAX_COUNT);
+  if (limit_max_count == 0)
+    {
+      /* SORT-LIMIT plans are disabled */
+      goto abandon_stop_limit;
+    }
+
+  if ((DB_BIGINT) limit_max_count < DB_GET_BIGINT (&QO_ENV_LIMIT_VALUE (env)))
+    {
+      /* Limit too large to apply this optimization. Mark it as candidate but
+       * do not generate SORT-LIMIT plans at this time.
+       */
+      goto sort_limit_possible;
+    }
+
   if (bitset_cardinality (&env->sort_limit_nodes) == 1)
     {
       /* Mark this node as a sort stop candidate. We will generate a
@@ -8730,20 +8762,19 @@ qo_discover_sort_limit_nodes (QO_ENV * env)
       node = QO_ENV_NODE (env, n);
       QO_NODE_SORT_LIMIT_CANDIDATE (node) = true;
     }
-  else if (bitset_cardinality (&env->sort_limit_nodes) == env->Nnodes)
-    {
-      /* There is no subset of nodes on which we can apply SORT_LIMIT so 
-       * abandon this optimization
-       */
-      goto abandon_stop_limit;
-    }
-  bitset_delset (&order_nodes);
+
+  env->use_sort_limit = QO_SL_USE;
+  return;
+
+sort_limit_possible:
+  env->use_sort_limit = QO_SL_POSSIBLE;
+  bitset_delset (&QO_ENV_SORT_LIMIT_NODES (env));
   return;
 
 abandon_stop_limit:
   bitset_delset (&order_nodes);
   bitset_delset (&QO_ENV_SORT_LIMIT_NODES (env));
-  env->use_sort_limit = false;
+  env->use_sort_limit = QO_SL_INVALID;
 }
 
 /*

@@ -656,6 +656,59 @@ hm_get_statement (int mapped_id, T_CON_HANDLE ** connection,
   return CCI_ER_NO_ERROR;
 }
 
+static T_CCI_ERROR_CODE
+hm_release_connection_internal (int mapped_id,
+				T_CON_HANDLE ** connection,
+				bool delete_handle)
+{
+  T_CCI_ERROR_CODE error;
+
+  error = map_close_otc (mapped_id);
+  if (error != CCI_ER_NO_ERROR)
+    {
+      return error;
+    }
+
+  if (delete_handle)
+    {
+      error = hm_con_handle_free (*connection);
+    }
+
+  *connection = NULL;
+
+  return error;
+}
+
+T_CCI_ERROR_CODE
+hm_release_connection (int mapped_id, T_CON_HANDLE ** connection)
+{
+  return hm_release_connection_internal (mapped_id, connection, false);
+}
+
+T_CCI_ERROR_CODE
+hm_delete_connection (int mapped_id, T_CON_HANDLE ** connection)
+{
+  return hm_release_connection_internal (mapped_id, connection, true);
+}
+
+T_CCI_ERROR_CODE
+hm_release_statement (int mapped_id, T_CON_HANDLE ** connection,
+		      T_REQ_HANDLE ** statement)
+{
+  T_CCI_ERROR_CODE error;
+
+  error = map_close_ots (mapped_id);
+  if (error != CCI_ER_NO_ERROR)
+    {
+      return error;
+    }
+
+  *connection = NULL;
+  *statement = NULL;
+
+  return error;
+}
+
 void
 hm_req_handle_free (T_CON_HANDLE * con_handle, T_REQ_HANDLE * req_handle)
 {
@@ -1065,6 +1118,33 @@ hm_broker_understand_renewed_error_code (T_CON_HANDLE * con_handle)
 }
 
 bool
+hm_broker_understand_the_protocol (T_BROKER_VERSION broker_version,
+				   int require)
+{
+  if (broker_version >= CAS_PROTO_MAKE_VER (require))
+    {
+      return true;
+    }
+  else
+    {
+      return false;
+    }
+}
+
+bool
+hm_broker_match_the_protocol (T_BROKER_VERSION broker_version, int require)
+{
+  if (broker_version == CAS_PROTO_MAKE_VER (require))
+    {
+      return true;
+    }
+  else
+    {
+      return false;
+    }
+}
+
+bool
 hm_broker_support_holdable_result (T_CON_HANDLE * con_handle)
 {
   char f = con_handle->broker_info[BROKER_INFO_FUNCTION_FLAG];
@@ -1074,11 +1154,12 @@ hm_broker_support_holdable_result (T_CON_HANDLE * con_handle)
 }
 
 bool
-hm_broker_reconnect_down_server (T_CON_HANDLE * con_handle)
+hm_broker_reconnect_when_server_down (T_CON_HANDLE * con_handle)
 {
   char f = con_handle->broker_info[BROKER_INFO_FUNCTION_FLAG];
 
-  return (f & BROKER_RECONNECT_DOWN_SERVER) == BROKER_RECONNECT_DOWN_SERVER;
+  return (f & BROKER_RECONNECT_WHEN_SERVER_DOWN) ==
+    BROKER_RECONNECT_WHEN_SERVER_DOWN;
 }
 
 void

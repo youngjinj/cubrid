@@ -52,19 +52,19 @@
 
 #if defined (WINDOWS)
 #if __WORDSIZE == 64
-#define	DEFAULT_SERVER_MAX_SIZE	80
+#define	DEFAULT_SERVER_MAX_SIZE	"80M"
 #elif __WORDSIZE == 32
-#define DEFAULT_SERVER_MAX_SIZE 40
+#define DEFAULT_SERVER_MAX_SIZE "40M"
 #else
 #error "Error __WORDSIZE"
 #endif
 #else
-#define	DEFAULT_SERVER_MAX_SIZE	0
+#define	DEFAULT_SERVER_MAX_SIZE	"0"
 #endif
 
-#define	DEFAULT_SERVER_HARD_LIMIT	1024
+#define	DEFAULT_SERVER_HARD_LIMIT	"1G"
 
-#define	DEFAULT_TIME_TO_KILL	120	/* seconds */
+#define	DEFAULT_TIME_TO_KILL	"2min"
 #define SQL_LOG_TIME_MAX	-1
 
 #define CONF_ERR_LOG_NONE       0x00
@@ -72,10 +72,10 @@
 #define CONF_ERR_LOG_BROWSER    0x02
 #define CONF_ERR_LOG_BOTH       (CONF_ERR_LOG_LOGFILE | CONF_ERR_LOG_BROWSER)
 
-#define DEFAULT_SQL_LOG_MAX_SIZE	10000	/* about 10M */
-#define DEFAULT_LONG_QUERY_TIME         60
-#define DEFAULT_LONG_TRANSACTION_TIME   60
-#define MAX_SQL_LOG_MAX_SIZE            2000000	/* about 200M */
+#define DEFAULT_SQL_LOG_MAX_SIZE	"10M"
+#define DEFAULT_LONG_QUERY_TIME         "1min"
+#define DEFAULT_LONG_TRANSACTION_TIME   "1min"
+#define MAX_SQL_LOG_MAX_SIZE            2097152	/* about 2G */
 
 #define BROKER_NAME_LEN		64
 #define BROKER_LOG_MSG_SIZE	64
@@ -86,9 +86,17 @@
 #define DEFAULT_MAX_NUM_PROXY	1
 #define DEFAULT_MAX_CLIENT 	10
 
-#define DEFAULT_PROXY_LOG_MAX_SIZE	100000	/* 100M */
-#define MAX_PROXY_LOG_MAX_SIZE		1000000	/* 1G */
+#define DEFAULT_PROXY_LOG_MAX_SIZE	"100M"
+#define MAX_PROXY_LOG_MAX_SIZE		1048576	/* about 1G */
 #endif /* CUBRID_SHARD */
+
+#define SHARD_CONN_STAT_SIZE_LIMIT       256
+#define SHARD_KEY_STAT_SIZE_LIMIT        2
+#define CLIENT_INFO_SIZE_LIMIT           10000
+#define SHARD_INFO_SIZE_LIMIT            256
+
+#define BROKER_INFO_PATH_MAX             (1024)
+#define BROKER_INFO_NAME_MAX             (BROKER_INFO_PATH_MAX)
 
 typedef enum t_sql_log_mode_value T_SQL_LOG_MODE_VALUE;
 enum t_sql_log_mode_value
@@ -191,13 +199,11 @@ struct t_broker_info
   char log_dir[CONF_LOG_FILE_LEN];
   char slow_log_dir[CONF_LOG_FILE_LEN];
   char err_log_dir[CONF_LOG_FILE_LEN];
-#if !defined(CUBRID_SHARD)
   char access_log_file[CONF_LOG_FILE_LEN];
-#endif				/* CUBRID_SHARD */
   char error_log_file[CONF_LOG_FILE_LEN];
   char source_env[CONF_LOG_FILE_LEN];
   char acl_file[CONF_LOG_FILE_LEN];
-  char preferred_hosts[LINE_MAX];
+  char preferred_hosts[BROKER_INFO_NAME_MAX];
 
   char jdbc_cache;
   char jdbc_cache_only_hint;
@@ -212,33 +218,33 @@ struct t_broker_info
   char reject_client_flag;	/* reject clients due to hanging cas/proxy */
   int reject_client_count;
 
-#if defined(CUBRID_SHARD)
+  /*from here, these are used only in shard */
+  int proxy_shm_id;
+
   char proxy_log_mode;
 
   char shard_db_name[SRV_CON_DBNAME_SIZE];
   char shard_db_user[SRV_CON_DBUSER_SIZE];
   char shard_db_password[SRV_CON_DBPASSWD_SIZE];
 
-  int min_num_proxy;
-  int max_num_proxy;
+  int num_proxy;
   char proxy_log_dir[CONF_LOG_FILE_LEN];
   int max_client;
 
-  int metadata_shm_id;
-  char shard_connection_file[LINE_MAX];
-  char shard_key_file[LINE_MAX];
+  char shard_connection_file[BROKER_INFO_PATH_MAX];
+  char shard_key_file[BROKER_INFO_PATH_MAX];
 
   /* SHARD SHARD_KEY_ID */
   int shard_key_modular;
-  char shard_key_library_name[PATH_MAX];
-  char shard_key_function_name[PATH_MAX];
+  char shard_key_library_name[BROKER_INFO_NAME_MAX];
+  char shard_key_function_name[BROKER_INFO_NAME_MAX];
 
   int proxy_log_max_size;
   int proxy_max_prepared_stmt_count;
 
   char ignore_shard_hint;
   int proxy_timeout;
-#endif				/* CUBRID_SHARD */
+  /*to here, these are used only in shard */
 };
 
 extern int broker_config_read (const char *conf_file, T_BROKER_INFO * br_info,
@@ -257,7 +263,7 @@ extern int conf_get_value_access_mode (const char *value);
 #if defined(CUBRID_SHARD)
 extern int conf_get_value_proxy_log_mode (const char *value);
 #endif /* CUBRID_SHARD */
-extern void dir_repath (char *path);
+extern void dir_repath (char *path, size_t path_len);
 
 #if defined(CUBRID_SHARD)
 #if defined(SHARD_VERBOSE_DEBUG)

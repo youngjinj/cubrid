@@ -315,6 +315,10 @@ static char *stx_alloc_struct (THREAD_ENTRY * thread_p, int size);
 static int stx_init_xasl_unpack_info (THREAD_ENTRY * thread_p,
 				      char *xasl_stream,
 				      int xasl_stream_size);
+static char *stx_build_regu_variable_list (THREAD_ENTRY * thread_p, char *ptr,
+					   REGU_VARIABLE_LIST *
+					   regu_var_list);
+
 
 #if defined(ENABLE_UNUSED_FUNCTION)
 static char *stx_unpack_char (char *tmp, char *ptr);
@@ -416,7 +420,7 @@ stx_map_stream_to_xasl (THREAD_ENTRY * thread_p, XASL_NODE ** xasl_tree,
   OID_SET_NULL (&xasl->creator_oid);
   xasl->n_oid_list = 0;
   xasl->class_oid_list = NULL;
-  xasl->repr_id_list = NULL;
+  xasl->tcard_list = NULL;
 
   /* initialize the query in progress flag to FALSE.  Note that this flag
      is not packed/unpacked.  It is strictly a server side flag. */
@@ -5531,6 +5535,7 @@ stx_unpack_regu_variable_value (THREAD_ENTRY * thread_p, char *ptr,
 				REGU_VARIABLE * regu_var)
 {
   REGU_VALUE_LIST *regu_list;
+  REGU_VARIABLE_LIST regu_var_list = NULL;
   int offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
@@ -5539,6 +5544,15 @@ stx_unpack_regu_variable_value (THREAD_ENTRY * thread_p, char *ptr,
 
   switch (regu_var->type)
     {
+    case TYPE_REGU_VAR_LIST:
+      ptr = stx_build_regu_variable_list (thread_p, ptr, &regu_var_list);
+      if (ptr == NULL)
+	{
+	  goto error;
+	}
+      regu_var->value.regu_var_list = regu_var_list;
+      break;
+
     case TYPE_REGUVAL_LIST:
       regu_list = stx_regu_value_list_alloc_and_init (thread_p);
 
@@ -6145,6 +6159,9 @@ stx_build_analytic_type (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &tmp_i);
   analytic->ignore_nulls = (bool) tmp_i;
 
+  ptr = or_unpack_int (ptr, &tmp_i);
+  analytic->is_const_operand = (bool) tmp_i;
+
   return ptr;
 
 error:
@@ -6593,6 +6610,42 @@ stx_build_regu_value_list (THREAD_ENTRY * thread_p, char *ptr,
 
 error:
   return NULL;
+}
+
+/* stx_build_regu_variable_list () -
+ *   return:
+ *   thread_p(in)
+ *   ptr(out):
+ *   regu_var_list(in): pointer to REGU_VARIABLE_LIST
+ */
+static char *
+stx_build_regu_variable_list (THREAD_ENTRY * thread_p, char *ptr,
+			      REGU_VARIABLE_LIST * regu_var_list)
+{
+  int offset;
+  XASL_UNPACK_INFO *xasl_unpack_info =
+    stx_get_xasl_unpack_info_ptr (thread_p);
+
+  assert (ptr != NULL && regu_var_list != NULL);
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      *regu_var_list = NULL;
+    }
+  else
+    {
+      *regu_var_list =
+	stx_restore_regu_variable_list (thread_p,
+					&xasl_unpack_info->
+					packed_xasl[offset]);
+      if (*regu_var_list == NULL)
+	{
+	  return NULL;
+	}
+    }
+
+  return ptr;
 }
 
 /*

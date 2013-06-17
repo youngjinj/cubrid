@@ -46,6 +46,7 @@
 #include "rb_tree.h"
 #include "query_list.h"
 #include "lock_manager.h"
+#include "connection_globals.h"
 #include "mvcc.h"
 
 #if defined(SOLARIS)
@@ -646,10 +647,18 @@ enum update_stats_action_type
   UPDATE_STATS_ACTION_RESET
 };
 
+typedef struct btid_list BTID_LIST;
+struct btid_list
+{
+  BTID_LIST *next;
+  BTID btid;
+};
+
 typedef struct modified_class_entry MODIFIED_CLASS_ENTRY;
 struct modified_class_entry
 {
   MODIFIED_CLASS_ENTRY *next;
+  BTID_LIST *btid_list;
   OID class_oid;
   LOG_LSA last_modified_lsa;
   bool need_update_stats;
@@ -704,6 +713,15 @@ typedef struct lob_locator_entry LOB_LOCATOR_ENTRY;
   };
  */
 RB_HEAD (lob_rb_root, lob_locator_entry);
+
+
+typedef enum tran_abort_reason TRAN_ABORT_REASON;
+enum tran_abort_reason
+{
+  TRAN_NORMAL = 0,
+  TRAN_ABORT_DUE_DEADLOCK = 1,
+  TRAN_ABORT_DUE_ROLLBACK_ON_ESCALATION = 2
+};
 
 typedef struct log_tdes LOG_TDES;
 struct log_tdes
@@ -823,6 +841,9 @@ struct log_tdes
   LK_RES *waiting_for_res;	/* resource that i'm waiting for */
 
   int disable_modifications;	/* db_Disable_modification for each tran */
+
+  TRAN_ABORT_REASON tran_abort_reason;
+
 #if defined(MVCC_USE_COMMAND_ID)
   MVCC_COMMAND_ID mvcc_comm_id;	/* MVCC command id - increase with each
 				 * command that modified the data, 

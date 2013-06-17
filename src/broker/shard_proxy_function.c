@@ -134,9 +134,9 @@ proxy_send_request_to_cas (T_PROXY_CONTEXT * ctx_p, T_PROXY_EVENT * event_p)
 
   ENTER_FUNC ();
 
-  cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
-				     ctx_p->cid, ctx_p->uid,
-				     ctx_p->wait_timeout);
+  cas_io_p =
+    proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id, ctx_p->cas_id,
+			    ctx_p->cid, ctx_p->uid, ctx_p->wait_timeout);
   if (cas_io_p == NULL)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to allocate CAS. "
@@ -355,6 +355,13 @@ proxy_send_response_to_client_with_new_event (T_PROXY_CONTEXT * ctx_p,
   int error = 0;
   char *driver_info;
   T_PROXY_EVENT *event_p = NULL;
+  T_CLIENT_INFO *client_info_p = NULL;
+
+  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_p->client_id);
+  if (client_info_p != NULL)
+    {
+      client_info_p->res_time = time (NULL);
+    }
 
   driver_info = proxy_get_driver_info_by_ctx (ctx_p);
 
@@ -1223,9 +1230,9 @@ relay_prepare_request:
 	}
     }
 
-  cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
-				     ctx_p->cid, ctx_p->uid,
-				     ctx_p->wait_timeout);
+  cas_io_p =
+    proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id, ctx_p->cas_id,
+			    ctx_p->cid, ctx_p->uid, ctx_p->wait_timeout);
   if (cas_io_p == NULL)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to allocate CAS. context(%s).",
@@ -1527,9 +1534,9 @@ proxy_client_execute_internal (T_PROXY_CONTEXT * ctx_p,
 
   proxy_set_wait_timeout (ctx_p, query_timeout);
 
-  cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
-				     ctx_p->cid, ctx_p->uid,
-				     ctx_p->wait_timeout);
+  cas_io_p =
+    proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id, ctx_p->cas_id,
+			    ctx_p->cid, ctx_p->uid, ctx_p->wait_timeout);
   if (cas_io_p == NULL)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to allocate CAS. context(%s).",
@@ -1539,7 +1546,6 @@ proxy_client_execute_internal (T_PROXY_CONTEXT * ctx_p,
 
       proxy_event_free (event_p);
       event_p = NULL;
-
 
       EXIT_FUNC ();
       return -1;
@@ -1708,6 +1714,206 @@ free_context:
 }
 
 int
+fn_proxy_client_set_db_parameter (T_PROXY_CONTEXT * ctx_p,
+				  T_PROXY_EVENT * event_p, int argc,
+				  char **argv)
+{
+  int error = 0;
+  int param_name;
+  T_CLIENT_INFO *client_info_p = NULL;
+  char *driver_info;
+  T_PROXY_EVENT *new_event_p = NULL;
+  const char func_code = CAS_FC_SET_DB_PARAMETER;
+
+  if (argc < 2)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		 "Invalid argument. (argc:%d). context(%s).", argc,
+		 proxy_str_context (ctx_p));
+      proxy_context_set_error (ctx_p, CAS_ERROR_INDICATOR, CAS_ER_ARGS);
+      error = -1;
+      goto free_and_return;
+    }
+
+  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_p->client_id);
+  if (client_info_p == NULL)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		 "Unable to find cilent info in shared memory. "
+		 "(context id:%d, context uid:%d)", ctx_p->cid, ctx_p->uid);
+      proxy_context_set_error (ctx_p, CAS_ERROR_INDICATOR, CAS_ER_INTERNAL);
+      error = -1;
+      goto free_and_return;
+    }
+
+  net_arg_get_int (&param_name, argv[0]);
+  if (param_name == CCI_PARAM_ISOLATION_LEVEL)
+    {
+      int isolation_level = 0;
+
+      net_arg_get_int (&isolation_level, argv[1]);
+      if (isolation_level < TRAN_MINVALUE_ISOLATION
+	  || isolation_level > TRAN_MAXVALUE_ISOLATION)
+	{
+	  PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		     "Invalid isolation level. (isolation:%d). "
+		     "(context id:%d, context uid:%d)", isolation_level,
+		     ctx_p->cid, ctx_p->uid);
+	  proxy_context_set_error (ctx_p, CAS_ERROR_INDICATOR,
+				   CAS_ER_INTERNAL);
+	  error = -1;
+	  goto free_and_return;
+	}
+
+      client_info_p->isolation_level = isolation_level;
+    }
+  else if (param_name == CCI_PARAM_LOCK_TIMEOUT)
+    {
+      int lock_timeout = -1;
+
+      net_arg_get_int (&lock_timeout, argv[1]);
+      if (lock_timeout < CAS_USE_DEFAULT_DB_PARAM)
+	{
+	  lock_timeout = -1;
+	}
+
+      client_info_p->lock_timeout = lock_timeout;
+    }
+
+  driver_info = proxy_get_driver_info_by_ctx (ctx_p);
+  new_event_p =
+    proxy_event_new_with_rsp (driver_info, PROXY_EVENT_IO_WRITE,
+			      PROXY_EVENT_FROM_CLIENT,
+			      proxy_io_make_set_db_parameter_ok);
+  if (new_event_p == NULL)
+    {
+      goto free_context;
+    }
+
+  error = proxy_send_response_to_client (ctx_p, new_event_p);
+  if (error)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to response to the client. "
+		 "(error=%d). context(%s). evnet(%s).",
+		 error, proxy_str_context (ctx_p),
+		 proxy_str_event (new_event_p));
+
+      proxy_event_free (new_event_p);
+      goto free_context;
+    }
+
+free_and_return:
+  if (event_p != NULL)
+    {
+      proxy_event_free (event_p);
+    }
+
+  return error;
+
+free_context:
+  ctx_p->free_context = true;
+
+  if (event_p != NULL)
+    {
+      proxy_event_free (event_p);
+    }
+
+  return -1;
+}
+
+int
+fn_proxy_client_get_db_parameter (T_PROXY_CONTEXT * ctx_p,
+				  T_PROXY_EVENT * event_p, int argc,
+				  char **argv)
+{
+  int error = 0;
+  int param_name;
+  T_CLIENT_INFO *client_info_p = NULL;
+  char *driver_info;
+  T_PROXY_EVENT *new_event_p = NULL;
+  const char func_code = CAS_FC_SET_DB_PARAMETER;
+
+  if (argc < 1)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		 "Invalid argument. (argc:%d). context(%s).", argc,
+		 proxy_str_context (ctx_p));
+      proxy_context_set_error (ctx_p, CAS_ERROR_INDICATOR, CAS_ER_ARGS);
+      error = -1;
+      goto free_and_return;
+    }
+
+  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_p->client_id);
+  if (client_info_p == NULL)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		 "Unable to find cilent info in shared memory. "
+		 "(context id:%d, context uid:%d)", ctx_p->cid, ctx_p->uid);
+      proxy_context_set_error (ctx_p, CAS_ERROR_INDICATOR, CAS_ER_INTERNAL);
+      error = -1;
+      goto free_and_return;
+    }
+
+  net_arg_get_int (&param_name, argv[0]);
+
+  driver_info = proxy_get_driver_info_by_ctx (ctx_p);
+
+  if (param_name == CCI_PARAM_ISOLATION_LEVEL)
+    {
+      new_event_p = proxy_event_new_with_rsp_ex (driver_info,
+						 PROXY_EVENT_IO_WRITE,
+						 PROXY_EVENT_FROM_CLIENT,
+						 proxy_io_make_ex_get_isolation_level,
+						 &client_info_p->
+						 isolation_level);
+    }
+  else if (param_name == CCI_PARAM_LOCK_TIMEOUT)
+    {
+      new_event_p = proxy_event_new_with_rsp_ex (driver_info,
+						 PROXY_EVENT_IO_WRITE,
+						 PROXY_EVENT_FROM_CLIENT,
+						 proxy_io_make_ex_get_lock_timeout,
+						 &client_info_p->
+						 isolation_level);
+    }
+
+  if (new_event_p == NULL)
+    {
+      goto free_context;
+    }
+
+  error = proxy_send_response_to_client (ctx_p, new_event_p);
+  if (error)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to response to the client. "
+		 "(error=%d). context(%s). evnet(%s).",
+		 error, proxy_str_context (ctx_p),
+		 proxy_str_event (new_event_p));
+
+      proxy_event_free (new_event_p);
+      goto free_context;
+    }
+
+free_and_return:
+  if (event_p != NULL)
+    {
+      proxy_event_free (event_p);
+    }
+
+  return error;
+
+free_context:
+  ctx_p->free_context = true;
+
+  if (event_p != NULL)
+    {
+      proxy_event_free (event_p);
+    }
+
+  return -1;
+}
+
+int
 fn_proxy_client_close_req_handle (T_PROXY_CONTEXT * ctx_p,
 				  T_PROXY_EVENT * event_p, int argc,
 				  char **argv)
@@ -1723,9 +1929,10 @@ fn_proxy_client_close_req_handle (T_PROXY_CONTEXT * ctx_p,
 
   if (ctx_p->is_in_tran)
     {
-      cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
-					 ctx_p->cid, ctx_p->uid,
-					 ctx_p->wait_timeout);
+      cas_io_p =
+	proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id,
+				ctx_p->cas_id, ctx_p->cid, ctx_p->uid,
+				ctx_p->wait_timeout);
       if (cas_io_p == NULL)
 	{
 	  goto free_context;
@@ -1835,9 +2042,9 @@ fn_proxy_client_cursor (T_PROXY_CONTEXT * ctx_p, T_PROXY_EVENT * event_p,
     }
 
   /* find idle cas */
-  cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
-				     ctx_p->cid, ctx_p->uid,
-				     ctx_p->wait_timeout);
+  cas_io_p =
+    proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id, ctx_p->cas_id,
+			    ctx_p->cid, ctx_p->uid, ctx_p->wait_timeout);
   if (cas_io_p == NULL)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
@@ -1932,9 +2139,9 @@ fn_proxy_client_fetch (T_PROXY_CONTEXT * ctx_p, T_PROXY_EVENT * event_p,
     }
 
   /* find idle cas */
-  cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
-				     ctx_p->cid, ctx_p->uid,
-				     ctx_p->wait_timeout);
+  cas_io_p =
+    proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id, ctx_p->cas_id,
+			    ctx_p->cid, ctx_p->uid, ctx_p->wait_timeout);
   if (cas_io_p == NULL)
     {
       goto free_context;
@@ -2345,7 +2552,7 @@ fn_proxy_client_cursor_close (T_PROXY_CONTEXT * ctx_p,
 
   if (ctx_p->is_in_tran)
     {
-      cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
+      cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id, ctx_p->cas_id,
 					 ctx_p->cid, ctx_p->uid,
 					 ctx_p->wait_timeout);
       if (cas_io_p == NULL)
@@ -2736,9 +2943,9 @@ fn_proxy_client_prepare_and_execute (T_PROXY_CONTEXT * ctx_p,
 	}
     }
 
-  cas_io_p = proxy_cas_alloc_by_ctx (ctx_p->shard_id, ctx_p->cas_id,
-				     ctx_p->cid, ctx_p->uid,
-				     ctx_p->wait_timeout);
+  cas_io_p =
+    proxy_cas_alloc_by_ctx (ctx_p->client_id, ctx_p->shard_id, ctx_p->cas_id,
+			    ctx_p->cid, ctx_p->uid, ctx_p->wait_timeout);
   if (cas_io_p == NULL)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to allocate CAS. context(%s).",

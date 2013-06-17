@@ -655,7 +655,7 @@ struct xasl_node
   int n_oid_list;		/* size of the referenced OID list */
   OID *class_oid_list;		/* list of class/serial OIDs referenced
 				 * in the XASL */
-  int *repr_id_list;		/* representation ids of the classes in the class OID list */
+  int *tcard_list;		/* list of #pages of the class OIDs */
   const char *query_alias;
   int dbval_cnt;		/* number of host variables in this XASL */
   bool iscan_oid_order;
@@ -684,7 +684,9 @@ struct func_pred
 #define XASL_TO_BE_CACHED         16	/* the result will be cached */
 #define	XASL_HAS_NOCYCLE	  32	/* NOCYCLE is specified */
 #define	XASL_HAS_CONNECT_BY	  64	/* has CONNECT BY clause */
+#if 0				/* not used anymore */
 #define XASL_QEXEC_MODE_ASYNC    128	/* query exec mode (async) */
+#endif
 #define XASL_MULTI_UPDATE_AGG    256	/* is for multi-update with aggregate */
 #define XASL_IGNORE_CYCLES	 512	/* is for LEVEL usage in connect by
 					 * clause... sometimes cycles may be
@@ -693,6 +695,7 @@ struct func_pred
 #define	XASL_OBJFETCH_IGNORE_CLASSOID 1024	/* fetch proc should ignore class oid */
 #define XASL_IS_MERGE_QUERY	      2048	/* query belongs to a merge statement */
 #define XASL_USES_MRO	      4096	/* query uses multi range optimization */
+#define XASL_KEEP_DBVAL	      8192	/* do not clear db_value */
 
 #define XASL_IS_FLAGED(x, f)        ((x)->flag & (int) (f))
 #define XASL_SET_FLAG(x, f)         (x)->flag |= (int) (f)
@@ -753,7 +756,7 @@ struct xasl_cache_ent
   OID creator_oid;		/* OID of the user who created this XASL */
   const OID *class_oid_list;	/* list of class/serial OIDs referenced
 				 * in the XASL */
-  const int *repr_id_list;	/* representation ids of the classes in the class OID list */
+  const int *tcard_list;	/* list of #pages of the class OIDs */
   struct timeval time_created;	/* when this entry created */
   struct timeval time_last_used;	/* when this entry used lastly */
   int n_oid_list;		/* size of the class OID list */
@@ -843,7 +846,7 @@ extern XASL_CACHE_ENTRY *qexec_update_filter_pred_cache_ent (THREAD_ENTRY *
 							     const OID *
 							     class_oids,
 							     const int
-							     *repr_ids,
+							     *tcards,
 							     int dbval_cnt);
 extern int qexec_end_use_of_xasl_cache_ent (THREAD_ENTRY * thread_p,
 					    const XASL_ID * xasl_id,
@@ -851,6 +854,8 @@ extern int qexec_end_use_of_xasl_cache_ent (THREAD_ENTRY * thread_p,
 extern int qexec_end_use_of_filter_pred_cache_ent (THREAD_ENTRY * thread_p,
 						   const XASL_ID * xasl_id,
 						   bool marker);
+extern int qexec_RT_xasl_cache_ent (THREAD_ENTRY * thread_p,
+				    XASL_CACHE_ENTRY * ent);
 extern XASL_CACHE_ENTRY *qexec_check_xasl_cache_ent_by_xasl (THREAD_ENTRY *
 							     thread_p,
 							     const XASL_ID *

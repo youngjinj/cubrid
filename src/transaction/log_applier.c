@@ -50,6 +50,8 @@
 #include "object_print.h"
 #include "file_io.h"
 #include "memory_hash.h"
+#include "schema_manager.h"
+#include "log_applier_sql_log.h"
 #if !defined(WINDOWS)
 #include "heartbeat.h"
 #endif
@@ -136,7 +138,6 @@
    (error == ER_LK_OBJECT_DL_TIMEOUT_CLASS_MSG)       || \
    (error == ER_LK_OBJECT_DL_TIMEOUT_CLASSOF_MSG)     || \
    (error == ER_LK_DEADLOCK_CYCLE_DETECTED))
-
 
 typedef struct la_cache_buffer LA_CACHE_BUFFER;
 struct la_cache_buffer
@@ -357,6 +358,9 @@ LA_INFO la_Info;
 static bool la_applier_need_shutdown = false;
 static bool la_applier_shutdown_by_signal = false;
 static char la_slave_db_name[DB_MAX_IDENTIFIER_LENGTH + 1];
+static char la_peer_host[MAXHOSTNAMELEN + 1];
+
+static bool la_enable_sql_logging = false;
 
 static void la_shutdown_by_signal ();
 static void la_init_ha_apply_info (LA_HA_APPLY_INFO * ha_apply_info);
@@ -514,6 +518,8 @@ static LA_ITEM *la_get_next_repl_item_from_log (LA_ITEM * item,
 static int la_commit_transaction (void);
 static int la_find_last_deleted_arv_num (void);
 
+static bool la_restart_on_bulk_flush_error (int errid);
+static char *la_get_hostname_from_log_path (char *log_path);
 
 /*
  * la_shutdown_by_signal() - When the process catches the SIGTERM signal,
@@ -2181,6 +2187,26 @@ la_ignore_on_error (int errid)
     }
 
   return false;
+}
+
+/*
+ * la_restart_on_bulk_flush_error() -
+ *   return: whether to restart or not for a given error
+ *
+ * Note:
+ *     this function is essentially the same as
+ *     la_retry_on_error but it is used when checking
+ *     error while bulk flushing
+ */
+static bool
+la_restart_on_bulk_flush_error (int errid)
+{
+  if (la_ignore_on_error (errid))
+    {
+      return false;
+    }
+
+  return la_retry_on_error (errid);
 }
 
 static bool
@@ -4487,10 +4513,12 @@ static int
 la_flush_unflushed_insert (MOP class_mop)
 {
   int error = NO_ERROR;
+  WS_FLUSH_ERR *flush_err;
   MOP mop;
   const char *class_name;
   char primary_key[256];
   int length;
+  char buf[256];
 
   if (la_Info.num_unflushed_insert > 0)
     {
@@ -4511,7 +4539,23 @@ la_flush_unflushed_insert (MOP class_mop)
 	    {
 	      class_name = NULL;
 
-	      mop = ws_get_error_from_error_link ();
+	      flush_err = ws_get_error_from_error_link ();
+	      if (flush_err == NULL)
+		{
+		  break;
+		}
+
+	      error = flush_err->error_code;
+
+	      if (class_mop == NULL)
+		{
+		  class_mop =
+		    ws_mop (&flush_err->class_oid, sm_Root_class_mop);
+		}
+	      mop = ws_mop (&flush_err->oid, class_mop);
+
+	      ws_free_flush_error (flush_err);
+
 	      if (mop == NULL)
 		{
 		  break;
@@ -4533,7 +4577,7 @@ la_flush_unflushed_insert (MOP class_mop)
 		      er_stack_push ();
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_HA_LA_FAILED_TO_APPLY_INSERT, 3, class_name,
-			      primary_key, ER_FAILED);
+			      primary_key, error);
 		      er_stack_pop ();
 		    }
 		}
@@ -4541,6 +4585,24 @@ la_flush_unflushed_insert (MOP class_mop)
 	      ws_decache (mop);
 
 	      la_Info.fail_counter++;
+
+	      if (la_restart_on_bulk_flush_error (error))
+		{
+		  snprintf (buf, sizeof (buf),
+			    "applylogdb will reconnect to server due to a failure "
+			    "in flushing changes (error:%d)", error);
+		  er_stack_push ();
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			  ER_HA_GENERIC_ERROR, 1, buf);
+		  er_stack_pop ();
+
+		  error = ER_LC_PARTIALLY_FAILED_TO_FLUSH;
+		  la_applier_need_shutdown = true;
+
+		  ws_clear_all_errors_of_error_link ();
+
+		  return error;
+		}
 	    }
 
 	  ws_clear_all_errors_of_error_link ();
@@ -4570,8 +4632,10 @@ static int
 la_apply_delete_log (LA_ITEM * item)
 {
   DB_OBJECT *class_obj;
+  MOBJ mclass;
   int error;
   char buf[256];
+  char sql_log_err[LINE_MAX];
 
   error = la_flush_unflushed_insert (NULL);
   if (error != NO_ERROR)
@@ -4587,6 +4651,26 @@ la_apply_delete_log (LA_ITEM * item)
     }
   else
     {
+      /* get class info */
+      mclass = locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTREAD);
+
+      if (la_enable_sql_logging)
+	{
+	  if (sl_write_delete_sql (item->class_name, mclass, &item->key) !=
+	      NO_ERROR)
+	    {
+	      help_sprint_value (&item->key, buf, 255);
+	      snprintf (sql_log_err, sizeof (sql_log_err),
+			"failed to write SQL log. class: %s, key: %s",
+			item->class_name, buf);
+
+	      er_stack_push ();
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_GENERIC_ERROR,
+		      1, sql_log_err);
+	      er_stack_pop ();
+	    }
+	}
+
       error = obj_repl_delete_object_by_pkey (class_obj, &item->key);
       if (error == NO_ERROR)
 	{
@@ -4645,6 +4729,7 @@ la_apply_update_log (LA_ITEM * item)
   bool ovfyn = false;
   LOG_PAGEID old_pageid = -1;
   char buf[256];
+  char sql_log_err[LINE_MAX];
 
   /* get the target log page */
   old_pageid = item->target_lsa.pageid;
@@ -4735,6 +4820,23 @@ la_apply_update_log (LA_ITEM * item)
   if (error != NO_ERROR)
     {
       goto error_rtn;
+    }
+
+  /* write sql log */
+  if (la_enable_sql_logging)
+    {
+      if (sl_write_update_sql (inst_tp, &item->key) != NO_ERROR)
+	{
+	  help_sprint_value (&item->key, buf, 255);
+	  snprintf (sql_log_err, sizeof (sql_log_err),
+		    "failed to write SQL log. class: %s, key: %s",
+		    item->class_name, buf);
+
+	  er_stack_push ();
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_GENERIC_ERROR,
+		  1, sql_log_err);
+	  er_stack_pop ();
+	}
     }
 
   /* update object */
@@ -4854,6 +4956,7 @@ la_apply_insert_log (LA_ITEM * item)
   char buf[256];
   static char last_inserted_class_name[DB_MAX_IDENTIFIER_LENGTH] = { 0, };
   DB_OBJECT *last_inserted_class_obj;
+  char sql_log_err[LINE_MAX];
 
   /* get the target log page */
   old_pageid = item->target_lsa.pageid;
@@ -4934,11 +5037,28 @@ la_apply_insert_log (LA_ITEM * item)
       goto error_rtn;
     }
 
-  /* make object using the record rescription */
+  /* make object using the record description */
   error = la_disk_to_obj (mclass, &recdes, inst_tp, &item->key);
   if (error != NO_ERROR)
     {
       goto error_rtn;
+    }
+
+  /* write sql log */
+  if (la_enable_sql_logging)
+    {
+      if (sl_write_insert_sql (inst_tp, &item->key) != NO_ERROR)
+	{
+	  help_sprint_value (&item->key, buf, 255);
+	  snprintf (sql_log_err, sizeof (sql_log_err),
+		    "failed to write SQL log. class: %s, key: %s",
+		    item->class_name, buf);
+
+	  er_stack_push ();
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_GENERIC_ERROR,
+		  1, sql_log_err);
+	  er_stack_pop ();
+	}
     }
 
   /* update object */
@@ -5112,6 +5232,7 @@ la_apply_schema_log (LA_ITEM * item)
   int error = NO_ERROR;
   DB_OBJECT *user = NULL, *save_user = NULL;
   char buf[256];
+  char sql_log_err[LINE_MAX];
 
   error = la_flush_unflushed_insert (NULL);
   if (error != NO_ERROR)
@@ -5186,7 +5307,9 @@ la_apply_schema_log (LA_ITEM * item)
 
 	  /* change owner */
 	  save_user = Au_user;
+	  er_stack_push ();
 	  error = AU_SET_USER (user);
+	  er_stack_pop ();
 	  if (error != NO_ERROR)
 	    {
 	      save_user = NULL;
@@ -5195,6 +5318,26 @@ la_apply_schema_log (LA_ITEM * item)
 	}
 
       ddl = db_get_string (&item->key);
+
+      /* write sql log */
+      if (la_enable_sql_logging)
+	{
+	  if (sl_write_schema_sql
+	      (item->class_name, item->db_user, item->item_type,
+	       ddl) != NO_ERROR)
+	    {
+	      help_sprint_value (&item->key, buf, 255);
+	      snprintf (sql_log_err, sizeof (sql_log_err),
+			"failed to write SQL log. class: %s, key: %s",
+			item->class_name, buf);
+
+	      er_stack_push ();
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_GENERIC_ERROR,
+		      1, sql_log_err);
+	      er_stack_pop ();
+	    }
+	}
+
       if (la_update_query_execute (ddl, false) != NO_ERROR)
 	{
 	  error = er_errid ();
@@ -5211,11 +5354,14 @@ la_apply_schema_log (LA_ITEM * item)
 
       if (save_user != NULL)
 	{
+	  er_stack_push ();
 	  if (AU_SET_USER (save_user))
 	    {
+	      er_stack_pop ();
 	      /* it can be happened */
 	      abort ();
 	    }
+	  er_stack_pop ();
 	}
       break;
 
@@ -5378,6 +5524,13 @@ la_apply_repl_log (int tranid, int rectype, LOG_LSA * commit_lsa,
 	    }
 	  else
 	    {
+	      /* reconnect to server due to error in flushing unflushed insert */
+	      if (error == ER_LC_PARTIALLY_FAILED_TO_FLUSH
+		  && la_applier_need_shutdown)
+		{
+		  goto end;
+		}
+
 	      errid = er_errid ();
 
 	      help_sprint_value (&item->key, buf, 255);
@@ -5827,6 +5980,11 @@ la_log_record_process (LOG_RECORD_HEADER * lrec,
 		  la_applier_need_shutdown = true;
 		  return error;
 		}
+	      else if (error == ER_LC_PARTIALLY_FAILED_TO_FLUSH
+		       && la_applier_need_shutdown)
+		{
+		  return error;
+		}
 
 	      if (!LSA_ISNULL (&lsa_apply))
 		{
@@ -5885,7 +6043,8 @@ la_log_record_process (LOG_RECORD_HEADER * lrec,
 	  && ha_server_state != HA_SERVER_STATE_TO_BE_STANDBY)
 	{
 	  snprintf (buffer, sizeof (buffer),
-		    "ha_server_state is changed to %s",
+		    "the state of HA server (%s@%s) is changed to %s",
+		    la_slave_db_name, la_peer_host,
 		    css_ha_server_state_string (ha_server_state));
 	  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
 		  ER_HA_GENERIC_ERROR, 1, buffer);
@@ -5937,6 +6096,49 @@ la_log_record_process (LOG_RECORD_HEADER * lrec,
   return NO_ERROR;
 }
 
+static char *
+la_get_hostname_from_log_path (char *log_path)
+{
+  char *hostname = NULL, *p;
+
+  if (log_path == NULL)
+    {
+      return NULL;
+    }
+
+  p = log_path;
+  p += (strlen (log_path) - 1);
+
+  /* log_path: "path/dbname_hostname/" */
+  if (*p == '/')
+    {
+      p--;
+    }
+
+  while (*p != '/')
+    {
+      p--;
+      if (p == log_path)
+	{
+	  return NULL;
+	}
+    }
+
+  hostname = strstr (p, la_slave_db_name);
+  if (hostname == NULL)
+    {
+      return NULL;
+    }
+
+  hostname += strlen (la_slave_db_name);
+  if (*hostname != '_')
+    {
+      return NULL;
+    }
+
+  return hostname + 1;
+}
+
 static int
 la_change_state (void)
 {
@@ -5954,7 +6156,9 @@ la_change_state (void)
 
   if (la_Info.last_server_state != la_Info.act_log.log_hdr->ha_server_state)
     {
-      sprintf (buffer, "change HA server state from '%s' to '%s'",
+      sprintf (buffer,
+	       "change the state of HA server (%s@%s) from '%s' to '%s'",
+	       la_slave_db_name, la_peer_host,
 	       css_ha_server_state_string (la_Info.last_server_state),
 	       css_ha_server_state_string (la_Info.act_log.log_hdr->
 					   ha_server_state));
@@ -6888,7 +7092,8 @@ la_remove_archive_logs (const char *db_name, int last_deleted_arv_num,
 			int nxarv_num)
 {
   int error = NO_ERROR;
-  int log_max_archives = prm_get_integer_value (PRM_ID_LOG_MAX_ARCHIVES);
+  int log_max_archives =
+    prm_get_integer_value (PRM_ID_HA_COPY_LOG_MAX_ARCHIVES);
   const char *info_reason, *catmsg;
   char archive_name[PATH_MAX] = { '\0', }, archive_name_first[PATH_MAX];
   int first_arv_num_to_delete = -1;
@@ -7064,8 +7269,33 @@ la_apply_log_file (const char *database_name, const char *log_path,
       *s = '\0';
     }
 
+  s = la_get_hostname_from_log_path (log_path);
+  if (s)
+    {
+      strncpy (la_peer_host, s, MAXHOSTNAMELEN);
+    }
+  else
+    {
+      strncpy (la_peer_host, "unknown", MAXHOSTNAMELEN);
+    }
+
   /* init la_Info */
   la_init (log_path, max_mem_size);
+
+  if (prm_get_bool_value (PRM_ID_HA_SQL_LOGGING))
+    {
+      if (sl_init (la_slave_db_name, log_path) != NO_ERROR)
+	{
+	  er_stack_push ();
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_GENERIC_ERROR,
+		  1, "Failed to initialize SQL logger");
+	  er_stack_pop ();
+	}
+      else
+	{
+	  la_enable_sql_logging = true;
+	}
+    }
 
   error = la_check_duplicated (la_Info.log_path, la_slave_db_name,
 			       &la_Info.log_path_lockf_vdes,
@@ -7246,6 +7476,11 @@ la_apply_log_file (const char *database_name, const char *log_path,
 		      er_log_debug (ARG_FILE_LINE,
 				    "we lost connection with DB server.");
 		      la_applier_need_shutdown = true;
+		      break;
+		    }
+		  else if (error == ER_LC_PARTIALLY_FAILED_TO_FLUSH
+			   && la_applier_need_shutdown)
+		    {
 		      break;
 		    }
 		}
@@ -7484,6 +7719,12 @@ la_apply_log_file (const char *database_name, const char *log_path,
 		      la_shutdown ();
 		      return error;
 		    }
+		  else if (error == ER_LC_PARTIALLY_FAILED_TO_FLUSH
+			   && la_applier_need_shutdown)
+		    {
+		      la_shutdown ();
+		      return error;
+		    }
 
 		  if (error == ER_LOG_PAGE_CORRUPTED)
 		    {
@@ -7519,6 +7760,11 @@ la_apply_log_file (const char *database_name, const char *log_path,
 		  er_log_debug (ARG_FILE_LINE,
 				"we have lost connection with DB server.");
 		  la_applier_need_shutdown = true;
+		  break;
+		}
+	      else if (error == ER_LC_PARTIALLY_FAILED_TO_FLUSH
+		       && la_applier_need_shutdown)
+		{
 		  break;
 		}
 	    }

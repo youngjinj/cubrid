@@ -51,12 +51,15 @@
 #define	SERVICE_READY_WAIT_COUNT	3000
 #endif /* CUBRID_SHARD */
 
-#define MAKE_FILEPATH(dest,src) \
+#define MAKE_FILEPATH(dest,src,dest_len) \
   do { \
+      char _buf[PATH_MAX]; \
       if ((src) == NULL || (src)[0] == 0) { \
 	  (dest)[0] = 0; \
-      } else if (realpath ((src), (dest)) == NULL) { \
-	  strcpy ((dest), (src)); \
+      } else if (realpath ((src), _buf) != NULL) { \
+	  strncpy ((dest), _buf, (dest_len)); \
+      } else { \
+	  strncpy ((dest), (src), (dest_len)); \
       } \
   } while (0)
 
@@ -88,4 +91,10 @@ extern char *ut_get_ipv4_string (char *ip_str, int len,
 				 const unsigned char *ip_addr);
 extern float ut_get_avg_from_array (int array[], int size);
 extern bool ut_is_appl_server_ready (int pid, char *ready_flag);
+
+extern double ut_size_string_to_kbyte (const char *size_str,
+				       const char *default_unit);
+extern double ut_time_string_to_sec (const char *time_str,
+				     const char *default_unit);
+
 #endif /* _BROKER_UTIL_H_ */

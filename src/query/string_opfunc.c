@@ -1147,6 +1147,7 @@ db_string_concatenate (const DB_VALUE * string1,
   QSTR_CATEGORY string1_code_set, string2_code_set;
   int error_status = NO_ERROR;
   DB_TYPE string_type1, string_type2;
+  bool is_inplace_concat;
 
   /*
    *  Initialize status value
@@ -1159,6 +1160,14 @@ db_string_concatenate (const DB_VALUE * string1,
   assert (string1 != (DB_VALUE *) NULL);
   assert (string2 != (DB_VALUE *) NULL);
   assert (result != (DB_VALUE *) NULL);
+
+  is_inplace_concat = false;	/* init */
+
+  /* check iff is in-place update */
+  if (string1 == result || string2 == result)
+    {
+      is_inplace_concat = true;
+    }
 
   /*
    *  Categorize the parameters into respective code sets.
@@ -1427,6 +1436,12 @@ db_string_concatenate (const DB_VALUE * string1,
 		  result_domain_length = MIN (QSTR_MAX_PRECISION (r_type),
 					      DB_VALUE_PRECISION (string1) +
 					      DB_VALUE_PRECISION (string2));
+		}
+
+	      if (is_inplace_concat)
+		{
+		  /* clear value before in-place update */
+		  (void) pr_clear_value (result);
 		}
 
 	      qstr_make_typed_string (r_type,
@@ -2316,7 +2331,6 @@ db_string_substring_index (DB_VALUE * src_string,
   DB_MAKE_NULL (result);
   DB_MAKE_NULL (&empty_string1);
   DB_MAKE_NULL (&empty_string2);
-  count_i = DB_GET_INT (count);
 
   /*
    *  Assert that DB_VALUE structures have been allocated.
@@ -2325,6 +2339,15 @@ db_string_substring_index (DB_VALUE * src_string,
   assert (delim_string != (DB_VALUE *) NULL);
   assert (count != (DB_VALUE *) NULL);
   assert (result != (DB_VALUE *) NULL);
+
+  if (DB_IS_NULL (count))
+    {
+      DB_MAKE_NULL (result);
+
+      return NO_ERROR;
+    }
+  count_i = DB_GET_INT (count);
+
   /*
    *  Categorize the parameters into respective code sets.
    *  Verify that the parameters are both character strings.
@@ -2409,12 +2432,7 @@ db_string_substring_index (DB_VALUE * src_string,
       goto exit;
     }
 
-  if (DB_IS_NULL (count))
-    {
-      /* result is DB_TYPE_NULL */
-      goto exit;
-    }
-  else if (!QSTR_IS_ANY_CHAR (src_type) || !QSTR_IS_ANY_CHAR (delim_type))
+  if (!QSTR_IS_ANY_CHAR (src_type) || !QSTR_IS_ANY_CHAR (delim_type))
     {
       error_status = ER_QSTR_INVALID_DATA_TYPE;
     }
@@ -9957,6 +9975,13 @@ db_datetime_to_timestamp (const DB_VALUE * src_datetime,
   DB_VALUE temp, *temp_p;
   bool same_argument = (src_datetime == result_timestamp);
 
+  if (DB_IS_NULL (src_datetime))
+    {
+      db_make_null (result_timestamp);
+
+      return NO_ERROR;
+    }
+
   if (same_argument)
     {
       /* if the result argument is the same with the source argument, then use
@@ -9979,6 +10004,7 @@ db_datetime_to_timestamp (const DB_VALUE * src_datetime,
       /* error message has been set */
       return error;
     }
+
   tmp_datetime = db_get_datetime (src_datetime);
   tmp_date = tmp_datetime->date;
   tmp_time = tmp_datetime->time / 1000;
@@ -9997,6 +10023,7 @@ db_datetime_to_timestamp (const DB_VALUE * src_datetime,
        */
       pr_clone_value (temp_p, result_timestamp);
     }
+
   return NO_ERROR;
 }
 

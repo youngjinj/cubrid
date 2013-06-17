@@ -849,6 +849,13 @@ parser_free_node (const PARSER_CONTEXT * parser, PT_NODE * node)
   int rv;
 #endif /* SERVER_MODE */
 
+  if (node == NULL)
+    {
+      assert_release (false);
+      return;
+    }
+
+  assert_release (node->node_type != PT_LAST_NODE_NUMBER);
 
   /* find free list for for this id */
   idhash = parser->id % HASH_NUMBER;
@@ -892,7 +899,7 @@ parser_free_node (const PARSER_CONTEXT * parser, PT_NODE * node)
    * fatal errors.  A common symptom is stack exhaustion during parser_free_tree
    * as we try to recursively walk a cyclic free list.
    */
-  node->node_type = PT_NODE_NUMBER;
+  node->node_type = PT_LAST_NODE_NUMBER;
 
   node->next = free_list->node;
   free_list->node = node;
@@ -1178,6 +1185,7 @@ parser_create_parser (void)
   srand48_r (t.tv_usec, &rand_buf);
   lrand48_r (&rand_buf, &parser->lrand);
   drand48_r (&rand_buf, &parser->drand);
+  db_make_null (&parser->sys_datetime);
 
   /* initialization */
   parser->is_in_and_list = false;

@@ -105,11 +105,35 @@ return_error_to_client (THREAD_ENTRY * thread_p, unsigned int rid)
   char buffer[1024];
   int length = 1024;
   CSS_CONN_ENTRY *conn;
+  LOG_TDES *tdes;
+  bool flag_abort = false;
 
   assert (thread_p != NULL);
 
   conn = thread_p->conn_entry;
   assert (conn != NULL);
+
+  errid = er_errid ();
+  if (errid == ER_LK_UNILATERALLY_ABORTED || errid == ER_DB_NO_MODIFICATIONS)
+    {
+      flag_abort = true;
+    }
+
+  /*
+   * DEFENCE CODE:
+   *  below block means ER_LK_UNILATERALLY_ABORTED ocurrs but another error
+   *  set after that.
+   *  So, re-set that error to rollback in client side.
+   */
+  tdes = LOG_FIND_CURRENT_TDES (thread_p);
+  if (tdes != NULL && tdes->tran_abort_reason != TRAN_NORMAL && flag_abort == false)
+    {
+      flag_abort = true;
+
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LK_UNILATERALLY_ABORTED, 4,
+	      thread_p->tran_index, tdes->client.db_user,
+	      tdes->client.host_name, tdes->client.process_id);
+    }
 
   /* check some errors which require special actions */
   /*
@@ -119,11 +143,11 @@ return_error_to_client (THREAD_ENTRY * thread_p, unsigned int rid)
    * it means that the user tried to update the database
    * when the server was disabled to modify. (aka standby mode)
    */
-  errid = er_errid ();
-  if (errid == ER_LK_UNILATERALLY_ABORTED || errid == ER_DB_NO_MODIFICATIONS)
+  if (flag_abort)
     {
       tran_server_unilaterally_abort_tran (thread_p);
     }
+
   if (errid == ER_DB_NO_MODIFICATIONS)
     {
       conn->reset_on_commit = true;
@@ -136,6 +160,8 @@ return_error_to_client (THREAD_ENTRY * thread_p, unsigned int rid)
       css_send_error_to_client (conn, rid, (char *) area, length);
       conn->db_error = 0;
     }
+
+  tdes->tran_abort_reason = TRAN_NORMAL;
 }
 
 /*
@@ -3797,7 +3823,7 @@ sboot_add_volume_extension (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_unpack_string_nocopy (request, &ext_info.path);
   ptr = or_unpack_string_nocopy (ptr, &ext_info.name);
   ptr = or_unpack_string_nocopy (ptr, &ext_info.comments);
-  ptr = or_unpack_int (ptr, &ext_info.npages);
+  ptr = or_unpack_int (ptr, &ext_info.max_npages);
   ptr = or_unpack_int (ptr, &ext_info.max_writesize_in_sec);
   ptr = or_unpack_int (ptr, &tmp);
   ext_info.purpose = (DB_VOLPURPOSE) tmp;
@@ -4548,7 +4574,18 @@ sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 
   if (do_now)
     {
-      error = xstats_update_class_statistics (thread_p, &classoid, &btid);
+      if (BTID_IS_NULL (&btid))
+	{
+	  error = xstats_update_class_statistics (thread_p, &classoid, NULL);
+	}
+      else
+	{
+	  BTID_LIST b;
+
+	  b.next = NULL;
+	  BTID_COPY (&b.btid, &btid);
+	  error = xstats_update_class_statistics (thread_p, &classoid, &b);
+	}
       if (error != NO_ERROR)
 	{
 	  return_error_to_client (thread_p, rid);
@@ -4557,7 +4594,7 @@ sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
   else
     {
       /* Just mark the class as "updating statistics is required". */
-      log_add_to_modified_class_list (thread_p, &classoid,
+      log_add_to_modified_class_list (thread_p, &classoid, &btid,
 				      UPDATE_STATS_ACTION_SET);
       error = NO_ERROR;
     }
@@ -4662,8 +4699,7 @@ sbtree_load_index (THREAD_ENTRY * thread_p, unsigned int rid,
   BTID *return_btid = NULL;
   OID *class_oids = NULL;
   HFID *hfids = NULL;
-  int unique_flag;
-  int last_key_desc;
+  int unique_flag, not_null_flag;
   OID fk_refcls_oid;
   BTID fk_refcls_pk_btid;
   int cache_attr_id;
@@ -4719,7 +4755,7 @@ sbtree_load_index (THREAD_ENTRY * thread_p, unsigned int rid,
     }
 
   ptr = or_unpack_int (ptr, &unique_flag);
-  ptr = or_unpack_int (ptr, &last_key_desc);
+  ptr = or_unpack_int (ptr, &not_null_flag);
 
   ptr = or_unpack_oid (ptr, &fk_refcls_oid);
   ptr = or_unpack_btid (ptr, &fk_refcls_pk_btid);
@@ -4772,9 +4808,9 @@ sbtree_load_index (THREAD_ENTRY * thread_p, unsigned int rid,
 
   return_btid = xbtree_load_index (thread_p, &btid, key_type, class_oids,
 				   n_classes, n_attrs, attr_ids,
-				   attr_prefix_lengths,
-				   hfids, unique_flag,
-				   last_key_desc, &fk_refcls_oid,
+				   attr_prefix_lengths, hfids,
+				   unique_flag, not_null_flag,
+				   &fk_refcls_oid,
 				   &fk_refcls_pk_btid, cache_attr_id,
 				   fk_name, pred_stream, pred_stream_size,
 				   expr_stream, expr_stream_size,
@@ -5376,8 +5412,9 @@ sdk_purpose_totalpgs_and_freepgs (THREAD_ENTRY * thread_p,
   DISK_VOLPURPOSE vol_purpose;
   DKNPAGES vol_ntotal_pages;
   DKNPAGES vol_nfree_pages;
+  DKNPAGES vol_nmax_pages;
   char *ptr;
-  OR_ALIGNED_BUF (OR_INT_SIZE * 4) a_reply;
+  OR_ALIGNED_BUF (OR_INT_SIZE * 5) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
 
   (void) or_unpack_int (request, &int_volid);
@@ -5386,7 +5423,8 @@ sdk_purpose_totalpgs_and_freepgs (THREAD_ENTRY * thread_p,
   volid = xdisk_get_purpose_and_total_free_numpages (thread_p, volid,
 						     &vol_purpose,
 						     &vol_ntotal_pages,
-						     &vol_nfree_pages);
+						     &vol_nfree_pages,
+						     &vol_nmax_pages);
   if (volid == NULL_VOLID)
     {
       return_error_to_client (thread_p, rid);
@@ -5395,6 +5433,7 @@ sdk_purpose_totalpgs_and_freepgs (THREAD_ENTRY * thread_p,
   ptr = or_pack_int (reply, vol_purpose);
   ptr = or_pack_int (ptr, vol_ntotal_pages);
   ptr = or_pack_int (ptr, vol_nfree_pages);
+  ptr = or_pack_int (ptr, vol_nmax_pages);
   ptr = or_pack_int (ptr, (int) volid);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
@@ -5691,7 +5730,6 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   char *ptr, *data = NULL, *reply, *replydata = NULL;
   PAGE_PTR page_ptr;
   char page_buf[IO_MAX_PAGE_SIZE + MAX_ALIGNMENT], *aligned_page_buf;
-  DB_VALUE *dbvals = NULL, *dbval;
   QUERY_FLAG query_flag;
   OR_ALIGNED_BUF (OR_INT_SIZE * 4 + OR_PTR_ALIGNED_SIZE
 		  + OR_CACHE_TIME_SIZE) a_reply;
@@ -5708,7 +5746,8 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 
   MNT_SERVER_EXEC_STATS base_stats, current_stats, diff_stats;
   char stat_buf[STATDUMP_BUF_SIZE];
-  char *sql_id;
+  char *sql_id = NULL;
+  int error_code = NO_ERROR;
 
   EXECUTION_INFO info = { NULL, NULL, NULL };
 
@@ -5738,8 +5777,6 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
      allocate space for them */
   if (dbval_cnt)
     {
-      HL_HEAPID old_pri_heap_id;
-
       /* receive parameter values (DB_VALUE) from the client */
       csserror = css_receive_data_from_client (thread_p->conn_entry, rid,
 					       &data, &data_size);
@@ -5754,55 +5791,20 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 	    }
 	  return;		/* error */
 	}
-
-      /* use global heap for memory allocation.
-         In the case of async query, the space will be freed
-         when the query is completed. See qmgr_execute_async_select() */
-      if (IS_ASYNC_EXEC_MODE (query_flag))
-	{
-	  old_pri_heap_id = db_change_private_heap (thread_p, 0);
-	}
-
-      dbvals = (DB_VALUE *) db_private_alloc (thread_p,
-					      sizeof (DB_VALUE) * dbval_cnt);
-      if (dbvals == NULL)
-	{
-	  if (IS_ASYNC_EXEC_MODE (query_flag))
-	    {
-	      /* restore private heap */
-	      (void) db_change_private_heap (thread_p, old_pri_heap_id);
-	    }
-
-	  css_send_abort_to_client (thread_p->conn_entry, rid);
-	  return;		/* error */
-	}
-
-      /* unpack DB_VALUEs from the received data */
-      ptr = data;
-      for (i = 0, dbval = dbvals; i < dbval_cnt; i++, dbval++)
-	{
-	  ptr = or_unpack_db_value (ptr, dbval);
-	}
-
-      if (IS_ASYNC_EXEC_MODE (query_flag))
-	{
-	  /* restore private heap */
-	  (void) db_change_private_heap (thread_p, old_pri_heap_id);
-	}
-
-      if (data)
-	{
-	  free_and_init (data);
-	}
     }
 
   CACHE_TIME_RESET (&srv_cache_time);
 
   /* call the server routine of query execute */
   list_id = xqmgr_execute_query (thread_p, &xasl_id, &query_id,
-				 dbval_cnt, dbvals, &query_flag,
+				 dbval_cnt, data, &query_flag,
 				 &clt_cache_time, &srv_cache_time,
 				 query_timeout, &info);
+
+  if (data)
+    {
+      free_and_init (data);
+    }
 
 #if 0
   if (list_id == NULL && !CACHE_TIME_EQ (&clt_cache_time, &srv_cache_time))
@@ -5810,19 +5812,26 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   if (list_id == NULL)
 #endif
     {
-      return_error_to_client (thread_p, rid);
-    }
+      error_code = er_errid ();
 
-  /* clear and free space for DB_VALUEs after the query is executed
-     In the case of async query, the space will be freed
-     when the query is completed. See qmgr_execute_async_select() */
-  if (IS_SYNC_EXEC_MODE (query_flag) && dbvals)
-    {
-      for (i = 0, dbval = dbvals; i < dbval_cnt; i++, dbval++)
+      if (error_code != NO_ERROR)
 	{
-	  db_value_clear (dbval);
+	  if (info.sql_hash_text != NULL)
+	    {
+	      if (qmgr_get_sql_id (thread_p, &sql_id,
+				   info.sql_hash_text,
+				   strlen (info.sql_hash_text)) != NO_ERROR)
+		{
+		  sql_id = NULL;
+		}
+	    }
+
+	  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
+		  ER_QUERY_EXECUTION_ERROR, 3, error_code, sql_id,
+		  info.sql_user_text);
 	}
-      db_private_free_and_init (thread_p, dbvals);
+
+      return_error_to_client (thread_p, rid);
     }
 
   page_size = 0;
@@ -5923,10 +5932,13 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 	      stat_buf[0] = '\0';
 	    }
 
-	  if (qmgr_get_sql_id (thread_p, &sql_id, info.sql_hash_text,
-			       strlen (info.sql_hash_text)) != NO_ERROR)
+	  if (sql_id == NULL)
 	    {
-	      sql_id = NULL;
+	      if (qmgr_get_sql_id (thread_p, &sql_id, info.sql_hash_text,
+				   strlen (info.sql_hash_text)) != NO_ERROR)
+		{
+		  sql_id = NULL;
+		}
 	    }
 
 	  queryinfo_string_length =
@@ -5936,11 +5948,6 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 		      info.sql_user_text,
 		      sql_id ? sql_id : "(null)",
 		      info.sql_hash_text, info.sql_plan_text, stat_buf, line);
-
-	  if (sql_id != NULL)
-	    {
-	      free (sql_id);
-	    }
 
 	  if (queryinfo_string_length >= QUERY_INFO_BUF_SIZE)
 	    {
@@ -5953,6 +5960,11 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 		  ER_SLOW_QUERY, 2, response_time, queryinfo_string);
 	}
       xmnt_server_stop_stats (thread_p);
+    }
+
+  if (sql_id != NULL)
+    {
+      free_and_init (sql_id);
     }
 
   ptr = or_pack_int (ptr, queryinfo_string_length);
@@ -6003,7 +6015,6 @@ sqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   char *xasl_stream;
   int xasl_stream_size;
   char *ptr, *var_data, *list_data;
-  DB_VALUE *dbvals;
   OR_ALIGNED_BUF (OR_INT_SIZE * 4 + OR_PTR_ALIGNED_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
   PAGE_PTR page_ptr;
@@ -6020,7 +6031,6 @@ sqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
 
   var_data = NULL;
   var_datasize = 0;
-  dbvals = NULL;
   list_data = NULL;
   page_ptr = NULL;
   page_size = 0;
@@ -6054,24 +6064,6 @@ sqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
 	  css_send_abort_to_client (thread_p->conn_entry, rid);
 	  goto cleanup;
 	}
-      dbvals = (DB_VALUE *) db_private_alloc (thread_p,
-					      sizeof (DB_VALUE) * var_count);
-      if (dbvals == NULL)
-	{
-	  css_send_abort_to_client (thread_p->conn_entry, rid);
-	  goto cleanup;
-	}
-      ptr = var_data;
-      for (i = 0; i < var_count; i++)
-	{
-	  ptr = or_unpack_db_value (ptr, &dbvals[i]);
-	}
-      /*
-       * Don't need this anymore; might as well return the memory now.  It
-       * could conceivably be largish if we sent down some big sets as host
-       * vars.
-       */
-      free_and_init (var_data);
     }
 
   /*
@@ -6080,24 +6072,16 @@ sqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
    */
   q_result =
     xqmgr_prepare_and_execute_query (thread_p, xasl_stream, xasl_stream_size,
-				     &query_id, var_count, dbvals, &flag,
+				     &query_id, var_count, var_data, &flag,
 				     query_timeout);
+  if (var_data)
+    {
+      free_and_init (var_data);
+    }
+
   if (xasl_stream)
     {
       free_and_init (xasl_stream);	/* allocated at css_receive_data_from_client() */
-    }
-
-  /*
-   * For streaming queries, the dbvals will be cleared when the query
-   * has completed.
-   */
-  if (IS_SYNC_EXEC_MODE (flag) && (dbvals))
-    {
-      for (i = 0; i < var_count; i++)
-	{
-	  db_value_clear (&dbvals[i]);
-	}
-      db_private_free_and_init (thread_p, dbvals);
     }
 
   if (q_result == NULL)
@@ -7038,7 +7022,28 @@ int
 xs_receive_data_from_client (THREAD_ENTRY * thread_p, char **area,
 			     int *datasize)
 {
+  return xs_receive_data_from_client_with_timeout (thread_p, area, datasize,
+						   -1);
+}
+
+/*
+ * xs_receive_data_from_client_with_timeout -
+ *
+ * return:
+ *
+ *   area(in):
+ *   datasize(in):
+ *   timeout (in):
+ *
+ * NOTE:
+ */
+int
+xs_receive_data_from_client_with_timeout (THREAD_ENTRY * thread_p,
+					  char **area, int *datasize,
+					  int timeout)
+{
   unsigned int rid;
+  int rc = 0;
   bool continue_checking = true;
 
   if (*area)
@@ -7047,18 +7052,28 @@ xs_receive_data_from_client (THREAD_ENTRY * thread_p, char **area,
     }
   rid = thread_get_comm_request_id (thread_p);
 
-  if (css_receive_data_from_client (thread_p->conn_entry, rid, area,
-				    (int *) datasize))
+  rc = css_receive_data_from_client_with_timeout
+    (thread_p->conn_entry, rid, area, (int *) datasize, timeout);
+
+  if (rc == TIMEDOUT_ON_QUEUE)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_NET_DATA_RECEIVE_TIMEDOUT,
+	      0);
+      return ER_NET_DATA_RECEIVE_TIMEDOUT;
+    }
+  else if (rc != 0)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_NET_SERVER_DATA_RECEIVE,
 	      0);
       return ER_FAILED;
     }
+
   if (logtb_is_interrupted (thread_p, false, &continue_checking))
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_INTERRUPTED, 0);
       return ER_FAILED;
     }
+
   return NO_ERROR;
 }
 
@@ -7866,13 +7881,17 @@ xlog_get_page_request_with_reply (THREAD_ENTRY * thread_p,
 
   /* Obtain success message from the client, without blocking the
      server. */
-  if ((error = xs_receive_data_from_client (thread_p, &reply, &reply_size))
-      != NO_ERROR)
+  error =
+    xs_receive_data_from_client_with_timeout (thread_p, &reply, &reply_size,
+					      prm_get_integer_value
+					      (PRM_ID_HA_COPY_LOG_TIMEOUT));
+  if (error != NO_ERROR)
     {
       if (reply)
 	{
 	  free_and_init (reply);
 	}
+
       return error;
     }
 
@@ -8548,10 +8567,18 @@ slogwr_get_log_pages (THREAD_ENTRY * thread_p, unsigned int rid,
     {
       return_error_to_client (thread_p, rid);
     }
-  ptr = or_pack_int (reply, (int) END_CALLBACK);
-  ptr = or_pack_int (ptr, error);
-  (void) css_send_data_to_client (thread_p->conn_entry, rid, reply,
-				  OR_ALIGNED_BUF_SIZE (a_reply));
+
+  if (error == NO_ERROR || error == ER_INTERRUPTED)
+    {
+      ptr = or_pack_int (reply, (int) END_CALLBACK);
+      ptr = or_pack_int (ptr, error);
+      (void) css_send_data_to_client (thread_p->conn_entry, rid, reply,
+				      OR_ALIGNED_BUF_SIZE (a_reply));
+    }
+  else if (error == ER_NET_DATA_RECEIVE_TIMEDOUT)
+    {
+      css_end_server_request (thread_p->conn_entry);
+    }
 
   return;
 }

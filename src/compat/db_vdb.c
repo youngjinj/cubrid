@@ -102,9 +102,9 @@ static int do_process_deallocate_prepare (DB_SESSION * session,
 					  PT_NODE * statement);
 static bool is_allowed_as_prepared_statement (PT_NODE * node);
 static bool is_allowed_as_prepared_statement_with_hv (PT_NODE * node);
-static bool db_check_limit_for_mro_need_recompile (PARSER_CONTEXT * parser,
-						   PT_NODE * statement,
-						   bool mro_info_use_mro);
+static bool db_check_limit_need_recompile (PARSER_CONTEXT * parser,
+					   PT_NODE * statement,
+					   int xasl_flag);
 
 /*
  * get_dimemsion_of() - returns the number of elements of a null-terminated
@@ -493,7 +493,7 @@ db_set_base_server_time (SERVER_INFO * server_info)
 {
   if (server_info->info_bits & SI_SYS_DATETIME)
     {
-      struct tm c_time_struct;
+      struct tm c_time_struct, tz_check;
       DB_DATETIME *dt = &server_info->value[0]->data.datetime;
       int msecs;
 
@@ -507,6 +507,12 @@ db_set_base_server_time (SERVER_INFO * server_info)
 
       c_time_struct.tm_year -= 1900;
       c_time_struct.tm_mon -= 1;
+      c_time_struct.tm_isdst = -1;
+      tz_check = c_time_struct;
+
+      /* get correct timezone setting */
+      mktime (&tz_check);
+      c_time_struct.tm_isdst = tz_check.tm_isdst;
 
       base_server_timeb.time = mktime (&c_time_struct);
       ftime (&base_client_timeb);
@@ -1328,7 +1334,11 @@ db_marker_domain (DB_MARKER * marker)
 
   if (marker)
     {
-      result = pt_node_to_db_domain (NULL, marker, NULL);
+      result = marker->expected_domain;
+      if (result == NULL)
+	{
+	  result = pt_node_to_db_domain (NULL, marker, NULL);
+	}
     }
   /* it is safet to call pt_node_to_db_domain() without parser */
 
@@ -1700,7 +1710,8 @@ db_set_session_mode_async (DB_SESSION * session)
       return ER_IT_INVALID_SESSION;
     }
 
-  db_set_sync_flag (session, ASYNC_EXEC);
+  /* async execution mode is not supported */
+  db_set_sync_flag (session, SYNC_EXEC);
 
   return NO_ERROR;
 }
@@ -1818,8 +1829,16 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
 
   /* get sys_date, sys_time, sys_timestamp, sys_datetime values from the server */
   server_info.info_bits = 0;	/* init */
-  if (statement->si_datetime)
+  if (statement->si_datetime
+      || (statement->node_type == PT_CREATE_ENTITY
+	  || statement->node_type == PT_ALTER))
     {
+      /* Some create and alter statement require the server timestamp
+       * even though it does not explicitly refer timestamp-related pseudocolumns.
+       * For instance,
+       *   create table foo (a timestamp default systimestamp);
+       *   create view v_foo as select * from foo;
+       */
       db_calculate_current_server_time (parser, &server_info);
     }
 
@@ -2588,13 +2607,11 @@ do_get_prepared_statement_info (DB_SESSION * session, int stmt_idx)
       && (prepare_info.host_variables.size > prepare_info.auto_param_count))
     {
       /* query has to be multi range opt candidate */
-      if (xasl_header.xasl_flag & (MRO_CANDIDATE | MRO_IS_USED))
+      if (xasl_header.xasl_flag & (MRO_CANDIDATE | MRO_IS_USED
+				   | SORT_LIMIT_CANDIDATE | SORT_LIMIT_USED))
 	{
-	  bool mro_info_use_mro = (xasl_header.xasl_flag & MRO_IS_USED);
-
-	  if (db_check_limit_for_mro_need_recompile (parser,
-						     statement,
-						     mro_info_use_mro))
+	  if (db_check_limit_need_recompile (parser, statement,
+					     xasl_header.xasl_flag))
 	    {
 	      /* need recompile, set XASL_ID to NULL */
 	      XASL_ID_SET_NULL (&statement->info.execute.xasl_id);
@@ -2711,21 +2728,21 @@ do_set_user_host_variables (DB_SESSION * session, PT_NODE * using_list)
 }
 
 /*
- * db_check_limit_for_mro_need_recompile () - Check if statement that can use
- *					      multi range optimization need
- *					      to recompile.
+ * db_check_limit_need_recompile () - Check if statement has to be recompiled
+ *				      for limit optimizations with supplied
+ *				      limit value
  *
  * return	  : true if recompile is needed, false otherwise
  * parser (in)	  : parser context for statement
  * statement (in) : execute prepare statement
+ * xasl_flag (in) : flag specifying limit optimizations used in XASL
  *
  * NOTE: This function attempts to evaluate superior limit for orderby_num ()
  *	 without doing a full statement recompile.
  */
 static bool
-db_check_limit_for_mro_need_recompile (PARSER_CONTEXT * parent_parser,
-				       PT_NODE * statement,
-				       bool mro_info_use_mro)
+db_check_limit_need_recompile (PARSER_CONTEXT * parent_parser,
+			       PT_NODE * statement, int xasl_flag)
 {
   DB_SESSION *session = NULL;
   PT_NODE *query = NULL, *limit = NULL, *orderby_for = NULL;
@@ -2780,10 +2797,8 @@ db_check_limit_for_mro_need_recompile (PARSER_CONTEXT * parent_parser,
   session->parser->auto_param_count = parent_parser->auto_param_count;
   session->parser->set_host_var = 1;
 
-  use_mro =
-    pt_check_ordby_num_for_multi_range_opt (session->parser, query, NULL,
-					    &cannot_eval);
-  if (cannot_eval || (use_mro != mro_info_use_mro))
+  if (pt_recompile_for_limit_optimizations (session->parser, query,
+					    xasl_flag))
     {
       /* need recompile */
       do_recompile = true;
@@ -3769,6 +3784,9 @@ db_query_produce_updatable_result (DB_SESSION * session, int stmt_ndx)
 bool
 db_is_query_async_executable (DB_SESSION * session, int stmt_ndx)
 {
+  /* async execution mode is not supported */
+  return false;
+#if 0
   PT_NODE *statement;
   bool sync;
 
@@ -3809,4 +3827,5 @@ db_is_query_async_executable (DB_SESSION * session, int stmt_ndx)
 	       && statement->is_click_counter)) ? true : false);
 
   return !sync;
+#endif
 }

@@ -68,6 +68,14 @@
 /* Volid of copies */
 #define LOG_DBCOPY_VOLID         (LOG_DBFIRST_VOLID - 19)
 
+#define LOG_TOPOP_STACK_INIT_SIZE 1024
+
+typedef struct log_topop_range LOG_TOPOP_RANGE;
+struct log_topop_range
+{
+  LOG_LSA start_lsa;
+  LOG_LSA end_lsa;
+};
 extern bool mvcc_Enabled;
 
 extern const char *log_to_string (LOG_RECTYPE type);
@@ -204,7 +212,7 @@ extern void log_append_commit_client_loose_ends (THREAD_ENTRY * thread_p,
 extern void log_append_abort_client_loose_ends (THREAD_ENTRY * thread_p,
 						LOG_TDES * tdes);
 extern int log_add_to_modified_class_list (THREAD_ENTRY * thread_p,
-					   const OID * class_oid,
+					   const OID * class_oid, BTID * btid,
 					   UPDATE_STATS_ACTION_TYPE
 					   action_type);
 extern bool log_is_class_being_modified (THREAD_ENTRY * thread_p,
@@ -226,8 +234,7 @@ extern TRAN_STATE log_complete (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 				LOG_GETNEWTRID get_newtrid);
 extern void
 log_do_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
-		 LOG_LSA * start_posplsa, LOG_RECTYPE posp_type,
-		 bool skip_head);
+		 LOG_LSA * start_posplsa, LOG_RECTYPE posp_type);
 extern void log_recreate (THREAD_ENTRY * thread_p, VOLID num_perm_vols,
 			  const char *db_fullname, const char *logpath,
 			  const char *prefix_logname, DKNPAGES log_npages,
@@ -249,6 +256,9 @@ extern void log_append_run_postpone (THREAD_ENTRY * thread_p,
 				     const VPID * rcv_vpid, int length,
 				     const void *data,
 				     const LOG_LSA * ref_lsa);
+extern int log_get_next_nested_top (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
+				    LOG_LSA * start_postpone_lsa,
+				    LOG_TOPOP_RANGE ** out_nxtop_range_stack);
 
 /*
  * FOR DEBUGGING

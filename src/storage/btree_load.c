@@ -48,6 +48,7 @@ typedef struct sort_args SORT_ARGS;
 struct sort_args
 {				/* Collection of information required for "sr_index_sort" */
   int unique_flag;
+  int not_null_flag;
   HFID *hfids;			/* Array of HFIDs for the class(es) */
   OID *class_ids;		/* Array of class OIDs              */
   OID cur_oid;			/* Identifier of the current object */
@@ -188,6 +189,7 @@ static void print_list (const BTREE_NODE * this_list);
  *   hfids(in): Identifier of the heap file containing the instances of the
  *	        class
  *   unique_flag(in):
+ *   not_null_flag(in):
  *   fk_refcls_oid(in):
  *   fk_refcls_pk_btid(in):
  *   cache_attr_id(in):
@@ -198,8 +200,8 @@ BTID *
 xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, TP_DOMAIN * key_type,
 		   OID * class_oids, int n_classes, int n_attrs,
 		   int *attr_ids, int *attrs_prefix_length,
-		   HFID * hfids, int unique_flag,
-		   int last_key_desc, OID * fk_refcls_oid,
+		   HFID * hfids, int unique_flag, int not_null_flag,
+		   OID * fk_refcls_oid,
 		   BTID * fk_refcls_pk_btid, int cache_attr_id,
 		   const char *fk_name, char *pred_stream,
 		   int pred_stream_size,
@@ -268,10 +270,9 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, TP_DOMAIN * key_type,
 
 
   /*
-   * check for the last element domain of partial-key and key is desc;
    * for btree_range_search, part_key_desc is re-set at btree_initialize_bts
    */
-  btid_int.part_key_desc = btid_int.last_key_desc = last_key_desc;
+  btid_int.part_key_desc = 0;
 
   /* init index key copy_buf info */
   btid_int.copy_buf = NULL;
@@ -287,6 +288,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, TP_DOMAIN * key_type,
 
   /* Initialize the fields of sorting argument structures */
   sort_args->unique_flag = unique_flag;
+  sort_args->not_null_flag = not_null_flag;
   sort_args->hfids = hfids;
   sort_args->class_ids = class_oids;
   sort_args->attr_ids = attr_ids;
@@ -445,7 +447,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, TP_DOMAIN * key_type,
   load_args->btid = &btid_int;
   load_args->allocated_pgcnt = init_pgcnt;
   load_args->used_pgcnt = 1;	/* set used page count (first page used for root) */
-  db_make_null (&load_args->current_key);
+  DB_MAKE_NULL (&load_args->current_key);
   VPID_SET_NULL (&load_args->nleaf.vpid);
   load_args->nleaf.pgptr = NULL;
   VPID_SET_NULL (&load_args->leaf.vpid);
@@ -996,9 +998,9 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
   int ret = NO_ERROR;
   int node_level = 2;		/* leaf level = 1, lowest non-leaf level = 2 */
 
-  db_make_null (&last_key);
-  db_make_null (&first_key);
-  db_make_null (&prefix_key);
+  DB_MAKE_NULL (&last_key);
+  DB_MAKE_NULL (&first_key);
+  DB_MAKE_NULL (&prefix_key);
 
   temp_data = (char *) os_malloc (DB_PAGESIZE);
   if (temp_data == NULL)
@@ -1045,7 +1047,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
       goto exit_on_error;
     }
 
-  db_make_null (&last_key);
+  DB_MAKE_NULL (&last_key);
 
   /* While there are some leaf pages do */
   while (!VPID_ISNULL (&(load_args->leaf.vpid)))
@@ -1087,14 +1089,21 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 	   * Key type is string or midxkey.
 	   * Should insert the prefix key to the parent level
 	   */
-
-	  /* Insert the prefix key to the parent level */
-	  ret = btree_get_prefix_separator (&last_key, &first_key,
-					    &prefix_key,
-					    load_args->btid->key_type);
-	  if (ret != NO_ERROR)
+	  if (DB_IS_NULL (&last_key))
 	    {
-	      goto exit_on_error;
+	      /* is the first leaf */
+	      pr_clone_value (&first_key, &prefix_key);
+	    }
+	  else
+	    {
+	      /* Insert the prefix key to the parent level */
+	      ret = btree_get_prefix_separator (&last_key, &first_key,
+						&prefix_key,
+						load_args->btid->key_type);
+	      if (ret != NO_ERROR)
+		{
+		  goto exit_on_error;
+		}
 	    }
 
 	  /*
@@ -2632,6 +2641,20 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 		}
 	      return SORT_ERROR_OCCURRED;
 	    }
+	}
+
+      if (sort_args->not_null_flag
+	  && (db_value_is_null (dbvalue_ptr)
+	      || btree_multicol_key_has_null (dbvalue_ptr)))
+	{
+	  if (dbvalue_ptr == &dbvalue)
+	    {
+	      pr_clear_value (&dbvalue);
+	    }
+
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_NOT_NULL_DOES_NOT_ALLOW_NULL_VALUE, 0);
+	  return SORT_ERROR_OCCURRED;
 	}
 
       if (db_value_is_null (dbvalue_ptr)

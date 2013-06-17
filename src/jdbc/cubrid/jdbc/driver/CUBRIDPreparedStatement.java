@@ -436,6 +436,8 @@ public class CUBRIDPreparedStatement extends CUBRIDStatement implements
 
 	public synchronized void setObject(int parameterIndex, Object x,
 			int targetSqlType) throws SQLException {
+		checkIsOpen();
+		
 		setObject(parameterIndex, x);
 	}
 
@@ -724,8 +726,9 @@ public class CUBRIDPreparedStatement extends CUBRIDStatement implements
 	    			setShardId(UShardInfo.SHARD_ID_INVALID);
 					if (is_closed)
 						return;
-					is_closed = true;
+					
 					complete();
+					is_closed = true;
 
 					if (u_stmt != null) {
 						u_stmt.close();
@@ -936,7 +939,12 @@ public class CUBRIDPreparedStatement extends CUBRIDStatement implements
 
 	protected void checkIsOpen() throws SQLException {
 		if (is_closed) {
-			throw con.createCUBRIDException(CUBRIDJDBCErrorCode.prepared_statement_closed, null);
+			if (con != null) {
+				throw con.createCUBRIDException(CUBRIDJDBCErrorCode.prepared_statement_closed, null);
+			} else {
+				throw new CUBRIDException(CUBRIDJDBCErrorCode.prepared_statement_closed, null);
+			}
+			
 		}
 	}
 

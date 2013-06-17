@@ -17,36 +17,25 @@
  *
  */
 
-
 /*
- * broker_log_util.h -
+ * log_applier_sql_log.h - Definitions for log applier's SQL logging module
  */
 
-#ifndef	_BROKER_LOG_UTIL_H_
-#define	_BROKER_LOG_UTIL_H_
+#ifndef LOG_APPLIER_SQL_LOG_H_
+#define LOG_APPLIER_SQL_LOG_H_
 
 #ident "$Id$"
 
-#if defined(WINDOWS)
-#include <windows.h>
-#else
-#include <sys/time.h>
-#endif
+#include "dbdef.h"
+#include "dbtype.h"
+#include "work_space.h"
 
-#include "cas_common.h"
-#include "log_top_string.h"
+extern int sl_write_schema_sql (char *class_name, char *db_user,
+				int item_type, char *ddl);
+extern int sl_write_insert_sql (DB_OTMPL * inst_tp, DB_VALUE * key);
+extern int sl_write_update_sql (DB_OTMPL * inst_tp, DB_VALUE * key);
+extern int sl_write_delete_sql (char *class_name, MOBJ mclass,
+				DB_VALUE * key);
+extern int sl_init (const char *db_name, const char *repl_log_path);
 
-#define CAS_LOG_BEGIN_WITH_YEAR 1
-#define CAS_LOG_BEGIN_WITH_MONTH 2
-
-#define CAS_LOG_MSG_INDEX 22
-#define CAS_RUN_NEW_LINE_CHAR	1
-
-extern char *ut_trim (char *);
-extern void ut_tolower (char *str);
-extern int ut_get_line (FILE * fp, T_STRING * t_str, char **out_str,
-			int *lineno);
-extern int is_cas_log (char *str);
-extern char *get_msg_start_ptr (char *linebuf);
-
-#endif /* _BROKER_LOG_UTIL_H_ */
+#endif /* LOG_APPLIER_SQL_LOG_H_ */

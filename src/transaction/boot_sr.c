@@ -126,6 +126,11 @@ struct boot_dbparm
   VOLID temp_last_volid;	/* Next temporary volume identifier. This goes
 				 * from a higher number to a lower number */
 };
+
+#if defined(SERVER_MODE)
+AUTO_ADDVOL_JOB boot_Auto_addvol_job = BOOT_AUTO_ADDVOL_JOB_INITIALIZER;
+#endif
+
 extern bool catcls_Enable;
 extern int catcls_compile_catalog_classes (THREAD_ENTRY * thread_p);
 extern int catcls_finalize_class_oid_to_oid_hash_table ();
@@ -579,10 +584,8 @@ boot_add_volume (THREAD_ENTRY * thread_p, DBDEF_VOL_EXT_INFO * ext_info)
   pgbuf_refresh_max_permanent_volume_id (volid);
 
   /* Format the volume */
-  if (disk_format (thread_p, boot_Db_full_name, volid, ext_info->name,
-		   ext_info->comments, ext_info->npages,
-		   ext_info->max_writesize_in_sec,
-		   ext_info->purpose) == NULL_VOLID)
+  if (disk_format (thread_p, boot_Db_full_name,
+		   volid, ext_info) == NULL_VOLID)
     {
       goto error;
     }
@@ -845,6 +848,8 @@ xboot_add_volume_extension (THREAD_ENTRY * thread_p,
       temp_ext_info.path = real_pathbuf;
     }
 
+  temp_ext_info.extend_npages = temp_ext_info.max_npages;
+
   return boot_xadd_volume_extension (thread_p, &temp_ext_info);
 }
 
@@ -1066,11 +1071,11 @@ boot_xadd_volume_extension (THREAD_ENTRY * thread_p,
       temp_ext_info.comments = " ";
     }
 
-  if (temp_ext_info.npages > part_npages && part_npages >= 0)
+  if (temp_ext_info.max_npages > part_npages && part_npages >= 0)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_IO_FORMAT_OUT_OF_SPACE, 5,
-	      vol_fullname, temp_ext_info.npages,
-	      ((IO_PAGESIZE / 1024) * ((off_t) temp_ext_info.npages)),
+	      vol_fullname, temp_ext_info.max_npages,
+	      ((IO_PAGESIZE / 1024) * ((off_t) temp_ext_info.max_npages)),
 	      part_npages, ((IO_PAGESIZE / 1024) * ((off_t) part_npages)));
       volid = NULL_VOLID;
     }
@@ -1091,6 +1096,7 @@ boot_xadd_volume_extension (THREAD_ENTRY * thread_p,
   return volid;
 }
 
+
 /*
  * boot_add_auto_volume_extension () - add an automatic volume extension to the database
  *
@@ -1105,26 +1111,29 @@ boot_xadd_volume_extension (THREAD_ENTRY * thread_p,
 VOLID
 boot_add_auto_volume_extension (THREAD_ENTRY * thread_p, DKNPAGES min_npages,
 				DISK_SETPAGE_TYPE setpage_type,
-				DISK_VOLPURPOSE vol_purpose)
+				DISK_VOLPURPOSE vol_purpose, bool wait)
 {
+  bool old_check_interrupt;
+  int ret, new_vol_npages;
   VOLID volid;
   DBDEF_VOL_EXT_INFO ext_info;
 
-  ext_info.npages =
+  ext_info.max_npages =
     (DKNPAGES) (prm_get_size_value (PRM_ID_DB_VOLUME_SIZE) / IO_PAGESIZE);
 
   if (setpage_type != DISK_NONCONTIGUOUS_SPANVOLS_PAGES
-      && ext_info.npages < min_npages)
+      && ext_info.max_npages < min_npages)
     {
-      ext_info.npages = min_npages;
+      ext_info.max_npages = min_npages;
     }
 
-  if (ext_info.npages < BOOT_VOLUME_MINPAGES)
+  if (ext_info.max_npages < BOOT_VOLUME_MINPAGES)
     {
-      ext_info.npages = BOOT_VOLUME_MINPAGES;
+      ext_info.max_npages = BOOT_VOLUME_MINPAGES;
     }
 
-  ext_info.npages = MIN (ext_info.npages, VOL_MAX_NPAGES (IO_PAGESIZE));
+  ext_info.max_npages =
+    MIN (ext_info.max_npages, VOL_MAX_NPAGES (IO_PAGESIZE));
   ext_info.path = NULL;
   ext_info.name = NULL;
   ext_info.comments = "Automatic Volume Extension";
@@ -1132,14 +1141,122 @@ boot_add_auto_volume_extension (THREAD_ENTRY * thread_p, DKNPAGES min_npages,
   ext_info.overwrite = false;
   ext_info.max_writesize_in_sec = 0;
 
+#if defined (SERVER_MODE)
+  ext_info.extend_npages =
+    CEIL_PTVDIV (min_npages, AUTO_ADD_VOL_EXPAND_NPAGES) *
+    AUTO_ADD_VOL_EXPAND_NPAGES;
+
+retry:
+  volid = NULL_VOLID;
+
+  pthread_mutex_lock (&boot_Auto_addvol_job.lock);
+
+  if (boot_Auto_addvol_job.ext_info.extend_npages > 0)
+    {
+      /* add_vol_job is already running */
+      int allocating_npages;
+
+      assert_release (boot_Auto_addvol_job.ext_info.purpose ==
+		      DISK_PERMVOL_GENERIC_PURPOSE);
+
+      if (wait)
+	{
+	  allocating_npages = boot_Auto_addvol_job.ext_info.extend_npages;
+
+	  pthread_cond_wait (&boot_Auto_addvol_job.cond,
+			     &boot_Auto_addvol_job.lock);
+
+	  volid = boot_Auto_addvol_job.ret_volid;
+
+	  if (volid != NULL_VOLID && allocating_npages < min_npages)
+	    {
+	      /* allocated size is not enough */
+	      pthread_mutex_unlock (&boot_Auto_addvol_job.lock);
+	      goto retry;
+	    }
+	}
+
+      pthread_mutex_unlock (&boot_Auto_addvol_job.lock);
+
+      /* if wait flag is false, NULL_VOLID will be returned */
+      return volid;
+    }
+
+  if (thread_auto_volume_expansion_thread_is_running ())
+    {
+      /* volume_expansion_thread is active, but auto_addvol_job is empty.
+       * Maybe, the last addvol_job was just finished.
+       * Retry add job.
+       */
+      pthread_mutex_unlock (&boot_Auto_addvol_job.lock);
+      thread_sleep (10);
+      goto retry;
+    }
+
+  /* Register current job to boot_Auto_addvol_job */
+  memcpy (&boot_Auto_addvol_job.ext_info, &ext_info,
+	  sizeof (DBDEF_VOL_EXT_INFO));
+
+  if (disk_cache_get_auto_extend_volid (thread_p) == NULL_VOLID)
+    {
+      /* New volume must be added */
+      pthread_mutex_unlock (&boot_Auto_addvol_job.lock);
+
+      /* add new volume with minimum pages */
+      new_vol_npages =
+	1 + disk_get_num_overhead_for_newvol (ext_info.max_npages);
+
+      ext_info.extend_npages =
+	CEIL_PTVDIV (new_vol_npages, AUTO_ADD_VOL_EXPAND_NPAGES) *
+	AUTO_ADD_VOL_EXPAND_NPAGES;
+
+      /* Do not check interrupt while volume extension */
+      old_check_interrupt = thread_set_check_interrupt (thread_p, false);
+      volid = boot_xadd_volume_extension (thread_p, &ext_info);
+      thread_set_check_interrupt (thread_p, old_check_interrupt);
+
+      if (volid != NULL_VOLID)
+	{
+	  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
+		  ER_BO_NOTIFY_AUTO_VOLEXT, 2,
+		  fileio_get_volume_label (volid, PEEK),
+		  ext_info.extend_npages);
+	}
+      else
+	{
+	  /* just continue to expansion, although there was an error.
+	   * In this case, auto expansion thread will detect this situation
+	   * and set ret_volid to NULL_VOLID.
+	   */
+	}
+
+      pthread_mutex_lock (&boot_Auto_addvol_job.lock);
+    }
+
+  /* expand volume */
+  (void) thread_wakeup_auto_volume_expansion_thread ();
+
+  if (wait)
+    {
+      pthread_cond_wait (&boot_Auto_addvol_job.cond,
+			 &boot_Auto_addvol_job.lock);
+      volid = boot_Auto_addvol_job.ret_volid;
+    }
+
+  pthread_mutex_unlock (&boot_Auto_addvol_job.lock);
+
+#else
+  ext_info.extend_npages = ext_info.max_npages;
+
   volid = boot_xadd_volume_extension (thread_p, &ext_info);
 
   if (volid != NULL_VOLID)
     {
       er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
 	      ER_BO_NOTIFY_AUTO_VOLEXT, 2,
-	      fileio_get_volume_label (volid, PEEK), ext_info.npages);
+	      fileio_get_volume_label (volid, PEEK), ext_info.extend_npages);
     }
+#endif
 
   return volid;
 }
@@ -1376,7 +1493,7 @@ boot_parse_add_volume_extensions (THREAD_ENTRY * thread_p,
       ext_info.path = ext_path;
       ext_info.name = ext_name;
       ext_info.comments = ext_comments;
-      ext_info.npages = ext_npages;
+      ext_info.max_npages = ext_npages;
       ext_info.max_writesize_in_sec = 0;
       ext_info.purpose = ext_purpose;
       ext_info.overwrite = false;
@@ -1571,10 +1688,11 @@ boot_add_temp_volume (THREAD_ENTRY * thread_p, DKNPAGES min_npages)
 	  ext_info.path = NULL;
 	  ext_info.name = temp_vol_fullname;
 	  ext_info.comments = "Temporary Volume";
-	  ext_info.npages = possible_max_npages;
+	  ext_info.max_npages = possible_max_npages;
 	  ext_info.max_writesize_in_sec = 0;
 	  ext_info.purpose = DISK_TEMPVOL_TEMP_PURPOSE;
 	  ext_info.overwrite = true;
+	  ext_info.extend_npages = ext_info.max_npages;
 
 	  temp_volid = boot_add_volume (thread_p, &ext_info);
 	  if (temp_volid != NULL_VOLID)
@@ -3088,6 +3206,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 #if defined(SERVER_MODE)
   if (sysprm_load_and_init (boot_Db_full_name, NULL) != NO_ERROR)
     {
+      cfg_free_directory (dir);
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BO_CANT_LOAD_SYSPRM, 0);
       return ER_BO_CANT_LOAD_SYSPRM;
     }
@@ -3095,6 +3214,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
   if (common_ha_mode != prm_get_integer_value (PRM_ID_HA_MODE)
       && prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF)
     {
+      cfg_free_directory (dir);
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 	      ER_PRM_CONFLICT_EXISTS_ON_MULTIPLE_SECTIONS, 6, "cubrid.conf",
 	      "common", prm_get_name (PRM_ID_HA_MODE),
@@ -3107,24 +3227,28 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
   msgcat_final ();
   if (msgcat_init () != NO_ERROR)
     {
+      cfg_free_directory (dir);
       return ER_BO_CANNOT_ACCESS_MESSAGE_CATALOG;
     }
 
   error_code = css_init_conn_list ();
   if (error_code != NO_ERROR)
     {
+      cfg_free_directory (dir);
       return error_code;
     }
 
   /* reinitialize thread mgr to reflect # of active requests */
   if (thread_initialize_manager () != NO_ERROR)
     {
+      cfg_free_directory (dir);
       return ER_FAILED;
     }
   if (er_init_internal
       (prm_get_string_value (PRM_ID_ER_LOG_FILE),
        prm_get_integer_value (PRM_ID_ER_EXIT_ASK), true) != NO_ERROR)
     {
+      cfg_free_directory (dir);
       return ER_FAILED;
     }
   er_clear ();
@@ -3161,6 +3285,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
     {
       if (from_backup == false || er_errid () == ER_IO_MOUNT_LOCKED)
 	{
+	  cfg_free_directory (dir);
 	  return ER_FAILED;
 	}
     }
@@ -3171,11 +3296,13 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
   error_code = spage_boot (thread_p);
   if (error_code != NO_ERROR)
     {
+      cfg_free_directory (dir);
       return error_code;
     }
   error_code = heap_manager_initialize ();
   if (error_code != NO_ERROR)
     {
+      cfg_free_directory (dir);
       return error_code;
     }
 
@@ -3191,6 +3318,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 				  log_prefix, r_args);
       if (error_code != NO_ERROR)
 	{
+	  cfg_free_directory (dir);
 	  return error_code;
 	}
       else
@@ -3198,6 +3326,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 	  /* if table of contents only do not restart */
 	  if (r_args->printtoc)
 	    {
+	      cfg_free_directory (dir);
 	      return NO_ERROR;
 	    }
 	}
@@ -3526,6 +3655,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
   return NO_ERROR;
 
 error:
+  cfg_free_directory (dir);
   prev_err_msg = (char *) er_msg ();
   if (prev_err_msg != NULL)
     {
@@ -4150,7 +4280,11 @@ xboot_check_db_consistency (THREAD_ENTRY * thread_p, int check_flag,
     {
       if (isvalid != DISK_ERROR)
 	{
+#if defined (SERVER_MODE)
 	  isvalid = file_tracker_check (thread_p);
+#else
+	  isvalid = file_tracker_cross_check_with_disk_idsmap (thread_p);
+#endif
 	  if (isvalid != DISK_VALID)
 	    {
 	      error_code = ER_FAILED;
@@ -5289,6 +5423,7 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
   VOLID db_volid = NULL_VOLID;
   RECDES recdes;
   int error_code;
+  DBDEF_VOL_EXT_INFO ext_info;
 
   assert (client_credential != NULL);
 
@@ -5323,10 +5458,16 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
       goto error;
     }
 
+  ext_info.name = boot_Db_full_name;
+  ext_info.comments = db_comments;
+  ext_info.max_npages = db_npages;
+  ext_info.max_writesize_in_sec = 0;
+  ext_info.purpose = DISK_PERMVOL_GENERIC_PURPOSE;
+  ext_info.extend_npages = db_npages;
+
   /* Format the first database volume */
   db_volid = disk_format (thread_p, boot_Db_full_name, LOG_DBFIRST_VOLID,
-			  boot_Db_full_name, db_comments, db_npages,
-			  0, DISK_PERMVOL_GENERIC_PURPOSE);
+			  &ext_info);
   if (db_volid != LOG_DBFIRST_VOLID || boot_Init_server_is_canceled)
     {
       goto error;

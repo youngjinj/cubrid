@@ -4040,7 +4040,6 @@ heap_stats_sync_bestspace (THREAD_ENTRY * thread_p, const HFID * hfid,
   VPID vpid = { NULL_PAGEID, NULL_VOLID };
   VPID start_vpid = { NULL_PAGEID, NULL_VOLID };
   VPID next_vpid = { NULL_PAGEID, NULL_VOLID };
-  VPID last_vpid = { NULL_PAGEID, NULL_VOLID };
   VPID stopat_vpid = { NULL_PAGEID, NULL_VOLID };
   int num_pages = 0;
   int num_recs = 0;
@@ -4067,16 +4066,6 @@ heap_stats_sync_bestspace (THREAD_ENTRY * thread_p, const HFID * hfid,
 
   if (scan_all != true)
     {
-      /*
-       * Start scanning at the last best page in the array and then go back
-       * to beginning of heap if needed looking for good pages with a lot of
-       * free space.
-       */
-      if (file_find_last_page (thread_p, &hfid->vfid, &last_vpid) == NULL)
-	{
-	  return ER_FAILED;
-	}
-
       if (heap_hdr->estimates.num_high_best > 0)
 	{
 	  /* Use recently inserted one first. */
@@ -6650,10 +6639,20 @@ heap_find_slot_for_insert_with_lock (THREAD_ENTRY * thread_p,
 	}
       else if (lk_result != LK_NOTGRANTED_DUE_TIMEOUT)
 	{
-	  /* This means unknown locking error */
-	  assert (false);
+#if !defined(NDEBUG)
+	  if (lk_result == LK_NOTGRANTED_DUE_ABORTED)
+	    {
+	      LOG_TDES *tdes = LOG_FIND_CURRENT_TDES (thread_p);
+	      assert (tdes->tran_abort_reason ==
+		      TRAN_ABORT_DUE_ROLLBACK_ON_ESCALATION);
+	    }
+	  else
+	    {
+	      assert (false);	/* unknown locking error */
+	    }
+#endif
 	  OID_SET_NULL (oid);
-
+	  pgbuf_unfix_and_init (thread_p, pgptr);
 	  return NULL;
 	}
     }
@@ -6663,6 +6662,7 @@ heap_find_slot_for_insert_with_lock (THREAD_ENTRY * thread_p,
   assert (false);
   OID_SET_NULL (oid);
 
+  pgbuf_unfix_and_init (thread_p, pgptr);
   return NULL;
 }
 
@@ -6942,7 +6942,7 @@ heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid, OID * class_oid,
       && HFID_EQ ((hfid), heap_Classrepr->rootclass_hfid))
     {
 
-      if (log_add_to_modified_class_list (thread_p, oid,
+      if (log_add_to_modified_class_list (thread_p, oid, NULL,
 					  UPDATE_STATS_ACTION_KEEP) !=
 	  NO_ERROR)
 	{
@@ -8359,7 +8359,7 @@ try_again:
   if (heap_Guesschn != NULL && heap_Classrepr->rootclass_hfid != NULL
       && HFID_EQ ((hfid), heap_Classrepr->rootclass_hfid))
     {
-      if (log_add_to_modified_class_list (thread_p, oid,
+      if (log_add_to_modified_class_list (thread_p, oid, NULL,
 					  UPDATE_STATS_ACTION_KEEP) !=
 	  NO_ERROR)
 	{
@@ -8448,7 +8448,7 @@ heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid, const OID * oid,
       && HFID_EQ ((hfid), heap_Classrepr->rootclass_hfid))
     {
 
-      if (log_add_to_modified_class_list (thread_p, oid,
+      if (log_add_to_modified_class_list (thread_p, oid, NULL,
 					  UPDATE_STATS_ACTION_RESET) !=
 	  NO_ERROR)
 	{

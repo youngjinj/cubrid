@@ -61,6 +61,7 @@ typedef struct seman_compatible_info
   int prec;
   int scale;
   PT_COLL_INFER coll_infer;
+  const PT_NODE *ref_att;	/* column node having current compat info */
 } SEMAN_COMPATIBLE_INFO;
 
 typedef enum
@@ -371,6 +372,20 @@ static void pt_check_filter_index_expr (PARSER_CONTEXT * parser,
 					PT_NODE * atts, PT_NODE * node,
 					MOP db_obj);
 static PT_NODE *pt_get_assignments (PT_NODE * node);
+static int pt_check_cume_dist_percent_rank_order_by (PARSER_CONTEXT * parser,
+						     PT_NODE * func);
+static PT_UNION_COMPATIBLE
+pt_get_select_list_coll_compat (PARSER_CONTEXT * parser, PT_NODE * query,
+				SEMAN_COMPATIBLE_INFO * cinfo, int num_cinfo);
+static PT_UNION_COMPATIBLE
+pt_apply_union_select_list_collation (PARSER_CONTEXT * parser,
+				      PT_NODE * query,
+				      SEMAN_COMPATIBLE_INFO * cinfo,
+				      int num_cinfo);
+static PT_NODE *pt_mark_union_leaf_nodes (PARSER_CONTEXT * parser,
+					  PT_NODE * node, void *arg,
+					  int *continue_walk);
+
 
 /* pt_combine_compatible_info () - combine two cinfo into cinfo1
  *   return: true if compatible, else false
@@ -508,37 +523,6 @@ pt_update_compatible_info (PARSER_CONTEXT * parser,
       is_compatible = true;
       cinfo->type_enum = common_type;
       break;
-    }
-
-  if (PT_HAS_COLLATION (att1_info->type_enum)
-      && PT_HAS_COLLATION (att2_info->type_enum))
-    {
-      assert (PT_HAS_COLLATION (common_type));
-
-      if (att1_info->coll_infer.coll_id != att2_info->coll_infer.coll_id)
-	{
-	  if (pt_common_collation (&(att1_info->coll_infer),
-				   &(att2_info->coll_infer), NULL,
-				   2, false, &(cinfo->coll_infer.coll_id),
-				   &(cinfo->coll_infer.codeset)) != 0)
-	    {
-	      is_compatible = false;
-	    }
-	  else
-	    {
-	      cinfo->coll_infer.coerc_level =
-		MIN (att1_info->coll_infer.coerc_level,
-		     att2_info->coll_infer.coerc_level);
-	    }
-	}
-      else
-	{
-	  cinfo->coll_infer.coll_id = att1_info->coll_infer.coll_id;
-	  cinfo->coll_infer.codeset = att1_info->coll_infer.codeset;
-	  cinfo->coll_infer.coerc_level =
-	    MIN (att1_info->coll_infer.coerc_level,
-		 att2_info->coll_infer.coerc_level);
-	}
     }
 
   return is_compatible;
@@ -763,6 +747,7 @@ pt_get_compatible_info (PARSER_CONTEXT * parser, PT_NODE * node,
 		  cinfo[k].coll_infer.codeset = LANG_SYS_CODESET;
 		  cinfo[k].coll_infer.coerc_level = PT_COLLATION_NOT_COERC;
 		  cinfo[k].coll_infer.can_force_cs = false;
+		  cinfo[k].ref_att = NULL;
 		}
 	    }
 
@@ -2463,24 +2448,6 @@ pt_union_compatible (PARSER_CONTEXT * parser,
 
 	  if (dt1 && dt2)
 	    {
-	      if (PT_HAS_COLLATION (common_type))
-		{
-		  PT_COLL_INFER coll_infer1, coll_infer2;
-
-		  (void) pt_get_collation_info (item1, &coll_infer1);
-		  (void) pt_get_collation_info (item2, &coll_infer2);
-
-		  /* TODO : should infer common collation here with
-		   * 'pt_common_collation', but with current algorithm of
-		   * compatibility check for UNION which performs paired
-		   * checks, the results are not coherent when changing order
-		   * of SELECT lists */
-		  if (coll_infer1.coll_id != coll_infer2.coll_id)
-		    {
-		      return PT_UNION_INCOMP_CANNOT_FIX;
-		    }
-		}
-
 	      /* numeric type, fixed size string type */
 	      if (common_type == PT_TYPE_NUMERIC
 		  || PT_IS_STRING_TYPE (common_type))
@@ -2764,14 +2731,29 @@ pt_to_compatible_cast (PARSER_CONTEXT * parser, PT_NODE * node,
 
 	      if (need_to_cast)
 		{
+		  SEMAN_COMPATIBLE_INFO att_cinfo;
+
 		  if (!is_cast_allowed)
 		    {
 		      return NULL;
 		    }
 
+		  memcpy (&att_cinfo, &(cinfo[i]), sizeof (att_cinfo));
+
+		  if (PT_HAS_COLLATION (att->type_enum)
+		      && att->data_type != NULL)
+		    {
+		      /* use collation and codeset of original attribute
+		       * the values from cinfo are not usable */
+		      att_cinfo.coll_infer.coll_id =
+			att->data_type->info.data_type.collation_id;
+		      att_cinfo.coll_infer.codeset =
+			att->data_type->info.data_type.units;
+		    }
+
 		  new_att =
 		    pt_make_cast_with_compatible_info (parser, att, next_att,
-						       cinfo + i,
+						       &att_cinfo,
 						       &new_cast_added);
 		  if (new_att == NULL)
 		    {
@@ -2860,6 +2842,7 @@ pt_get_compatible_info_from_node (const PT_NODE * att,
   cinfo->coll_infer.coerc_level = PT_COLLATION_NOT_COERC;
   cinfo->coll_infer.can_force_cs = false;
   cinfo->prec = cinfo->scale = 0;
+  cinfo->ref_att = att;
 
   cinfo->type_enum = att->type_enum;
 
@@ -4471,10 +4454,9 @@ pt_check_data_default (PARSER_CONTEXT * parser, PT_NODE * data_default_list)
  * parser(in): parser context
  * attr(in/out) : data default node
  * default_cs(in): codeset of the attribute's class, or override value
+ *		   if special value = -1 is given, then charset implied by
+ *		   default_coll argument is used
  * default_coll(in): collation of the attribute's class, or override value
- * use_cs(in): if true, default_cs is taken into consideration;
- *	       if false, default_cs is assumed to be missing, and the
- *	       corresponding codeset of the default_coll is assumed to be used
  */
 void
 pt_attr_check_default_cs_coll (PARSER_CONTEXT * parser, PT_NODE * attr,
@@ -4484,6 +4466,8 @@ pt_attr_check_default_cs_coll (PARSER_CONTEXT * parser, PT_NODE * attr,
   int attr_coll = attr->data_type->info.data_type.collation_id;
   LANG_COLLATION *lc;
 
+  assert (default_coll >= 0);
+
   if (attr->data_type->info.data_type.has_cs_spec)
     {
       if (attr->data_type->info.data_type.has_coll_spec)
@@ -4491,21 +4475,8 @@ pt_attr_check_default_cs_coll (PARSER_CONTEXT * parser, PT_NODE * attr,
 	  return;
 	}
 
-      if (default_cs == -1)
-	{
-	  lc = lang_get_collation (default_coll);
-	  assert (lc != NULL);
-	  default_cs = lc->codeset;
-	}
-
-      if (attr_cs == default_cs)
-	{
-	  attr_coll = default_coll;
-	}
-      else
-	{
-	  attr_coll = LANG_GET_BINARY_COLLATION (attr_cs);
-	}
+      /* use binary collation of attribute's charset specifier */
+      attr_coll = LANG_GET_BINARY_COLLATION (attr_cs);
     }
   else if (attr->data_type->info.data_type.has_coll_spec)
     {
@@ -9847,6 +9818,7 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
   PT_NODE *t_node;
   PT_NODE *entity;
   PT_ASSIGNMENTS_HELPER ea;
+  PT_NODE *sort_spec = NULL;
 
   assert (parser != NULL);
 
@@ -10013,6 +9985,52 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
 	      break;
 	    }
 	}
+      else if (node->info.function.function_type == PT_CUME_DIST
+	       || node->info.function.function_type == PT_PERCENT_RANK)
+	{
+	  /* for CUME_DIST and PERCENT_RANK aggregate function */
+	  if (pt_check_cume_dist_percent_rank_order_by (parser, node) !=
+	      NO_ERROR)
+	    {
+	      break;
+	    }
+	}
+
+
+      if (node->info.function.function_type == PT_MEDIAN
+	  && !node->info.function.analytic.is_analytic
+	  && node->info.function.arg_list != NULL
+	  && !PT_IS_CONST (node->info.function.arg_list)
+	  && node->info.function.order_by == NULL)
+	{
+	  /* generate the sort spec for median */
+	  sort_spec = parser_new_node (parser, PT_SORT_SPEC);
+	  if (sort_spec == NULL)
+	    {
+	      PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	      break;
+	    }
+
+	  sort_spec->info.sort_spec.asc_or_desc = PT_ASC;
+	  sort_spec->info.sort_spec.nulls_first_or_last = PT_NULLS_DEFAULT;
+	  sort_spec->info.sort_spec.expr = parser_copy_tree (parser,
+							     node->info.
+							     function.
+							     arg_list);
+	  if (sort_spec->info.sort_spec.expr == NULL)
+	    {
+	      PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	      break;
+	    }
+
+	  sort_spec->info.sort_spec.pos_descr.pos_no = 1;
+	  sort_spec->info.sort_spec.pos_descr.dom =
+	    pt_xasl_node_to_domain (parser, node->info.function.arg_list);
+
+	  node->info.function.order_by = sort_spec;
+	}
       break;
 
     case PT_UNION:
@@ -10031,13 +10049,64 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
 
       pt_check_into_clause (parser, node);
 
-      /* check the orderby clause if present(all 3 nodes have SAME structure) */
+      /* check the orderby clause if present (all 3 nodes have SAME
+       * structure) */
       if (pt_check_order_by (parser, node) != NO_ERROR)
 	{
 	  break;		/* error */
 	}
 
       node = pt_semantic_type (parser, node, info);
+      if (node == NULL)
+	{
+	  break;
+	}
+
+      /* only root UNION nodes */
+      if (node->info.query.q.union_.is_leaf_node == false)
+	{
+	  PT_NODE *attrs = NULL;
+	  int cnt, k;
+	  SEMAN_COMPATIBLE_INFO *cinfo = NULL;
+	  PT_UNION_COMPATIBLE status;
+
+	  /* do collation inference necessary */
+	  attrs = pt_get_select_list (parser, node->info.query.q.union_.arg1);
+	  cnt = pt_length_of_select_list (attrs, EXCLUDE_HIDDEN_COLUMNS);
+
+	  cinfo = (SEMAN_COMPATIBLE_INFO *) malloc (cnt * sizeof
+						    (SEMAN_COMPATIBLE_INFO));
+	  if (cinfo == NULL)
+	    {
+	      PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	      break;
+	    }
+
+	  for (k = 0; k < cnt; ++k)
+	    {
+	      cinfo[k].idx = -1;
+	      cinfo[k].type_enum = PT_TYPE_NONE;
+	      cinfo[k].prec = DB_DEFAULT_PRECISION;
+	      cinfo[k].scale = DB_DEFAULT_SCALE;
+	      cinfo[k].coll_infer.coll_id = LANG_SYS_COLLATION;
+	      cinfo[k].coll_infer.codeset = LANG_SYS_CODESET;
+	      cinfo[k].coll_infer.coerc_level = PT_COLLATION_NOT_COERC;
+	      cinfo[k].coll_infer.can_force_cs = false;
+	      cinfo[k].ref_att = NULL;
+	    }
+
+	  status = pt_get_select_list_coll_compat (parser, node, cinfo, cnt);
+	  if (status == PT_UNION_INCOMP)
+	    {
+	      (void) pt_apply_union_select_list_collation (parser, node,
+							   cinfo, cnt);
+	      free (cinfo);
+	      break;
+	    }
+
+	  free (cinfo);
+	}
       break;
 
     case PT_SELECT:
@@ -11187,6 +11256,9 @@ pt_check_with_info (PARSER_CONTEXT * parser,
 		}
 	    }
 
+	  node = parser_walk_tree (parser, node, pt_mark_union_leaf_nodes,
+				   NULL, pt_continue_walk, NULL);
+
 	  if (!pt_has_error (parser))
 	    {
 	      /* remove unnecessary variable */
@@ -11675,7 +11747,8 @@ pt_assignment_compatible (PARSER_CONTEXT * parser, PT_NODE * lhs,
       int p = 0, s = 0;
       SEMAN_COMPATIBLE_INFO sci = {
 	0, PT_TYPE_NONE, 0, 0,
-	{0, INTL_CODESET_NONE, PT_COLLATION_NOT_COERC, false}
+	{0, INTL_CODESET_NONE, PT_COLLATION_NOT_COERC, false},
+	NULL
       };
       bool is_cast_allowed = true;
 
@@ -14553,6 +14626,165 @@ error_exit:
 }
 
 /*
+ * pt_check_cume_dist_percent_rank_order_by () - checks an ORDER_BY clause of a
+ *			      CUME_DIST aggregate function;
+ *			      if the expression or identifier from
+ *			      ORDER BY clause matches an argument of function,
+ *			      the ORDER BY item is converted into associated
+ *			      number.
+ *   return: NO_ERROR or error_code
+ *   parser(in):
+ *   func(in): 
+ *
+ *
+ *  Note :
+ *    We need to check arguments and order by, 
+ *    because the arguments must be constant expression and
+ *    match the ORDER BY clause by position.
+ */
+
+static int
+pt_check_cume_dist_percent_rank_order_by (PARSER_CONTEXT * parser,
+					  PT_NODE * func)
+{
+  PT_NODE *arg_list = NULL;
+  PT_NODE *order_by = NULL;
+  PT_NODE *arg = NULL;
+  PT_NODE *order = NULL;
+  PT_NODE *order_expr = NULL;
+  DB_OBJECT *obj = NULL;
+  DB_ATTRIBUTE *att = NULL;
+  TP_DOMAIN *dom = NULL;
+  DB_VALUE *value = NULL;
+  int i, arg_list_len, order_by_list_len;
+  int error = NO_ERROR;
+  const char *func_name;
+
+  /* get function name for ERROR message */
+  if (func->info.function.function_type == PT_CUME_DIST)
+    {
+      func_name = "CUME_DIST";
+    }
+  else if (func->info.function.function_type == PT_PERCENT_RANK)
+    {
+      func_name = "PERCENT_RANK";
+    }
+  else
+    {
+      assert (false);
+      return ER_FAILED;
+    }
+
+  /* first check if the arguments are constant */
+  arg_list = func->info.function.arg_list;
+  order_by = func->info.function.order_by;
+
+  /* for analytic function */
+  if (func->info.function.analytic.is_analytic)
+    {
+      if (arg_list != NULL || order_by != NULL)
+	{
+	  error = ER_FAILED;
+	  PT_ERRORmf (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+		      MSGCAT_SEMANTIC_INVALID_INTERNAL_FUNCTION, func_name);
+	}
+      goto error_exit;
+    }
+
+  /* aggregate function */
+  if (arg_list == NULL || order_by == NULL)
+    {
+      error = ER_FAILED;
+      PT_ERRORmf (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+		  MSGCAT_SEMANTIC_INVALID_INTERNAL_FUNCTION, func_name);
+      goto error_exit;
+    }
+
+  /* save original length of select_list */
+  arg_list_len = pt_length_of_list (arg_list);
+  order_by_list_len = pt_length_of_list (order_by);
+  if (arg_list_len != order_by_list_len)
+    {
+      PT_ERRORmf (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+		  MSGCAT_SEMANTIC_UNMACHTED_ARG_ORDER, func_name);
+      goto error_exit;
+    }
+
+  arg = arg_list;
+  order = order_by;
+  for (i = 0; i < arg_list_len; i++)
+    {
+      /* check argument type:
+       *  arguments must be constant 
+       */
+      if (!pt_is_const_expr_node (arg))
+	{
+	  PT_ERRORmf (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+		      MSGCAT_SEMANTIC_INVALID_CONSTANT_PARAMETER, func_name);
+	  goto error_exit;
+	}
+
+      /* check order by */
+      order_expr = order->info.sort_spec.expr;
+      if (order->node_type != PT_SORT_SPEC
+	  || (order_expr->node_type != PT_NAME
+	      && order_expr->node_type != PT_VALUE)
+	  || PT_IS_LOB_TYPE (order_expr->type_enum))
+	{
+	  PT_ERRORmf (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+		      MSGCAT_SEMANTIC_INVALID_FUNCTION_ORDERBY, func_name);
+	  goto error_exit;
+	}
+
+      if (order_expr->node_type == PT_NAME)
+	{
+	  /* check if the arg matches order by clause by position */
+	  dom = NULL;
+	  obj = db_find_class (order_expr->info.name.resolved);
+	  if (obj != NULL)
+	    {
+	      att = db_get_attribute (obj, order_expr->info.name.original);
+	      if (att != NULL)
+		{
+		  dom = att->domain;
+		}
+	    }
+
+	  if (dom == NULL)
+	    {
+	      error = er_errid ();
+	      goto error_exit;
+	    }
+
+	  /* for common values */
+	  if (arg->node_type != PT_EXPR)
+	    {
+	      value = &arg->info.value.db_value;
+	      error = db_value_coerce (value, value, dom);
+	      if (error != NO_ERROR)
+		{
+		  PT_ERRORmf2 (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+			       MSGCAT_SEMANTIC_CANT_COERCE_TO,
+			       pt_short_print (parser, arg),
+			       pt_show_type_enum (order_expr->type_enum));
+		  goto error_exit;
+		}
+	    }
+	}
+
+      /* to next */
+      order->info.sort_spec.pos_descr.pos_no = i + 1;
+      arg = arg->next;
+      order = order->next;
+    }
+
+error_exit:
+
+  return error;
+}
+
+
+/*
  * pt_has_parameters () - check if a statement uses session variables
  * return	: true if the statement uses session variables
  * parser (in)	: parser context
@@ -14847,6 +15079,7 @@ pt_check_analytic_function (PARSER_CONTEXT * parser, PT_NODE * func,
   PT_NODE *arg_list, *partition_by, *order_by, *select_list;
   PT_NODE *order, *query;
   PT_NODE *link = NULL, *order_list = NULL, *match = NULL;
+  PT_NODE *new_order = NULL;
 
   if (func->node_type != PT_FUNCTION
       || !func->info.function.analytic.is_analytic)
@@ -14868,12 +15101,49 @@ pt_check_analytic_function (PARSER_CONTEXT * parser, PT_NODE * func,
       && func->info.function.function_type != PT_COUNT_STAR
       && func->info.function.function_type != PT_ROW_NUMBER
       && func->info.function.function_type != PT_RANK
-      && func->info.function.function_type != PT_DENSE_RANK)
+      && func->info.function.function_type != PT_DENSE_RANK
+      && func->info.function.function_type != PT_CUME_DIST
+      && func->info.function.function_type != PT_PERCENT_RANK)
     {
       PT_ERRORmf (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
 		  MSGCAT_SEMANTIC_FUNCTION_NO_ARGS,
 		  pt_short_print (parser, func));
       return func;
+    }
+
+  /* median doesn't support over(order by ...) */
+  if (func->info.function.function_type == PT_MEDIAN)
+    {
+      if (func->info.function.analytic.order_by != NULL)
+	{
+	  PT_ERRORm (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+		     MSGCAT_SEMANTIC_MEDIAN_FUNC_NOT_ALLOW_ORDER_BY);
+	  return func;
+	}
+      else if (!PT_IS_CONST (arg_list))
+	{
+	  /* only sort data when arg is not constant */
+	  new_order = parser_new_node (parser, PT_SORT_SPEC);
+	  if (new_order == NULL)
+	    {
+	      PT_ERRORm (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	      return func;
+	    }
+
+	  new_order->info.sort_spec.asc_or_desc = PT_ASC;
+	  new_order->info.sort_spec.nulls_first_or_last = PT_NULLS_DEFAULT;
+	  new_order->info.sort_spec.expr =
+	    parser_copy_tree (parser, arg_list);
+	  if (new_order->info.sort_spec.expr == NULL)
+	    {
+	      PT_ERRORm (parser, func, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	      return func;
+	    }
+
+	  func->info.function.analytic.order_by = new_order;
+	}
     }
 
   /* remove NULL specs */
@@ -15797,4 +16067,283 @@ pt_check_odku_assignments (PARSER_CONTEXT * parser, PT_NODE * insert)
 	}
     }
   return insert;
+}
+
+/*
+ * pt_get_select_list_coll_compat () - scans a UNION parse tree and retains
+ *				       for each column with collation the node
+ *				       (and its compatibility info) having the
+ *				       least (collation) coercible level
+ *
+ *   return:  compatibility status
+ *   parser(in): the parser context
+ *   query(in): query node
+ *   cinfo(in/out): compatibility info array structure
+ *   num_cinfo(in): number of elements in cinfo
+ */
+static PT_UNION_COMPATIBLE
+pt_get_select_list_coll_compat (PARSER_CONTEXT * parser, PT_NODE * query,
+				SEMAN_COMPATIBLE_INFO * cinfo, int num_cinfo)
+{
+  PT_NODE *attrs, *att;
+  int i;
+  PT_UNION_COMPATIBLE status = PT_UNION_COMP, status2;
+
+  assert (query != NULL);
+
+  switch (query->node_type)
+    {
+    case PT_SELECT:
+
+      attrs = pt_get_select_list (parser, query);
+
+      for (att = attrs, i = 0; i < num_cinfo && att != NULL;
+	   ++i, att = att->next)
+	{
+	  SEMAN_COMPATIBLE_INFO cinfo_att;
+
+	  if (!PT_HAS_COLLATION (att->type_enum))
+	    {
+	      continue;
+	    }
+
+	  pt_get_compatible_info_from_node (att, &cinfo_att);
+
+	  if (cinfo[i].type_enum == PT_TYPE_NONE)
+	    {
+	      /* first query, init this column */
+	      memcpy (&(cinfo[i]), &cinfo_att, sizeof (cinfo_att));
+	    }
+	  else if (cinfo_att.coll_infer.coerc_level
+		   < cinfo[i].coll_infer.coerc_level)
+	    {
+	      assert (PT_HAS_COLLATION (cinfo[i].type_enum));
+
+	      memcpy (&(cinfo[i].coll_infer), &(cinfo_att.coll_infer),
+		      sizeof (cinfo_att.coll_infer));
+	      cinfo[i].ref_att = att;
+	      status = PT_UNION_INCOMP;
+	    }
+	  else if (cinfo_att.coll_infer.coll_id
+		   != cinfo[i].coll_infer.coll_id)
+	    {
+	      status = PT_UNION_INCOMP;
+	    }
+	}
+      break;
+    case PT_UNION:
+    case PT_INTERSECTION:
+    case PT_DIFFERENCE:
+      status =
+	pt_get_select_list_coll_compat (parser,
+					query->info.query.q.union_.arg1,
+					cinfo, num_cinfo);
+
+      if (status != PT_UNION_COMP && status != PT_UNION_INCOMP)
+	{
+	  break;
+	}
+
+      status2 =
+	pt_get_select_list_coll_compat (parser,
+					query->info.query.q.union_.arg2,
+					cinfo, num_cinfo);
+      if (status2 != PT_UNION_COMP)
+	{
+	  status = status2;
+	}
+      break;
+    default:
+      break;
+    }
+
+  return status;
+}
+
+/*
+ * pt_apply_union_select_list_collation () - scans a UNION parse tree and
+ *		sets for each node with collation the collation corresponding
+ *		of the column in 'cinfo' array
+ *				       
+ *   return:  union compatibility status
+ *   parser(in): the parser context
+ *   query(in): query node
+ *   cinfo(in): compatibility info array structure
+ *   num_cinfo(in): number of elements in cinfo
+ */
+static PT_UNION_COMPATIBLE
+pt_apply_union_select_list_collation (PARSER_CONTEXT * parser,
+				      PT_NODE * query,
+				      SEMAN_COMPATIBLE_INFO * cinfo,
+				      int num_cinfo)
+{
+  PT_NODE *attrs, *att, *prev_att, *next_att, *new_att;
+  int i;
+  PT_UNION_COMPATIBLE status = PT_UNION_COMP, status2;
+
+  assert (query != NULL);
+
+  switch (query->node_type)
+    {
+    case PT_SELECT:
+
+      attrs = pt_get_select_list (parser, query);
+
+      prev_att = NULL;
+      next_att = NULL;
+
+      for (att = attrs, i = 0; i < num_cinfo && att != NULL;
+	   ++i, att = next_att)
+	{
+	  SEMAN_COMPATIBLE_INFO cinfo_att;
+
+	  next_att = att->next;
+
+	  if (!PT_HAS_COLLATION (att->type_enum))
+	    {
+	      continue;
+	    }
+
+	  assert (PT_HAS_COLLATION (cinfo[i].type_enum));
+
+	  pt_get_compatible_info_from_node (att, &cinfo_att);
+
+	  if (cinfo_att.coll_infer.coll_id != cinfo[i].coll_infer.coll_id)
+	    {
+	      bool new_cast_added = false;
+
+	      if (pt_common_collation (&cinfo_att.coll_infer,
+				       &(cinfo[i].coll_infer), NULL, 2, false,
+				       &cinfo_att.coll_infer.coll_id,
+				       &cinfo_att.coll_infer.codeset) != 0)
+		{
+		  PT_ERRORmf2 (parser, att, MSGCAT_SET_PARSER_SEMANTIC,
+			       MSGCAT_SEMANTIC_UNION_INCOMPATIBLE,
+			       pt_short_print (parser, att),
+			       pt_short_print (parser, cinfo[i].ref_att));
+		  return PT_UNION_INCOMP_CANNOT_FIX;
+		}
+
+	      new_att = pt_make_cast_with_compatible_info (parser, att,
+							   next_att,
+							   &cinfo_att,
+							   &new_cast_added);
+	      if (new_att == NULL)
+		{
+		  PT_ERRORmf2 (parser, att, MSGCAT_SET_PARSER_SEMANTIC,
+			       MSGCAT_SEMANTIC_UNION_INCOMPATIBLE,
+			       pt_short_print (parser, att),
+			       pt_short_print (parser, cinfo[i].ref_att));
+		  return PT_UNION_INCOMP_CANNOT_FIX;
+		}
+
+	      att = new_att;
+
+	      if (new_cast_added)
+		{
+		  if (prev_att == NULL)
+		    {
+		      query->info.query.q.select.list = att;
+		      query->type_enum = att->type_enum;
+		      if (query->data_type)
+			{
+			  parser_free_tree (parser, query->data_type);
+			}
+
+		      query->data_type = parser_copy_tree_list (parser,
+								att->
+								data_type);
+		    }
+		  else
+		    {
+		      prev_att->next = att;
+		    }
+		}
+
+	      prev_att = att;
+	      status = PT_UNION_INCOMP;
+	    }
+	}
+      break;
+    case PT_UNION:
+    case PT_INTERSECTION:
+    case PT_DIFFERENCE:
+      status =
+	pt_apply_union_select_list_collation (parser,
+					      query->info.query.q.union_.arg1,
+					      cinfo, num_cinfo);
+      if (status != PT_UNION_COMP && status != PT_UNION_INCOMP)
+	{
+	  return status;
+	}
+
+      status2 =
+	pt_apply_union_select_list_collation (parser,
+					      query->info.query.q.union_.arg2,
+					      cinfo, num_cinfo);
+
+      if (status2 != PT_UNION_COMP && status2 != PT_UNION_INCOMP)
+	{
+	  return status;
+	}
+
+      if (status2 != PT_UNION_COMP)
+	{
+	  status = status2;
+	}
+
+      if (status == PT_UNION_INCOMP)
+	{
+	  if (query->data_type != NULL)
+	    {
+	      parser_free_tree (parser, query->data_type);
+	    }
+
+	  query->data_type =
+	    parser_copy_tree (parser, query->info.query.q.union_.arg1->
+			      data_type);
+	}
+      break;
+    default:
+      break;
+    }
+
+  return status;
+}
+
+/*
+ * pt_mark_union_leaf_nodes () - walking function for setting for each UNION
+ *				 DIFFERENCE/INTERSECTION query if it is a root
+ *				 of a leaf node.
+ *   return:
+ *   parser(in):
+ *   node(in):
+ *   arg(in):
+ *   continue_walk(in/out):
+ */
+static PT_NODE *
+pt_mark_union_leaf_nodes (PARSER_CONTEXT * parser, PT_NODE * node,
+			  void *arg, int *continue_walk)
+{
+  if (PT_IS_UNION (node) || PT_IS_INTERSECTION (node)
+      || PT_IS_DIFFERENCE (node))
+    {
+      PT_NODE *arg;
+
+      arg = node->info.query.q.union_.arg1;
+      if (PT_IS_UNION (arg) || PT_IS_INTERSECTION (arg)
+	  || PT_IS_DIFFERENCE (arg))
+	{
+	  arg->info.query.q.union_.is_leaf_node = 1;
+	}
+
+      arg = node->info.query.q.union_.arg2;
+      if (PT_IS_UNION (arg) || PT_IS_INTERSECTION (arg)
+	  || PT_IS_DIFFERENCE (arg))
+	{
+	  arg->info.query.q.union_.is_leaf_node = 1;
+	}
+    }
+
+  return node;
 }

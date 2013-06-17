@@ -146,7 +146,8 @@ extern VOLID
 disk_get_purpose_and_total_free_numpages (VOLID volid,
 					  DISK_VOLPURPOSE * vol_purpose,
 					  DKNPAGES * vol_ntotal_pages,
-					  DKNPAGES * vol_nfree_pages);
+					  DKNPAGES * vol_nfree_pages,
+					  DKNPAGES * vol_nmax_pages);
 extern char *disk_get_fullname (VOLID volid, char *vol_fullname);
 extern LOG_COPY *log_client_get_first_postpone (LOG_LSA * next_lsa);
 extern LOG_COPY *log_client_get_next_postpone (LOG_LSA * next_lsa);
@@ -283,8 +284,7 @@ extern int btree_add_index (BTID * btid, TP_DOMAIN * key_type,
 extern int btree_load_index (BTID * btid, TP_DOMAIN * key_type,
 			     OID * class_oids, int n_classes, int n_attrs,
 			     int *attr_ids, int *attrs_prefix_length,
-			     HFID * hfids, int unique_flag,
-			     int last_key_desc,
+			     HFID * hfids, int unique_flag, int not_null_flag,
 			     OID * fk_refcls_oid, BTID * fk_refcls_pk_btid,
 			     int cache_attr_id, const char *fk_name,
 			     char *pred_stream, int pred_stream_size,

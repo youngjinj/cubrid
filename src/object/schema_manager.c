@@ -413,7 +413,7 @@ static int allocate_index (MOP classop, SM_CLASS * class_,
 			   DB_OBJLIST * subclasses,
 			   SM_ATTRIBUTE ** attrs, const int *asc_desc,
 			   const int *attrs_prefix_length,
-			   int unique, int reverse,
+			   int unique, int not_null, int reverse,
 			   const char *constraint_name, BTID * index,
 			   OID * fk_refcls_oid, BTID * fk_refcls_pk_btid,
 			   int cache_attr_id, const char *fk_name,
@@ -474,7 +474,6 @@ static int update_class (SM_TEMPLATE * template_, MOP * classmop,
 			 int auto_res);
 static void remove_class_triggers (MOP classop, SM_CLASS * class_);
 static int sm_drop_cascade_foreign_key (SM_CLASS * class_);
-static int sm_exist_index (MOP classop, const char *idxname, BTID * btid);
 static char *sm_default_constraint_name (const char *class_name,
 					 DB_CONSTRAINT_TYPE type,
 					 const char **att_names,
@@ -3794,7 +3793,7 @@ sm_get_class_with_statistics (MOP classop)
 	      stats = stats_get_statistics (WS_OID (classop),
 					    class_->stats->time_stamp);
 	      /* if newly updated statistics are fetched, replace the old one */
-	      if (stats != NULL)
+	      if (stats)
 		{
 		  stats_free_statistics (class_->stats);
 		  class_->stats = stats;
@@ -10278,6 +10277,7 @@ collect_hier_class_info (MOP classop, DB_OBJLIST * subclasses,
  *   attrs(in): attribute getting the index
  *   asc_desc(in): asc/desc info list
  *   unique(in): True if were allocating a UNIQUE index.  False otherwise.
+ *   not_null(in):
  *   reverse(in):
  *   constraint_name(in): Name of constraint.
  *   index(out): The BTID of the returned index.
@@ -10290,8 +10290,8 @@ collect_hier_class_info (MOP classop, DB_OBJLIST * subclasses,
 static int
 allocate_index (MOP classop, SM_CLASS * class_, DB_OBJLIST * subclasses,
 		SM_ATTRIBUTE ** attrs, const int *asc_desc,
-		const int *attrs_prefix_length, int unique, int reverse,
-		const char *constraint_name, BTID * index,
+		const int *attrs_prefix_length, int unique, int not_null,
+		int reverse, const char *constraint_name, BTID * index,
 		OID * fk_refcls_oid, BTID * fk_refcls_pk_btid,
 		int cache_attr_id, const char *fk_name,
 		SM_PREDICATE_INFO * filter_index,
@@ -10459,27 +10459,13 @@ allocate_index (MOP classop, SM_CLASS * class_, DB_OBJLIST * subclasses,
 	     subclasses) into the new B-tree */
 	  else
 	    {
-	      int last_key_desc = 0;
-
-	      if (reverse || (asc_desc && asc_desc[n_attrs - 1] == 1)
-		  || (function_index && function_index->fi_domain->is_desc
-		      && (function_index->col_id == function_index->
-			  attr_index_start)))
-		{
-		  last_key_desc = true;
-		}
-	      else
-		{
-		  last_key_desc = false;
-		}
-
 	      if (function_index)
 		{
 		  error =
 		    btree_load_index (index, domain, oids, n_classes, n_attrs,
 				      attr_ids, (int *) attrs_prefix_length,
-				      hfids, unique,
-				      last_key_desc, fk_refcls_oid,
+				      hfids, unique, not_null,
+				      fk_refcls_oid,
 				      fk_refcls_pk_btid, cache_attr_id,
 				      fk_name,
 				      SM_GET_FILTER_PRED_STREAM
@@ -10496,8 +10482,8 @@ allocate_index (MOP classop, SM_CLASS * class_, DB_OBJLIST * subclasses,
 		  error =
 		    btree_load_index (index, domain, oids, n_classes, n_attrs,
 				      attr_ids, (int *) attrs_prefix_length,
-				      hfids, unique,
-				      last_key_desc, fk_refcls_oid,
+				      hfids, unique, not_null,
+				      fk_refcls_oid,
 				      fk_refcls_pk_btid, cache_attr_id,
 				      fk_name,
 				      SM_GET_FILTER_PRED_STREAM
@@ -10734,7 +10720,7 @@ allocate_unique_constraint (MOP classop, SM_CLASS * class_,
 			    SM_CLASS_CONSTRAINT * con,
 			    DB_OBJLIST * subclasses)
 {
-  int unique, reverse;
+  int unique, not_null, reverse;
   SM_CLASS *super_class;
   SM_CLASS_CONSTRAINT *super_con, *shared_con;
   const int *asc_desc;
@@ -10811,10 +10797,11 @@ allocate_unique_constraint (MOP classop, SM_CLASS * class_,
 	    }
 
 	  reverse = SM_IS_CONSTRAINT_REVERSE_INDEX_FAMILY (con->type);
+	  not_null = con->type == SM_CONSTRAINT_PRIMARY_KEY ? true : false;
 
 	  if (allocate_index
 	      (classop, class_, local_subclasses, con->attributes, asc_desc,
-	       con->attrs_prefix_length, unique, reverse, con->name,
+	       con->attrs_prefix_length, unique, not_null, reverse, con->name,
 	       &con->index_btid, NULL, NULL, -1, NULL, con->filter_predicate,
 	       con->func_index_info))
 	    {
@@ -10925,7 +10912,7 @@ allocate_foreign_key (MOP classop, SM_CLASS * class_,
     {
       if (allocate_index (classop, class_, subclasses, con->attributes, NULL,
 			  con->attrs_prefix_length, false,
-			  false, con->name, &con->index_btid,
+			  false, false, con->name, &con->index_btid,
 			  &(con->fk_info->ref_class_oid),
 			  &(con->fk_info->ref_class_pk_btid),
 			  con->fk_info->cache_attr_id, con->fk_info->name,
@@ -10998,7 +10985,7 @@ allocate_disk_structure_helper (MOP classop, SM_CLASS * class_,
 	  error = allocate_index (classop, class_, NULL, con->attributes,
 				  con->asc_desc,
 				  con->attrs_prefix_length,
-				  false, reverse, con->name,
+				  false, false, reverse, con->name,
 				  &con->index_btid, NULL, NULL, -1, NULL,
 				  con->filter_predicate,
 				  con->func_index_info);
@@ -11423,8 +11410,11 @@ transfer_disk_structures (MOP classop, SM_CLASS * class_, SM_TEMPLATE * flat)
 	  continue;
 	}
 
-      new_con = classobj_find_class_constraint (flat_constraints, con->type,
-						con->name);
+      /* We need to find the constraint by BTID because the constraint name
+       * may have been changed by RENAME CONSTRAINT(or INDEX) DDLs. */
+      new_con = classobj_find_class_constraint_by_btid (flat_constraints,
+							con->type,
+							con->index_btid);
       if (new_con == NULL)
 	{
 	  /* Constraint does not exist in the template */
@@ -12836,7 +12826,8 @@ cleanup:
       classobj_free_template (flat);
       abort_subclasses (newsubs);
       if (error == ER_BTREE_UNIQUE_FAILED || error == ER_FK_INVALID
-	  || error == ER_SM_PRIMARY_KEY_EXISTS)
+	  || error == ER_SM_PRIMARY_KEY_EXISTS
+	  || error == ER_NOT_NULL_DOES_NOT_ALLOW_NULL_VALUE)
 	{
 	  (void) tran_abort_upto_system_savepoint (UNIQUE_SAVEPOINT_NAME);
 	}
@@ -13351,7 +13342,7 @@ sm_delete_class (const char *name)
  *   classop(in): class object
  *   idxname(in): index name
  */
-static int
+int
 sm_exist_index (MOP classop, const char *idxname, BTID * btid)
 {
   int error = NO_ERROR;
@@ -13671,7 +13662,7 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 	     are existing instances */
 	  BTID_SET_NULL (&index);
 	  error = allocate_index (classop, class_, NULL, attrs, asc_desc,
-				  attrs_prefix_length, false,
+				  attrs_prefix_length, false, false,
 				  reverse_index, constraint_name, &index,
 				  NULL, NULL, -1, NULL, filter_index,
 				  function_index);
@@ -13728,7 +13719,7 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 	   * to make use of the new index.  Recall that the optimizer
 	   * looks at the statistics structures, not the schema structures.
 	   */
-	  if (sm_update_index_statistics (classop, &index, true))
+	  if (sm_update_index_statistics (classop, &index, false))
 	    {
 	      goto severe_error;
 	    }
@@ -14506,7 +14497,7 @@ sm_add_constraint (MOP classop, DB_CONSTRAINT_TYPE constraint_type,
     case DB_CONSTRAINT_UNIQUE:
     case DB_CONSTRAINT_REVERSE_UNIQUE:
     case DB_CONSTRAINT_PRIMARY_KEY:
-      def = smt_edit_class_mop (classop);
+      def = smt_edit_class_mop (classop, AU_ALTER);
       if (def == NULL)
 	{
 	  error = er_errid ();
@@ -14529,7 +14520,7 @@ sm_add_constraint (MOP classop, DB_CONSTRAINT_TYPE constraint_type,
       break;
 
     case DB_CONSTRAINT_NOT_NULL:
-      def = smt_edit_class_mop (classop);
+      def = smt_edit_class_mop (classop, AU_ALTER);
       if (def == NULL)
 	{
 	  error = er_errid ();
@@ -14629,7 +14620,7 @@ sm_drop_constraint (MOP classop,
     case DB_CONSTRAINT_UNIQUE:
     case DB_CONSTRAINT_REVERSE_UNIQUE:
     case DB_CONSTRAINT_PRIMARY_KEY:
-      def = smt_edit_class_mop (classop);
+      def = smt_edit_class_mop (classop, AU_ALTER);
       if (def == NULL)
 	{
 	  error = er_errid ();
@@ -14654,7 +14645,7 @@ sm_drop_constraint (MOP classop,
       break;
 
     case DB_CONSTRAINT_NOT_NULL:
-      def = smt_edit_class_mop (classop);
+      def = smt_edit_class_mop (classop, AU_ALTER);
       if (def == NULL)
 	{
 	  error = er_errid ();

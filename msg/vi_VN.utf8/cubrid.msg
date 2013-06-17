@@ -1183,7 +1183,21 @@ $ LOADDB
 1114 Argument '%s' is out of range.
 1115 Started to update statistics (class "%1$s", oid : %2$d|%3$d|%4$d).
 1116 Finished to update statistics (class "%1$s", oid : %2$d|%3$d|%4$d, error code : %5$d).
-1117 Lỗi sau cùng
+1117 Cannot change attribute "%1$s". CUBRID cannot change an attribute as a SHARED and vice versa.
+1118 The argument of "%1$s" can not be coerced to desired domain "%2$s".
+1119 Internal error: Page id %1$d is allocated according to the allocation map of volume "%2$s", but it does not belong to any file. 
+1120 Internal error: Page id %1$d of volume "%2$s" is currently being used, but it is not allocated according to the allocation map of volume.
+1121 NOT NULL constraints do not allow NULL value.
+1122 Time out in receiving data.
+1123 pthread_cond_timedwait() timed out. 
+1124 Query execution error. ERROR_CODE = %1$d, /* SQL_ID: %2$s */ %3$s
+1125 Unused error code.
+1126 Unused error code.
+1127 Unused error code.
+1128 Log recovery is started. The number of log records to be applied: %1$lld. Log page: %2$lld ~ %3$lld.
+1129 Log recovery is finished.
+1130 Transaction is aborted because transaction lock counts exceeds %1$d.
+1131 Lỗi sau cùng
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Lỗi trong các lỗi hệ thống con (dòng %d):
@@ -1608,6 +1622,11 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 273 Only one table within a view can be updated.
 274 Multiple insert targets not allowed.
 275 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
+276 ORDER BY is not allowed in function MEDIAN.
+277 The arguments of the function '%s' must be constant.
+278 Function '%s' must have ORDER BY clause.
+279 For function '%s', the number of arguments does not match the number of ORDER BY columns.
+280 For function '%s', the ORDER BY clause is invalid.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Không đủ bộ nhớ ảo: không thể cấp phát %d bytes.

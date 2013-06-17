@@ -278,7 +278,7 @@ extern BTID *xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid,
 				int n_classes, int n_attrs, int *attr_ids,
 				int *attrs_prefix_length,
 				HFID * hfids, int unique_flag,
-				int last_key_desc,
+				int not_null_flag,
 				OID * fk_refcls_oid, BTID * fk_refcls_pk_btid,
 				int cache_attr_id, const char *fk_name,
 				char *pred_stream, int pred_stream_size,
@@ -314,7 +314,7 @@ extern char *xstats_get_statistics_from_server (THREAD_ENTRY * thread_p,
 						unsigned int timestamp,
 						int *length);
 extern int xstats_update_class_statistics (THREAD_ENTRY * thread_p,
-					   OID * classoid, BTID * btid);
+					   OID * classoid, BTID_LIST * btids);
 extern int xstats_update_statistics (THREAD_ENTRY * thread_p);
 
 extern DKNPAGES xdisk_get_total_numpages (THREAD_ENTRY * thread_p,
@@ -333,8 +333,9 @@ extern VOLID xdisk_get_purpose_and_total_free_numpages (THREAD_ENTRY *
 							DKNPAGES *
 							vol_ntotal_pages,
 							DKNPAGES *
-							vol_nfree_pages);
-
+							vol_nfree_pages,
+							DKNPAGES *
+							vol_nmax_pages);
 extern int xqfile_get_list_file_page (THREAD_ENTRY * thread_p,
 				      QUERY_ID query_id, VOLID volid,
 				      PAGEID pageid, char *page_bufp,
@@ -350,7 +351,7 @@ extern QFILE_LIST_ID *xqmgr_execute_query (THREAD_ENTRY * thrd,
 					   const XASL_ID * xasl_id,
 					   QUERY_ID * query_idp,
 					   int dbval_cnt,
-					   const DB_VALUE * dbvals,
+					   const char *data,
 					   QUERY_FLAG * flagp,
 					   CACHE_TIME * clt_cache_time,
 					   CACHE_TIME * srv_cache_time,
@@ -361,7 +362,7 @@ extern QFILE_LIST_ID *xqmgr_prepare_and_execute_query (THREAD_ENTRY * thrd,
 						       int xasl_stream_size,
 						       QUERY_ID * query_id,
 						       int dbval_cnt,
-						       DB_VALUE * dbval_ptr,
+						       const char *data,
 						       QUERY_FLAG * flag,
 						       int query_timeout);
 extern int xqmgr_end_query (THREAD_ENTRY * thrd, QUERY_ID query_id);

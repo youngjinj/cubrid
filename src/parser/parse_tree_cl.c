@@ -990,7 +990,7 @@ pt_walk_private (PARSER_CONTEXT * parser, PT_NODE * node, void *void_arg)
 	       */
 	      node_type = node->node_type;
 
-	      if (node_type >= PT_NODE_NUMBER
+	      if (node_type >= PT_LAST_NODE_NUMBER
 		  || !(apply = pt_apply_f[node_type]))
 		{
 		  return NULL;
@@ -1075,7 +1075,8 @@ parser_walk_leaves (PARSER_CONTEXT * parser,
     {
       node_type = walk->node_type;
 
-      if (node_type >= PT_NODE_NUMBER || !(apply = pt_apply_f[node_type]))
+      if (node_type >= PT_LAST_NODE_NUMBER
+	  || !(apply = pt_apply_f[node_type]))
 	{
 	  return NULL;
 	}
@@ -2337,7 +2338,7 @@ parser_init_node (PT_NODE * node)
     {
       PARSER_INIT_NODE_FUNC f;
 
-      assert (node->node_type < PT_NODE_NUMBER);
+      assert (node->node_type < PT_LAST_NODE_NUMBER);
 
       /* don't write over node_type, parser_id, line or column */
       node->next = NULL;
@@ -2432,7 +2433,7 @@ pt_print_bytes (PARSER_CONTEXT * parser, const PT_NODE * node)
 
   t = node->node_type;
 
-  if (t >= PT_NODE_NUMBER || !(f = pt_print_f[t]))
+  if (t >= PT_LAST_NODE_NUMBER || !(f = pt_print_f[t]))
     {
       return NULL;
     }
@@ -3239,6 +3240,10 @@ pt_show_misc_type (PT_MISC_TYPE p)
       return "out";
     case PT_INPUTOUTPUT:
       return "inout";
+    case PT_CONSTRAINT_NAME:
+      return "constraint";
+    case PT_INDEX_NAME:
+      return "index";
     default:
       return "MISC_TYPE: type unknown";
     }
@@ -3787,6 +3792,10 @@ pt_show_function (FUNC_TYPE c)
       return "count";
     case PT_COUNT_STAR:
       return "count";
+    case PT_CUME_DIST:
+      return "cume_dist";
+    case PT_PERCENT_RANK:
+      return "percent_rank";
     case PT_GROUPBY_NUM:
       return "groupby_num";
     case PT_AGG_BIT_AND:
@@ -3815,6 +3824,8 @@ pt_show_function (FUNC_TYPE c)
       return "last_value";
     case PT_NTH_VALUE:
       return "nth_value";
+    case PT_MEDIAN:
+      return "median";
 
     case F_SEQUENCE:
       return "sequence";
@@ -5384,6 +5395,15 @@ pt_apply_alter (PARSER_CONTEXT * parser, PT_NODE * p,
       p->info.alter.alter_clause.rename.mthd_name =
 	g (parser, p->info.alter.alter_clause.rename.mthd_name, arg);
       break;
+    case PT_RENAME_CONSTRAINT:
+    case PT_RENAME_INDEX:
+      p->info.alter.alter_clause.rename.old_name = g (parser,
+						      p->info.
+						      alter.alter_clause.
+						      rename.old_name, arg);
+      p->info.alter.alter_clause.rename.new_name =
+	g (parser, p->info.alter.alter_clause.rename.new_name, arg);
+      break;
     case PT_MODIFY_DEFAULT:
     case PT_ALTER_DEFAULT:
       p->info.alter.alter_clause.ch_attr_def.attr_name_list =
@@ -5775,6 +5795,33 @@ pt_print_alter_one_clause (PARSER_CONTEXT * parser, PT_NODE * p)
 	pt_print_bytes (parser, p->info.alter.alter_clause.rename.new_name);
       q = pt_append_varchar (parser, q, r1);
       break;
+
+    case PT_RENAME_CONSTRAINT:
+    case PT_RENAME_INDEX:
+      q = pt_append_nulstring (parser, q, " rename ");
+      q = pt_append_nulstring (parser, q,
+			       pt_show_misc_type (p->info.alter.
+						  alter_clause.rename.
+						  element_type));
+      q = pt_append_nulstring (parser, q, " ");
+
+      switch (p->info.alter.alter_clause.rename.element_type)
+	{
+	default:
+	  break;
+	case PT_CONSTRAINT_NAME:
+	case PT_INDEX_NAME:
+	  r1 = pt_print_bytes (parser,
+			       p->info.alter.alter_clause.rename.old_name);
+	  r2 = pt_print_bytes (parser,
+			       p->info.alter.alter_clause.rename.new_name);
+	  q = pt_append_varchar (parser, q, r1);
+	  q = pt_append_nulstring (parser, q, " to ");
+	  q = pt_append_varchar (parser, q, r2);
+	  break;
+	}
+      break;
+
     case PT_RENAME_ATTR_MTHD:
       q = pt_append_nulstring (parser, q, " rename ");
       q = pt_append_nulstring (parser, q,
@@ -6168,14 +6215,28 @@ pt_print_alter_index (PARSER_CONTEXT * parser, PT_NODE * p)
 
   b = pt_append_nulstring (parser, b, " ");
 
-  if (p->info.index.where)
-    {
-      r3 = pt_print_and_list (parser, p->info.index.where);
-      b = pt_append_nulstring (parser, b, " where ");
-      b = pt_append_varchar (parser, b, r3);
-    }
 
-  b = pt_append_nulstring (parser, b, "rebuild");
+  if (p->info.index.code == PT_REBUILD_INDEX)
+    {
+      if (p->info.index.where)
+	{
+	  r3 = pt_print_and_list (parser, p->info.index.where);
+	  b = pt_append_nulstring (parser, b, " where ");
+	  b = pt_append_varchar (parser, b, r3);
+	}
+
+      b = pt_append_nulstring (parser, b, "rebuild");
+    }
+  else				/* if (p->info.index.code == PT_RENAME_INDEX) */
+    {
+      b = pt_append_nulstring (parser, b, "rename to ");
+
+      if (p->info.index.new_name)
+	{
+	  const char *new_name = p->info.index.new_name->info.name.original;
+	  b = pt_append_bytes (parser, b, new_name, strlen (new_name));
+	}
+    }
 
   return b;
 }
@@ -7622,7 +7683,21 @@ pt_print_table_option (PARSER_CONTEXT * parser, PT_NODE * p)
 
   if (p->info.table_option.val != NULL)
     {
-      r1 = pt_print_bytes_l (parser, p->info.table_option.val);
+      if (p->info.table_option.option == PT_TABLE_OPTION_CHARSET
+	  || p->info.table_option.option == PT_TABLE_OPTION_COLLATION)
+	{
+	  /* print as unquoted string */
+	  assert (p->info.table_option.val != NULL);
+	  assert (p->info.table_option.val->node_type == PT_VALUE);
+	  assert (PT_IS_SIMPLE_CHAR_STRING_TYPE
+		  (p->info.table_option.val->type_enum));
+	  r1 = p->info.table_option.val->info.value.data_value.str;
+	  assert (r1 != NULL);
+	}
+      else
+	{
+	  r1 = pt_print_bytes_l (parser, p->info.table_option.val);
+	}
       q = pt_append_varchar (parser, q, r1);
     }
 
@@ -8575,6 +8650,11 @@ pt_print_delete (PARSER_CONTEXT * parser, PT_NODE * p)
       if (p->info.delete_.hint & PT_HINT_NO_MULTI_RANGE_OPT)
 	{
 	  q = pt_append_nulstring (parser, q, " NO_MULTI_RANGE_OPT ");
+	}
+
+      if (p->info.delete_.hint & PT_HINT_NO_SORT_LIMIT)
+	{
+	  q = pt_append_nulstring (parser, q, " NO_SORT_LIMIT ");
 	}
 
       q = pt_append_nulstring (parser, q, " */");
@@ -11972,6 +12052,25 @@ pt_print_function (PARSER_CONTEXT * parser, PT_NODE * p)
 
       q = pt_append_nulstring (parser, q, ")");
     }
+  else if (code == PT_CUME_DIST || code == PT_PERCENT_RANK)
+    {
+      r1 = pt_print_bytes_l (parser, p->info.function.arg_list);
+      q = pt_append_nulstring (parser, q, pt_show_function (code));
+      q = pt_append_nulstring (parser, q, "(");
+      q = pt_append_varchar (parser, q, r1);
+      q = pt_append_nulstring (parser, q, ")");
+
+      if (!p->info.function.analytic.is_analytic)
+	{			/* aggregate */
+	  if (p->info.function.order_by)
+	    {
+	      r1 = pt_print_bytes_l (parser, p->info.function.order_by);
+	      q = pt_append_nulstring (parser, q, " within group(order by ");
+	      q = pt_append_varchar (parser, q, r1);
+	      q = pt_append_nulstring (parser, q, ")");
+	    }
+	}
+    }
   else if (code == F_SET || code == F_MULTISET || code == F_SEQUENCE)
     {
       if (p->spec_ident)
@@ -14107,6 +14206,11 @@ pt_print_select (PARSER_CONTEXT * parser, PT_NODE * p)
 	      q = pt_append_nulstring (parser, q, "NO_MULTI_RANGE_OPT ");
 	    }
 
+	  if (p->info.query.q.select.hint & PT_HINT_NO_SORT_LIMIT)
+	    {
+	      q = pt_append_nulstring (parser, q, "NO_SORT_LIMIT ");
+	    }
+
 	  if (p->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
 	    {
 	      q = pt_append_nulstring (parser, q, "SELECT_RECORD_INFO");
@@ -15223,6 +15327,11 @@ pt_print_update (PARSER_CONTEXT * parser, PT_NODE * p)
       if (p->info.update.hint & PT_HINT_NO_MULTI_RANGE_OPT)
 	{
 	  b = pt_append_nulstring (parser, b, " NO_MULTI_RANGE_OPT ");
+	}
+
+      if (p->info.update.hint & PT_HINT_NO_SORT_LIMIT)
+	{
+	  b = pt_append_nulstring (parser, b, " NO_SORT_LIMIT ");
 	}
 
       b = pt_append_nulstring (parser, b, " */");

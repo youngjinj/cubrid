@@ -12197,7 +12197,8 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
   arg_list = node->info.function.arg_list;
   fcode = node->info.function.function_type;
   if (!arg_list && fcode != PT_COUNT_STAR && fcode != PT_GROUPBY_NUM
-      && fcode != PT_ROW_NUMBER && fcode != PT_RANK && fcode != PT_DENSE_RANK)
+      && fcode != PT_ROW_NUMBER && fcode != PT_RANK && fcode != PT_DENSE_RANK
+      && fcode != PT_CUME_DIST && fcode != PT_PERCENT_RANK)
     {
       PT_ERRORmf (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
 		  MSGCAT_SEMANTIC_FUNCTION_NO_ARGS,
@@ -12407,6 +12408,11 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
 	    break;
 	  }
       }
+      break;
+
+    case PT_CUME_DIST:
+    case PT_PERCENT_RANK:
+      check_agg_single_arg = false;
       break;
 
     case PT_NTILE:
@@ -12684,6 +12690,21 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
       }
       break;
 
+    case PT_MEDIAN:
+      if (arg_type != PT_TYPE_NULL
+	  && arg_type != PT_TYPE_NA
+	  && !PT_IS_NUMERIC_TYPE (arg_type)
+	  && !PT_IS_STRING_TYPE (arg_type)
+	  && !PT_IS_DATE_TIME_TYPE (arg_type) && arg_type != PT_TYPE_MAYBE)
+	{
+	  PT_ERRORmf2 (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+		       MSGCAT_SEMANTIC_INCOMPATIBLE_OPDS,
+		       pt_show_function (fcode),
+		       pt_show_type_enum (arg_type));
+	}
+
+      break;
+
     default:
       check_agg_single_arg = false;
       break;
@@ -12729,6 +12750,11 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
 	case PT_DENSE_RANK:
 	case PT_NTILE:
 	  node->type_enum = PT_TYPE_INTEGER;
+	  break;
+
+	case PT_CUME_DIST:
+	case PT_PERCENT_RANK:
+	  node->type_enum = PT_TYPE_DOUBLE;
 	  break;
 
 	case PT_GROUPBY_NUM:
@@ -12796,6 +12822,13 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
 	case PT_VAR_POP:
 	case PT_VAR_SAMP:
 	  node->type_enum = arg_type;
+	  node->data_type = NULL;
+
+	  break;
+
+	case PT_MEDIAN:
+	  /* let calculation decide the type */
+	  node->type_enum = PT_TYPE_MAYBE;
 	  node->data_type = NULL;
 
 	  break;
@@ -15321,23 +15354,71 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 	    case DB_TYPE_BIGINT:
 	      {
 		DB_BIGINT bi1, bi2, result_bi;
-		DB_DATETIME *dt1, *dt2;
 
-		if (typ1 == DB_TYPE_DATETIME && typ2 == DB_TYPE_DATETIME)
+		bi1 = bi2 = 0;
+		if (typ1 != typ2)
 		  {
+		    assert (false);
+
+		    DB_MAKE_NULL (result);
+		    break;
+		  }
+
+		if (typ1 == DB_TYPE_DATETIME)
+		  {
+		    DB_DATETIME *dt1, *dt2;
+
 		    dt1 = DB_GET_DATETIME (arg1);
 		    dt2 = DB_GET_DATETIME (arg2);
 
-		    bi1 = ((DB_BIGINT) dt1->date) * MILLISECONDS_OF_ONE_DAY
-		      + dt1->time;
-		    bi2 = ((DB_BIGINT) dt2->date) * MILLISECONDS_OF_ONE_DAY
-		      + dt2->time;
+		    bi1 = (((DB_BIGINT) dt1->date) * MILLISECONDS_OF_ONE_DAY
+			   + dt1->time);
+		    bi2 = (((DB_BIGINT) dt2->date) * MILLISECONDS_OF_ONE_DAY
+			   + dt2->time);
 		  }
-		else
+		else if (typ1 == DB_TYPE_DATE)
+		  {
+		    DB_DATE *d1, *d2;
+
+		    d1 = DB_GET_DATE (arg1);
+		    d2 = DB_GET_DATE (arg2);
+
+		    bi1 = (DB_BIGINT) (*d1);
+		    bi2 = (DB_BIGINT) (*d2);
+		  }
+		else if (typ1 == DB_TYPE_TIME)
+		  {
+		    DB_TIME *t1, *t2;
+
+		    t1 = DB_GET_TIME (arg1);
+		    t2 = DB_GET_TIME (arg2);
+
+		    bi1 = (DB_BIGINT) (*t1);
+		    bi2 = (DB_BIGINT) (*t2);
+		  }
+		else if (typ1 == DB_TYPE_TIMESTAMP)
+		  {
+		    DB_TIMESTAMP *ts1, *ts2;
+
+		    ts1 = DB_GET_TIMESTAMP (arg1);
+		    ts2 = DB_GET_TIMESTAMP (arg2);
+
+		    bi1 = (DB_BIGINT) (*ts1);
+		    bi2 = (DB_BIGINT) (*ts2);
+		  }
+		else if (typ1 == DB_TYPE_BIGINT)
 		  {
 		    bi1 = DB_GET_BIGINT (arg1);
 		    bi2 = DB_GET_BIGINT (arg2);
 		  }
+		else
+		  {
+		    assert (false);
+
+		    DB_MAKE_NULL (result);
+		    break;
+		  }
+
 
 		if ((TP_IS_DATE_TYPE (typ1) && bi1 == 0)
 		    || (TP_IS_DATE_TYPE (typ2) && bi2 == 0))
@@ -17084,7 +17165,9 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 
 	db_value_domain_init (result, DB_TYPE_DATE, DB_DEFAULT_PRECISION,
 			      DB_DEFAULT_SCALE);
+
 	tmp_datetime = db_get_datetime (&parser->sys_datetime);
+
 	db_value_put_encoded_date (result, &tmp_datetime->date);
 
 	return 1;
@@ -17096,15 +17179,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 	DB_DATETIME db_datetime;
 	DB_DATETIME *tmp_datetime;
 
-	DB_DATE db_date;
-
 	/* extract the timezone part */
 	db_sys_timezone (&timezone);
 	timezone_milis = DB_GET_INT (&timezone) * 60000;
 	tmp_datetime = db_get_datetime (&parser->sys_datetime);
 	db_add_int_to_datetime (tmp_datetime, timezone_milis, &db_datetime);
-	db_date = db_datetime.date;
-	DB_MAKE_ENCODED_DATE (result, &db_date);
+
+	DB_MAKE_ENCODED_DATE (result, &db_datetime.date);
 
 	return 1;
       }
@@ -17125,6 +17206,7 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 	db_time = db_time % SECONDS_OF_ONE_DAY;
 
 	DB_MAKE_ENCODED_TIME (result, &db_time);
+
 	return 1;
       }
 
@@ -17135,8 +17217,10 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 
 	db_value_domain_init (result, DB_TYPE_TIME, DB_DEFAULT_PRECISION,
 			      DB_DEFAULT_SCALE);
+
 	tmp_datetime = db_get_datetime (&parser->sys_datetime);
 	tmp_time = tmp_datetime->time / 1000;
+
 	db_value_put_encoded_time (result, &tmp_time);
 
 	return 1;
@@ -17145,17 +17229,20 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
     case PT_SYS_TIMESTAMP:
       {
 	DB_DATETIME *tmp_datetime;
-	DB_DATE tmp_date;
-	DB_TIME tmp_time;
+	DB_DATE tmp_date = 0;
+	DB_TIME tmp_time = 0;
 	DB_TIMESTAMP tmp_timestamp;
 
-	db_value_domain_init (result, DB_TYPE_TIMESTAMP, DB_DEFAULT_PRECISION,
-			      DB_DEFAULT_SCALE);
+	db_value_domain_init (result, DB_TYPE_TIMESTAMP,
+			      DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
+
 	tmp_datetime = db_get_datetime (&parser->sys_datetime);
 	tmp_date = tmp_datetime->date;
 	tmp_time = tmp_datetime->time / 1000;
+
 	db_timestamp_encode (&tmp_timestamp, &tmp_date, &tmp_time);
 	db_make_timestamp (result, tmp_timestamp);
+
 	return 1;
       }
 
@@ -17163,11 +17250,12 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
       {
 	DB_DATETIME *tmp_datetime;
 
-	db_value_domain_init (result, DB_TYPE_DATETIME, DB_DEFAULT_PRECISION,
-			      DB_DEFAULT_SCALE);
+	db_value_domain_init (result, DB_TYPE_DATETIME,
+			      DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
 	tmp_datetime = db_get_datetime (&parser->sys_datetime);
 
 	db_make_datetime (result, tmp_datetime);
+
 	return 1;
       }
 
@@ -22911,7 +22999,7 @@ pt_get_common_arg_type_of_width_bucket (PARSER_CONTEXT * parser,
 }
 
 /*
- * pt_is_const_foldable_width_bucket () - check whether width_bucket function 
+ * pt_is_const_foldable_width_bucket () - check whether width_bucket function
  *                                        is constant foldable or not.
  *  return: true/false
  *  parser(in):

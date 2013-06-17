@@ -296,6 +296,11 @@ static int xts_mark_ptr_visited (const void *ptr, int offset);
 static int xts_get_offset_visited_ptr (const void *ptr);
 static void xts_free_visited_ptrs (void);
 static int xts_reserve_location_in_stream (int size);
+static int xts_sizeof_regu_variable_list (const REGU_VARIABLE_LIST
+					  regu_var_list);
+static char *xts_process_regu_variable_list (char *ptr,
+					     const REGU_VARIABLE_LIST
+					     regu_var_list);
 
 /*
  * xts_map_xasl_to_stream () -
@@ -332,7 +337,7 @@ xts_map_xasl_to_stream (const XASL_NODE * xasl_tree, XASL_STREAM * stream)
     + sizeof (OID)		/* xasl->creator_oid */
     + sizeof (int)		/* xasl->n_oid_list */
     + sizeof (OID) * xasl_tree->n_oid_list	/* xasl->class_oid_list */
-    + sizeof (int) * xasl_tree->n_oid_list;	/* xasl->repr_id_list */
+    + sizeof (int) * xasl_tree->n_oid_list;	/* xasl->tcard_list */
 
   offset = sizeof (int)		/* [size of header data] */
     + header_size		/* [header data] */
@@ -362,7 +367,7 @@ xts_map_xasl_to_stream (const XASL_NODE * xasl_tree, XASL_STREAM * stream)
     }
   for (i = 0; i < xasl_tree->n_oid_list; i++)
     {
-      p = or_pack_int (p, xasl_tree->repr_id_list[i]);
+      p = or_pack_int (p, xasl_tree->tcard_list[i]);
     }
 
   /* set body size of new XASL format */
@@ -4756,6 +4761,15 @@ xts_pack_regu_variable_value (char *ptr, const REGU_VARIABLE * regu_var)
 
   switch (regu_var->type)
     {
+    case TYPE_REGU_VAR_LIST:
+      ptr =
+	xts_process_regu_variable_list (ptr, regu_var->value.regu_var_list);
+      if (ptr == NULL)
+	{
+	  return NULL;
+	}
+      break;
+
     case TYPE_REGUVAL_LIST:
       ptr = xts_process_regu_value_list (ptr, regu_var->value.reguval_list);
       if (ptr == NULL)
@@ -4763,6 +4777,7 @@ xts_pack_regu_variable_value (char *ptr, const REGU_VARIABLE * regu_var)
 	  return NULL;
 	}
       break;
+
     case TYPE_DBVAL:
       ptr = xts_process_db_value (ptr, &regu_var->value.dbval);
       if (ptr == NULL)
@@ -5123,6 +5138,8 @@ xts_process_analytic_type (char *ptr, const ANALYTIC_TYPE * analytic)
   ptr = or_pack_int (ptr, analytic->from_last);
 
   ptr = or_pack_int (ptr, analytic->ignore_nulls);
+
+  ptr = or_pack_int (ptr, analytic->is_const_operand);
 
   return ptr;
 }
@@ -6510,6 +6527,10 @@ xts_get_regu_variable_value_size (const REGU_VARIABLE * regu_var)
 
   switch (regu_var->type)
     {
+    case TYPE_REGU_VAR_LIST:
+      size = xts_sizeof_regu_variable_list (regu_var->value.regu_var_list);
+      break;
+
     case TYPE_REGUVAL_LIST:
       size = xts_sizeof_regu_value_list (regu_var->value.reguval_list);
       break;
@@ -6711,7 +6732,8 @@ xts_sizeof_analytic_type (const ANALYTIC_TYPE * analytic)
     OR_INT_SIZE +		/* flag */
     OR_INT_SIZE +		/* eval_grp */
     OR_INT_SIZE +		/* from_last */
-    OR_INT_SIZE;		/* ignore_nulls */
+    OR_INT_SIZE +		/* ignore_nulls */
+    OR_INT_SIZE;		/* is_const_opr */
 
   tmp_size = xts_sizeof_regu_variable (&analytic->operand);
   if (tmp_size == ER_FAILED)
@@ -6846,6 +6868,36 @@ xts_sizeof_regu_value_list (const REGU_VALUE_LIST * regu_value_list)
        regu_value_item = regu_value_item->next)
     {
       tmp_size = xts_get_regu_variable_value_size (regu_value_item->value);
+
+      if (tmp_size == ER_FAILED)
+	{
+	  return ER_FAILED;
+	}
+
+      size += OR_INT_SIZE + tmp_size;	/* OR_INT_SIZE for type */
+    }
+
+  return size;
+}
+
+/*
+ * xts_sizeof_regu_variable_list () -
+ *   return: size or ER_FAILED
+ *   regu_value_list(in)    :
+ */
+static int
+xts_sizeof_regu_variable_list (const REGU_VARIABLE_LIST regu_var_list)
+{
+  int size = 0, tmp_size = 0;
+  REGU_VARIABLE_LIST regu_var = regu_var_list;
+
+  assert (regu_var_list != NULL);
+
+  size += OR_INT_SIZE;
+  while (regu_var)
+    {
+      tmp_size = xts_get_regu_variable_value_size (&regu_var->value);
+      regu_var = regu_var->next;
 
       if (tmp_size == ER_FAILED)
 	{
@@ -7012,4 +7064,29 @@ xts_reserve_location_in_stream (int size)
   assert ((xts_Free_offset_in_stream - size) % MAX_ALIGNMENT == 0);
 
   return (xts_Free_offset_in_stream - size);
+}
+
+
+/*
+ * xts_process_regu_variable_list () -
+ *   return:
+ *   ptr(in):
+ *   regu_value_list(in):
+ */
+static char *
+xts_process_regu_variable_list (char *ptr,
+				const REGU_VARIABLE_LIST regu_var_list)
+{
+  int offset = 0;
+
+  assert (regu_var_list);
+  /* save regu variable list */
+  offset = xts_save_regu_variable_list (regu_var_list);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  return ptr;
 }

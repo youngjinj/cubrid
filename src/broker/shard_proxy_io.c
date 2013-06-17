@@ -58,8 +58,6 @@
 #define CAS_READ_ERROR(i)       io_error(i, PROC_TYPE_CAS, READ_TYPE)
 #define CAS_WRITE_ERROR(i)      io_error(i, PROC_TYPE_CAS, WRITE_TYPE)
 
-#define MAX_NUM_NEW_CLIENT	5
-
 #define PROXY_START_PORT	1
 #define GET_CLIENT_PORT(broker_port, proxy_index)	(broker_port) + PROXY_START_PORT + (proxy_index)
 #define GET_CAS_PORT(broker_port, proxy_index, proxy_max_count)	(broker_port) + PROXY_START_PORT + (proxy_max_count) + (proxy_index)
@@ -68,6 +66,7 @@ extern T_SHM_APPL_SERVER *shm_as_p;
 extern T_SHM_PROXY *shm_proxy_p;
 extern T_PROXY_INFO *proxy_info_p;
 extern T_SHM_SHARD_USER *shm_user_p;
+extern T_SHM_SHARD_CONN *shm_conn_p;
 extern int proxy_id;
 
 extern T_PROXY_HANDLER proxy_Handler;
@@ -153,6 +152,9 @@ static SOCKET proxy_io_accept (SOCKET lsnr_fd);
 static SOCKET proxy_io_cas_accept (SOCKET lsnr_fd);
 
 static void proxy_init_net_buf (T_NET_BUF * net_buf);
+
+static int proxy_io_make_ex_get_int (char *driver_info, char **buffer,
+				     int *argv);
 
 #if defined(LINUX)
 static int proxy_get_max_socket (void);
@@ -550,6 +552,44 @@ proxy_init_net_buf (T_NET_BUF * net_buf)
   return;
 }
 
+static int
+proxy_io_make_ex_get_int (char *driver_info, char **buffer, int *argv)
+{
+  int error;
+  T_NET_BUF net_buf;
+
+  assert (buffer);
+  assert (*buffer == NULL);
+  assert (argv != NULL);
+
+  error = proxy_make_net_buf (&net_buf, NET_BUF_ALLOC_SIZE);
+  if (error)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		 "Failed to make net buffer. (error:%d).", error);
+      goto error_return;
+    }
+
+  proxy_init_net_buf (&net_buf);
+
+  /* error code */
+  net_buf_cp_int (&net_buf, 0 /* success */ , NULL);
+  /* int arg1 */
+  net_buf_cp_int (&net_buf, *argv, NULL);
+
+  *buffer = net_buf.data;
+  set_data_length (*buffer, net_buf.data_size);
+
+  net_buf.data = NULL;
+
+  return (net_buf.data_size + MSG_HEADER_SIZE);
+
+error_return:
+  *buffer = NULL;
+
+  return -1;
+}
+
 /* error */
 int
 proxy_io_make_error_msg (char *driver_info, char **buffer,
@@ -634,6 +674,26 @@ int
 proxy_io_make_check_cas_ok (char *driver_info, char **buffer)
 {
   return proxy_io_make_no_error (driver_info, buffer);
+}
+
+int
+proxy_io_make_set_db_parameter_ok (char *driver_info, char **buffer)
+{
+  return proxy_io_make_no_error (driver_info, buffer);
+}
+
+int
+proxy_io_make_ex_get_isolation_level (char *driver_info, char **buffer,
+				      void *argv)
+{
+  return proxy_io_make_ex_get_int (driver_info, buffer, argv);
+}
+
+int
+proxy_io_make_ex_get_lock_timeout (char *driver_info, char **buffer,
+				   void *argv)
+{
+  return proxy_io_make_ex_get_int (driver_info, buffer, argv);
 }
 
 int
@@ -975,9 +1035,9 @@ proxy_io_make_shard_info (char *driver_info, char **buffer)
 {
   int error;
   int length;
-  int i;
-  T_SHARD_INFO *shard_info_p;
+  int shard_index;
   T_NET_BUF net_buf;
+  T_SHARD_CONN *shard_conn_p;
 
   assert (buffer);
   assert (*buffer == NULL);
@@ -998,22 +1058,23 @@ proxy_io_make_shard_info (char *driver_info, char **buffer)
   net_buf_cp_int (&net_buf, proxy_info_p->max_shard, NULL);
 
   /* N * shard info */
-  for (i = 0, shard_info_p = shard_shm_get_first_shard_info (proxy_info_p);
-       i < proxy_info_p->max_shard && shard_info_p;
-       i++, shard_info_p = shard_shm_get_next_shard_info (shard_info_p))
+  for (shard_index = 0; shard_index < shm_conn_p->num_shard_conn;
+       shard_index++)
     {
+      shard_conn_p = &shm_conn_p->shard_conn[shard_index];
+
       /* shard id */
-      net_buf_cp_int (&net_buf, shard_info_p->shard_id, NULL);
+      net_buf_cp_int (&net_buf, shard_index, NULL);
 
       /* shard db name */
-      length = strlen (shard_info_p->db_name) + 1 /* NTS */ ;
+      length = strlen (shard_conn_p->db_name) + 1 /* NTS */ ;
       net_buf_cp_int (&net_buf, length, NULL);
-      net_buf_cp_str (&net_buf, shard_info_p->db_name, length);
+      net_buf_cp_str (&net_buf, shard_conn_p->db_name, length);
 
       /* shard db server */
-      length = strlen (shard_info_p->db_conn_info) + 1 /* NTS */ ;
+      length = strlen (shard_conn_p->db_conn_info) + 1 /* NTS */ ;
       net_buf_cp_int (&net_buf, length, NULL);
-      net_buf_cp_str (&net_buf, shard_info_p->db_conn_info, length);
+      net_buf_cp_str (&net_buf, shard_conn_p->db_conn_info, length);
     }
 
   *buffer = net_buf.data;
@@ -1515,9 +1576,12 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
   T_IO_BUFFER *read_buffer;
   T_SHARD_USER *user_p;
   T_PROXY_EVENT *event_p;
+  T_CLIENT_INFO *client_info_p;
   unsigned char *ip_addr;
+  char len;
   char *driver_info;
   T_BROKER_VERSION client_version;
+  char driver_version[SRV_CON_VER_STR_MAX_SIZE];
   char err_msg[256];
 
   ENTER_FUNC ();
@@ -1599,6 +1663,46 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
     {
       url = db_passwd + SRV_CON_DBPASSWD_SIZE;
       url[SRV_CON_URL_SIZE + 1] = '\0';
+      driver_version[0] = '\0';
+      if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V5))
+	{
+	  len = *(url + strlen (url) + 1);
+	  if (len > 0 && len < SRV_CON_VER_STR_MAX_SIZE)
+	    {
+	      memcpy (driver_version, url + strlen (url) + 2, (int) len);
+	      driver_version[len + 1] = '\0';
+	    }
+	  else
+	    {
+	      snprintf (driver_version, SRV_CON_VER_STR_MAX_SIZE,
+			"PROTOCOL V%d",
+			(int) (CAS_PROTO_VER_MASK & client_version));
+	    }
+	}
+      else
+	if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V1))
+	{
+	  char *ver;
+
+	  CAS_PROTO_TO_VER_STR (&ver,
+				(int) (CAS_PROTO_VER_MASK & client_version));
+
+	  strncpy (driver_version, ver, SRV_CON_VER_STR_MAX_SIZE);
+	}
+      else
+	{
+	  snprintf (driver_version, SRV_CON_VER_STR_MAX_SIZE,
+		    "%d.%d.%d", CAS_VER_TO_MAJOR (client_version),
+		    CAS_VER_TO_MINOR (client_version),
+		    CAS_VER_TO_PATCH (client_version));
+	}
+      client_info_p = shard_shm_get_client_info (proxy_info_p,
+						 sock_io_p->id.client_id);
+      if (client_info_p)
+	{
+	  memcpy (client_info_p->driver_version, driver_version,
+		  sizeof (driver_version));
+	}
     }
 
   /* SHARD DO NOT SUPPORT SESSION */
@@ -1679,8 +1783,8 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
 connection_established:
   if (ctx_p->error_ind != CAS_NO_ERROR)
     {
-      /* 
-       * Process error message if exists. 
+      /*
+       * Process error message if exists.
        * context will be freed after sending error message.
        */
       proxy_context_send_error (ctx_p);
@@ -1889,9 +1993,9 @@ proxy_process_client_read_error (T_SOCKET_IO * sock_io_p)
   assert (sock_io_p);
 
 #if defined(LINUX)
-  /* 
-   * If connection error event was triggered by EPOLLERR, EPOLLHUP, 
-   * there could be no error events. 
+  /*
+   * If connection error event was triggered by EPOLLERR, EPOLLHUP,
+   * there could be no error events.
    */
 #else /* LINUX */
   assert (sock_io_p->read_event);
@@ -2017,6 +2121,11 @@ error_return:
   if (cas_io_p && shard_id >= 0 && cas_id >= 0)
     {
       proxy_cas_io_free (shard_id, cas_id);
+    }
+  else
+    {
+      /* cas have to retry register to proxy. */
+      proxy_socket_io_delete (sock_io_p->fd);
     }
 
   EXIT_FUNC ();
@@ -2256,9 +2365,9 @@ proxy_process_cas_read_error (T_SOCKET_IO * sock_io_p)
   assert (sock_io_p);
 
 #if defined(LINUX)
-  /* 
-   * If connection error event was triggered by EPOLLERR, EPOLLHUP, 
-   * there could be no error events. 
+  /*
+   * If connection error event was triggered by EPOLLERR, EPOLLHUP,
+   * there could be no error events.
    */
 #else /* LINUX */
   assert (sock_io_p->read_event);
@@ -2421,14 +2530,13 @@ proxy_socket_io_write_to_client (T_SOCKET_IO * sock_io_p)
       return;
     }
 
-  if (ctx_p->free_on_client_io_write)
+  if (ctx_p->free_on_client_io_write && sock_io_p->write_event == NULL)
     {
       /* init shared memory T_CLIENT_INFO */
       client_info_p =
 	shard_shm_get_client_info (proxy_info_p, sock_io_p->id.client_id);
       shard_shm_init_client_info (client_info_p);
 
-      sock_io_p->status = SOCK_IO_CLOSE_WAIT;
       proxy_context_free (ctx_p);
     }
 
@@ -2669,6 +2777,12 @@ proxy_socket_io_write (T_SOCKET_IO * sock_io_p)
 #endif /* !LINUX */
 
       return;
+    }
+  else if (sock_io_p->status == SOCK_IO_IDLE)
+    {
+      assert (false);
+      PROXY_DEBUG_LOG ("Unexpected socket status. (fd:%d, status:%d). \n",
+		       sock_io_p->fd, sock_io_p->status);
     }
 
   if (sock_io_p->write_event == NULL)
@@ -2946,8 +3060,8 @@ proxy_client_io_new (SOCKET fd, char *driver_info)
 
       if (proxy_Client_io.cur_client > proxy_Client_io.max_client)
 	{
-	  /* 
-	   * Error message would be retured when processing 
+	  /*
+	   * Error message would be retured when processing
 	   * register(db_info) request.
 	   */
 	  char err_msg[256];
@@ -3411,8 +3525,8 @@ proxy_cas_io_free (int shard_id, int cas_id)
 
   if (cas_io_p->is_in_tran == true)
     {
-      if (shard_shm_set_as_client_info (proxy_info_p, shard_id, cas_id, 0,
-					NULL) == false)
+      if (shard_shm_set_as_client_info
+	  (proxy_info_p, shm_as_p, shard_id, cas_id, 0, NULL, NULL) == false)
 	{
 	  PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		     "Unable to find CAS info in shared memory. "
@@ -3497,7 +3611,7 @@ proxy_cas_io_free_by_ctx (int shard_id, int cas_id, int ctx_cid,
     }
 
   if (shard_shm_set_as_client_info
-      (proxy_info_p, shard_id, cas_id, 0, NULL) == false)
+      (proxy_info_p, shm_as_p, shard_id, cas_id, 0, NULL, NULL) == false)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		 "Unable to find CAS info in shared memory. "
@@ -3594,7 +3708,7 @@ proxy_cas_find_io_by_ctx (int shard_id, int cas_id, int ctx_cid,
 }
 
 T_CAS_IO *
-proxy_cas_alloc_by_ctx (int shard_id, int cas_id, int ctx_cid,
+proxy_cas_alloc_by_ctx (int client_id, int shard_id, int cas_id, int ctx_cid,
 			unsigned int ctx_uid, int timeout)
 {
   int error;
@@ -3666,18 +3780,17 @@ proxy_cas_alloc_by_ctx (int shard_id, int cas_id, int ctx_cid,
 	  assert (cas_io_p->ctx_uid == 0);
 	}
 
-      client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_cid);
+      client_info_p = shard_shm_get_client_info (proxy_info_p, client_id);
       if (client_info_p == NULL)
 	{
 	  PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		     "Unable to find cilent info in shared memory. "
 		     "(context id:%d, context uid:%d)", ctx_cid, ctx_uid);
 	}
-      else if (shard_shm_set_as_client_info (proxy_info_p, cas_io_p->shard_id,
-					     cas_io_p->cas_id,
-					     client_info_p->client_ip,
-					     client_info_p->driver_info) ==
-	       false)
+      else
+	if (shard_shm_set_as_client_info_with_db_param
+	    (proxy_info_p, shm_as_p, cas_io_p->shard_id, cas_io_p->cas_id,
+	     client_info_p) == false)
 	{
 
 	  PROXY_LOG (PROXY_LOG_MODE_ERROR,
@@ -3787,19 +3900,18 @@ proxy_cas_alloc_by_ctx (int shard_id, int cas_id, int ctx_cid,
   assert (cas_io_p->ctx_uid == 0);
   assert (cas_io_p->fd != INVALID_SOCKET);
 
-  client_info_p = shard_shm_get_client_info (proxy_info_p, ctx_cid);
+  client_info_p = shard_shm_get_client_info (proxy_info_p, client_id);
   if (client_info_p == NULL)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		 "Unable to find cilent info in shared memory. "
 		 "(context id:%d, context uid:%d)", ctx_cid, ctx_uid);
     }
-  else if (shard_shm_set_as_client_info (proxy_info_p, cas_io_p->shard_id,
-					 cas_io_p->cas_id,
-					 client_info_p->client_ip,
-					 client_info_p->driver_info) == false)
+  else
+    if (shard_shm_set_as_client_info_with_db_param
+	(proxy_info_p, shm_as_p, cas_io_p->shard_id, cas_io_p->cas_id,
+	 client_info_p) == false)
     {
-
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		 "Unable to find CAS info in shared memory. "
 		 "(shard_id:%d, cas_id:%d).", cas_io_p->shard_id,
@@ -3811,7 +3923,6 @@ proxy_cas_alloc_by_ctx (int shard_id, int cas_id, int ctx_cid,
   cas_io_p->ctx_uid = ctx_uid;
 
   return cas_io_p;
-
 
 set_waiter:
   if (shard_id >= 0)
@@ -3887,7 +3998,7 @@ proxy_cas_release_by_ctx (int shard_id, int cas_id, int ctx_cid,
     }
 
   if (shard_shm_set_as_client_info
-      (proxy_info_p, shard_id, cas_id, 0, NULL) == false)
+      (proxy_info_p, shm_as_p, shard_id, cas_id, 0, NULL, NULL) == false)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		 "Unable to find CAS info in shared memory. "
@@ -4214,7 +4325,7 @@ proxy_io_cas_lsnr (void)
 
 #if defined(WINDOWS)
   int port = GET_CAS_PORT (broker_port, proxy_info_p->proxy_id,
-			   shm_proxy_p->max_num_proxy);
+			   shm_proxy_p->num_proxy);
 
   /* FOR DEBUG */
   PROXY_LOG (PROXY_LOG_MODE_NOTICE, "Listen CAS socket. (port number:[%d])",
@@ -4489,7 +4600,6 @@ proxy_io_process (void)
   int error;
   int cas_fd;
   int i;
-  unsigned int num_new_client = 0;
 #if defined(WINDOWS)
   int client_fd;
 #endif
@@ -4504,8 +4614,6 @@ proxy_io_process (void)
 #endif /* !LINUX */
 
   T_SOCKET_IO *sock_io_p = NULL;
-
-retry_select:
 
 #if defined(LINUX)
   timeout = 1000 / HZ;
@@ -4576,15 +4684,7 @@ retry_select:
 	  else if (ep_Event[i].events & EPOLLIN
 		   || ep_Event[i].events & EPOLLPRI)
 	    {
-	      error = proxy_socket_io_new_client (broker_conn_fd);
-	      if (error == 0)
-		{
-		  num_new_client++;
-		  if (num_new_client < MAX_NUM_NEW_CLIENT)
-		    {
-		      goto retry_select;
-		    }
-		}
+	      proxy_socket_io_new_client (broker_conn_fd);
 	    }
 	}
       else
@@ -4658,21 +4758,14 @@ retry_select:
 		     client_fd);
 	  return 0;		/* or -1 */
 	}
-      error = proxy_socket_io_new_client (client_fd);
+      proxy_socket_io_new_client (client_fd);
+    }
 #else /* WINDOWS */
   if (FD_ISSET (broker_conn_fd, &rset))
     {
-      error = proxy_socket_io_new_client (broker_conn_fd);
-#endif /* !WINDOWS */
-      if (error == 0)
-	{
-	  num_new_client++;
-	  if (num_new_client < MAX_NUM_NEW_CLIENT)
-	    {
-	      goto retry_select;
-	    }
-	}
+      proxy_socket_io_new_client (broker_conn_fd);
     }
+#endif /* !WINDOWS */
 
   /* process socket io */
   for (i = 0; i <= maxfd; i++)

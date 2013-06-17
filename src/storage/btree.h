@@ -54,13 +54,16 @@
   (logtb_is_current_active (thread_p) \
    && (op == SINGLE_ROW_INSERT || op == MULTI_ROW_INSERT || op == SINGLE_ROW_UPDATE))
 
-#if defined(SERVER_MODE)
 /* For next-key locking */
 #define BTREE_CONTINUE                     -1
 #define BTREE_GETOID_AGAIN                 -2
 #define BTREE_GETOID_AGAIN_WITH_CHECK      -3
 #define BTREE_SEARCH_AGAIN_WITH_CHECK      -4
+#define BTREE_GOTO_END_OF_SCAN		   -5
+#define BTREE_GOTO_START_LOCKING	   -6
+#define BTREE_GOTO_LOCKING_DONE		   -7
 
+#if defined(SERVER_MODE)
 #define BTREE_CLASS_LOCK_MAP_MAX_COUNT     10
 #endif /* SERVER_MODE */
 
@@ -83,7 +86,6 @@ typedef enum
 #define BTREE_IS_PRIMARY_KEY(unique) ((unique) & BTREE_CONSTRAINT_PRIMARY_KEY)
 #define BTREE_IS_UNIQUE(btid)  ((btid)->unique & BTREE_CONSTRAINT_UNIQUE)
 #define BTREE_IS_PART_KEY_DESC(btid) ((btid)->part_key_desc == true)
-#define BTREE_IS_LAST_KEY_DESC(btid) ((btid)->last_key_desc == true)
 
 
 #define BTREE_NORMAL_KEY 0
@@ -100,7 +102,6 @@ struct btid_int
   BTID *sys_btid;
   int unique;			/* if it is an unique index */
   int part_key_desc;		/* the last partial-key domain is desc */
-  int last_key_desc;		/* the last key domain is desc */
   TP_DOMAIN *key_type;
   TP_DOMAIN *nonleaf_key_type;	/* With prefix keys, the domain of the
 				 * non leaf keys might be different.  It

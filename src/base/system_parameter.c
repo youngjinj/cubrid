@@ -140,6 +140,8 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_LK_ESCALATION_AT "lock_escalation"
 
+#define PRM_NAME_LK_ROLLBACK_ON_LOCK_ESCALATION "rollback_on_lock_escalation"
+
 #define PRM_NAME_LK_TIMEOUT_SECS "lock_timeout_in_secs"
 
 #define PRM_NAME_LK_RUN_DEADLOCK_INTERVAL "deadlock_detection_interval_in_secs"
@@ -360,6 +362,14 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_HA_APPLYLOGDB_LOG_WAIT_TIME_IN_SECS "ha_applylogdb_log_wait_time_in_secs"
 
+#define PRM_NAME_HA_SQL_LOGGING "ha_enable_sql_logging"
+
+#define PRM_NAME_HA_SQL_LOG_MAX_SIZE_IN_MB "ha_sql_log_max_size_in_mbytes"
+
+#define PRM_NAME_HA_COPY_LOG_MAX_ARCHIVES "ha_copy_log_max_archives"
+
+#define PRM_NAME_HA_COPY_LOG_TIMEOUT "ha_copy_log_timeout"
+
 #define PRM_NAME_JAVA_STORED_PROCEDURE "java_stored_procedure"
 
 #define PRM_NAME_COMPAT_PRIMARY_KEY "compat_primary_key"
@@ -470,9 +480,12 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_INTL_COLLATION "intl_collation"
 
+#define PRM_NAME_GENERIC_VOL_PREALLOC_SIZE "generic_vol_prealloc_size"
+
+#define PRM_NAME_SORT_LIMIT_MAX_COUNT "sort_limit_max_count"
+
 #define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
 #define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
-
 
 /*
  * Note about ERROR_LIST and INTEGER_LIST type
@@ -690,6 +703,9 @@ int PRM_LK_ESCALATION_AT = 100000;
 static int prm_lk_escalation_at_default = 100000;
 static int prm_lk_escalation_at_lower = 5;
 
+bool PRM_LK_ROLLBACK_ON_LOCK_ESCALATION = false;
+static bool prm_lk_rollback_on_lock_escalation_default = false;
+
 int PRM_LK_TIMEOUT_SECS = -1;
 static int prm_lk_timeout_secs_default = -1;	/* Infinite */
 static int prm_lk_timeout_secs_lower = -1;
@@ -730,8 +746,8 @@ static int prm_log_isolation_level_upper = TRAN_SERIALIZABLE;
 bool PRM_COMMIT_ON_SHUTDOWN = false;
 static bool prm_commit_on_shutdown_default = false;
 
-int PRM_SHUTDOWN_WAIT_TIME_IN_SECS = 60;
-static int prm_shutdown_wait_time_in_secs_default = 60;
+int PRM_SHUTDOWN_WAIT_TIME_IN_SECS = 600;
+static int prm_shutdown_wait_time_in_secs_default = 600;
 static int prm_shutdown_wait_time_in_secs_lower = 60;
 
 bool PRM_CSQL_AUTO_COMMIT = true;
@@ -817,8 +833,8 @@ static UINT64 prm_index_scan_key_buffer_size_lower = 0;
 bool PRM_DONT_REUSE_HEAP_FILE = false;
 static bool prm_dont_reuse_heap_file_default = false;
 
-bool PRM_QUERY_MODE_SYNC = false;
-static bool prm_query_mode_sync_default = false;
+bool PRM_QUERY_MODE_SYNC = true;
+static bool prm_query_mode_sync_default = true;
 
 int PRM_INSERT_MODE = 1 + 8 + 16;
 static int prm_insert_mode_default = 1 + 8 + 16;
@@ -1090,6 +1106,24 @@ int PRM_HA_APPLYLOGDB_LOG_WAIT_TIME_IN_SECS = -1;
 static int prm_ha_applylogdb_log_wait_time_in_secs_default = -1;
 static int prm_ha_applylogdb_log_wait_time_in_secs_lower = -1;
 
+bool PRM_HA_SQL_LOGGING = false;
+static bool prm_ha_sql_logging_default = false;
+
+int PRM_HA_SQL_LOG_MAX_SIZE_IN_MB = INT_MIN;
+static int prm_ha_sql_log_max_size_in_mb_default = 50;
+static int prm_ha_sql_log_max_size_in_mb_upper = 2048;
+static int prm_ha_sql_log_max_size_in_mb_lower = 1;
+
+int PRM_HA_COPY_LOG_MAX_ARCHIVES = 1;
+static int prm_ha_copy_log_max_archives_default = 1;
+static int prm_ha_copy_log_max_archives_upper = INT_MAX;
+static int prm_ha_copy_log_max_archives_lower = 0;
+
+int PRM_HA_COPY_LOG_TIMEOUT = 5;
+static int prm_ha_copy_log_timeout_default = 5;
+static int prm_ha_copy_log_timeout_upper = INT_MAX;
+static int prm_ha_copy_log_timeout_lower = -1;
+
 bool PRM_JAVA_STORED_PROCEDURE = false;
 static bool prm_java_stored_procedure_default = false;
 
@@ -1250,6 +1284,11 @@ static bool prm_intl_check_input_string_default = false;
 int PRM_CHECK_PEER_ALIVE = CSS_CHECK_PEER_ALIVE_BOTH;
 static int prm_check_peer_alive_default = CSS_CHECK_PEER_ALIVE_BOTH;
 
+UINT64 PRM_GENERIC_VOL_PREALLOC_SIZE;
+static UINT64 prm_generic_vol_prealloc_size_default = 52428800ULL;	/* 50M */
+static UINT64 prm_generic_vol_prealloc_size_lower = 0ULL;
+static UINT64 prm_generic_vol_prealloc_size_upper = 21474836480ULL;	/* 20G */
+
 int PRM_SQL_TRACE_SLOW_MSECS = -1;
 static int prm_sql_trace_slow_msecs_default = -1;
 static int prm_sql_trace_slow_msecs_lower = -1;
@@ -1260,6 +1299,11 @@ static bool prm_sql_trace_execution_plan_default = false;
 
 char *PRM_INTL_COLLATION = NULL;
 static char *prm_intl_collation_default = NULL;
+
+int PRM_SORT_LIMIT_MAX_COUNT = 1000;
+static int prm_sort_limit_max_count_default = 1000;
+static int prm_sort_limit_max_count_lower = 0;	/* disabled */
+static int prm_sort_limit_max_count_upper = INT_MAX;
 
 bool PRM_MVCC_ENABLED = false;
 static bool prm_mvcc_enabled_default = false;
@@ -1457,6 +1501,13 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &prm_lk_escalation_at_default,
    (void *) &PRM_LK_ESCALATION_AT,
    (void *) NULL, (void *) &prm_lk_escalation_at_lower,
+   (char *) NULL},
+  {PRM_NAME_LK_ROLLBACK_ON_LOCK_ESCALATION,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_BOOLEAN,
+   (void *) &prm_lk_rollback_on_lock_escalation_default,
+   (void *) &PRM_LK_ROLLBACK_ON_LOCK_ESCALATION,
+   (void *) NULL, (void *) NULL,
    (char *) NULL},
   {PRM_NAME_LK_TIMEOUT_SECS,
    (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION),
@@ -2242,6 +2293,37 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &PRM_HA_APPLYLOGDB_LOG_WAIT_TIME_IN_SECS,
    (void *) NULL, (void *) &prm_ha_applylogdb_log_wait_time_in_secs_lower,
    (char *) NULL},
+  {PRM_NAME_HA_SQL_LOGGING,
+   (PRM_FOR_CLIENT | PRM_FOR_HA),
+   PRM_BOOLEAN,
+   (void *) &prm_ha_sql_logging_default,
+   (void *) &PRM_HA_SQL_LOGGING,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL},
+  {PRM_NAME_HA_SQL_LOG_MAX_SIZE_IN_MB,
+   (PRM_FOR_CLIENT | PRM_FOR_HA),
+   PRM_INTEGER,
+   (void *) &prm_ha_sql_log_max_size_in_mb_default,
+   (void *) &PRM_HA_SQL_LOG_MAX_SIZE_IN_MB,
+   (void *) &prm_ha_sql_log_max_size_in_mb_upper,
+   (void *) &prm_ha_sql_log_max_size_in_mb_lower,
+   (char *) NULL},
+  {PRM_NAME_HA_COPY_LOG_MAX_ARCHIVES,
+   (PRM_FOR_CLIENT | PRM_FOR_HA),
+   PRM_INTEGER,
+   (void *) &prm_ha_copy_log_max_archives_default,
+   (void *) &PRM_HA_COPY_LOG_MAX_ARCHIVES,
+   (void *) &prm_ha_copy_log_max_archives_upper,
+   (void *) &prm_ha_copy_log_max_archives_lower,
+   (char *) NULL},
+  {PRM_NAME_HA_COPY_LOG_TIMEOUT,
+   (PRM_FOR_SERVER | PRM_FOR_HA),
+   PRM_INTEGER,
+   (void *) &prm_ha_copy_log_timeout_default,
+   (void *) &PRM_HA_COPY_LOG_TIMEOUT,
+   (void *) &prm_ha_copy_log_timeout_upper,
+   (void *) &prm_ha_copy_log_timeout_lower,
+   (char *) NULL},
   {PRM_NAME_JAVA_STORED_PROCEDURE,
    (PRM_FOR_SERVER),
    PRM_BOOLEAN,
@@ -2635,6 +2717,22 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &PRM_INTL_COLLATION,
    (void *) NULL, (void *) NULL,
    (char *) NULL},
+  {PRM_NAME_GENERIC_VOL_PREALLOC_SIZE,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_SIZE,
+   (void *) &prm_generic_vol_prealloc_size_default,
+   (void *) &PRM_GENERIC_VOL_PREALLOC_SIZE,
+   (void *) &prm_generic_vol_prealloc_size_upper,
+   (void *) &prm_generic_vol_prealloc_size_lower,
+   (char *) NULL},
+  {PRM_NAME_SORT_LIMIT_MAX_COUNT,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION | PRM_FOR_QRY_STRING),
+   PRM_INTEGER,
+   (void *) &prm_sort_limit_max_count_default,
+   (void *) &PRM_SORT_LIMIT_MAX_COUNT,
+   (void *) &prm_sort_limit_max_count_upper,
+   (void *) &prm_sort_limit_max_count_lower,
+   (char *) NULL},
   {PRM_NAME_MVCC_ENABLED,
    (PRM_FOR_SERVER | PRM_FOR_CLIENT | PRM_HIDDEN | PRM_FORCE_SERVER),
    PRM_BOOLEAN,
@@ -2941,7 +3039,8 @@ static const int call_stack_dump_error_codes[] = {
   ER_PARTITION_NOT_EXIST,
   ER_FILE_TABLE_OVERFLOW,
   ER_HA_GENERIC_ERROR,
-  ER_DESC_ISCAN_ABORTED
+  ER_DESC_ISCAN_ABORTED,
+  ER_SP_INVALID_HEADER
 };
 
 typedef enum
@@ -6208,38 +6307,6 @@ prm_tune_parameters (void)
     }
 
   assert (ha_mode_prm != NULL);
-  if (ha_mode_prm != NULL && PRM_GET_INT (ha_mode_prm->value) != HA_MODE_OFF)
-    {
-      assert (ha_process_dereg_confirm_interval_in_msecs_prm != NULL);
-      assert (ha_max_process_dereg_confirm_prm != NULL);
-      assert (shutdown_wait_time_in_secs_prm != NULL);
-
-      if (ha_process_dereg_confirm_interval_in_msecs_prm != NULL
-	  && ha_max_process_dereg_confirm_prm != NULL
-	  && shutdown_wait_time_in_secs_prm != NULL)
-	{
-	  ha_process_dereg_confirm_interval_in_msecs =
-	    PRM_GET_INT (ha_process_dereg_confirm_interval_in_msecs_prm->
-			 value);
-	  ha_max_process_dereg_confirm =
-	    PRM_GET_INT (ha_max_process_dereg_confirm_prm->value);
-	  shutdown_wait_time_in_secs =
-	    PRM_GET_INT (shutdown_wait_time_in_secs_prm->value);
-
-	  if ((shutdown_wait_time_in_secs * 1000) >
-	      (ha_process_dereg_confirm_interval_in_msecs *
-	       ha_max_process_dereg_confirm))
-	    {
-	      ha_max_process_dereg_confirm =
-		((shutdown_wait_time_in_secs * 1000) /
-		 ha_process_dereg_confirm_interval_in_msecs) + 3;
-
-	      snprintf (newval, sizeof (newval) - 1, "%d",
-			ha_max_process_dereg_confirm);
-	      prm_set (ha_max_process_dereg_confirm_prm, newval, false);
-	    }
-	}
-    }
 
   return;
 }

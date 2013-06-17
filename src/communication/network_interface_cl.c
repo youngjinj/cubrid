@@ -129,13 +129,13 @@ pack_const_string (char *buffer, const char *cstring)
 }
 
 /*
- * pack_string_with_null_padding - pack stream and add null. 
+ * pack_string_with_null_padding - pack stream and add null.
  *                                 so stream is made as null terminated string.
  *
  * return:
  *
  *   buffer(in):
- *   stream(in): 
+ *   stream(in):
  *   len(in):
  *
  * NOTE:
@@ -1920,6 +1920,7 @@ disk_get_purpose (VOLID volid)
  *   vol_purpose(in):
  *   vol_ntotal_pages(in):
  *   vol_nfree_pages(in):
+ *   vol_nmax_pages(in):
  *
  * NOTE:
  */
@@ -1927,7 +1928,8 @@ VOLID
 disk_get_purpose_and_total_free_numpages (VOLID volid,
 					  DISK_VOLPURPOSE * vol_purpose,
 					  DKNPAGES * vol_ntotal_pages,
-					  DKNPAGES * vol_nfree_pages)
+					  DKNPAGES * vol_nfree_pages,
+					  DKNPAGES * vol_nmax_pages)
 {
 #if defined(CS_MODE)
   int temp;
@@ -1935,7 +1937,7 @@ disk_get_purpose_and_total_free_numpages (VOLID volid,
   char *ptr;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_request;
   char *request;
-  OR_ALIGNED_BUF (OR_INT_SIZE * 4) a_reply;
+  OR_ALIGNED_BUF (OR_INT_SIZE * 5) a_reply;
   char *reply;
 
   request = OR_ALIGNED_BUF_START (a_request);
@@ -1953,6 +1955,7 @@ disk_get_purpose_and_total_free_numpages (VOLID volid,
       *vol_purpose = (DB_VOLPURPOSE) temp;
       ptr = or_unpack_int (ptr, vol_ntotal_pages);
       ptr = or_unpack_int (ptr, vol_nfree_pages);
+      ptr = or_unpack_int (ptr, vol_nmax_pages);
       ptr = or_unpack_int (ptr, &temp);
       volid = temp;
     }
@@ -1968,7 +1971,8 @@ disk_get_purpose_and_total_free_numpages (VOLID volid,
 
   volid = xdisk_get_purpose_and_total_free_numpages (NULL, volid, vol_purpose,
 						     vol_ntotal_pages,
-						     vol_nfree_pages);
+						     vol_nfree_pages,
+						     vol_nmax_pages);
 
   EXIT_SERVER ();
 
@@ -4388,7 +4392,7 @@ boot_add_volume_extension (DBDEF_VOL_EXT_INFO * ext_info)
       ptr = pack_const_string_with_length (request, ext_info->path, strlen1);
       ptr = pack_const_string_with_length (ptr, ext_info->name, strlen2);
       ptr = pack_const_string_with_length (ptr, ext_info->comments, strlen3);
-      ptr = or_pack_int (ptr, (int) ext_info->npages);
+      ptr = or_pack_int (ptr, (int) ext_info->max_npages);
       ptr = or_pack_int (ptr, (int) ext_info->max_writesize_in_sec);
       ptr = or_pack_int (ptr, (int) ext_info->purpose);
       ptr = or_pack_int (ptr, (int) ext_info->overwrite);
@@ -6505,8 +6509,27 @@ stats_update_class_statistics (OID * classoid, BTID * btid, int do_now)
   int success;
 
   ENTER_SERVER ();
+  if (!do_now)
+    {
+      /* postpone updating statistics */
+      log_add_to_modified_class_list (NULL, classoid, btid,
+				      UPDATE_STATS_ACTION_SET);
+      EXIT_SERVER ();
+      return NO_ERROR;
+    }
 
-  success = xstats_update_class_statistics (NULL, classoid, btid);
+  if (btid == NULL || BTID_IS_NULL (btid))
+    {
+      success = xstats_update_class_statistics (NULL, classoid, NULL);
+    }
+  else
+    {
+      BTID_LIST b;
+
+      b.next = NULL;
+      BTID_COPY (&b.btid, btid);
+      success = xstats_update_class_statistics (NULL, classoid, &b);
+    }
 
   EXIT_SERVER ();
 
@@ -6651,7 +6674,6 @@ btree_add_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oid,
  *   attr_ids(in):
  *   hfids(in):
  *   unique_flag(in):
- *   last_key_desc(in):
  *   fk_refcls_oid(in):
  *   fk_refcls_pk_btid(in):
  *   cache_attr_id(in):
@@ -6663,7 +6685,7 @@ int
 btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
 		  int n_classes, int n_attrs, int *attr_ids,
 		  int *attrs_prefix_length, HFID * hfids,
-		  int unique_flag, int last_key_desc,
+		  int unique_flag, int not_null_flag,
 		  OID * fk_refcls_oid, BTID * fk_refcls_pk_btid,
 		  int cache_attr_id, const char *fk_name,
 		  char *pred_stream, int pred_stream_size,
@@ -6701,7 +6723,7 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
     + ((n_classes == 1) ? (n_attrs * OR_INT_SIZE) : 0)	/* attrs_prefix_length */
     + (n_classes * OR_HFID_SIZE)	/* hfids */
     + OR_INT_SIZE		/* unique_flag */
-    + OR_INT_SIZE		/* last_key_desc */
+    + OR_INT_SIZE		/* not_null_flag */
     + OR_OID_SIZE		/* fk_refcls_oid */
     + OR_BTID_ALIGNED_SIZE	/* fk_refcls_pk_btid */
     + OR_INT_SIZE		/* cache_attr_id */
@@ -6750,7 +6772,7 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
 	}
 
       ptr = or_pack_int (ptr, unique_flag);
-      ptr = or_pack_int (ptr, last_key_desc);
+      ptr = or_pack_int (ptr, not_null_flag);
 
       ptr = or_pack_oid (ptr, fk_refcls_oid);
       ptr = or_pack_btid (ptr, fk_refcls_pk_btid);
@@ -6814,10 +6836,10 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
   btid =
     xbtree_load_index (NULL, btid, key_type, class_oids, n_classes, n_attrs,
 		       attr_ids, attrs_prefix_length, hfids, unique_flag,
-		       last_key_desc, fk_refcls_oid, fk_refcls_pk_btid,
-		       cache_attr_id, fk_name, pred_stream, pred_stream_size,
-		       expr_stream, expr_stream_size, func_col_id,
-		       func_attr_index_start);
+		       not_null_flag, fk_refcls_oid,
+		       fk_refcls_pk_btid, cache_attr_id, fk_name, pred_stream,
+		       pred_stream_size, expr_stream, expr_stream_size,
+		       func_col_id, func_attr_index_start);
   if (btid == NULL)
     {
       error = er_errid ();

@@ -115,6 +115,7 @@ static FUNCTION_MAP functions[] = {
   {"concat_ws", PT_CONCAT_WS},
   {"cos", PT_COS},
   {"cot", PT_COT},
+  {"cume_dist", PT_CUME_DIST},
   {"curtime", PT_SYS_TIME},
   {"curdate", PT_SYS_DATE},
   {"utc_time", PT_UTC_TIME},
@@ -164,6 +165,7 @@ static FUNCTION_MAP functions[] = {
   {"nvl", PT_NVL},
   {"nvl2", PT_NVL2},
   {"orderby_num", PT_ORDERBY_NUM},
+  {"percent_rank", PT_PERCENT_RANK},
   {"power", PT_POWER},
   {"pow", PT_POWER},
   {"pi", PT_PI},
@@ -588,6 +590,7 @@ typedef struct YYLTYPE
 %type <number> opt_with_read_uncommitted
 %type <number> opt_class_type
 %type <number> opt_of_attr_column_method
+%type <number> opt_of_constraint_index_key
 %type <number> opt_class
 %type <number> isolation_level_name
 %type <number> opt_status
@@ -635,6 +638,7 @@ typedef struct YYLTYPE
 %type <number> of_analytic_nth_value
 %type <number> of_analytic_lead_lag
 %type <number> of_analytic_no_args
+%type <number> of_cume_dist_percent_rank_function
 %type <number> negative_prec_cast_type
 %type <number> opt_nulls_first_or_last
 /*}}}*/
@@ -663,6 +667,7 @@ typedef struct YYLTYPE
 %type <node> table_spec_list
 %type <node> join_table_spec
 %type <node> table_spec
+%type <node> original_table_spec
 %type <node> join_condition
 %type <node> class_spec_list
 %type <node> class_spec
@@ -1053,7 +1058,7 @@ typedef struct YYLTYPE
 %token CYCLE
 %token DATA
 %token DATABASE
-%token DATA_TYPE
+%token DATA_TYPE_
 %token Date
 %token DATETIME
 %token DAY_
@@ -1334,6 +1339,7 @@ typedef struct YYLTYPE
 %token WHERE
 %token WHILE
 %token WITH
+%token WITHIN
 %token WITHOUT
 %token WORK
 %token WRITE
@@ -1367,6 +1373,7 @@ typedef struct YYLTYPE
 %token CROATIAN_KUNA_SIGN
 %token SERBIAN_DINAR_SIGN
 
+%token DOT
 %token RIGHT_ARROW
 %token STRCAT
 %token COMP_NOT_EQ
@@ -1390,6 +1397,7 @@ typedef struct YYLTYPE
 %token <cptr> COLUMNS
 %token <cptr> COMMITTED
 %token <cptr> COST
+%token <cptr> CUME_DIST
 %token <cptr> DATE_ADD
 %token <cptr> DATE_SUB
 %token <cptr> DECREMENT
@@ -1426,6 +1434,7 @@ typedef struct YYLTYPE
 %token <cptr> LOCK_
 %token <cptr> MAXIMUM
 %token <cptr> MAXVALUE
+%token <cptr> MEDIAN
 %token <cptr> MEMBERS
 %token <cptr> MINVALUE
 %token <cptr> NAME
@@ -1441,6 +1450,7 @@ typedef struct YYLTYPE
 %token <cptr> PARTITIONING
 %token <cptr> PARTITIONS
 %token <cptr> PASSWORD
+%token <cptr> PERCENT_RANK
 %token <cptr> PRINT
 %token <cptr> PRIORITY
 %token <cptr> QUARTER
@@ -1587,9 +1597,15 @@ stmt
 			    /* set query length of previous statement */
 			    if (g_last_stmt)
 			      {
-				int len = g_query_string - g_last_stmt->sql_user_text; 
+				/* remove ';' character in user sql text */
+				int len = g_query_string - g_last_stmt->sql_user_text - 1; 
 				g_last_stmt->sql_user_text_len = len;
 				g_query_string_len = len;
+			      }
+			    
+			    while (isspace (*g_query_string))
+			      {
+			        g_query_string++;
 			      }
 			  }
 
@@ -1742,7 +1758,7 @@ stmt_
 		{ $$ = $1; }
 	| get_stmt
 		{ $$ = $1; }
-	| DATA_TYPE data_type
+	| DATA_TYPE_ data_type
 		{{
 
 			PT_NODE *dt, *set_dt;
@@ -3164,6 +3180,7 @@ alter_stmt
 			if (node && ocs)
 			  {
 			    PT_NODE *col, *temp;
+			    node->info.index.code = PT_REBUILD_INDEX;
 			    node->info.index.reverse = $4;
 			    node->info.index.unique = $5;
 			    node->info.index.index_name = $7;
@@ -3224,6 +3241,7 @@ alter_stmt
 
 			PT_NODE *node = parser_pop_hint_node ();
 
+			node->info.index.code = PT_REBUILD_INDEX;
 			node->info.index.reverse = $4;
 			node->info.index.unique = $5;
 
@@ -3231,6 +3249,40 @@ alter_stmt
 			if (node->info.index.index_name)
 			  {
 			    node->info.index.index_name->info.name.meta_class = PT_INDEX_NAME;
+			  }
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| ALTER				/* 1 */
+	  INDEX				/* 2 */
+	  identifier			/* 3 */
+	  ON_					/* 4 */
+	  class_name			/* 5 */
+	  RENAME				/* 6 */
+	  TO					/* 7 */
+	  identifier			/* 8 */
+		{{
+			PT_NODE* node = parser_new_node(this_parser, PT_ALTER_INDEX);
+			
+			node->info.index.code = PT_RENAME_INDEX;
+			node->info.index.index_name = $3;
+			node->info.index.new_name = $8;
+						
+			if (node->info.index.index_name)
+			  {
+			    node->info.index.index_name->info.name.meta_class = PT_INDEX_NAME;
+			  }
+			
+			if ($5 != NULL)
+			  {
+			    PT_NODE *ocs = parser_new_node(this_parser, PT_SPEC);
+			    ocs->info.spec.entity_name = $5;
+			    ocs->info.spec.only_all = PT_ONLY;
+			    ocs->info.spec.meta_class = PT_CLASS;
+			
+			    node->info.index.indexed_class = ocs;
 			  }
 
 			$$ = node;
@@ -4071,6 +4123,22 @@ opt_outer
 	;
 
 table_spec
+	: '(' table_spec ')' %dprec 1
+		{{
+
+			$$ = $2;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| original_table_spec %dprec 2
+		{{
+
+			$$ = $1;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+
+original_table_spec
 	: class_spec opt_as_identifier_attr_name opt_table_spec_index_hint_list opt_with_read_uncommitted
 		{{
 			PT_NODE *range_var = NULL;
@@ -4503,7 +4571,7 @@ only_all_class_spec
 	;
 
 class_name
-	: identifier '.' identifier
+	: identifier DOT identifier
 		{{
 
 			PT_NODE *user_node = $1;
@@ -4811,6 +4879,36 @@ alter_rename_clause_allow_multiple
 			  }
 
 		DBG_PRINT}}
+	| opt_of_constraint_index_key identifier as_or_to identifier
+		{{
+
+			PT_NODE *node = parser_get_alter_node ();
+			PT_MISC_TYPE etyp = $1;
+
+			if (node)
+			  {
+			    if (etyp == PT_CONSTRAINT_NAME)
+			    	{
+			    	  node->info.alter.code = PT_RENAME_CONSTRAINT;
+			    	}
+			    else if (etyp == PT_INDEX_NAME)
+			        {
+			        node->info.alter.code = PT_RENAME_INDEX;
+			        }
+			    else 
+			        {
+  			        node->info.alter.code = PT_RENAME_ATTR_MTHD;
+  			        etyp = PT_ATTRIBUTE;
+  			        node->info.alter.alter_clause.rename.meta = PT_NORMAL;
+  			        }
+
+			    node->info.alter.alter_clause.rename.element_type = etyp;
+			    
+			    node->info.alter.alter_clause.rename.new_name = $4;
+			    node->info.alter.alter_clause.rename.old_name = $2;
+			  }
+
+		DBG_PRINT}}
 	;
 
 alter_rename_clause_cubrid_specific
@@ -4873,6 +4971,26 @@ opt_of_attr_column_method
 		{{
 
 			$$ = PT_METHOD;
+		DBG_PRINT}}
+	;
+	
+opt_of_constraint_index_key
+	: CONSTRAINT
+		{{
+
+			$$ = PT_CONSTRAINT_NAME;
+
+		DBG_PRINT}}
+   	| INDEX
+		{{
+
+			$$ = PT_INDEX_NAME;
+
+		DBG_PRINT}}
+   	| KEY
+		{{
+
+			$$ = PT_INDEX_NAME;
 
 		DBG_PRINT}}
 	;
@@ -6754,7 +6872,7 @@ delete_name
 			$$ = node;
 
 		DBG_PRINT}}
-	| identifier '.' '*'
+	| identifier DOT '*'
 		{{
 
 			PT_NODE *node = $1;
@@ -12261,6 +12379,18 @@ index_name
 		{{
 
 			PT_NODE *node = $1;
+			/* Since both .NONE and ."NONE" (or .[NONE], .`NONE`) will be
+			 * parsed as DOT IdName by lexer. In order to distinguish the 
+			 * ambiguous word "NONE" (reserved word or normal IdName) in the 
+			 * context of USING INDEX clause, we have to check the
+			 * last character of the word "NONE" in the original SQL text.
+			 */
+			if (strcasecmp (node->info.name.original, "none") == 0
+			    && toupper (node->sql_user_text[node->buffer_pos - 1]) == 'E')
+			  { 
+			    PT_ERRORmf2 (this_parser, node, MSGCAT_SET_PARSER_SYNTAX,
+			        MSGCAT_SYNTAX_KEYWORD_ERROR, "NONE", "a valid index name");
+			  }
 			node->info.name.meta_class = PT_INDEX_NAME;
 			node->etc = (void *) PT_IDX_HINT_FORCE;
 			$$ = node;
@@ -12271,6 +12401,18 @@ index_name
 		{{
 
 			PT_NODE *node = $1;
+			/* Since both .NONE and ."NONE" (or .[NONE], .`NONE`) will be
+			 * parsed as DOT IdName by lexer. In order to distinguish the 
+			 * ambiguous word "NONE" (reserved word or normal IdName) in the 
+			 * context of USING INDEX clause, we have to check the
+			 * last character of the word "NONE" in the original SQL text.
+			 */
+			if (strcasecmp (node->info.name.original, "none") == 0
+			    && toupper (node->sql_user_text[node->buffer_pos - 1]) == 'E')
+			  { 
+			    PT_ERRORmf2 (this_parser, node, MSGCAT_SET_PARSER_SYNTAX,
+			        MSGCAT_SYNTAX_KEYWORD_ERROR, "NONE", "a valid index name");
+			  }
 			node->info.name.meta_class = PT_INDEX_NAME;
 			node->etc = (void *) PT_IDX_HINT_IGNORE;
 			$$ = node;
@@ -12282,22 +12424,25 @@ index_name
 
 			PT_NODE *node = $1;
 			node->info.name.meta_class = PT_INDEX_NAME;
-			node->etc = (void *) PT_IDX_HINT_USE;
+			/* Since both .NONE and ."NONE" (or .[NONE], .`NONE`) will be
+			 * parsed as DOT IdName by lexer. In order to distinguish the 
+			 * ambiguous word "NONE" (reserved word or normal IdName) in the 
+			 * context of USING INDEX clause, we have to check the
+			 * last character of the word "NONE" in the original SQL text.
+			 */
+			if (strcasecmp (node->info.name.original, "none") == 0
+			    && toupper (node->sql_user_text[node->buffer_pos - 1]) == 'E')
+			  {
+			    node->info.name.original = NULL;
+			    node->etc = (void *) PT_IDX_HINT_CLASS_NONE;
+			  }
+			else
+			  {
+			    node->etc = (void *) PT_IDX_HINT_USE;
+			  }
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
-		DBG_PRINT}}
-	| identifier '.' NONE
-		{{
-		
-			PT_NODE *node = $1;
-			node->info.name.meta_class = PT_INDEX_NAME;
-			node->info.name.resolved = node->info.name.original;
-			node->info.name.original = NULL;
-			node->etc = (void *) PT_IDX_HINT_CLASS_NONE;
-			$$ = node;
-			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
-		
 		DBG_PRINT}}
 	;
 
@@ -13489,14 +13634,18 @@ reserved_func
 		{{
 
 			PT_NODE *node = parser_new_node (this_parser, PT_FUNCTION);
-			node->info.function.function_type = $1;
-
-			if ($1 == PT_MAX || $1 == PT_MIN)
-			  node->info.function.all_or_distinct = PT_ALL;
-			else
-			  node->info.function.all_or_distinct = PT_DISTINCT;
-
-			node->info.function.arg_list = $4;
+			
+			if (node != NULL)
+			  {
+			    node->info.function.function_type = $1;
+  
+			    if ($1 == PT_MAX || $1 == PT_MIN || $1 == PT_MEDIAN)
+			      node->info.function.all_or_distinct = PT_ALL;
+			    else
+			      node->info.function.all_or_distinct = PT_DISTINCT;
+  
+			    node->info.function.arg_list = $4;
+			  }
 
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -13508,7 +13657,7 @@ reserved_func
 
 			PT_NODE *node = parser_new_node (this_parser, PT_FUNCTION);
 
-			if (node)
+			if (node != NULL)
 			  {
 			    node->info.function.function_type = $1;
 			    node->info.function.all_or_distinct = PT_ALL;
@@ -13718,6 +13867,16 @@ reserved_func
 			    node->info.function.analytic.is_analytic = true;
 			    node->info.function.analytic.partition_by = $6;
 			    node->info.function.analytic.order_by = $7;
+				if ($7 == NULL)
+				  {
+					if ($1 == PT_CUME_DIST || $1 == PT_PERCENT_RANK)
+					  {
+						PT_ERRORmf (this_parser, node,
+									MSGCAT_SET_PARSER_SEMANTIC,
+									MSGCAT_SEMANTIC_NULL_ORDER_BY,
+									pt_show_function ($1));
+					  }
+				  }
 			  }
 
 			$$ = node;
@@ -14571,8 +14730,35 @@ reserved_func
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| of_cume_dist_percent_rank_function '(' expression_list ')' WITHIN GROUP_ '('ORDER BY sort_spec_list')'
+		{{
+
+			PT_NODE *node = parser_new_node (this_parser, PT_FUNCTION);
+			if (node)
+			  {
+				node->info.function.function_type = $1;
+				node->info.function.all_or_distinct = PT_ALL;
+				node->info.function.arg_list = $3;
+				node->info.function.analytic.is_analytic = false;
+				node->info.function.order_by = $10;
+			  }
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+        DBG_PRINT}}
 	;
 
+of_cume_dist_percent_rank_function
+	: CUME_DIST        
+		{{
+			$$ = PT_CUME_DIST;
+		DBG_PRINT}}
+
+	|PERCENT_RANK        
+		{{
+			$$ = PT_PERCENT_RANK;
+		DBG_PRINT}}
+    ;
 
 of_dates
 	: SYS_DATE
@@ -14705,6 +14891,12 @@ of_avg_max_etc
 			$$ = PT_AGG_BIT_XOR;
 
 		DBG_PRINT}}
+	| MEDIAN
+		{{
+		
+			$$ = PT_MEDIAN;
+		
+		DBG_PRINT}}
 	;
 
 of_analytic
@@ -14774,6 +14966,12 @@ of_analytic
 			$$ = PT_NTILE;
 
 		DBG_PRINT}}
+	| MEDIAN
+		{{
+		
+			$$ = PT_MEDIAN;
+		
+		DBG_PRINT}}
 	/* add other analytic functions here */
 	;
 
@@ -14834,6 +15032,16 @@ of_analytic_no_args
 		{{
 
 			$$ = PT_DENSE_RANK;
+
+		DBG_PRINT}}
+	| CUME_DIST
+		{{
+			$$ = PT_CUME_DIST;
+
+		DBG_PRINT}}
+	| PERCENT_RANK
+		{{
+			$$ = PT_PERCENT_RANK;
 
 		DBG_PRINT}}
 	/* add other analytic functions here */
@@ -16616,14 +16824,14 @@ subquery
 
 
 path_expression
-	: path_header '.' IDENTITY		%dprec 5
+	: path_header DOT IDENTITY		%dprec 5
 		{{
 
 			$$ = $1;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| path_header '.' OBJECT		%dprec 4
+	| path_header DOT OBJECT		%dprec 4
 		{{
 
 			PT_NODE *node = $1;
@@ -16636,7 +16844,7 @@ path_expression
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| path_header '.' '*'			%dprec 3
+	| path_header DOT '*'			%dprec 3
 		{{
 
 			PT_NODE *node = $1;
@@ -16787,7 +16995,7 @@ path_header
 	;
 
 path_dot
-	: '.'
+	: DOT
 	| RIGHT_ARROW
 	;
 
@@ -16828,7 +17036,7 @@ path_id
 	;
 
 simple_path_id
-	: identifier '.' identifier
+	: identifier DOT identifier
 		{{
 
 			PT_NODE *dot = parser_new_node (this_parser, PT_DOT_);
@@ -18695,6 +18903,17 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| CUME_DIST
+		{{
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p != NULL)
+			  {
+				p->info.name.original = $1;
+			  }
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	| DECREMENT
 		{{
 
@@ -19091,6 +19310,18 @@ identifier
 			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
 			if (p)
 			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| PERCENT_RANK
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p != NULL)
+			  {
+				p->info.name.original = $1;
+			  }
 			$$ = p;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -19643,6 +19874,19 @@ identifier
 			$$ = p;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
+		DBG_PRINT}}
+	| MEDIAN
+		{{
+		
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p != NULL)
+			  {
+			    p->info.name.original = $1;
+			  }
+
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+		
 		DBG_PRINT}}
 	;
 
@@ -20898,6 +21142,7 @@ pop_msg ()
 int yyline = 0;
 int yycolumn = 0;
 int yycolumn_end = 0;
+int dot_flag = 0;
 
 int parser_function_code = PT_EMPTY;
 
@@ -21981,6 +22226,7 @@ parser_main (PARSER_CONTEXT * parser)
   yycolumn = yycolumn_end = 1;
   yybuffer_pos=0;
   csql_yylloc.buffer_pos=0;
+  dot_flag = 0;
 
   g_query_string = NULL;
   g_query_string_len = 0;
@@ -22135,6 +22381,8 @@ PT_HINT parser_hint_table[] = {
   {"USE_UPDATE_IDX", NULL, PT_HINT_USE_UPDATE_IDX}
   ,
   {"USE_INSERT_IDX", NULL, PT_HINT_USE_INSERT_IDX}
+  ,
+  {"NO_SORT_LIMIT", NULL, PT_HINT_NO_SORT_LIMIT}
   ,
   {"SELECT_RECORD_INFO", NULL, PT_HINT_SELECT_RECORD_INFO}
   ,

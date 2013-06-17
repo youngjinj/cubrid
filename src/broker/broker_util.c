@@ -590,3 +590,121 @@ ut_is_appl_server_ready (int pid, char *ready_flag)
 
   return false;
 }
+
+double
+ut_size_string_to_kbyte (const char *size_str, const char *default_unit)
+{
+  double val;
+  char *end;
+  char *unit;
+
+  if (size_str == NULL || default_unit == NULL)
+    {
+      assert (false);
+    }
+
+  val = strtod (size_str, &end);
+  if (end == (char *) size_str)
+    {
+      return -1.0;
+    }
+
+  if (isalpha (*end))
+    {
+      unit = end;
+    }
+  else
+    {
+      unit = (char *) default_unit;
+    }
+
+  if (strcasecmp (unit, "b") == 0)
+    {
+      /* byte */
+      val = val / ONE_K;
+    }
+  else if ((strcasecmp (unit, "k") == 0) || (strcasecmp (unit, "kb") == 0))
+    {
+      /* kilo */
+    }
+  else if ((strcasecmp (unit, "m") == 0) || (strcasecmp (unit, "mb") == 0))
+    {
+      /* mega */
+      val = val * ONE_K;
+    }
+  else if ((strcasecmp (unit, "g") == 0) || (strcasecmp (unit, "gb") == 0))
+    {
+      /* giga */
+      val = val * ONE_M;
+    }
+  else
+    {
+      return -1.0;
+    }
+
+  if (val > INT_MAX)		/* spec */
+    {
+      return -1.0;
+    }
+
+  return val;
+}
+
+double
+ut_time_string_to_sec (const char *time_str, const char *default_unit)
+{
+  double val;
+  char *end;
+  char *unit;
+
+  if (time_str == NULL || default_unit == NULL)
+    {
+      assert (false);
+    }
+
+  val = strtod (time_str, &end);
+  if (end == (char *) time_str)
+    {
+      return -1.0;
+    }
+
+  if (isalpha (*end))
+    {
+      unit = end;
+    }
+  else
+    {
+      unit = (char *) default_unit;
+    }
+
+  if ((strcasecmp (unit, "ms") == 0) || (strcasecmp (unit, "msec") == 0))
+    {
+      /* millisecond */
+      val = val / ONE_SEC;
+    }
+  else if ((strcasecmp (unit, "s") == 0) || (strcasecmp (unit, "sec") == 0))
+    {
+      /* second */
+    }
+  else if (strcasecmp (unit, "min") == 0)
+    {
+      /* minute */
+      val = val * ONE_MIN / ONE_SEC;
+    }
+  else if (strcasecmp (unit, "h") == 0)
+    {
+      /* hours */
+      val = val * ONE_HOUR / ONE_SEC;
+    }
+  else
+    {
+      return -1.0;
+    }
+
+  if (val > INT_MAX)		/* spec */
+    {
+      return -1.0;
+    }
+
+  return val;
+}

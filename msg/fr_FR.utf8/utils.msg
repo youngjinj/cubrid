@@ -217,7 +217,7 @@ usage: %s heartbeat <command> [args]\n\
 \n\
 Commandes disponibles:\n\
     start       [database-name]\n\
-    stop        [database-name]\n\
+    stop        [-i|database-name]\n\
     copylogdb   <start|stop> database-name node-name\n\
     applylogdb  <start|stop> database-name node-name\n\
     status\n\
@@ -360,7 +360,7 @@ $set 9 MSGCAT_UTIL_SET_MASTER
 18 Le serveur %s est informé de l 'arrêt.\nCette opération peut durer plusieurs minutes. Attendez s'il vous plaît.
 19 Serveur %s n'est pas trouvé.
 20 Maître s'arrêt dans %d minutes\n
-
+21 Heartbeat failover was finished. Please wait until all shutdown processes of cub_servers are completed.\n
 
 $set 10 MSGCAT_UTIL_SET_OPTIMIZEDB
 11 Impossible d'ouvrir le fichier de sortie '%s'\n
@@ -588,6 +588,7 @@ options valids:\n\
   -D, --dereg-process=PID          quitte le processus cible et le supprime des entrées de processus gérés\n\
   -F, --reconfig-node-list         applique la configuration du CUBRID heartbeat récemment changé\n\
   -U, --deactivate-heartbeat       désactiver la fonction CUBRID heartbeat et supprime le nœud actuel du groupe de nœuds\n\
+  -i, --immediately                Immediately kill active ones, if one of HA processes are not terminated while CUBRID heartbeat is shutting down; with -U option; default: disabled\n\
   -T, --activate-heartbeat         active la fonction CUBRID heartbeat et rend le nœud actuel un membre du groupe de nœuds\n\
   -V, --verbose                    active les messages verbeux d'état; par défaut: désactivé\n
 28 Commande inconnue: %s\n
@@ -601,7 +602,7 @@ options valids:\n\
 36 Ne peut pas exec shell (%s) pour %s, %s
 37 Fork du processus %s, a retourné %d, %s
 38 Impossible d'exécuter %s
-
+39 -i(--immediately) option must be used with -U(--deactivate-heartbeat) option.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -1032,6 +1033,7 @@ $set 49 MSGCAT_UTIL_SET_TRANLIST
 24 %4d%-10s %14s %14s %15d %17s\n
 25 Il n'ya pas de transactions\n
 26 tranlist peuvent être effectuées uniquement par le DBA ou un membre du groupe DBA.\n
+27 sort-key column number(%d) is invalid.\n
 32 Indice de tran.    Processus id  Nom du programme          Temps de req. Temps de tran.         Attendre le dét. de verr. SQL_ID       SQL Texte\n
 33 %4d%-10s %14d    %-25s %10.2f %12.2f    %28s     %13s   %s\n
 34 --------------------------------------------------------------------------------------------------------------------------------------------------\n
@@ -1048,4 +1050,6 @@ usage: %s tranlist [OPTION] database-name\n\
 options valides:\n\
   -u, --user=ID                ID d'utilisateur pour l'accès à la base de données; par défaut: utilisateur DBA\n\
   -p, --password=PASS          mot de passe d'utilisateur; par défaut: aucun\n\
-  -s, --summary                affichage des informations résumées de(s) transaction(s)\n
+  -s, --summary                affichage des informations résumées de(s) transaction(s)\n\
+      --sort-key=COLUMN_NUMBER column number to be sorted\n\
+      --reverse                reverse the sort result\n

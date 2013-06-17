@@ -1148,8 +1148,7 @@ process_service (int command_type, bool process_window_service)
 	    {
 	      status = process_heartbeat (command_type, 0, NULL);
 	    }
-	  if (strcmp (get_property (SERVICE_START_SHARD), PROPERTY_ON) ==
-	      0)
+	  if (strcmp (get_property (SERVICE_START_SHARD), PROPERTY_ON) == 0)
 	    {
 	      status = process_shard (command_type, 0, NULL, false);
 	    }
@@ -1233,6 +1232,11 @@ process_service (int command_type, bool process_window_service)
 	if (strcmp (get_property (SERVICE_START_HEARTBEAT), PROPERTY_ON) == 0)
 	  {
 	    status = process_heartbeat (command_type, 0, NULL);
+	  }
+
+	if (strcmp (get_property (SERVICE_START_SHARD), PROPERTY_ON) == 0)
+	  {
+	    status = process_shard (command_type, 0, NULL, false);
 	  }
       }
       break;
@@ -3341,25 +3345,27 @@ process_heartbeat (int command_type, int argc, const char **argv)
 	{
 	  if (argc >= 1)
 	    {
-	      db_name = argv[0];
-	      if (db_name != NULL)
+	      if (strcmp (argv[0], "-i") != 0)
 		{
-		  status = sysprm_load_and_init (db_name, NULL);
-		  if (status != NO_ERROR)
-		    {
-		      print_result (PRINT_HEARTBEAT_NAME, status,
-				    command_type);
-		      goto ret;
-		    }
+		  db_name = argv[0];
+		}
+	    }
 
-		  if (util_get_ha_mode_for_sa_utils () == HA_MODE_OFF)
-		    {
-		      status = ER_GENERIC_ERROR;
-		      print_message (stderr, MSGCAT_UTIL_GENERIC_NOT_HA_MODE);
-		      print_result (PRINT_HEARTBEAT_NAME, status,
-				    command_type);
-		      goto ret;
-		    }
+	  if (db_name != NULL)
+	    {
+	      status = sysprm_load_and_init (db_name, NULL);
+	      if (status != NO_ERROR)
+		{
+		  print_result (PRINT_HEARTBEAT_NAME, status, command_type);
+		  goto ret;
+		}
+
+	      if (util_get_ha_mode_for_sa_utils () == HA_MODE_OFF)
+		{
+		  status = ER_GENERIC_ERROR;
+		  print_message (stderr, MSGCAT_UTIL_GENERIC_NOT_HA_MODE);
+		  print_result (PRINT_HEARTBEAT_NAME, status, command_type);
+		  goto ret;
 		}
 
 	      status = us_hb_process_stop (&ha_conf, db_name);
@@ -3367,7 +3373,13 @@ process_heartbeat (int command_type, int argc, const char **argv)
 	  else
 	    {
 	      const char *args[] =
-		{ UTIL_COMMDB_NAME, COMMDB_HA_DEACTIVATE, NULL };
+		{ UTIL_COMMDB_NAME, COMMDB_HA_DEACTIVATE, NULL, NULL };
+
+	      if (argc >= 1)
+		{
+		  args[2] = argv[0];
+		}
+
 	      status =
 		proc_execute (UTIL_COMMDB_NAME, args, true, false, false,
 			      NULL);

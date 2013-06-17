@@ -1766,7 +1766,7 @@ pt_bind_names (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
 
       if (pt_has_error (parser))
 	{
-	  parser_free_tree (parser, node);
+	  /* this node will be registered to orphan list and freed later */
 	  node = NULL;
 	  goto select_end;
 	}
@@ -1783,7 +1783,7 @@ pt_bind_names (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
 	  && node->info.query.q.select.from->next == NULL)
 	{
 	  if ((node->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
-	      != 0)
+	       != 0)
 	    {
 	      /* mark spec to scan for record info */
 	      node->info.query.q.select.from->info.spec.flag |=
@@ -1791,7 +1791,7 @@ pt_bind_names (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
 	    }
 	  else
 	    if ((node->info.query.q.select.
-		 hint & PT_HINT_SELECT_PAGE_INFO) != 0)
+		 hint & PT_HINT_SELECT_PAGE_INFO))
 	    {
 	      /* mark spec to scan for heap page headers */
 	      node->info.query.q.select.from->info.spec.flag |=

@@ -174,6 +174,7 @@ log_top_query (int argc, char *argv[], int arg_start)
   FILE *fp;
   char *filename;
   int i;
+  int error = 0;
   long start_offset, end_offset;
 #ifdef MT_MODE
   T_THREAD thrid;
@@ -239,12 +240,12 @@ log_top_query (int argc, char *argv[], int arg_start)
 	    break;
 	}
 #else
-      if (log_top (fp, filename, start_offset, end_offset) < 0)
-	{
-	  fclose (fp);
-	  return -1;
-	}
+      error = log_top (fp, filename, start_offset, end_offset);
       fclose (fp);
+      if (error == LT_INVAILD_VERSION)
+	{
+	  return error;
+	}
 #endif
     }
 
@@ -357,7 +358,10 @@ log_top (FILE * fp, char *filename, long start_offset, long end_offset)
       if (log_type == CAS_LOG_BEGIN_WITH_MONTH)
 	{
 	  fprintf (stderr, "invaild version of log file\n");
-	  goto log_top_err;
+	  t_string_free (cas_log_buf);
+	  t_string_free (sql_buf);
+	  t_string_free (linebuf_tstr);
+	  return LT_INVAILD_VERSION;
 	}
       else if (log_type != CAS_LOG_BEGIN_WITH_YEAR)
 	{
@@ -375,7 +379,7 @@ log_top (FILE * fp, char *filename, long start_offset, long end_offset)
 	  strcpy (start_date, cur_date);
 	}
 
-      GET_MSG_START_PTR (msg_p, linebuf);
+      msg_p = get_msg_start_ptr (linebuf);
       if (strncmp (msg_p, "execute", 7) == 0
 	  || strncmp (msg_p, "execute_all", 11) == 0
 	  || strncmp (msg_p, "execute_call", 12) == 0
@@ -419,7 +423,7 @@ log_top (FILE * fp, char *filename, long start_offset, long end_offset)
 	      break;
 	    }
 
-	  GET_MSG_START_PTR (msg_p, linebuf);
+	  msg_p = get_msg_start_ptr (linebuf);
 
 	  /* skip query_cancel */
 	  if (strncmp (msg_p, "query_cancel", 12) == 0)
@@ -439,7 +443,7 @@ log_top (FILE * fp, char *filename, long start_offset, long end_offset)
 		      break;
 		    }
 
-		  GET_MSG_START_PTR (msg_p, linebuf);
+		  msg_p = get_msg_start_ptr (linebuf);
 		  if (strncmp (msg_p, "***", 3) == 0)
 		    {
 		      end_block_flag = 1;
@@ -466,7 +470,7 @@ log_top (FILE * fp, char *filename, long start_offset, long end_offset)
 	  strcpy (query_info_buf[qi_idx].sql,
 		  ut_trim (t_string_str (sql_buf)));
 
-	  GET_MSG_START_PTR (msg_p, linebuf);
+	  msg_p = get_msg_start_ptr (linebuf);
 	  GET_CUR_DATE_STR (cur_date, linebuf);
 
 	  strcpy (query_info_buf[qi_idx].start_date, start_date);
@@ -536,13 +540,13 @@ log_top (FILE * fp, char *filename, long start_offset, long end_offset)
   t_string_free (cas_log_buf);
   t_string_free (sql_buf);
   t_string_free (linebuf_tstr);
-  return 0;
+  return LT_NO_ERROR;
 
 log_top_err:
   t_string_free (cas_log_buf);
   t_string_free (sql_buf);
   t_string_free (linebuf_tstr);
-  return -1;
+  return LT_OTHER_ERROR;
 }
 
 static int
@@ -714,7 +718,7 @@ read_bind_value (FILE * fp, T_STRING * t_str, char **linebuf, int *lineno,
 
       if (is_cas_log (*linebuf) == CAS_LOG_BEGIN_WITH_YEAR)
 	{
-	  GET_MSG_START_PTR (msg_p, *linebuf);
+	  msg_p = get_msg_start_ptr (*linebuf);
 	  if (strncmp (msg_p, "bind ", 5) == 0)
 	    is_bind_value = 1;
 	}
