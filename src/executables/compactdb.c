@@ -629,8 +629,9 @@ disk_update_instance (MOP classop, DESC_OBJ * obj, OID * oid)
       update_indexes (WS_OID (classop), oid, Diskrec);
     }
 
-  if (heap_update (NULL, hfid, WS_OID (classop), oid, Diskrec, &oldflag, NULL)
-      != oid)
+  if (heap_perform_update
+      (NULL, hfid, WS_OID (classop), oid, Diskrec, &oldflag, NULL,
+       NULL) != oid)
     {
       printf (msgcat_message (MSGCAT_CATALOG_UTILS,
 			      MSGCAT_UTIL_SET_COMPACTDB,

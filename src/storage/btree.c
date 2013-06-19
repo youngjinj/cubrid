@@ -856,7 +856,8 @@ btree_load_overflow_key (THREAD_ENTRY * thread_p, BTID_INT * btid,
       goto exit_on_error;
     }
 
-  if (overflow_get (thread_p, first_overflow_page_vpid, &rec) != S_SUCCESS)
+  if (overflow_get (thread_p, first_overflow_page_vpid, &rec, NULL) !=
+      S_SUCCESS)
     {
       goto exit_on_error;
     }
@@ -3223,7 +3224,7 @@ xbtree_delete_with_unique_key (THREAD_ENTRY * thread_p, BTID * btid,
 
       error = locator_delete_force (thread_p, &hfid, &unique_oid, btid, false,
 				    true, SINGLE_ROW_DELETE, &scan_cache,
-				    &force_count);
+				    &force_count, NULL);
 
       heap_scancache_end_modify (thread_p, &scan_cache);
     }

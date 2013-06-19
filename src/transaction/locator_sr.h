@@ -89,7 +89,8 @@ extern int locator_attribute_info_force (THREAD_ENTRY * thread_p,
 					 REPL_INFO_TYPE repl_info,
 					 int pruning_type,
 					 PRUNING_CONTEXT * pcontext,
-					 FUNC_PRED_UNPACK_INFO * func_preds);
+					 FUNC_PRED_UNPACK_INFO * func_preds,
+					 void *mvcc_data_filter);
 extern LC_COPYAREA *locator_allocate_copy_area_by_attr_info (THREAD_ENTRY *
 							     thread_p,
 							     HEAP_CACHE_ATTRINFO
@@ -132,7 +133,7 @@ extern int locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid,
 				 bool duplicate_key_locked,
 				 int has_index, int op_type,
 				 HEAP_SCANCACHE * scan_cache,
-				 int *force_count);
+				 int *force_count, void *mvcc_data_filter);
 extern int locator_add_or_remove_index (THREAD_ENTRY * thread_p,
 					RECDES * recdes, OID * inst_oid,
 					OID * class_oid, BTID * search_btid,

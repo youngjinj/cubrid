@@ -2899,6 +2899,31 @@ pgbuf_get_vpid_ptr (PAGE_PTR pgptr)
 }
 
 /*
+ * pgbuf_get_latch_mode () - Find the latch mode associated
+ *                         with the passed buffer
+ *   return: latch mode
+ *   pgptr(in): Page pointer 
+ */
+int
+pgbuf_get_latch_mode (PAGE_PTR pgptr)
+{
+  PGBUF_BCB *bufptr;
+
+  if (pgbuf_get_check_page_validation (NULL, PGBUF_DEBUG_PAGE_VALIDATION_ALL))
+    {
+      if (pgbuf_is_valid_page_ptr (pgptr) == false)
+	{
+	  return NULL;
+	}
+    }
+
+  /* NOTE: Does not need to hold BCB_mutex since the page is fixed */
+
+  CAST_PGPTR_TO_BFPTR (bufptr, pgptr);
+  return bufptr->latch_mode;
+}
+
+/*
  * pgbuf_get_page_id () - Find the page identifier associated with the
  *                        passed buffer
  *   return: PAGEID

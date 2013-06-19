@@ -149,13 +149,6 @@ static void scan_init_scan_pred (SCAN_PRED * scan_pred_p,
 static void scan_init_scan_attrs (SCAN_ATTRS * scan_attrs_p, int num_attrs,
 				  ATTR_ID * attr_ids,
 				  HEAP_CACHE_ATTRINFO * attr_cache);
-static void scan_init_filter_info (FILTER_INFO * filter_info_p,
-				   SCAN_PRED * scan_pred,
-				   SCAN_ATTRS * scan_attrs,
-				   VAL_LIST * val_list, VAL_DESCR * val_descr,
-				   OID * class_oid, int btree_num_attrs,
-				   ATTR_ID * btree_attr_ids,
-				   int *num_vstr_ptr, ATTR_ID * vstr_ids);
 static int scan_init_indx_coverage (THREAD_ENTRY * thread_p,
 				    int coverage_enabled,
 				    OUTPTR_LIST * output_val_list,
@@ -691,7 +684,7 @@ scan_init_scan_attrs (SCAN_ATTRS * scan_attrs_p, int num_attrs,
  * scan_init_filter_info () - initialize FILTER_INFO structure as a data/key filter
  *   return: none
  */
-static void
+void
 scan_init_filter_info (FILTER_INFO * filter_info_p, SCAN_PRED * scan_pred,
 		       SCAN_ATTRS * scan_attrs, VAL_LIST * val_list,
 		       VAL_DESCR * val_descr, OID * class_oid,

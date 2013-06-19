@@ -899,6 +899,7 @@ overflow_get_length (THREAD_ENTRY * thread_p, const VPID * ovf_vpid)
  *   start_offset(in): Start offset of portion to copy
  *   max_nbytes(in): Maximum number of bytes to retrieve
  *   remaining_length(in): The number of remaining bytes to read
+ *   mvcc_snapshot(in): mvcc snapshot
  *
  * Note: A portion of the content of the overflow record associated with the
  *       given overflow address(ovf_pid) is placed into the area pointed to by
@@ -911,7 +912,7 @@ overflow_get_length (THREAD_ENTRY * thread_p, const VPID * ovf_vpid)
 SCAN_CODE
 overflow_get_nbytes (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
 		     RECDES * recdes, int start_offset, int max_nbytes,
-		     int *remaining_length)
+		     int *remaining_length, MVCC_SNAPSHOT * mvcc_snapshot)
 {
   OVERFLOW_FIRST_PART *first_part;
   OVERFLOW_REST_PART *rest_parts;
@@ -937,6 +938,17 @@ overflow_get_nbytes (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
     }
 
   first_part = (OVERFLOW_FIRST_PART *) pgptr;
+  if (mvcc_snapshot != NULL)
+    {
+      if (mvcc_snapshot->snapshot_fnc (thread_p,
+				       (MVCC_REC_HEADER *) first_part->data,
+				       mvcc_snapshot, pgptr) != true)
+	{
+	  pgbuf_unfix_and_init (thread_p, pgptr);
+	  return S_SNAPSHOT_NOT_SATISFIED;
+	}
+    }
+
   *remaining_length = first_part->length;
 
   if (max_nbytes < 0)
@@ -1061,6 +1073,7 @@ overflow_get_nbytes (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
  *   return: scan status
  *   ovf_vpid(in): Overflow address
  *   recdes(in): Record descriptor
+ *   mvcc_snapshot(in): mvcc snapshot
  *
  * Note: The content of a multipage object associated with the given overflow
  *       address(oid) is placed into the area pointed to by the record
@@ -1072,12 +1085,13 @@ overflow_get_nbytes (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
  *
  */
 SCAN_CODE
-overflow_get (THREAD_ENTRY * thread_p, const VPID * ovf_vpid, RECDES * recdes)
+overflow_get (THREAD_ENTRY * thread_p, const VPID * ovf_vpid, RECDES * recdes,
+	      MVCC_SNAPSHOT * mvcc_snapshot)
 {
   int remaining_length;
 
   return overflow_get_nbytes (thread_p, ovf_vpid, recdes, 0, -1,
-			      &remaining_length);
+			      &remaining_length, mvcc_snapshot);
 }
 
 /*

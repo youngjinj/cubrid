@@ -410,6 +410,7 @@ struct upddel_class_info_internal
   bool **btids_dup_key_locked;	/* true, if corresponding btid contain
 				   duplicate keys locked when searching  */
   BTREE_UNIQUE_STATS_UPDATE_INFO unique_stats;	/* unique indexes statistics */
+  FILTER_INFO mvcc_data_filter;	/* mvcc data filter */
 };
 
 typedef enum analytic_stage ANALYTIC_STAGE;
@@ -1103,6 +1104,11 @@ static int qexec_upddel_setup_current_class (THREAD_ENTRY * thread_p,
 					     UPDDEL_CLASS_INFO_INTERNAL *
 					     class_info, int op_type,
 					     OID * current_oid);
+static int qexec_upddel_mvcc_set_data_filter (THREAD_ENTRY * thread_p,
+					      XASL_NODE * aptr_list,
+					      UPDDEL_CLASS_INFO_INTERNAL *
+					      internal_class,
+					      OID * class_oid);
 static HEAP_SCANCACHE *qexec_reset_caches (THREAD_ENTRY * thread_p,
 					   PRUNING_CONTEXT * pcontext,
 					   UPDDEL_CLASS_INFO_INTERNAL *
@@ -1594,13 +1600,19 @@ qexec_end_one_iteration (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	{
 	  class_oid = &ACCESS_SPEC_CLS_OID (xasl->aptr_list->spec_list);
 	}
-      ret = qexec_add_composite_lock (thread_p, xasl->outptr_list->valptrp,
+
+      /* add composite locks if mvcc is disabled */
+      if (mvcc_Enabled == false)
+	{
+	  ret =
+	    qexec_add_composite_lock (thread_p, xasl->outptr_list->valptrp,
 				      xasl->val_list, xasl_state,
 				      &xasl->composite_lock,
 				      xasl->upd_del_class_cnt, class_oid);
-      if (ret != NO_ERROR)
-	{
-	  GOTO_EXIT_ON_ERROR;
+	  if (ret != NO_ERROR)
+	    {
+	      GOTO_EXIT_ON_ERROR;
+	    }
 	}
     }
 
@@ -4050,12 +4062,15 @@ qexec_gby_finalize_group (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate)
     {
       if (gbstate->composite_lock != NULL)
 	{
-	  if (qexec_add_composite_lock
-	      (thread_p, gbstate->g_outptr_list->valptrp, gbstate->g_val_list,
-	       xasl_state, gbstate->composite_lock,
-	       gbstate->upd_del_class_cnt, NULL) != NO_ERROR)
+	  if (mvcc_Enabled == false)
 	    {
-	      GOTO_EXIT_ON_ERROR;
+	      if (qexec_add_composite_lock
+		  (thread_p, gbstate->g_outptr_list->valptrp,
+		   gbstate->g_val_list, xasl_state, gbstate->composite_lock,
+		   gbstate->upd_del_class_cnt, NULL) != NO_ERROR)
+		{
+		  GOTO_EXIT_ON_ERROR;
+		}
 	    }
 	}
 
@@ -8556,15 +8571,15 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 
 
   /* set X_LOCK for updatable classes */
+  aptr = xasl->aptr_list;
   error =
-    qexec_set_lock_for_sequential_access (thread_p, xasl->aptr_list,
+    qexec_set_lock_for_sequential_access (thread_p, aptr,
 					  update->classes, update->no_classes,
 					  internal_classes);
   if (error != NO_ERROR)
     {
       GOTO_EXIT_ON_ERROR;
     }
-  aptr = xasl->aptr_list;
 
   if (qexec_execute_mainblock (thread_p, aptr, xasl_state) != NO_ERROR)
     {
@@ -8749,6 +8764,16 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 				    " not correct\n");
 		      GOTO_EXIT_ON_ERROR;
 		    }
+
+		  error = qexec_upddel_mvcc_set_data_filter (thread_p,
+							     aptr,
+							     internal_class,
+							     class_oid);
+		  if (error != NO_ERROR)
+		    {
+		      GOTO_EXIT_ON_ERROR;
+		    }
+
 		  /* clear attribute cache information if valid old subclass */
 		  if (!OID_ISNULL (&internal_class->prev_class_oid)
 		      && internal_class->is_attr_info_inited)
@@ -8864,7 +8889,8 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		       LC_FLUSH_DELETE, current_op_type,
 		       internal_class->scan_cache, &force_count, false,
 		       REPL_INFO_TYPE_STMT_NORMAL,
-		       DB_NOT_PARTITIONED_CLASS, NULL, NULL) != NO_ERROR)
+		       DB_NOT_PARTITIONED_CLASS, NULL, NULL,
+		       &internal_class->mvcc_data_filter) != NO_ERROR)
 		    {
 		      GOTO_EXIT_ON_ERROR;
 		    }
@@ -8984,7 +9010,9 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					      internal_class->scan_cache,
 					      &force_count, false, repl_info,
 					      internal_class->needs_pruning,
-					      pcontext, NULL);
+					      pcontext, NULL,
+					      &internal_class->
+					      mvcc_data_filter);
 	      if (error != NO_ERROR && error != ER_HEAP_UNKNOWN_OBJECT)
 		{
 		  GOTO_EXIT_ON_ERROR;
@@ -9584,7 +9612,7 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		   NULL, NULL, 0,
 		   LC_FLUSH_DELETE, op_type, internal_class->scan_cache,
 		   &force_count, false, REPL_INFO_TYPE_STMT_NORMAL,
-		   DB_NOT_PARTITIONED_CLASS, NULL, NULL) != NO_ERROR)
+		   DB_NOT_PARTITIONED_CLASS, NULL, NULL, NULL) != NO_ERROR)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
@@ -10069,7 +10097,7 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 					  local_scan_cache, &force_count,
 					  false, REPL_INFO_TYPE_STMT_NORMAL,
 					  DB_NOT_PARTITIONED_CLASS, NULL,
-					  NULL);
+					  NULL, NULL);
 	  if (error_code != NO_ERROR)
 	    {
 	      goto error_exit;
@@ -10407,7 +10435,7 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
 					odku->no_assigns, LC_FLUSH_UPDATE,
 					local_op_type, scan_cache,
 					force_count, false, repl_info,
-					pruning_type, pcontext, NULL);
+					pruning_type, pcontext, NULL, NULL);
   if (error != NO_ERROR)
     {
       goto exit_on_error;
@@ -10846,8 +10874,8 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 						false,
 						REPL_INFO_TYPE_STMT_NORMAL,
 						insert->pruning_type,
-						pcontext, func_indx_preds) !=
-		  NO_ERROR)
+						pcontext, func_indx_preds,
+						NULL) != NO_ERROR)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
@@ -11019,7 +11047,7 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					    &force_count, false,
 					    REPL_INFO_TYPE_STMT_NORMAL,
 					    insert->pruning_type, NULL,
-					    NULL) != NO_ERROR)
+					    NULL, NULL) != NO_ERROR)
 	    {
 	      GOTO_EXIT_ON_ERROR;
 	    }
@@ -11716,7 +11744,8 @@ qexec_execute_increment (THREAD_ENTRY * thread_p, OID * oid, OID * class_oid,
 					area_op, op_type, &scan_cache,
 					&force_count, false,
 					REPL_INFO_TYPE_STMT_NORMAL,
-					pruning_type, NULL, NULL) != NO_ERROR)
+					pruning_type, NULL, NULL,
+					NULL) != NO_ERROR)
 	{
 	  error = ER_FAILED;
 	  goto wrapup;
@@ -24870,6 +24899,9 @@ qexec_create_internal_classes (THREAD_ENTRY * thread_p,
       class_->no_lob_attrs = 0;
       class_->lob_attr_ids = NULL;
       class_->crt_del_lob_info = NULL;
+      scan_init_filter_info (&class_->mvcc_data_filter,
+			     NULL, NULL, NULL, NULL, NULL, 0,
+			     NULL, NULL, NULL);
     }
 
   *internal_classes = classes;
@@ -24928,6 +24960,84 @@ qexec_clear_internal_classes (THREAD_ENTRY * thread_p,
 	  partition_clear_pruning_context (&classes[i].context);
 	}
     }
+}
+
+/*
+ * qexec_upddel_mvcc_set_data_filter () - setup current class data filter
+ *					 in a class hierarchy
+ * return : error code or NO_ERROR
+ * thread_p (in) :
+ * aptr_list (in) : 
+ * internal_class (in) : internal class
+ * class_oid (in) : class oid
+ *
+ * Note: this function is used only in mvcc
+ */
+static int
+qexec_upddel_mvcc_set_data_filter (THREAD_ENTRY * thread_p,
+				   XASL_NODE * aptr_list,
+				   UPDDEL_CLASS_INFO_INTERNAL *
+				   internal_class, OID * class_oid)
+{
+  SCAN_ID *scan_id = NULL;
+  HEAP_SCAN_ID *hsidp = NULL;
+  INDX_SCAN_ID *isidp = NULL;
+
+  assert (mvcc_Enabled == true);
+  if (!QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (aptr_list))
+    {
+      ACCESS_SPEC_TYPE *curr_spec;
+      curr_spec = aptr_list->spec_list;
+      while (curr_spec != NULL)
+	{
+	  if (OID_EQ (&(curr_spec->s.cls_node.cls_oid), class_oid))
+	    {
+	      break;
+	    }
+
+	  curr_spec = curr_spec->next;
+	}
+
+      if (curr_spec == NULL)
+	{
+	  return ER_FAILED;
+	}
+
+      scan_id = &curr_spec->s_id;
+      switch (scan_id->type)
+	{
+	case S_HEAP_SCAN:
+	  {
+	    hsidp = &scan_id->s.hsid;
+	    scan_init_filter_info (&internal_class->
+				   mvcc_data_filter,
+				   &hsidp->scan_pred,
+				   &hsidp->pred_attrs,
+				   scan_id->val_list,
+				   scan_id->vd,
+				   &hsidp->cls_oid, 0, NULL, NULL, NULL);
+	  }
+	  break;
+
+	case S_INDX_SCAN:
+	  {
+	    isidp = &scan_id->s.isid;
+	    scan_init_filter_info (&internal_class->
+				   mvcc_data_filter,
+				   &isidp->scan_pred,
+				   &isidp->pred_attrs,
+				   scan_id->val_list,
+				   scan_id->vd,
+				   &isidp->cls_oid, 0, NULL, NULL, NULL);
+	  }
+	  break;
+
+	default:
+	  break;
+	}
+    }
+
+  return NO_ERROR;
 }
 
 /*

@@ -2151,7 +2151,8 @@ sort_retrieve_longrec (THREAD_ENTRY * thread_p, RECDES * address,
     }
 
   /* Retrieve the long record */
-  if (overflow_get (thread_p, (VPID *) address->data, memory) != S_SUCCESS)
+  if (overflow_get (thread_p, (VPID *) address->data, memory, NULL) !=
+      S_SUCCESS)
     {
       return NULL;
     }

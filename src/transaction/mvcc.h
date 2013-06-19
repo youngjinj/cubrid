@@ -112,6 +112,11 @@ extern MVCC_SATISFIES_DELETE_RESULT mvcc_satisfies_delete (THREAD_ENTRY *
 #endif				/* MVCC_USE_COMMAND_ID */
 							   PAGE_PTR page);
 
+extern bool mvcc_satisfies_dirty (THREAD_ENTRY *
+				  thread_p,
+				  MVCC_REC_HEADER *
+				  rec_header,
+				  MVCC_SNAPSHOT * snapshot, PAGE_PTR page);
 extern bool mvcc_id_precedes (MVCCID id1, MVCCID id2);
 extern bool mvcc_id_follow_or_equal (MVCCID id1, MVCCID id2);
 #endif /* _MVCC_SNAPSHOT_H_ */

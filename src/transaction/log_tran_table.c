@@ -3763,8 +3763,8 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 
   TR_TABLE_CS_EXIT ();
 
-  if (file_mvcc_get_id_status (thread_p, mvccid, &mvcc_status)
-      == MVCC_STATUS_ABORTED)
+  (void) file_mvcc_get_id_status (thread_p, mvccid, &mvcc_status);
+  if (mvcc_status == MVCC_STATUS_ABORTED)
     {
       return false;
     }
@@ -3775,7 +3775,7 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 }
 
 /*
- * logtb_is_mvccid_committed - check whether given mvccid was committes
+ * logtb_is_mvccid_committed - check whether given mvccid was committed
  *
  * return: bool
  *

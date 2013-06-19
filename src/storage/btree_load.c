@@ -222,7 +222,6 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, TP_DOMAIN * key_type,
   DB_TYPE single_node_type = DB_TYPE_NULL;
   void *buf_info = NULL;
   void *func_unpack_info = NULL;
-  HL_HEAPID old_pri_heap_id;
 #if !defined(NDEBUG)
   int track_id;
 #endif
@@ -2388,7 +2387,7 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
 					  &upd_scancache, &force_count, true,
 					  REPL_INFO_TYPE_STMT_NORMAL,
 					  DB_NOT_PARTITIONED_CLASS, NULL,
-					  NULL);
+					  NULL, NULL);
       if (ret != NO_ERROR)
 	{
 	  heap_attrinfo_end (thread_p, &attr_info);

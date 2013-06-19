@@ -3893,8 +3893,8 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
       goto error;
     }
 
-  if (heap_update (thread_p, hfid_p, class_oid_p, oid_p, &record,
-		   &old, scan_p) == NULL)
+  if (heap_perform_update (thread_p, hfid_p, class_oid_p, oid_p, &record,
+			   &old, scan_p, NULL) == NULL)
     {
       error = er_errid ();
       goto error;
@@ -3994,7 +3994,8 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
       goto error;
     }
 
-  if (heap_delete (thread_p, hfid_p, oid_p, scan_p) == NULL)
+  if (heap_perform_delete (thread_p, hfid_p, oid_p, scan_p, NULL,
+			   NULL) == NULL)
     {
       error = er_errid ();
       goto error;
@@ -4168,8 +4169,9 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 	  goto error;
 	}
 
-      if (heap_update (thread_p, hfid_p, class_oid_p, oid_p, &record, &old,
-		       scan_p) == NULL)
+      if (heap_perform_update
+	  (thread_p, hfid_p, class_oid_p, oid_p, &record, &old,
+	   scan_p, NULL) == NULL)
 	{
 	  error = er_errid ();
 	  goto error;

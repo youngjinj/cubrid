@@ -491,5 +491,12 @@ extern int scan_init_iss (INDX_SCAN_ID * isidp);
 extern void scan_init_index_scan (INDX_SCAN_ID * isidp, OID * oid_buf);
 extern void scan_initialize (void);
 extern void scan_finalize (void);
+extern void scan_init_filter_info (FILTER_INFO * filter_info_p,
+				   SCAN_PRED * scan_pred,
+				   SCAN_ATTRS * scan_attrs,
+				   VAL_LIST * val_list, VAL_DESCR * val_descr,
+				   OID * class_oid, int btree_num_attrs,
+				   ATTR_ID * btree_attr_ids,
+				   int *num_vstr_ptr, ATTR_ID * vstr_ids);
 
 #endif /* _SCAN_MANAGER_H_ */

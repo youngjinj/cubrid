@@ -210,14 +210,16 @@ static int locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid,
 				 HEAP_SCANCACHE * scan_cache,
 				 int *force_count, bool not_check_fk,
 				 REPL_INFO_TYPE repl_info, int pruning_type,
-				 PRUNING_CONTEXT * pcontext);
+				 PRUNING_CONTEXT * pcontext,
+				 void *mvcc_data_filter);
 static int locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
 				OID * old_class_oid, OID * obj_oid,
 				BTID * btid, bool btid_dup_key_locked,
 				OID * new_class_oid, HFID * new_class_hfid,
 				RECDES * recdes, HEAP_SCANCACHE * scan_cache,
 				int op_type, int has_index, int *force_count,
-				PRUNING_CONTEXT * context);
+				PRUNING_CONTEXT * context,
+				void *mvcc_data_filter);
 static int locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 					   LC_COPYAREA * force_area);
 
@@ -4328,7 +4330,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 							 true,
 							 SINGLE_ROW_DELETE,
 							 &scan_cache,
-							 &force_count);
+							 &force_count, NULL);
 		      if (error_code != NO_ERROR)
 			{
 			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
@@ -4372,7 +4374,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 						      false,
 						      REPL_INFO_TYPE_STMT_NORMAL,
 						      DB_NOT_PARTITIONED_CLASS,
-						      NULL, NULL);
+						      NULL, NULL, NULL);
 		      if (error_code != NO_ERROR)
 			{
 			  goto error1;
@@ -4605,7 +4607,7 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
 							 &force_count, true,
 							 REPL_INFO_TYPE_STMT_NORMAL,
 							 DB_NOT_PARTITIONED_CLASS,
-							 NULL, NULL);
+							 NULL, NULL, NULL);
 	      if (error_code != NO_ERROR)
 		{
 		  goto error1;
@@ -4879,7 +4881,8 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 							     false,
 							     REPL_INFO_TYPE_STMT_NORMAL,
 							     DB_NOT_PARTITIONED_CLASS,
-							     NULL, NULL);
+							     NULL, NULL,
+							     NULL);
 		  if (error_code != NO_ERROR)
 		    {
 		      goto error1;
@@ -5186,9 +5189,9 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 
 	      recdes = &new_recdes;
 	      /* Cache object has been updated, we need update the value again */
-	      if (heap_update (thread_p, &real_hfid, &real_class_oid, oid,
-			       recdes, &isold_object,
-			       local_scan_cache) == NULL)
+	      if (heap_perform_update
+		  (thread_p, &real_hfid, &real_class_oid, oid, recdes,
+		   &isold_object, local_scan_cache, NULL) == NULL)
 		{
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
@@ -5270,6 +5273,7 @@ error2:
  * has_index (in)	: true if the class has indexes
  * force_count (in/out)	:
  * context(in)	        : pruning context
+ *   mvcc_data_filter(in): mvcc data filter
  *
  * Note: this function calls locator_delete_force on the current object oid
  * and locator_insert_force for the RECDES it receives. The record has already
@@ -5282,7 +5286,8 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
 		     bool btid_dup_key_locked, OID * new_class_oid,
 		     HFID * new_class_hfid, RECDES * recdes,
 		     HEAP_SCANCACHE * scan_cache, int op_type, int has_index,
-		     int *force_count, PRUNING_CONTEXT * context)
+		     int *force_count, PRUNING_CONTEXT * context,
+		     void *mvcc_data_filter)
 {
   int error = NO_ERROR;
   OID new_obj_oid;
@@ -5297,7 +5302,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
   /* delete this record from the class it currently resides in */
   error = locator_delete_force (thread_p, old_hfid, obj_oid, btid,
 				btid_dup_key_locked, true, del_op_type,
-				scan_cache, force_count);
+				scan_cache, force_count, mvcc_data_filter);
   if (error != NO_ERROR)
     {
       return error;
@@ -5382,6 +5387,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
  *   repl_inf(in): replication info
  *   pruning_type(in): pruning type
  *   pcontext(in): pruning context
+ *   mvcc_data_filter(in): mvcc data filter
  *
  * Note: The given object is updated on this heap and all appropriate
  *              index entries are updated.
@@ -5395,7 +5401,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		      int op_type, HEAP_SCANCACHE * scan_cache,
 		      int *force_count, bool not_check_fk,
 		      REPL_INFO_TYPE repl_info, int pruning_type,
-		      PRUNING_CONTEXT * pcontext)
+		      PRUNING_CONTEXT * pcontext, void *mvcc_data_filter)
 {
   char *old_classname = NULL;	/* Classname that may have been
 				 * renamed */
@@ -5489,8 +5495,9 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    }
 	}
 
-      if (heap_update (thread_p, hfid, class_oid, oid, recdes, &isold_object,
-		       scan_cache) == NULL)
+      if (heap_perform_update
+	  (thread_p, hfid, class_oid, oid, recdes, &isold_object,
+	   scan_cache, mvcc_data_filter) == NULL)
 	{
 	  /*
 	   * Problems updating the object...Maybe, the transaction should be
@@ -5624,7 +5631,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 				     search_btid_duplicate_key_locked,
 				     &real_class_oid, &real_hfid, recdes,
 				     scan_cache, op_type, has_index,
-				     force_count, pcontext);
+				     force_count, pcontext, mvcc_data_filter);
 	      if (error_code == NO_ERROR)
 		{
 		  COPY_OID (class_oid, &real_class_oid);
@@ -5754,8 +5761,9 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    }
 	}
 
-      if (heap_update (thread_p, hfid, class_oid, oid, recdes, &isold_object,
-		       local_scan_cache) == NULL)
+      if (heap_perform_update
+	  (thread_p, hfid, class_oid, oid, recdes, &isold_object,
+	   local_scan_cache, mvcc_data_filter) == NULL)
 	{
 	  /*
 	   * Problems updating the object...Maybe, the transaction should be
@@ -5826,6 +5834,7 @@ error:
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                   between heap changes.
  *   force_count(in):
+ *   mvcc_data_filter(in): mvcc data filter
  *
  * Note: The given object is deleted on this heap and all appropiate
  *              index entries are deleted.
@@ -5835,7 +5844,8 @@ locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * oid,
 		      BTID * search_btid,
 		      bool search_btid_duplicate_key_locked,
 		      int has_index, int op_type,
-		      HEAP_SCANCACHE * scan_cache, int *force_count)
+		      HEAP_SCANCACHE * scan_cache, int *force_count,
+		      void *mvcc_data_filter)
 {
   bool isold_object;		/* Make sure that this is an old object
 				 * during the deletion */
@@ -5985,6 +5995,8 @@ locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * oid,
 			" failed for class { %d %d %d }\n",
 			oid->pageid, oid->slotid, oid->volid);
 	}
+
+      scan_cache->delete_old_row = true;
     }
   else
     {
@@ -6031,7 +6043,8 @@ locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * oid,
 	}
     }
 
-  if (heap_delete (thread_p, hfid, oid, scan_cache) == NULL)
+  if (heap_perform_delete (thread_p, hfid, oid, scan_cache,
+			   mvcc_data_filter) == NULL)
     {
       /*
        * Problems deleting the object...Maybe, the transaction should be
@@ -6254,7 +6267,8 @@ locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 				  &obj->oid, NULL, false, NULL, &recdes,
 				  has_index, NULL, 0, MULTI_ROW_UPDATE,
 				  &scan_cache, &force_count, false,
-				  repl_info, DB_NOT_PARTITIONED_CLASS, NULL);
+				  repl_info, DB_NOT_PARTITIONED_CLASS, NULL,
+				  NULL);
 	  if (error_code != NO_ERROR)
 	    {
 	      /*
@@ -6512,7 +6526,7 @@ xlocator_force (THREAD_ENTRY * thread_p, LC_COPYAREA * force_area,
 				  has_index, NULL, 0, SINGLE_ROW_UPDATE,
 				  force_scancache, &force_count, false,
 				  REPL_INFO_TYPE_STMT_NORMAL, pruning_type,
-				  NULL);
+				  NULL, NULL);
 
 	  if (error_code == NO_ERROR)
 	    {
@@ -6525,7 +6539,8 @@ xlocator_force (THREAD_ENTRY * thread_p, LC_COPYAREA * force_area,
 	  error_code = locator_delete_force (thread_p, &obj->hfid, &obj->oid,
 					     NULL, false, has_index,
 					     SINGLE_ROW_DELETE,
-					     force_scancache, &force_count);
+					     force_scancache, &force_count,
+					     NULL);
 
 	  if (error_code == NO_ERROR)
 	    {
@@ -6781,6 +6796,7 @@ locator_allocate_copy_area_by_attr_info (THREAD_ENTRY * thread_p,
  *   pruning_type(in):
  *   pcontext(in): partition pruning context
  *   func_preds(in): cached function index expressions
+ *   mvcc_data_filter(in): mvcc data filter
  *
  * Note: Force an object represented by an attribute information structure.
  *       For insert the oid is set as a side effect.
@@ -6796,7 +6812,8 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 			      HEAP_SCANCACHE * scan_cache, int *force_count,
 			      bool not_check_fk, REPL_INFO_TYPE repl_info,
 			      int pruning_type, PRUNING_CONTEXT * pcontext,
-			      FUNC_PRED_UNPACK_INFO * func_preds)
+			      FUNC_PRED_UNPACK_INFO * func_preds,
+			      void *mvcc_data_filter)
 {
   LC_COPYAREA *copyarea = NULL;
   RECDES new_recdes;
@@ -6913,7 +6930,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 				  old_recdes, &new_recdes, true, att_id,
 				  n_att_id, op_type, scan_cache, force_count,
 				  not_check_fk, repl_info, pruning_type,
-				  pcontext);
+				  pcontext, mvcc_data_filter);
 	}
       if (copyarea != NULL)
 	{
@@ -6930,7 +6947,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 					 search_btid,
 					 search_btid_duplicate_key_locked,
 					 true, op_type, scan_cache,
-					 force_count);
+					 force_count, mvcc_data_filter);
       break;
 
     default:

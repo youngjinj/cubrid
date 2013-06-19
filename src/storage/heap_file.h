@@ -101,6 +101,17 @@
  * Heap scan structures
  */
 
+/* heap mvcv update informations */
+typedef struct heap_mvcc_update_info HEAP_MVCC_DELETE_INFO;
+typedef struct heap_mvcc_update_info
+{
+  LOCK row_lock;		/* mvcc row lock */
+  OID next_row_version;		/* next row version */
+  MVCCID row_delid;		/* row delete id */
+  /* true, if satisfies delete result */
+  MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;
+};
+
 typedef struct heap_bestspace HEAP_BESTSPACE;
 struct heap_bestspace
 {
@@ -298,12 +309,17 @@ extern int heap_assign_address_with_class_oid (THREAD_ENTRY * thread_p,
 extern OID *heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid,
 			 OID * class_oid, OID * oid, RECDES * recdes,
 			 HEAP_SCANCACHE * scan_cache);
-extern const OID *heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
-			       const OID * class_oid, const OID * oid,
-			       RECDES * recdes, bool * old,
-			       HEAP_SCANCACHE * scan_cache);
-extern const OID *heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
-			       const OID * oid, HEAP_SCANCACHE * scan_cache);
+extern const OID *heap_perform_update (THREAD_ENTRY * thread_p,
+				       const HFID * hfid,
+				       const OID * class_oid, const OID * oid,
+				       RECDES * recdes, bool * old,
+				       HEAP_SCANCACHE * scan_cache,
+				       void *mvcc_data_filter);
+extern const OID *heap_perform_delete (THREAD_ENTRY * thread_p,
+				       const HFID * hfid,
+				       const OID * oid,
+				       HEAP_SCANCACHE * scan_cache,
+				       void *mvcc_data_filter);
 extern void heap_flush (THREAD_ENTRY * thread_p, const OID * oid);
 extern int xheap_reclaim_addresses (THREAD_ENTRY * thread_p,
 				    const HFID * hfid);
@@ -337,6 +353,9 @@ extern int heap_get_chn (THREAD_ENTRY * thread_p, const OID * oid);
 extern SCAN_CODE heap_get (THREAD_ENTRY * thread_p, const OID * oid,
 			   RECDES * recdes, HEAP_SCANCACHE * scan_cache,
 			   int ispeeking, int chn);
+extern SCAN_CODE heap_get_mvcc (THREAD_ENTRY * thread_p, const OID * oid,
+				RECDES * recdes, HEAP_SCANCACHE * scan_cache,
+				int ispeeking);
 extern SCAN_CODE heap_get_with_class_oid (THREAD_ENTRY * thread_p,
 					  OID * class_oid, const OID * oid,
 					  RECDES * recdes,
@@ -663,5 +682,8 @@ extern bool heap_set_record_header_flag (THREAD_ENTRY * thread_p,
 					 MVCC_REC_HEADER * rec_header,
 					 PAGE_PTR pgptr, int flag,
 					 MVCCID mvccid);
-
+extern bool heap_update_record_header_del_flag (THREAD_ENTRY * thread_p,
+						MVCC_REC_HEADER * rec_header,
+						PAGE_PTR pgptr,
+						MVCCID del_mvccid);
 #endif /* _HEAP_FILE_H_ */

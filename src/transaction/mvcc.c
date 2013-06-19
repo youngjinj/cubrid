@@ -166,7 +166,7 @@ mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
 	  /* record insertion aborted - set flag */
 	  heap_set_record_header_flag (thread_p, rec_header, page,
 				       HEAP_MVCC_FLAG_INSID_INVALID,
-				       HEAP_GET_MVCC_INS_ID (rec_header));
+				       MVCCID_NULL);
 	  return false;
 	}
 
@@ -222,7 +222,8 @@ mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
 	{
 	  /* record deletion aborted */
 	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_DELID_INVALID, MVCCID_NULL);
+				       HEAP_MVCC_FLAG_DELID_INVALID,
+				       MVCCID_NULL);
 
 	  return true;
 	}
@@ -277,7 +278,8 @@ mvcc_satisfies_vacuum (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
 	       (thread_p, HEAP_GET_MVCC_INS_ID (rec_header)))
 	{
 	  /* The inserting transaction is still active */
-	  if (HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_DELID_INVALID))
+	  if (HEAP_MVCC_IS_FLAG_SET
+	      (rec_header, HEAP_MVCC_FLAG_DELID_INVALID))
 	    {
 	      /* The record is not deleted, insert is still in progress */
 	      return VACUUM_RECORD_INSERT_IN_PROGRESS;
@@ -510,6 +512,131 @@ mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
   /* deleted by other committed transaction */
   return DELETE_RECORD_DELETED;
 }
+
+/*
+ * mvcc_satisfies_dirty () - Check whether a record is visible considering
+ *			    following effects:
+ *			      - committed transactions
+ *			      - in progress transactions
+ *			      - previous commands of current transaction
+ *				    
+ *   return: true, if the record is valid for snapshot
+ *   thread_p(in): thread entry
+ *   rec_header(out): the record header
+ *   snapshot(in): the snapshot used for record validation
+ *   page_ptr(in): the page where the record reside
+ * Note: snapshot->lowest_active_mvccid and snapshot->highest_completed_mvccid 
+ *    are set as a side effect. Thus, snapshot->lowest_active_mvccid is set 
+ *    to tuple insert id when it is the id of another active transaction, otherwise 
+ *    is set to MVCCID_NULL
+ */
+bool
+mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
+		      MVCC_REC_HEADER * rec_header,
+		      MVCC_SNAPSHOT * snapshot, PAGE_PTR page)
+{
+  assert (rec_header != NULL && snapshot != NULL && page != NULL);
+
+  snapshot->lowest_active_mvccid = snapshot->highest_completed_mvccid =
+    MVCCID_NULL;
+
+  if (!(rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_COMMITTED))
+    {
+      if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_INVALID)
+	{
+	  /* mvcc insert id invalid/aborted */
+	  return false;
+	}
+
+      if (logtb_is_current_mvccid (thread_p,
+				   HEAP_GET_MVCC_INS_ID (rec_header)))
+	{
+	  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
+	    {
+	      /* mvcc delete id invald/aborted */
+	      return true;
+	    }
+
+	  if (!logtb_is_current_mvccid (thread_p,
+					HEAP_GET_MVCC_DEL_ID (rec_header)))
+	    {
+	      heap_set_record_header_flag (thread_p, rec_header, page,
+					   HEAP_MVCC_FLAG_DELID_INVALID,
+					   MVCCID_NULL);
+	      return true;
+	    }
+
+	  return false;
+	}
+      else if (logtb_is_active_mvccid (thread_p,
+				       HEAP_GET_MVCC_INS_ID (rec_header)))
+	{
+	  snapshot->lowest_active_mvccid = HEAP_GET_MVCC_INS_ID (rec_header);
+	  /* inserted by other, satisfies dirty */
+	  return true;
+	}
+      else if (logtb_is_mvccid_committed (thread_p,
+					  HEAP_GET_MVCC_INS_ID (rec_header)))
+	{
+	  /* record insertion committed - set flag */
+	  heap_set_record_header_flag (thread_p, rec_header, page,
+				       HEAP_MVCC_FLAG_INSID_COMMITTED,
+				       HEAP_GET_MVCC_INS_ID (rec_header));
+	}
+      else
+	{
+	  /* record insertion aborted - set flag */
+	  heap_set_record_header_flag (thread_p, rec_header, page,
+				       HEAP_MVCC_FLAG_INSID_INVALID,
+				       MVCCID_NULL);
+	  return false;
+	}
+
+    }
+
+  /* record insertion already committed, need to check when was committed */
+  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
+    {
+      /* not deleted or aborted */
+      return true;
+    }
+
+  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_COMMITTED)
+    {
+      /* delete by other - does not satisfies dirty */
+      return false;
+    }
+
+  if (logtb_is_current_mvccid (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header)))
+    {
+      return false;
+    }
+
+  if (logtb_is_active_mvccid (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header)))
+    {
+      snapshot->highest_completed_mvccid = HEAP_GET_MVCC_DEL_ID (rec_header);
+      /* record deletion not committed yet */
+      return true;
+    }
+
+  if (!logtb_is_mvccid_committed (thread_p,
+				  HEAP_GET_MVCC_DEL_ID (rec_header)))
+    {
+      /* record deletion aborted */
+      heap_set_record_header_flag (thread_p, rec_header, page,
+				   HEAP_MVCC_FLAG_DELID_INVALID, MVCCID_NULL);
+
+      return true;
+    }
+
+  heap_set_record_header_flag (thread_p, rec_header, page,
+			       HEAP_MVCC_FLAG_DELID_COMMITTED,
+			       HEAP_GET_MVCC_DEL_ID (rec_header));
+
+  return false;
+}
+
+
 
 /*
  * mvcc_id_precedes - compare MVCC ids

@@ -52,11 +52,13 @@ extern void overflow_flush (THREAD_ENTRY * thread_p, const VPID * ovf_vpid);
 extern int overflow_get_length (THREAD_ENTRY * thread_p,
 				const VPID * ovf_vpid);
 extern SCAN_CODE overflow_get (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
-			       RECDES * recdes);
+			       RECDES * recdes,
+			       MVCC_SNAPSHOT * mvcc_snapshot);
 extern SCAN_CODE overflow_get_nbytes (THREAD_ENTRY * thread_p,
 				      const VPID * ovf_vpid, RECDES * recdes,
 				      int start_offset, int max_nbytes,
-				      int *remaining_length);
+				      int *remaining_length,
+				      MVCC_SNAPSHOT * mvcc_snapshot);
 extern int overflow_get_capacity (THREAD_ENTRY * thread_p,
 				  const VPID * ovf_vpid, int *ovf_length,
 				  int *ovf_num_pages, int *ovf_overhead,

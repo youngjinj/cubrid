@@ -238,7 +238,48 @@ static SCAN_CODE heap_get_page_info (THREAD_ENTRY * thread_p,
 				     const VPID * vpid,
 				     const PAGE_PTR pgptr,
 				     DB_VALUE ** page_info);
-
+static const OID *heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
+			       const OID * class_oid, const OID * oid,
+			       RECDES * recdes, bool * old,
+			       HEAP_SCANCACHE * scan_cache,
+			       HEAP_MVCC_DELETE_INFO * mvcc_delete_info);
+static const OID *heap_mvcc_update (THREAD_ENTRY * thread_p,
+				    const HFID * hfid, const OID * class_oid,
+				    const OID * oid, RECDES * recdes,
+				    bool * old, HEAP_SCANCACHE * scan_cache,
+				    void *mvcc_data_filter);
+static const OID *heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
+			       const OID * oid, HEAP_SCANCACHE * scan_cache,
+			       HEAP_MVCC_DELETE_INFO * mvcc_delete_info);
+static const OID *heap_mvcc_delete (THREAD_ENTRY * thread_p,
+				    const HFID * hfid, const OID * oid,
+				    HEAP_SCANCACHE * scan_cache,
+				    void *mvcc_data_filter);
+static int heap_scancache_start_chain_update (THREAD_ENTRY * thread_p,
+					      HEAP_SCANCACHE * new_scan_cache,
+					      HEAP_SCANCACHE * old_scan_cache,
+					      OID * next_row_version);
+static int heap_mvcc_lock_for_delete (THREAD_ENTRY * thread_p,
+				      const HFID * hfid, const OID * oid,
+				      OID * class_oid,
+				      MVCC_REC_HEADER ** recdes_header,
+				      PAGE_PTR * pgptr,
+				      PAGE_PTR * forward_pgptr,
+				      PAGE_PTR * ovf_hdr_pgptr,
+				      HEAP_MVCC_DELETE_INFO *
+				      mvcc_delete_info);
+static int heap_get_pages_for_mvcc_chain_read (THREAD_ENTRY * thread_p,
+					       OID * oid,
+					       const HFID * hfid,
+					       PAGE_PTR * pgptr,
+					       PAGE_PTR * forward_pgptr);
+static int heap_get_pages_for_mvcc_chain_write (THREAD_ENTRY * thread_p,
+						const OID * oid,
+						const HFID * hfid,
+						PAGE_PTR * pgptr,
+						PAGE_PTR * forward_pgptr,
+						PAGE_PTR * ovf_hdr_pgptr,
+						bool * wait);
 
 /*
  * Heap file header
@@ -742,8 +783,9 @@ static int heap_insert_with_lock_internal (THREAD_ENTRY * thread_p,
 static const OID *heap_delete_internal (THREAD_ENTRY * thread_p,
 					const HFID * hfid, const OID * oid,
 					HEAP_SCANCACHE * scan_cache,
-					bool ishome_delete);
-
+					bool ishome_delete,
+					HEAP_MVCC_DELETE_INFO *
+					mvcc_delete_info);
 static VFID *heap_ovf_find_vfid (THREAD_ENTRY * thread_p, const HFID * hfid,
 				 VFID * ovf_vfid, bool create);
 static OID *heap_ovf_insert (THREAD_ENTRY * thread_p, const HFID * hfid,
@@ -755,7 +797,18 @@ static const OID *heap_ovf_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
 static int heap_ovf_flush (THREAD_ENTRY * thread_p, const OID * ovf_oid);
 static int heap_ovf_get_length (THREAD_ENTRY * thread_p, const OID * ovf_oid);
 static SCAN_CODE heap_ovf_get (THREAD_ENTRY * thread_p, const OID * ovf_oid,
-			       RECDES * recdes, int chn);
+			       RECDES * recdes, int chn,
+			       MVCC_SNAPSHOT * mvcc_snapshot);
+static SCAN_CODE heap_peek_mvcc_data (THREAD_ENTRY * thread_p,
+				      const OID * oid, RECDES * recdes,
+				      PAGE_PTR page_ptr,
+				      PAGE_PTR ovf_first_page,
+				      MVCC_SNAPSHOT * mvcc_snapshot);
+static SCAN_CODE heap_ovf_peek_mvcc_record_header (THREAD_ENTRY * thread_p,
+						   RECDES * recdes,
+						   PAGE_PTR ovf_first_page,
+						   MVCC_SNAPSHOT *
+						   mvcc_snapshot);
 static int heap_ovf_get_capacity (THREAD_ENTRY * thread_p,
 				  const OID * ovf_oid, int *ovf_len,
 				  int *ovf_num_pages, int *ovf_overhead,
@@ -787,6 +840,10 @@ static SCAN_CODE heap_get_if_diff_chn (THREAD_ENTRY * thread_p,
 				       RECDES * recdes, int ispeeking,
 				       int chn,
 				       MVCC_SNAPSHOT * mvcc_snapshot);
+static SCAN_CODE heap_get_mvcc_record_header (THREAD_ENTRY * thread_p,
+					      PAGE_PTR pgptr, INT16 slotid,
+					      RECDES * recdes, int ispeeking,
+					      MVCC_SNAPSHOT * mvcc_snapshot);
 static SCAN_CODE heap_get_internal (THREAD_ENTRY * thread_p, OID * class_oid,
 				    const OID * oid, RECDES * recdes,
 				    HEAP_SCANCACHE * scan_cache,
@@ -3813,8 +3870,9 @@ heap_stats_find_best_page (THREAD_ENTRY * thread_p, const HFID * hfid,
    * fetching and updating the header page a lot.
    */
 
-  assert ((scan_cache == NULL)
-	  || (scan_cache && scan_cache->cache_last_fix_page == false));
+  assert (scan_cache == NULL
+	  || scan_cache->cache_last_fix_page == false
+	  || scan_cache->pgptr == NULL);
 
   /*
    * Get the heap header in exclusive mode since it is going to be changed.
@@ -6976,12 +7034,13 @@ heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid, OID * class_oid,
  *                it is set to false (i.e., only the address was stored)
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                       between heap changes.
- *
+ *   mvcc_delete_info(in/out): mvcc update info
  */
-const OID *
+static const OID *
 heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
 	     const OID * class_oid, const OID * oid, RECDES * recdes,
-	     bool * old, HEAP_SCANCACHE * scan_cache)
+	     bool * old, HEAP_SCANCACHE * scan_cache,
+	     HEAP_MVCC_DELETE_INFO * mvcc_delete_info)
 {
   VPID vpid;			/* Volume and page identifiers */
   VPID *vpidptr_incache;
@@ -7440,7 +7499,7 @@ try_again:
 		    {
 		      (void) heap_delete_internal (thread_p, hfid,
 						   &new_forward_oid,
-						   scan_cache, false);
+						   scan_cache, false, NULL);
 		    }
 		  goto error;
 		}
@@ -7458,7 +7517,7 @@ try_again:
 
 	      /* Delete the old new home (i.e., relocated record) */
 	      (void) heap_delete_internal (thread_p, hfid, &forward_oid,
-					   scan_cache, false);
+					   scan_cache, false, NULL);
 	      pgbuf_set_dirty (thread_p, forward_addr.pgptr, FREE);
 	      forward_addr.pgptr = NULL;
 	      pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
@@ -7532,7 +7591,7 @@ try_again:
 
 	  /* Delete the relocated record (old home) */
 	  (void) heap_delete_internal (thread_p, hfid, &forward_oid,
-				       scan_cache, false);
+				       scan_cache, false, NULL);
 	  pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
 	  pgbuf_set_dirty (thread_p, forward_addr.pgptr, FREE);
 	  forward_addr.pgptr = NULL;
@@ -7607,7 +7666,7 @@ try_again:
       if (use_mvcc && scan_cache->delete_old_row == false)
 	{
 	  MVCC_REC_HEADER *old_recdes_header = NULL;
-	  MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;
+	  MVCC_REC_HEADER *recdes_header = NULL;
 
 	  /* should not create any deadlocks, since header page latch
 	   * has been already acquired
@@ -7625,53 +7684,23 @@ try_again:
 	  old_recdes_header =
 	    (MVCC_REC_HEADER *) overflow_get_first_page_data (forward_addr.
 							      pgptr);
-	  satisfies_delete_result =
-	    mvcc_satisfies_delete (thread_p, old_recdes_header,
-#if defined(MVCC_USE_COMMAND_ID)
-				   mvcc_comm_id,
-#endif /* MVCC_USE_COMMAND_ID */
-				   forward_addr.pgptr);
-	  if (satisfies_delete_result == DELETE_RECORD_INVISIBLE)
+	  if (heap_mvcc_lock_for_delete (thread_p, hfid, oid,
+					 &scan_cache->class_oid,
+					 &old_recdes_header, &addr.pgptr,
+					 &forward_addr.pgptr,
+					 &hdr_pgptr,
+					 mvcc_delete_info) != NO_ERROR)
 	    {
-	      /* invisible tuple - nothing to do */
-	      break;
+	      goto error;
 	    }
-	  else if (satisfies_delete_result == DELETE_RECORD_DELETED
-#if defined(MVCC_USE_COMMAND_ID)
-		   || satisfies_delete_result == DELETE_RECORD_SELF_DELETED
-#endif /* MVCC_USE_COMMAND_ID */
-	    )
+
+	  if (mvcc_delete_info->satisfies_delete_result !=
+	      DELETE_RECORD_CAN_DELETE)
 	    {
-	      /* already deleted */
-	      if (record_locked == true)
-		{
-		  lock_unlock_object (thread_p, oid, &scan_cache->class_oid,
-				      X_LOCK, false);
-		}
+	      pgbuf_unfix_and_init (thread_p, forward_addr.pgptr);
+	      pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+	      oid = NULL;
 	      break;
-	    }
-	  else
-	    {
-	      if (record_locked == false)
-		{
-		  if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				   X_LOCK, LK_COND_LOCK) != LK_GRANTED)
-		    {
-		      pgbuf_unfix_and_init (thread_p, forward_addr.pgptr);
-		      pgbuf_unfix_and_init (thread_p, hdr_pgptr);
-		      pgbuf_unfix_and_init (thread_p, addr.pgptr);
-
-		      if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				       X_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
-			{
-			  goto error;
-			}
-		      record_locked = true;
-
-		      goto try_again;
-		    }
-		  record_locked = true;
-		}
 	    }
 
 	  if (heap_is_big_length (recdes->length))
@@ -7871,7 +7900,7 @@ try_again:
 #endif
 		  (void) heap_delete_internal (thread_p, hfid,
 					       &new_forward_oid, scan_cache,
-					       false);
+					       false, NULL);
 		  goto error;
 		}
 	      spage_update_record_type (thread_p, addr.pgptr, oid->slotid,
@@ -7918,60 +7947,27 @@ try_again:
       if (use_mvcc && scan_cache->delete_old_row == false)
 	{
 	  RECDES old_recdes;
-	  MVCC_REC_HEADER *old_recdes_header = NULL;
-	  MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;
 
-	  if (spage_get_record (addr.pgptr, oid->slotid, &old_recdes, PEEK)
-	      != S_SUCCESS)
+	  if (spage_get_record (addr.pgptr, oid->slotid,
+				&old_recdes, PEEK) != S_SUCCESS)
 	    {
 	      goto error;
 	    }
 
-	  old_recdes_header = (MVCC_REC_HEADER *) old_recdes.data;
-	  satisfies_delete_result =
-	    mvcc_satisfies_delete (thread_p, old_recdes_header,
-#if defined(MVCC_USE_COMMAND_ID)
-				   mvcc_comm_id,
-#endif /* MVCC_USE_COMMAND_ID */
-				   addr.pgptr);
-	  if (satisfies_delete_result == DELETE_RECORD_INVISIBLE)
+	  if (heap_mvcc_lock_for_delete (thread_p, hfid, oid,
+					 &scan_cache->class_oid,
+					 (MVCC_REC_HEADER **) & old_recdes.
+					 data, &addr.pgptr, NULL, NULL,
+					 mvcc_delete_info) != NO_ERROR)
 	    {
-	      /* invisible tuple - nothing to do */
-	      break;
+	      goto error;
 	    }
-	  else if (satisfies_delete_result == DELETE_RECORD_DELETED
-#if defined(MVCC_USE_COMMAND_ID)
-		   || satisfies_delete_result == DELETE_RECORD_SELF_DELETED
-#endif /* MVCC_USE_COMMAND_ID */
-	    )
-	    {
-	      /* already deleted */
-	      if (record_locked == true)
-		{
-		  lock_unlock_object (thread_p, oid, &scan_cache->class_oid,
-				      X_LOCK, false);
-		}
-	      break;
-	    }
-	  else
-	    {
-	      if (record_locked == false)
-		{
-		  if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				   X_LOCK, LK_COND_LOCK) != LK_GRANTED)
-		    {
-		      pgbuf_unfix_and_init (thread_p, addr.pgptr);
-		      if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				       X_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
-			{
-			  goto error;
-			}
 
-		      record_locked = true;
-		      goto try_again;
-		    }
-		  record_locked = true;
-		}
+	  if (mvcc_delete_info->satisfies_delete_result !=
+	      DELETE_RECORD_CAN_DELETE)
+	    {
+	      oid = NULL;
+	      break;
 	    }
 
 #if defined(MVCC_USE_COMMAND_ID)
@@ -8182,7 +8178,7 @@ try_again:
 		{
 		  (void) heap_delete_internal (thread_p, hfid,
 					       &new_forward_oid, scan_cache,
-					       false);
+					       false, NULL);
 		}
 	      goto error;
 	    }
@@ -8219,7 +8215,7 @@ try_again:
 		{
 		  (void) heap_delete_internal (thread_p, hfid,
 					       &new_forward_oid, scan_cache,
-					       false);
+					       false, NULL);
 		}
 	      goto error;
 	    }
@@ -8398,20 +8394,22 @@ error:
 }
 
 /*
- * heap_delete () - Delete an object from heap file
+ * heap_delete () - Delete an object from heap file when mvcc is disabled
  *   return: OID *(oid on success or NULL on failure)
  *   hfid(in): Heap file identifier
  *   oid(in): Object identifier
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                       between heap changes.
+ *   mvcc_delete_info(in/out): Mvcc delete info
  *
  * Note: Delete the object associated with the given OID from the given
  * heap file. If the object has been relocated or stored in
  * overflow, both the relocation and the relocated record are deleted.
  */
-const OID *
+static const OID *
 heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid, const OID * oid,
-	     HEAP_SCANCACHE * scan_cache)
+	     HEAP_SCANCACHE * scan_cache,
+	     HEAP_MVCC_DELETE_INFO * mvcc_delete_info)
 {
   int ret = NO_ERROR;
 
@@ -8466,7 +8464,8 @@ heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid, const OID * oid,
       csect_exit (CSECT_HEAP_CHNGUESS);
     }
 
-  return heap_delete_internal (thread_p, hfid, oid, scan_cache, true);
+  return heap_delete_internal (thread_p, hfid, oid, scan_cache, true,
+			       mvcc_delete_info);
 }
 
 /*
@@ -8476,6 +8475,7 @@ heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid, const OID * oid,
  *   oid(in): Object identifier
  *   scan_cache(in):
  *   ishome_delete(in):
+ *   mvcc_delete_info(in): mvcc delete info
  *
  * Note: Delete the object associated with the given OID from the given
  * heap file. If the object has been relocated or stored in
@@ -8498,7 +8498,8 @@ heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid, const OID * oid,
 static const OID *
 heap_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		      const OID * oid, HEAP_SCANCACHE * scan_cache,
-		      bool ishome_delete)
+		      bool ishome_delete,
+		      HEAP_MVCC_DELETE_INFO * mvcc_delete_info)
 {
   VPID vpid;			/* Volume and page identifiers */
   VPID *vpidptr_incache;
@@ -8519,6 +8520,12 @@ heap_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
   bool need_update;
   bool use_mvcc = mvcc_Enabled;
   bool record_locked = false;
+
+  if (use_mvcc == true && scan_cache != NULL)
+    {
+      use_mvcc = !OID_IS_ROOTOID (&scan_cache->class_oid)
+	&& !OID_ISNULL (&scan_cache->class_oid);
+    }
 
   oid_valid = HEAP_ISVALID_OID (oid);
   if (oid_valid != DISK_VALID)
@@ -8787,191 +8794,6 @@ try_again:
        * get the overflow address of the object
        */
 
-      if (use_mvcc && scan_cache->delete_old_row == false)
-	{
-	  MVCCID mvcc_id;
-#if defined(MVCC_USE_COMMAND_ID)
-	  MVCC_COMMAND_ID mvcc_comm_id;
-#endif /* MVCC_USE_COMMAND_ID */
-	  bool is_bigone = true;
-	  MVCC_REC_HEADER *old_recdes_header = NULL;
-	  MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;
-	  /*
-	   * The object stored on the page is a relocation record. The relocation
-	   * record is used as a map to find the actual location of the content of
-	   * the object.
-	   *
-	   * To avoid deadlocks, see heap_update. We do not move to a second page
-	   * until we are done with current page.
-	   */
-
-	  forward_recdes.data = (char *) &forward_oid;
-	  forward_recdes.length = sizeof (forward_oid);
-	  forward_recdes.area_size = sizeof (forward_oid);
-
-	  if (spage_get_record (addr.pgptr, oid->slotid, &forward_recdes,
-				COPY) != S_SUCCESS)
-	    {
-	      /* Unable to peek relocation record of the object */
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_BAD_RELOCATION_RECORD, 3, oid->volid,
-		      oid->pageid, oid->slotid);
-	      goto error;
-	    }
-
-	  /* Lock and fetch the page of new home (relocated/forwarded) record */
-	  vpid.volid = forward_oid.volid;
-	  vpid.pageid = forward_oid.pageid;
-
-	  /*
-	   * To avoid a possible deadlock, make sure that you do not wait on a
-	   * single lock. If we need to wait, release locks and request them in
-	   * one operation. In case of failure, the already released locks have
-	   * been freed.
-	   *
-	   * Note: that we have not peeked, so we do not need to fix anything at
-	   *       this moment.
-	   */
-
-	  forward_addr.pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
-					  PGBUF_LATCH_WRITE,
-					  PGBUF_CONDITIONAL_LATCH);
-	  if (forward_addr.pgptr == NULL)
-	    {
-	      pgbuf_unfix_and_init (thread_p, addr.pgptr);
-
-	      forward_addr.pgptr =
-		heap_scan_pb_lock_and_fetch (thread_p, &vpid, OLD_PAGE,
-					     X_LOCK, scan_cache);
-	      if (forward_addr.pgptr == NULL)
-		{
-		  if (er_errid () == ER_PB_BAD_PAGEID)
-		    {
-		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-			      ER_HEAP_UNKNOWN_OBJECT, 3, forward_oid.volid,
-			      forward_oid.pageid, forward_oid.slotid);
-		    }
-
-		  goto error;
-		}
-	      addr.pgptr = pgbuf_fix (thread_p, &home_vpid, OLD_PAGE,
-				      PGBUF_LATCH_WRITE,
-				      PGBUF_CONDITIONAL_LATCH);
-	      if (addr.pgptr == NULL)
-		{
-		  pgbuf_unfix_and_init (thread_p, forward_addr.pgptr);
-
-		  if (again_count++ >= again_max)
-		    {
-		      if (er_errid () == ER_PB_BAD_PAGEID)
-			{
-			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-				  ER_HEAP_UNKNOWN_OBJECT, 3, oid->volid,
-				  oid->pageid, oid->slotid);
-			}
-		      else if (er_errid () == NO_ERROR)
-			{
-			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-				  ER_GENERIC_ERROR, 0);
-			}
-		      goto error;
-		    }
-		  else
-		    {
-		      goto try_again;
-		    }
-		}
-	    }
-
-#if defined(CUBRID_DEBUG)
-	  if (spage_get_record_type (forward_addr.pgptr, forward_oid.slotid)
-	      != REC_NEWHOME)
-	    {
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_BAD_OBJECT_TYPE, 3, forward_oid.volid,
-		      forward_oid.pageid, forward_oid.slotid);
-	      goto error;
-	    }
-#endif
-
-	  /* Find the contents of the record for mvcc delete purposes */
-	  old_recdes_header =
-	    (MVCC_REC_HEADER *) overflow_get_first_page_data (forward_addr.
-							      pgptr);
-#if defined(MVCC_USE_COMMAND_ID)
-	  mvcc_comm_id = logtb_get_current_mvcc_command_id (thread_p);
-#endif /* MVCC_USE_COMMAND_ID */
-	  mvcc_id = logtb_get_current_mvccid (thread_p);
-
-	  satisfies_delete_result =
-	    mvcc_satisfies_delete (thread_p, old_recdes_header,
-#if defined(MVCC_USE_COMMAND_ID)
-				   mvcc_comm_id,
-#endif /* MVCC_USE_COMMAND_ID */
-				   forward_addr.pgptr);
-	  if (satisfies_delete_result == DELETE_RECORD_INVISIBLE)
-	    {
-	      /* invisible tuple - nothing to do */
-	      break;
-	    }
-	  else if (satisfies_delete_result == DELETE_RECORD_DELETED
-#if defined(MVCC_USE_COMMAND_ID)
-		   || satisfies_delete_result == DELETE_RECORD_SELF_DELETED
-#endif /* MVCC_USE_COMMAND_ID */
-	    )
-	    {
-	      /* already deleted */
-	      if (record_locked == true)
-		{
-		  lock_unlock_object (thread_p, oid, &scan_cache->class_oid,
-				      X_LOCK, false);
-		}
-	      break;
-	    }
-	  else
-	    {
-	      if (record_locked == false)
-		{
-		  if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				   X_LOCK, LK_COND_LOCK) != LK_GRANTED)
-		    {
-		      pgbuf_unfix_and_init (thread_p, forward_addr.pgptr);
-		      pgbuf_unfix_and_init (thread_p, addr.pgptr);
-		      if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				       X_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
-			{
-			  goto error;
-			}
-
-		      record_locked = true;
-		      goto try_again;
-		    }
-		  record_locked = true;
-		}
-	    }
-
-	  /* set overflow mvcc */
-	  old_recdes_header->mvcc_flags &=
-	    ~(HEAP_MVCC_FLAG_DELID_INVALID | HEAP_MVCC_FLAG_DELID_COMMITTED);
-	  HEAP_SET_MVCC_DEL_ID (old_recdes_header, mvcc_id);
-#if defined(MVCC_USE_COMMAND_ID)
-	  HEAP_SET_MVCC_DEL_CID (old_recdes_header, mvcc_comm_id);
-	  /* MVCC command id must be incremented after this execution */
-	  logtb_activate_command_id (thread_p);
-#endif /* MVCC_USE_COMMAND_ID */
-
-	  spage_mark_page_for_clean (thread_p, addr.pgptr, mvcc_id);
-
-	  /* logging for bigone object, no need to set offset */
-	  log_append_redo_data (thread_p, RVHF_MVCC_DELETE, &forward_addr,
-				sizeof (bool), &is_bigone);
-
-	  pgbuf_set_dirty (thread_p, forward_addr.pgptr, FREE);
-	  forward_addr.pgptr = NULL;
-
-	  break;
-	}
-
       /* Header of heap */
       vpid.volid = hfid->vfid.volid;
       vpid.pageid = hfid->hpgid;
@@ -9032,6 +8854,77 @@ try_again:
 	  goto error;
 	}
 
+      if (use_mvcc && scan_cache->delete_old_row == false)
+	{
+	  MVCCID mvcc_id;
+#if defined(MVCC_USE_COMMAND_ID)
+	  MVCC_COMMAND_ID mvcc_comm_id;
+#endif /* MVCC_USE_COMMAND_ID */
+	  bool is_bigone = true;
+	  MVCC_REC_HEADER *old_recdes_header = NULL;
+
+	  mvcc_id = logtb_get_current_mvccid (thread_p);
+
+	  /* should not create any deadlocks, since header page latch
+	   * has been already acquired
+	   * hdr_pgptr latch acquisition may be removed for mvcc in future  
+	   */
+	  vpid.volid = forward_oid.volid;
+	  vpid.pageid = forward_oid.pageid;
+	  forward_addr.pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
+					  PGBUF_LATCH_WRITE,
+					  PGBUF_UNCONDITIONAL_LATCH);
+	  if (forward_addr.pgptr == NULL)
+	    {
+	      goto error;
+	    }
+
+	  /* Find the contents of the record for mvcc delete purposes */
+	  old_recdes_header =
+	    (MVCC_REC_HEADER *) overflow_get_first_page_data (forward_addr.
+							      pgptr);
+	  if (heap_mvcc_lock_for_delete (thread_p, hfid, oid,
+					 &scan_cache->class_oid,
+					 &old_recdes_header,
+					 &addr.pgptr, &forward_addr.pgptr,
+					 &hdr_pgptr, mvcc_delete_info)
+	      != NO_ERROR)
+	    {
+	      goto error;
+	    }
+
+	  if (mvcc_delete_info->satisfies_delete_result !=
+	      DELETE_RECORD_CAN_DELETE)
+	    {
+	      pgbuf_unfix_and_init (thread_p, forward_addr.pgptr);
+	      pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+	      oid = NULL;
+	      break;
+	    }
+
+	  /* set overflow mvcc */
+	  old_recdes_header->mvcc_flags &=
+	    ~(HEAP_MVCC_FLAG_DELID_INVALID | HEAP_MVCC_FLAG_DELID_COMMITTED);
+	  HEAP_SET_MVCC_DEL_ID (old_recdes_header, mvcc_id);
+#if defined(MVCC_USE_COMMAND_ID)
+	  HEAP_SET_MVCC_DEL_CID (old_recdes_header, mvcc_comm_id);
+	  /* MVCC command id must be incremented after this execution */
+	  logtb_activate_command_id (thread_p);
+#endif /* MVCC_USE_COMMAND_ID */
+
+	  spage_mark_page_for_clean (thread_p, addr.pgptr, mvcc_id);
+
+	  /* logging for bigone object, no need to set offset */
+	  log_append_redo_data (thread_p, RVHF_MVCC_DELETE, &forward_addr,
+				sizeof (bool), &is_bigone);
+
+	  pgbuf_set_dirty (thread_p, forward_addr.pgptr, FREE);
+	  forward_addr.pgptr = NULL;
+	  pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+
+	  break;
+	}
+
       /* Remove the home object */
       addr.offset = oid->slotid;
       log_append_undoredo_recdes (thread_p, RVHF_DELETE, &addr,
@@ -9066,14 +8959,8 @@ try_again:
     case REC_HOME:
     case REC_NEWHOME:
     case REC_ASSIGN_ADDRESS:
-      /* Find the content of the record for logging purposes */
-      if (spage_get_record (addr.pgptr, oid->slotid, &undo_recdes,
-			    PEEK) != S_SUCCESS)
-	{
-	  /* Unable to peek before image for logging purposes */
-	  goto error;
-	}
 
+      /* Find the content of the record for logging purposes */
       if (use_mvcc && scan_cache->delete_old_row == false)
 	{
 	  MVCCID mvcc_id = logtb_get_current_mvccid (thread_p);
@@ -9083,57 +8970,31 @@ try_again:
 #endif /* MVCC_USE_COMMAND_ID */
 	  bool is_bigone = false;
 	  MVCC_REC_HEADER *old_recdes_header = NULL;
-	  MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;
-	  assert (undo_recdes.data != NULL &&
-		  undo_recdes.length >= sizeof (MVCC_REC_HEADER));
+	  RECDES old_recdes;
 
-	  old_recdes_header = (MVCC_REC_HEADER *) undo_recdes.data;
-	  satisfies_delete_result =
-	    mvcc_satisfies_delete (thread_p, old_recdes_header,
-#if defined(MVCC_USE_COMMAND_ID)
-				   mvcc_comm_id,
-#endif /* MVCC_USE_COMMAND_ID */
-				   addr.pgptr);
-	  if (satisfies_delete_result == DELETE_RECORD_INVISIBLE)
+	  if (spage_get_record (addr.pgptr, oid->slotid,
+				&old_recdes, PEEK) != S_SUCCESS)
 	    {
-	      /* invisible tuple - nothing to do */
+	      goto error;
+	    }
+
+	  if (heap_mvcc_lock_for_delete (thread_p, hfid, oid,
+					 &scan_cache->class_oid,
+					 (MVCC_REC_HEADER **) & old_recdes.
+					 data, &addr.pgptr, NULL, NULL,
+					 mvcc_delete_info) != NO_ERROR)
+	    {
+	      goto error;
+	    }
+
+	  if (mvcc_delete_info->satisfies_delete_result !=
+	      DELETE_RECORD_CAN_DELETE)
+	    {
+	      oid = NULL;
 	      break;
 	    }
-	  else if (satisfies_delete_result == DELETE_RECORD_DELETED
-#if defined(MVCC_USE_COMMAND_ID)
-		   || satisfies_delete_result == DELETE_RECORD_SELF_DELETED
-#endif /* MVCC_USE_COMMAND_ID */
-	    )
-	    {
-	      /* already deleted */
-	      if (record_locked == true)
-		{
-		  lock_unlock_object (thread_p, oid, &scan_cache->class_oid,
-				      X_LOCK, false);
-		}
-	      break;
-	    }
-	  else
-	    {
-	      if (record_locked == false)
-		{
-		  if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				   X_LOCK, LK_COND_LOCK) != LK_GRANTED)
-		    {
-		      pgbuf_unfix_and_init (thread_p, addr.pgptr);
-		      if (lock_object (thread_p, oid, &scan_cache->class_oid,
-				       X_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
-			{
-			  goto error;
-			}
 
-		      record_locked = true;
-		      goto try_again;
-		    }
-		  record_locked = true;
-		}
-	    }
-
+	  old_recdes_header = (MVCC_REC_HEADER *) old_recdes.data;
 	  old_recdes_header->mvcc_flags &=
 	    ~(HEAP_MVCC_FLAG_DELID_INVALID | HEAP_MVCC_FLAG_DELID_COMMITTED);
 	  HEAP_SET_MVCC_DEL_ID (old_recdes_header, mvcc_id);
@@ -9151,6 +9012,14 @@ try_again:
 	  pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
 	  break;
 	}
+
+      if (spage_get_record (addr.pgptr, oid->slotid, &undo_recdes,
+			    PEEK) != S_SUCCESS)
+	{
+	  /* Unable to peek before image for logging purposes */
+	  goto error;
+	}
+
 
       /* Log and remove the object */
       addr.offset = oid->slotid;
@@ -9867,7 +9736,7 @@ heap_ovf_get_length (THREAD_ENTRY * thread_p, const OID * ovf_oid)
  */
 static SCAN_CODE
 heap_ovf_get (THREAD_ENTRY * thread_p, const OID * ovf_oid, RECDES * recdes,
-	      int chn)
+	      int chn, MVCC_SNAPSHOT * mvcc_snapshot)
 {
   VPID ovf_vpid;
   int rest_length;
@@ -9886,15 +9755,38 @@ heap_ovf_get (THREAD_ENTRY * thread_p, const OID * ovf_oid, RECDES * recdes,
        * already in the page buffer pool.
        */
       scan = overflow_get_nbytes (thread_p, &ovf_vpid, recdes, 0,
-				  OR_HEADER_SIZE, &rest_length);
+				  OR_HEADER_SIZE, &rest_length,
+				  mvcc_snapshot);
       if (scan == S_SUCCESS && chn == or_chn (recdes))
 	{
 	  return S_SUCCESS_CHN_UPTODATE;
 	}
     }
-  scan = overflow_get (thread_p, &ovf_vpid, recdes);
+  scan = overflow_get (thread_p, &ovf_vpid, recdes, mvcc_snapshot);
 
   return scan;
+}
+
+static SCAN_CODE
+heap_ovf_peek_mvcc_record_header (THREAD_ENTRY * thread_p,
+				  RECDES * recdes, PAGE_PTR ovf_first_page,
+				  MVCC_SNAPSHOT * mvcc_snapshot)
+{
+  assert (ovf_first_page != NULL);
+
+  recdes->length = sizeof (MVCC_REC_HEADER);
+  recdes->data = overflow_get_first_page_data (ovf_first_page);;
+  if (mvcc_snapshot != NULL)
+    {
+      if (mvcc_snapshot->snapshot_fnc (thread_p,
+				       (MVCC_REC_HEADER *) recdes->data,
+				       mvcc_snapshot, ovf_first_page) != true)
+	{
+	  return S_SNAPSHOT_NOT_SATISFIED;
+	}
+    }
+
+  return S_SUCCESS;
 }
 
 /*
@@ -11044,7 +10936,7 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
   if (ispeeking == PEEK)
     {
       scan = spage_get_record (pgptr, slotid, recdes, PEEK);
-      if (mvcc_snapshot != NULL)
+      if (scan == S_SUCCESS && mvcc_snapshot != NULL)
 	{
 	  if (mvcc_snapshot->snapshot_fnc (thread_p,
 					   (MVCC_REC_HEADER *) recdes->data,
@@ -11062,7 +10954,8 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
   else
     {
       scan = spage_get_record (pgptr, slotid, &chn_recdes, PEEK);
-      if (mvcc_snapshot != NULL && mvcc_snapshot->snapshot_fnc != NULL)
+      if (scan == S_SUCCESS && mvcc_snapshot != NULL
+	  && mvcc_snapshot->snapshot_fnc != NULL)
 	{
 	  if (mvcc_snapshot->snapshot_fnc (thread_p,
 					   (MVCC_REC_HEADER *) chn_recdes.
@@ -11090,6 +10983,62 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
 
   return scan;
 }
+
+/*
+ * heap_get_mvcc_record_header () - Get mvcc of specified object of the given slotted page 
+ *   return: SCAN_CODE
+ *           (Either of S_SUCCESS,
+ *                      S_SUCCESS_CHN_UPTODATE,
+ *                      S_DOESNT_FIT,
+ *                      S_DOESNT_EXIST,
+ *			S_SNAPSHOT_NOT_SATISFIED)
+ *   pgptr(in): Pointer to slotted page
+ *   slotid(in): Slot identifier of current record.
+ *   recdes(in/out): Pointer to a record descriptor. Will be modified to
+ *                   describe the desired record.
+ *   ispeeking(in): Indicates whether the record is going to be copied
+ *                  (like a copy) or peeked (read at the buffer).
+ *   mvcc_snapshot(in) : mvcc snapshot
+ */
+static SCAN_CODE
+heap_get_mvcc_record_header (THREAD_ENTRY * thread_p,
+			     PAGE_PTR pgptr, INT16 slotid,
+			     RECDES * recdes, int ispeeking,
+			     MVCC_SNAPSHOT * mvcc_snapshot)
+{
+  SCAN_CODE scan;
+
+  /*
+   * Don't retrieve the object when the object has the same cache
+   * coherency number given by the caller. That is, the caller has the
+   * object cached.
+   */
+
+  if (ispeeking == PEEK)
+    {
+      scan = spage_get_record_mvcc (pgptr, slotid, recdes, PEEK);
+    }
+  else
+    {
+      scan = spage_get_record_mvcc (pgptr, slotid, recdes, COPY);
+    }
+
+  if (scan == S_SUCCESS && mvcc_snapshot != NULL
+      && mvcc_snapshot->snapshot_fnc != NULL)
+    {
+
+      if (mvcc_snapshot->snapshot_fnc (thread_p,
+				       (MVCC_REC_HEADER *) recdes->data,
+				       mvcc_snapshot, pgptr) != true)
+	{
+	  return S_SNAPSHOT_NOT_SATISFIED;
+	}
+
+    }
+
+  return scan;
+}
+
 
 #if defined (ENABLE_UNUSED_FUNCTION)
 /*
@@ -11568,8 +11517,8 @@ try_again:
 	  recdes->data = scan_cache->area;
 	  recdes->area_size = scan_cache->area_size;
 
-	  while ((scan = heap_ovf_get (thread_p, &forward_oid, recdes, chn))
-		 == S_DOESNT_FIT)
+	  while ((scan = heap_ovf_get (thread_p, &forward_oid, recdes, chn,
+				       mvcc_snapshot)) == S_DOESNT_FIT)
 	    {
 	      /*
 	       * The object did not fit into such an area, reallocate a new
@@ -11596,7 +11545,8 @@ try_again:
 	}
       else
 	{
-	  scan = heap_ovf_get (thread_p, &forward_oid, recdes, chn);
+	  scan =
+	    heap_ovf_get (thread_p, &forward_oid, recdes, chn, mvcc_snapshot);
 	}
 
       break;
@@ -21512,7 +21462,7 @@ heap_object_upgrade_domain (THREAD_ENTRY * thread_p,
 				  SINGLE_ROW_UPDATE, upd_scancache,
 				  &force_count, false,
 				  REPL_INFO_TYPE_STMT_NORMAL,
-				  DB_NOT_PARTITIONED_CLASS, NULL, NULL);
+				  DB_NOT_PARTITIONED_CLASS, NULL, NULL, NULL);
   if (error != NO_ERROR)
     {
       goto exit;
@@ -22353,7 +22303,10 @@ heap_update_mvcc_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
       HEAP_SET_MVCC_DEL_CID (old_recdes_header, mvcc_comm_id);
 #endif /* MVCC_USE_COMMAND_ID */
       HEAP_SET_MVCC_NEXT_VERSION (old_recdes_header, new_oid);
-      spage_mark_page_for_clean (thread_p, old_page_ptr, mvcc_id);
+      if (!is_old_page_overflow)
+	{
+	  spage_mark_page_for_clean (thread_p, old_page_ptr, mvcc_id);
+	}
 
       /* Log update */
       /* no need to log del_id, comm_id it can be easily restored */
@@ -22674,6 +22627,13 @@ heap_get_record_info (THREAD_ENTRY * thread_p, const OID oid,
 #endif /* MVCC_USE_COMMAND_ID */
   int mvcc_flags;
   OID next_version;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
+
+  if (scan_cache != NULL && scan_cache->mvcc_snapshot != NULL
+      && scan_cache->mvcc_snapshot->snapshot_fnc != NULL)
+    {
+      mvcc_snapshot = scan_cache->mvcc_snapshot;
+    }
 
   assert (record_info != NULL && recdes != NULL && record_info != NULL);
 
@@ -22791,7 +22751,7 @@ heap_get_record_info (THREAD_ENTRY * thread_p, const OID oid,
 
 	  while ((scan =
 		  heap_ovf_get (thread_p, &forward_oid, recdes,
-				NULL_CHN)) == S_DOESNT_FIT)
+				NULL_CHN, mvcc_snapshot)) == S_DOESNT_FIT)
 	    {
 	      /* The object did not fit into such an area, reallocate a new
 	       * area
@@ -22814,7 +22774,8 @@ heap_get_record_info (THREAD_ENTRY * thread_p, const OID oid,
 	}
       else
 	{
-	  scan = heap_ovf_get (thread_p, &forward_oid, recdes, NULL_CHN);
+	  scan = heap_ovf_get (thread_p, &forward_oid, recdes, NULL_CHN,
+			       mvcc_snapshot);
 	}
       DB_MAKE_INT (record_info[HEAP_RECORD_INFO_T_REPRID],
 		   or_rep_id (recdes));
@@ -22993,27 +22954,10 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
 
     case REC_BIGONE:
       {
-	PAGE_PTR ovf_pgptr = NULL;
 	/* Get the address of the content of the multipage object */
 	peek_oid = (OID *) forward_recdes.data;
 	forward_oid = *peek_oid;
 	pgbuf_unfix_and_init (thread_p, *pgptr);
-
-	if (mvcc_snapshot != NULL)
-	  {
-
-	    vpid.volid = forward_oid.volid;
-	    vpid.pageid = forward_oid.pageid;
-
-	    /* do not allow others to change the page up to snapshot */
-	    ovf_pgptr =
-	      pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_READ,
-			 PGBUF_UNCONDITIONAL_LATCH);
-	    if (ovf_pgptr == NULL)
-	      {
-		return S_ERROR;
-	      }
-	  }
 
 	/* Now get the content of the multipage object. */
 	/* Try to reuse the previously allocated area */
@@ -23034,10 +22978,6 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
 		  (char *) db_private_alloc (thread_p, scan_cache->area_size);
 		if (scan_cache->area == NULL)
 		  {
-		    if (ovf_pgptr != NULL)
-		      {
-			pgbuf_unfix_and_init (thread_p, ovf_pgptr);
-		      }
 		    scan_cache->area_size = -1;
 		    return S_ERROR;
 		  }
@@ -23047,7 +22987,7 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
 
 	    while ((scan =
 		    heap_ovf_get (thread_p, &forward_oid, recdes,
-				  NULL_CHN)) == S_DOESNT_FIT)
+				  NULL_CHN, mvcc_snapshot)) == S_DOESNT_FIT)
 	      {
 		/* The object did not fit into such an area, reallocate a new
 		 * area
@@ -23058,10 +22998,6 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
 					       recdes->area_size);
 		if (recdes->data == NULL)
 		  {
-		    if (ovf_pgptr != NULL)
-		      {
-			pgbuf_unfix_and_init (thread_p, ovf_pgptr);
-		      }
 		    return S_ERROR;
 		  }
 		scan_cache->area_size = recdes->area_size;
@@ -23074,25 +23010,8 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
 	  }
 	else
 	  {
-	    scan = heap_ovf_get (thread_p, &forward_oid, recdes, NULL_CHN);
-	  }
-
-	if (mvcc_snapshot != NULL)
-	  {
-	    assert (ovf_pgptr != NULL);
-
-	    if (scan == S_SUCCESS)
-	      {
-		if (mvcc_snapshot->snapshot_fnc (thread_p,
-						 (MVCC_REC_HEADER *) recdes->
-						 data, mvcc_snapshot,
-						 ovf_pgptr) == false)
-		  {
-		    scan = S_SNAPSHOT_NOT_SATISFIED;
-		  }
-
-	      }
-	    pgbuf_unfix_and_init (thread_p, ovf_pgptr);
+	    scan = heap_ovf_get (thread_p, &forward_oid, recdes, NULL_CHN,
+				 mvcc_snapshot);
 	  }
 
 	break;
@@ -23256,13 +23175,15 @@ heap_prev_record_info (THREAD_ENTRY * thread_p, const HFID * hfid,
 }
 
 /*
- * heap_set_record_header_flag () - mvcc set record flag
+ * heap_set_record_header_flag () - set record flag in mvcc, if possible
  *   return: true/false
  *   thread_p(in): thread entry
  *   rec_header(in): the record header
  *   pgptr(in): the page pointer
  *   flag(in): flag to set
  *   mvcc_id(in): mvcc id
+ *
+ * Note: The flag is set only if the page is not latched by other transaction.
  */
 bool
 heap_set_record_header_flag (THREAD_ENTRY * thread_p,
@@ -23290,4 +23211,1797 @@ heap_set_record_header_flag (THREAD_ENTRY * thread_p,
     }
   pgbuf_set_dirty (thread_p, pgptr, FREE);
   return true;
+}
+
+/*
+ * heap_update_record_header_del_flag () - update mvcc record header flags
+ *					after delete transaction ends
+ *   return: true/false
+ *   thread_p(in): thread entry
+ *   rec_header(in): the record header
+ *   pgptr(in): the page pointer 
+ *   mvcc_id(in): delete mvcc id
+ *
+ * Note: This function is called after waiting to delete transaction.
+ *	If delete transaction committed, set HEAP_MVCC_FLAG_DELID_COMMITTED
+ *	If delete transaction aborter, set HEAP_MVCC_FLAG_DELID_INVALID
+ */
+bool
+heap_update_record_header_del_flag (THREAD_ENTRY * thread_p,
+				    MVCC_REC_HEADER * rec_header,
+				    PAGE_PTR pgptr, MVCCID del_mvccid)
+{
+  assert (rec_header != NULL && pgptr != NULL);
+  assert (MVCCID_IS_EQUAL (HEAP_GET_MVCC_DEL_ID (rec_header), del_mvccid));
+
+  if (!(rec_header->mvcc_flags & (HEAP_MVCC_FLAG_DELID_COMMITTED |
+				  HEAP_MVCC_FLAG_DELID_INVALID)))
+    {
+      if (logtb_is_mvccid_committed (thread_p, del_mvccid))
+	{
+	  return heap_set_record_header_flag (thread_p, rec_header,
+					      pgptr,
+					      HEAP_MVCC_FLAG_DELID_COMMITTED,
+					      del_mvccid);
+	}
+      else
+	{
+	  return heap_set_record_header_flag (thread_p, rec_header,
+					      pgptr,
+					      HEAP_MVCC_FLAG_DELID_INVALID,
+					      del_mvccid);
+	}
+    }
+
+  /* flags already updated */
+  return true;
+}
+
+/*
+ * heap_mvcc_lock_for_delete () - lock a row if satisfies delete
+ *		
+ *   return: error code
+ *   thread_p(in): thread entry
+ *   hfid(in): hfid
+ *   oid(in): oid
+ *   class_oid(in): class oid
+ *   recdes_header(in/out): mvcc record header
+ *   pgptr(in): page where the record reside, already latched for write
+ *   forward_pgptr(in): forward page, needed in case of REC_BIGONE records
+ *   ovf_hdr_pgptr(in): overflow header page, needed in case of REC_BIGONE 
+ *			records
+ *   mvcc_delete_info(in/out): mvcc update info
+ */
+static int
+heap_mvcc_lock_for_delete (THREAD_ENTRY * thread_p,
+			   const HFID * hfid, const OID * oid,
+			   OID * class_oid, MVCC_REC_HEADER ** recdes_header,
+			   PAGE_PTR * pgptr,
+			   PAGE_PTR * forward_pgptr, PAGE_PTR * ovf_hdr_pgptr,
+			   HEAP_MVCC_DELETE_INFO * mvcc_delete_info)
+{
+  MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;
+  MVCCID del_mvccid;
+  bool record_locked = false;
+  OID curr_row_version = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
+  RECDES recdes;
+  assert (recdes_header != NULL && *recdes_header != NULL &&
+	  pgptr != NULL && *pgptr && mvcc_delete_info != NULL);
+
+try_again:
+  satisfies_delete_result = mvcc_satisfies_delete (thread_p, *recdes_header,
+#if defined(MVCC_USE_COMMAND_ID)
+						   mvcc_comm_id,
+#endif /* MVCC_USE_COMMAND_ID */
+						   *pgptr);
+  if (satisfies_delete_result == DELETE_RECORD_INVISIBLE)
+    {
+      /* TODO - er set */
+      if (record_locked == true)
+	{
+	  lock_unlock_object (thread_p, oid, class_oid,
+			      mvcc_delete_info->row_lock, true);
+	}
+      goto error;
+    }
+  else if (satisfies_delete_result == DELETE_RECORD_IN_PROGRESS)
+    {
+      del_mvccid = HEAP_GET_MVCC_DEL_ID (*recdes_header);
+
+      if (record_locked == false && mvcc_delete_info->row_lock != NULL_LOCK)
+	{
+	  if (lock_object (thread_p, oid, class_oid,
+			   mvcc_delete_info->row_lock,
+			   LK_COND_LOCK) != LK_GRANTED)
+	    {
+	      pgbuf_unfix_and_init (thread_p, *pgptr);
+	      if (forward_pgptr)
+		{
+		  pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+		}
+
+	      if (ovf_hdr_pgptr)
+		{
+		  pgbuf_unfix_and_init (thread_p, *ovf_hdr_pgptr);
+		}
+
+	      if (lock_object (thread_p, oid, class_oid,
+			       mvcc_delete_info->row_lock,
+			       LK_UNCOND_LOCK) != LK_GRANTED)
+		{
+		  goto error;
+		}
+
+	      record_locked = true;
+
+	      if (heap_get_pages_for_mvcc_chain_write
+		  (thread_p, oid, hfid, pgptr,
+		   forward_pgptr, ovf_hdr_pgptr, NULL) != NO_ERROR)
+		{
+		  goto error;
+		}
+	    }
+
+	  if (forward_pgptr != NULL && *forward_pgptr != NULL)
+	    {
+	      /* BIGONE type */
+	      *recdes_header =
+		(MVCC_REC_HEADER *)
+		overflow_get_first_page_data (*forward_pgptr);
+	    }
+	  else
+	    {
+	      if (spage_get_record (*pgptr, oid->slotid, &recdes, PEEK) !=
+		  S_SUCCESS)
+		{
+		  goto error;
+		}
+	      *recdes_header = (MVCC_REC_HEADER *) recdes.data;
+	    }
+
+	  if (!MVCCID_IS_EQUAL (HEAP_GET_MVCC_DEL_ID (*recdes_header),
+				del_mvccid))
+	    {
+	      /* other transaction updated the row while sleeping, 
+	       * check whether the row satisfies delete again
+	       */
+	      goto try_again;
+	    }
+
+	  /* update record header flag if possible */
+	  if (heap_update_record_header_del_flag (thread_p, *recdes_header,
+						  *pgptr, del_mvccid))
+	    {
+	      if ((*recdes_header)->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
+		{
+		  satisfies_delete_result = DELETE_RECORD_CAN_DELETE;
+		}
+	      else
+		{
+		  satisfies_delete_result = DELETE_RECORD_DELETED;
+		}
+	    }
+	}
+    }
+
+  if (satisfies_delete_result != DELETE_RECORD_CAN_DELETE)
+    {
+      mvcc_delete_info->row_delid = HEAP_GET_MVCC_DEL_ID (*recdes_header);
+      HEAP_GET_MVCC_NEXT_VERSION (*recdes_header,
+				  &mvcc_delete_info->next_row_version);
+      mvcc_delete_info->satisfies_delete_result = satisfies_delete_result;
+
+      return NO_ERROR;
+    }
+
+  /* the row can be deleted, check whether was previously locked by me */
+  if (record_locked == false && mvcc_delete_info->row_lock != NULL_LOCK)
+    {
+      /* the row can be deleted */
+      if (lock_object (thread_p, oid, class_oid,
+		       mvcc_delete_info->row_lock,
+		       LK_COND_LOCK) != LK_GRANTED)
+	{
+	  /* something goes wrong */
+	  goto error;
+	}
+    }
+
+  mvcc_delete_info->satisfies_delete_result = satisfies_delete_result;
+  return NO_ERROR;
+
+error:
+  return (er_errid () == NO_ERROR) ? ER_FAILED : er_errid ();
+}
+
+/*
+ * heap_get_pages_for_mvcc_chain_read  () - get pages for mvcc chain select
+ *		
+ *   return: error code
+ *   thread_p(in): thread entry
+ *   oid(in): oid
+ *   hfid(in): Heap file identifier
+ *   pgptr(in/out): page where oid reside 
+ *   forward_pgptr(out): forward page
+ *
+  * Note: The pages are read latched.
+ *	 This function try to get the home page in case of REC_HOME objects.
+ *	 In case of REC_BIGONE objects, try to get home and forward pages.
+ */
+static int
+heap_get_pages_for_mvcc_chain_read (THREAD_ENTRY * thread_p, OID * oid,
+				    const HFID * hfid, PAGE_PTR * pgptr,
+				    PAGE_PTR * forward_pgptr)
+{
+  RECDES forward_recdes;
+  VPID vpid, *vpidptr;
+  OID forward_oid;
+  int again_count = 0;
+  int again_max = 20;
+  INT16 type;
+
+  assert (pgptr != NULL);
+
+try_again:
+
+  vpid.volid = oid->volid;
+  vpid.pageid = oid->pageid;
+
+  if (*pgptr != NULL)
+    {
+      vpidptr = pgbuf_get_vpid_ptr (*pgptr);
+      if (!VPID_EQ (vpidptr, &vpid))
+	{
+	  pgbuf_unfix_and_init (thread_p, *pgptr);
+	}
+    }
+
+  if (*pgptr == NULL)
+    {
+      *pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_READ,
+			  PGBUF_CONDITIONAL_LATCH);
+      if (*pgptr == NULL)
+	{
+	  if (*forward_pgptr)
+	    {
+	      pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+	    }
+
+	  *pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_READ,
+			      PGBUF_UNCONDITIONAL_LATCH);
+	  if (*pgptr == NULL)
+	    {
+	      goto error;
+	    }
+	}
+    }
+
+  assert (*pgptr != NULL);
+  assert (pgbuf_get_latch_mode (*pgptr) == PGBUF_LATCH_READ ||
+	  pgbuf_get_latch_mode (*pgptr) == PGBUF_LATCH_WRITE);
+
+  type = spage_get_record_type (*pgptr, oid->slotid);
+  if (type == REC_UNKNOWN)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
+	      oid->volid, oid->pageid, oid->slotid);
+      goto error;
+    }
+
+  if (type == REC_HOME)
+    {
+      return NO_ERROR;
+    }
+
+  else if (type != REC_BIGONE)
+    {
+      return ER_FAILED;
+    }
+
+  assert (forward_pgptr != NULL);
+
+  /* REC_BIGONE - get overflow pages */
+  forward_recdes.data = (char *) &forward_oid;
+  forward_recdes.length = sizeof (OID);
+  forward_recdes.area_size = sizeof (OID);
+  if (spage_get_record (*pgptr, oid->slotid,
+			&forward_recdes, COPY) != S_SUCCESS)
+    {
+      /* Unable to peek overflow address of multipage object */
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+	      ER_HEAP_BAD_RELOCATION_RECORD, 3,
+	      oid->volid, oid->pageid, oid->slotid);
+      goto error;
+    }
+
+  /* should not create any deadlocks, since header page latch
+   * has been already acquired
+   */
+  vpid.volid = forward_oid.volid;
+  vpid.pageid = forward_oid.pageid;
+
+  if (*forward_pgptr != NULL)
+    {
+      vpidptr = pgbuf_get_vpid_ptr (*forward_pgptr);
+      if (!VPID_EQ (vpidptr, &vpid))
+	{
+	  pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+	}
+    }
+
+  if (*forward_pgptr == NULL)
+    {
+      *forward_pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
+				  PGBUF_LATCH_READ, PGBUF_CONDITIONAL_LATCH);
+      if (*forward_pgptr == NULL)
+	{
+	  pgbuf_unfix_and_init (thread_p, *pgptr);
+	  *forward_pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
+				      PGBUF_LATCH_READ,
+				      PGBUF_UNCONDITIONAL_LATCH);
+	  if (*forward_pgptr == NULL)
+	    {
+	      goto error;
+	    }
+
+	  vpid.volid = oid->volid;
+	  vpid.pageid = oid->pageid;
+	  *pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
+			      PGBUF_LATCH_READ, PGBUF_CONDITIONAL_LATCH);
+	  if (*pgptr == NULL)
+	    {
+	      pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+
+	      if (again_count++ >= again_max)
+		{
+		  if (er_errid () == ER_PB_BAD_PAGEID)
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_HEAP_UNKNOWN_OBJECT, 3, oid->volid,
+			      oid->pageid, oid->slotid);
+		    }
+		  else if (er_errid () == NO_ERROR)
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
+			      vpid.pageid);
+		    }
+
+		  goto error;
+		}
+	      else
+		{
+		  /* can't acquire latch on pages, try again */
+		  goto try_again;
+		}
+	    }
+	}
+    }
+
+  return NO_ERROR;
+
+error:
+  return (er_errid () == NO_ERROR) ? ER_FAILED : er_errid ();
+}
+
+/*
+ * heap_get_pages_for_mvcc_chain_write  () - get pages for mvcc chain delete		
+ *
+ *   return: error code
+ *   thread_p(in): thread entry
+ *   oid(in): oid
+ *   hfid(in): heap file identifier
+ *   pgptr(in/out): page where oid reside
+ *   forward_pgptr(out): forward page
+ *   ovf_hdr_pgptr(in): overflow header page 
+ *   wait(out): true, if transaction was blocked during latches acquisition
+ *
+ * Note: The pages are write latched.
+ *	 This function try to get the home page in case of REC_HOME objects.
+ *	 In case of REC_BIGONE objects, try to get home, forward and 
+ *  overflow header pages.
+ */
+static int
+heap_get_pages_for_mvcc_chain_write (THREAD_ENTRY * thread_p,
+				     const OID * oid, const HFID * hfid,
+				     PAGE_PTR * pgptr,
+				     PAGE_PTR * forward_pgptr,
+				     PAGE_PTR * ovf_hdr_pgptr, bool * wait)
+{
+  RECDES forward_recdes;
+  OID forward_oid;
+  VPID vpid, *vpidptr = NULL;
+  int again_count = 0;
+  int again_max = 20;
+  int saved_latch_mode;
+  INT16 type;
+
+  assert (pgptr != NULL);
+  if (wait)
+    {
+      *wait = false;
+    }
+
+try_again:
+
+  vpid.volid = oid->volid;
+  vpid.pageid = oid->pageid;
+
+  vpidptr = NULL;
+  saved_latch_mode = PGBUF_NO_LATCH;
+  if (*pgptr != NULL)
+    {
+      vpidptr = pgbuf_get_vpid_ptr (*pgptr);
+      if (!VPID_EQ (vpidptr, &vpid))
+	{
+	  pgbuf_unfix_and_init (thread_p, *pgptr);
+	}
+      else
+	{
+	  saved_latch_mode = pgbuf_get_latch_mode (*pgptr);
+	}
+    }
+
+  if (*pgptr == NULL || saved_latch_mode == PGBUF_LATCH_READ)
+    {
+      *pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
+			  PGBUF_CONDITIONAL_LATCH);
+      if (*pgptr == NULL)
+	{
+	  if (saved_latch_mode == PGBUF_LATCH_READ)
+	    {
+	      /* release latch, in order to avoid deadlock */
+	      pgbuf_unfix_and_init (thread_p, *pgptr);
+	      saved_latch_mode = PGBUF_NO_LATCH;
+	    }
+
+	  if (*forward_pgptr)
+	    {
+	      pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+	    }
+
+	  if (*ovf_hdr_pgptr)
+	    {
+	      pgbuf_unfix_and_init (thread_p, *ovf_hdr_pgptr);
+	    }
+
+	  *pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
+			      PGBUF_UNCONDITIONAL_LATCH);
+	  if (*pgptr == NULL)
+	    {
+	      goto error;
+	    }
+
+	  if (wait)
+	    {
+	      *wait = true;
+	    }
+	}
+      else if (saved_latch_mode == PGBUF_LATCH_READ)
+	{
+	  /* decrement reference count */
+	  pgbuf_unfix (thread_p, *pgptr);
+	}
+    }
+
+  assert (pgbuf_get_latch_mode (*pgptr) == PGBUF_LATCH_WRITE);
+
+  type = spage_get_record_type (*pgptr, oid->slotid);
+  if (type == REC_UNKNOWN)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
+	      oid->volid, oid->pageid, oid->slotid);
+      goto error;
+    }
+
+  if (type == REC_HOME)
+    {
+      return NO_ERROR;
+    }
+
+  else if (type != REC_BIGONE)
+    {
+      return ER_FAILED;
+    }
+
+  assert (*pgptr != NULL);
+  assert (forward_pgptr != NULL && ovf_hdr_pgptr != NULL);
+
+  /* REC_BIGONE */
+  /* acquire latch for overflow header page */
+  forward_recdes.data = (char *) &forward_oid;
+  forward_recdes.length = sizeof (OID);
+  forward_recdes.area_size = sizeof (OID);
+  if (spage_get_record (*pgptr, oid->slotid,
+			&forward_recdes, COPY) != S_SUCCESS)
+    {
+      /* Unable to peek overflow address of multipage object */
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+	      ER_HEAP_BAD_RELOCATION_RECORD, 3,
+	      oid->volid, oid->pageid, oid->slotid);
+      goto error;
+    }
+
+  /* Header of heap */
+  vpid.volid = hfid->vfid.volid;
+  vpid.pageid = hfid->hpgid;
+
+  vpidptr = NULL;
+  saved_latch_mode = PGBUF_NO_LATCH;
+  if (*ovf_hdr_pgptr != NULL)
+    {
+      vpidptr = pgbuf_get_vpid_ptr (*ovf_hdr_pgptr);
+      if (!VPID_EQ (vpidptr, &vpid))
+	{
+	  pgbuf_unfix_and_init (thread_p, *ovf_hdr_pgptr);
+	}
+      else
+	{
+	  saved_latch_mode = pgbuf_get_latch_mode (*ovf_hdr_pgptr);
+	}
+    }
+  else
+    {
+      vpidptr = NULL;
+    }
+
+  if (*ovf_hdr_pgptr == NULL || saved_latch_mode == PGBUF_LATCH_READ)
+    {
+      *ovf_hdr_pgptr =
+	pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
+		   PGBUF_CONDITIONAL_LATCH);
+      if (*ovf_hdr_pgptr == NULL)
+	{
+	  pgbuf_unfix_and_init (thread_p, *pgptr);
+
+	  if (*forward_pgptr)
+	    {
+	      pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+	    }
+
+	  if (saved_latch_mode == PGBUF_LATCH_READ)
+	    {
+	      /* release latch, in order to avoid deadlock */
+	      pgbuf_unfix_and_init (thread_p, *ovf_hdr_pgptr);
+	      saved_latch_mode = PGBUF_NO_LATCH;
+	    }
+
+	  *ovf_hdr_pgptr =
+	    pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
+		       PGBUF_UNCONDITIONAL_LATCH);
+	  if (*ovf_hdr_pgptr == NULL)
+	    {
+	      goto error;
+	    }
+
+	  if (wait)
+	    {
+	      *wait = true;
+	    }
+
+	  vpid.volid = oid->volid;
+	  vpid.pageid = oid->pageid;
+	  *pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
+			      PGBUF_LATCH_WRITE, PGBUF_CONDITIONAL_LATCH);
+	  if (*pgptr == NULL)
+	    {
+	      if (saved_latch_mode == PGBUF_LATCH_READ)
+		{
+		  /* decrement reference count */
+		  pgbuf_unfix (thread_p, *ovf_hdr_pgptr);
+		}
+	      pgbuf_unfix_and_init (thread_p, *ovf_hdr_pgptr);
+
+	      if (again_count++ >= again_max)
+		{
+		  if (er_errid () == ER_PB_BAD_PAGEID)
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_HEAP_UNKNOWN_OBJECT, 3, oid->volid,
+			      oid->pageid, oid->slotid);
+		    }
+
+		  else if (er_errid () == NO_ERROR)
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
+			      vpid.pageid);
+		    }
+
+		  goto error;
+		}
+	      else
+		{
+		  /* can't acquire latch on pages, try again */
+		  goto try_again;
+		}
+	    }
+	}
+      else if (saved_latch_mode == PGBUF_LATCH_READ)
+	{
+	  /* decrement reference count */
+	  pgbuf_unfix (thread_p, *ovf_hdr_pgptr);
+	}
+    }
+
+  /* acquire latch for forward page */
+  saved_latch_mode = PGBUF_NO_LATCH;
+  vpid.volid = forward_oid.volid;
+  vpid.pageid = forward_oid.pageid;
+  if (*forward_pgptr != NULL)
+    {
+      vpidptr = pgbuf_get_vpid_ptr (*forward_pgptr);
+      if (!VPID_EQ (vpidptr, &vpid))
+	{
+	  pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+	}
+      else
+	{
+	  saved_latch_mode = pgbuf_get_latch_mode (*forward_pgptr);
+	}
+    }
+  else
+    {
+      vpidptr = NULL;
+    }
+
+  if (*forward_pgptr == NULL || saved_latch_mode == PGBUF_LATCH_READ)
+    {
+      *forward_pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
+				  PGBUF_LATCH_WRITE, PGBUF_CONDITIONAL_LATCH);
+      if (*forward_pgptr == NULL)
+	{
+	  if (saved_latch_mode == PGBUF_LATCH_READ)
+	    {
+	      /* release latch, in order to avoid deadlock */
+	      pgbuf_unfix_and_init (thread_p, *forward_pgptr);
+	      saved_latch_mode = PGBUF_NO_LATCH;
+	    }
+
+	  /* should not create any deadlocks, since header page latch
+	   * has been already acquired
+	   */
+	  *forward_pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE,
+				      PGBUF_LATCH_WRITE,
+				      PGBUF_CONDITIONAL_LATCH);
+	  if (*forward_pgptr == NULL)
+	    {
+	      goto error;
+	    }
+	}
+      else if (saved_latch_mode == PGBUF_LATCH_READ)
+	{
+	  /* decrement reference count */
+	  pgbuf_unfix (thread_p, *forward_pgptr);
+	}
+    }
+
+  return NO_ERROR;
+
+error:
+  return (er_errid () == NO_ERROR) ? ER_FAILED : er_errid ();
+}
+
+/*
+ * heap_scancache_start_chain_update  () - start new scan cache for mvcc
+ *					  chain update
+ *   return: error code
+ *   thread_p(in): thread entry
+ *   new_scan_cache(in/out): the new scan cache
+ *   old_scan_cache(in/out): the old scan cache
+ *   next_row_version(in): next row version 
+ *
+ * Note: This function start a new scan cache used to update
+ *	mvcc chain. The old and new scan cache may share common data.
+ */
+int
+heap_scancache_start_chain_update (THREAD_ENTRY * thread_p,
+				   HEAP_SCANCACHE * new_scan_cache,
+				   HEAP_SCANCACHE * old_scan_cache,
+				   OID * next_row_version)
+{
+  assert (new_scan_cache != NULL && old_scan_cache != NULL);
+  /* update scan cache */
+
+  /* start a local cache that is suitable for our needs */
+  if (heap_scancache_start
+      (thread_p, new_scan_cache, &old_scan_cache->hfid,
+       &old_scan_cache->class_oid, true, false, LOCKHINT_NONE,
+       NULL) != NO_ERROR)
+    {
+      /* TODO - er_set */
+      return ER_FAILED;
+    }
+
+  /* use current_scan_cache->area in order to alloc only once */
+  new_scan_cache->area = old_scan_cache->area;
+  new_scan_cache->area_size = old_scan_cache->area_size;
+  /* set pgptr if is the case */
+  if (old_scan_cache->pgptr != NULL)
+    {
+      /* handle this case, just to be sure */
+      VPID *vpidptr_incache;
+      VPID vpid;
+
+      vpid.volid = next_row_version->volid;
+      vpid.pageid = next_row_version->pageid;
+      vpidptr_incache = pgbuf_get_vpid_ptr (old_scan_cache->pgptr);
+      if (VPID_EQ (&vpid, vpidptr_incache))
+	{
+	  /* TODO - set current_scan_cache->pgptr at the end of this function */
+	  new_scan_cache->pgptr = old_scan_cache->pgptr;
+	  old_scan_cache->pgptr = NULL;
+	}
+      else
+	{
+	  /* Free the previous scan page */
+	  pgbuf_unfix_and_init (thread_p, old_scan_cache->pgptr);
+	}
+    }
+
+  return NO_ERROR;
+}
+
+/*
+ * heap_peek_mvcc_data () - peek mvcc data
+ *
+ *   return: SCAN_CODE
+ *   thread_p: thread entry
+ *   oid(in): object identifier
+ *   recdes(in): record descriptor
+ *   page_ptr(in): page where the oid reside
+ *   ovf_first_page(in): oveflow first page pointer
+ *   mvcc_snapshot(in): mvcc snapshot
+ *
+ * Note: The user must be sure that the object resides in the page pointed
+ *	  by page_ptr, in case of REC_HOME records or in the page pointed by
+ *	  ovf_first_page in case of REC_BIGONE records. Otherwise error is
+ *	  returned.
+ */
+static SCAN_CODE
+heap_peek_mvcc_data (THREAD_ENTRY * thread_p,
+		     const OID * oid, RECDES * recdes,
+		     PAGE_PTR page_ptr,
+		     PAGE_PTR ovf_first_page, MVCC_SNAPSHOT * mvcc_snapshot)
+{
+  VPID home_vpid, *vpidptr = NULL;
+  SCAN_CODE scan_code = S_SUCCESS;
+  RECDES forward_recdes;
+  OID forward_oid;
+  INT16 type;
+
+  if (page_ptr == NULL)
+    {
+      return S_ERROR;
+    }
+
+  home_vpid.volid = oid->volid;
+  home_vpid.pageid = oid->pageid;
+
+  vpidptr = pgbuf_get_vpid_ptr (page_ptr);
+  if (!VPID_EQ (&home_vpid, vpidptr))
+    {
+      return S_ERROR;
+    }
+
+  type = spage_get_record_type (page_ptr, oid->slotid);
+  if (type == REC_UNKNOWN)
+    {
+      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
+	      oid->volid, oid->pageid, oid->slotid);
+      return S_DOESNT_EXIST;
+    }
+
+  switch (type)
+    {
+    case REC_ASSIGN_ADDRESS:
+      /* Object without content.. only the address has been assigned */
+      if (spage_check_slot_owner (thread_p, page_ptr, oid->slotid))
+	{
+	  er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
+		  ER_HEAP_NODATA_NEWADDRESS, 3, oid->volid, oid->pageid,
+		  oid->slotid);
+	  scan_code = S_DOESNT_EXIST;
+	}
+      else
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT,
+		  3, oid->volid, oid->pageid, oid->slotid);
+	  scan_code = S_ERROR;
+	}
+      break;
+
+    case REC_HOME:
+      scan_code =
+	heap_get_mvcc_record_header (thread_p, page_ptr, oid->slotid, recdes,
+				     true, mvcc_snapshot);
+      break;
+
+    case REC_BIGONE:
+      if (ovf_first_page == NULL)
+	{
+	  return S_ERROR;
+	}
+
+      forward_recdes.data = (char *) &forward_oid;
+      forward_recdes.length = sizeof (forward_oid);
+      forward_recdes.area_size = sizeof (forward_oid);
+
+      scan_code =
+	spage_get_record (page_ptr, oid->slotid, &forward_recdes, COPY);
+      if (scan_code != S_SUCCESS)
+	{
+	  /* Unable to read overflow address of multipage object */
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_HEAP_BAD_RELOCATION_RECORD, 3, oid->volid, oid->pageid,
+		  oid->slotid);
+	  return scan_code;
+	}
+
+      /* check vpid using home_vpid */
+      VPID_SET (&home_vpid, forward_oid.volid, forward_oid.pageid);
+      vpidptr = pgbuf_get_vpid_ptr (ovf_first_page);
+      if (!VPID_EQ (&home_vpid, vpidptr))
+	{
+	  return S_ERROR;
+	}
+
+      scan_code =
+	heap_ovf_peek_mvcc_record_header (thread_p, recdes, ovf_first_page,
+					  mvcc_snapshot);
+
+      break;
+
+    case REC_RELOCATION:
+    case REC_MARKDELETED:
+    case REC_DELETED_WILL_REUSE:
+    case REC_NEWHOME:
+    default:
+      scan_code = S_ERROR;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_BAD_OBJECT_TYPE, 3,
+	      oid->volid, oid->pageid, oid->slotid);
+      break;
+    }
+
+  return scan_code;
+}
+
+/*
+ * heap_mvcc_update () - Update an object in mvcc
+ *
+ *   return: OID *(oid on success or NULL on failure)
+ *   hfid(in): Heap file identifier
+ *   class_oid(in):
+ *   oid(in): Object identifier
+ *   recdes(in): Record descriptor
+ *   old(in/out): Flag. Set to true, if content of object has been stored
+ *                it is set to false (i.e., only the address was stored)
+ *   scan_cache(in/out): Scan cache
+ *   mvcc_data_filter(in): mvcc data filter
+ */
+const OID *
+heap_mvcc_update (THREAD_ENTRY * thread_p, const HFID * hfid,
+		  const OID * class_oid, const OID * oid, RECDES * recdes,
+		  bool * old, HEAP_SCANCACHE * scan_cache,
+		  void *mvcc_data_filter)
+{
+  const OID *new_oid = NULL;
+  HEAP_SCANCACHE local_scan_cache;
+  MVCC_SNAPSHOT mvcc_snapshot_dirty;
+  SCAN_CODE scan_code;
+  RECDES temp_recdes;
+  MVCCID prev_row_delid;
+  bool row_found = false;
+  HEAP_MVCC_DELETE_INFO mvcc_delete_info;
+  MVCC_SNAPSHOT *saved_snapshot = NULL;
+  bool curr_row_locked = false;
+  HEAP_SCANCACHE *p_scan_cache = NULL;
+  bool scan_cache_updated = false;
+  /* current row in chain */
+  OID curr_row_version = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
+  /* previously locked row in chain */
+  OID prev_row_locked = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
+  PAGE_PTR hdr_pgptr = NULL, forward_pgptr = NULL;
+  bool check_data_filter = false, wait = false;
+
+  assert (mvcc_Enabled == true);
+
+  mvcc_delete_info.row_lock = X_LOCK;
+  mvcc_delete_info.row_delid = MVCCID_NULL;
+  mvcc_snapshot_dirty.snapshot_fnc = mvcc_satisfies_dirty;
+  OID_SET_NULL (&mvcc_delete_info.next_row_version);
+
+  p_scan_cache = scan_cache;
+  /* we expect p_scan_cache->cache_last_fix_page to be false,
+   * when update heap data, however check to be sure
+   */
+  if (p_scan_cache != NULL && p_scan_cache->cache_last_fix_page
+      && p_scan_cache->pgptr != NULL)
+    {
+      /* need to unlock the page here, in order to avoid page deadlock
+       * that may occur when find the best page for mvcc insertion
+       */
+      pgbuf_unfix_and_init (thread_p, p_scan_cache->pgptr);
+    }
+
+  while (true)
+    {
+      new_oid =
+	heap_update (thread_p, hfid, class_oid, oid, recdes, old,
+		     p_scan_cache, &mvcc_delete_info);
+
+      if (er_errid () != NO_ERROR || mvcc_Enabled == false)
+	{
+	  /* if no mvcc or error happened return */
+	  goto end;
+	}
+
+      if (new_oid != NULL)
+	{
+	  /* row successfully updated, nothing to do */
+	  goto end;
+	}
+
+      /* need to update the next row version */
+      switch (mvcc_delete_info.satisfies_delete_result)
+	{
+	case DELETE_RECORD_DELETED:
+	  /* need to update next row version */
+	  check_data_filter = true;
+	  mvcc_delete_info.row_lock = X_LOCK;
+	  break;
+
+	default:
+	  /* return NULL, TODO - er_set */
+	  new_oid = NULL;
+	  goto end;
+	}
+
+      if (OID_ISNULL (&mvcc_delete_info.next_row_version))
+	{
+	  /* row deleted, can't be updated */
+	  new_oid = NULL;
+	  goto end;
+	}
+
+      prev_row_delid = mvcc_delete_info.row_delid;
+      if (scan_cache_updated == false)
+	{
+	  /* choose the best scan cache for our needs */
+	  if (scan_cache == NULL || scan_cache->cache_last_fix_page == true)
+	    {
+	      /* use the old scancache */
+	      p_scan_cache = scan_cache;
+	    }
+	  else
+	    {
+	      if (heap_scancache_start_chain_update
+		  (thread_p, &local_scan_cache, scan_cache,
+		   &(mvcc_delete_info.next_row_version)) != NO_ERROR)
+		{
+		  goto end;
+		}
+	      p_scan_cache = &local_scan_cache;
+	    }
+	  /* need to check snapshot dirty */
+	  saved_snapshot = p_scan_cache->mvcc_snapshot;
+	  p_scan_cache->mvcc_snapshot = &mvcc_snapshot_dirty;
+	  scan_cache_updated = true;
+	}
+
+      COPY_OID (&prev_row_locked, oid);
+      COPY_OID (&curr_row_version, &mvcc_delete_info.next_row_version);
+      curr_row_locked = false;
+      while (true)
+	{
+	  /* get pages for read */
+	  if (heap_get_pages_for_mvcc_chain_read
+	      (thread_p, &curr_row_version, &p_scan_cache->hfid,
+	       &p_scan_cache->pgptr, &forward_pgptr) != NO_ERROR)
+	    {
+	      goto error;
+	    }
+
+	  scan_code =
+	    heap_peek_mvcc_data (thread_p, &curr_row_version,
+				 &temp_recdes, p_scan_cache->pgptr,
+				 forward_pgptr, p_scan_cache->mvcc_snapshot);
+	  if (scan_code == S_SUCCESS)
+	    {
+	      if (!MVCCID_IS_EQUAL
+		  (HEAP_GET_MVCC_INS_ID
+		   ((MVCC_REC_HEADER *) temp_recdes.data), prev_row_delid))
+		{
+		  /* the slot was reused, since transaction id differ
+		   * by our expectation - delete id of previous row from chain
+		   */
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      if (MVCCID_IS_VALID (mvcc_snapshot_dirty.lowest_active_mvccid))
+		{
+		  /* TO DO er_set */
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      if (MVCCID_IS_VALID
+		  (mvcc_snapshot_dirty.highest_completed_mvccid))
+		{
+		  /* next row has been updated by other active transaction,
+		   * wait for commit/abort of that transaction
+		   */
+		  if (curr_row_locked == false)
+		    {
+		      if (lock_object (thread_p, &curr_row_version,
+				       class_oid, X_LOCK, LK_COND_LOCK)
+			  != LK_GRANTED)
+			{
+			  if (p_scan_cache->pgptr != NULL)
+			    {
+			      pgbuf_unfix_and_init (thread_p,
+						    p_scan_cache->pgptr);
+			    }
+
+			  if (lock_object
+			      (thread_p, &curr_row_version, class_oid,
+			       mvcc_delete_info.row_lock,
+			       LK_UNCOND_LOCK) != LK_GRANTED)
+			    {
+			      new_oid = NULL;
+			      goto end;
+			    }
+
+			  curr_row_locked = true;
+
+			  /* fetch the row again,
+			   * checking whether is visible or not for dirty snapshot
+			   */
+			  continue;
+			}
+		    }
+		}
+
+	      /* get pages for write */
+	      if (heap_get_pages_for_mvcc_chain_write
+		  (thread_p, &curr_row_version, hfid,
+		   &p_scan_cache->pgptr, &forward_pgptr, &hdr_pgptr,
+		   &wait) != NO_ERROR)
+		{
+		  goto error;
+		}
+
+	      if (wait == true)
+		{
+		  /* fetch the row again,
+		   * checking whether is visible or not for dirty snapshot
+		   */
+		  continue;
+		}
+
+	      /* the row is candidate for update - not updated by other
+	       * transactions, prepare it for update
+	       */
+	      mvcc_delete_info.row_lock =
+		(curr_row_locked == false) ? X_LOCK : NULL_LOCK;
+	      mvcc_delete_info.row_delid = MVCCID_NULL;
+	      OID_SET_NULL (&mvcc_delete_info.next_row_version);
+
+	      if (heap_mvcc_lock_for_delete (thread_p,
+					     hfid,
+					     &curr_row_version,
+					     (OID *) class_oid,
+					     (MVCC_REC_HEADER **)
+					     & temp_recdes.data,
+					     &p_scan_cache->pgptr,
+					     &forward_pgptr, &hdr_pgptr,
+					     &mvcc_delete_info) != NO_ERROR)
+		{
+		  goto error;
+		}
+
+	      switch (mvcc_delete_info.satisfies_delete_result)
+		{
+		case DELETE_RECORD_CAN_DELETE:
+		  /* satisfies update, successfully locked */
+		  curr_row_locked = true;
+		  if (!OID_ISNULL (&prev_row_locked))
+		    {
+		      /* release previously locked row in chain */
+		      lock_unlock_object (thread_p, &prev_row_locked,
+					  class_oid, X_LOCK, true);
+		      OID_SET_NULL (&prev_row_locked);
+		    }
+
+		  /* already locked */
+		  mvcc_delete_info.row_lock = NULL_LOCK;
+		  break;
+
+		case DELETE_RECORD_DELETED:
+		  /* advance to the next row in chain */
+		  if (!OID_ISNULL (&mvcc_delete_info.next_row_version))
+		    {
+		      if (curr_row_locked == true)
+			{
+			  /* release current lock  */
+			  lock_unlock_object (thread_p, &curr_row_version,
+					      class_oid, X_LOCK, true);
+			  curr_row_locked = false;
+			}
+
+		      /* row updated, fetch the updated version */
+		      COPY_OID (&curr_row_version,
+				&mvcc_delete_info.next_row_version);
+		      COPY_OID (&prev_row_delid, &mvcc_delete_info.row_delid);
+		      mvcc_delete_info.row_lock = X_LOCK;
+
+		      if (forward_pgptr)
+			{
+			  pgbuf_unfix_and_init (thread_p, forward_pgptr);
+			}
+
+		      if (hdr_pgptr)
+			{
+			  pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+			}
+		      continue;
+		    }
+
+		  /* there is no next version, the row has been deleted */
+		  new_oid = NULL;
+		  goto end;
+
+		default:
+		  /* something goes wrong - remove the lock */
+		  if (curr_row_locked == true)
+		    {
+		      lock_unlock_object (thread_p, &curr_row_version,
+					  class_oid, X_LOCK, true);
+		      curr_row_locked = false;
+		    }
+
+		  /* TODO er-set */
+		  curr_row_locked = false;
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      break;
+	    }
+	  else if (scan_code != S_SNAPSHOT_NOT_SATISFIED)
+	    {
+	      new_oid = NULL;
+	      break;
+	    }
+	  else
+	    {
+	      /* check whether insert id is different than delete id of 
+	       * previous row in chain. If is true, it means that the 
+	       * row has been reused since the latest row version has
+	       * been deleted - nothing to update.
+	       */
+	      if (!MVCCID_IS_EQUAL
+		  (HEAP_GET_MVCC_INS_ID
+		   ((MVCC_REC_HEADER *) temp_recdes.data), prev_row_delid))
+		{
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      /* the row was updated or deleted by other committed transaction.
+	       * if updated, try to update the next version in chain
+	       */
+	      if (OID_ISNULL
+		  (&((MVCC_REC_HEADER *) temp_recdes.data)->next_version))
+		{
+		  /* there is no next version, the row has been deleted */
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      if (curr_row_locked == true)
+		{
+		  /* release current lock  */
+		  lock_unlock_object (thread_p, &curr_row_version,
+				      class_oid, X_LOCK, true);
+		  curr_row_locked = false;
+		}
+
+	      prev_row_delid =
+		HEAP_GET_MVCC_DEL_ID ((MVCC_REC_HEADER *) temp_recdes.data);
+	      HEAP_GET_MVCC_NEXT_VERSION ((MVCC_REC_HEADER *)
+					  temp_recdes.data,
+					  &curr_row_version);
+	      mvcc_delete_info.row_lock = X_LOCK;
+
+	      if (forward_pgptr)
+		{
+		  pgbuf_unfix_and_init (thread_p, forward_pgptr);
+		}
+
+	      if (hdr_pgptr)
+		{
+		  pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+		}
+	    }
+	}
+
+      /* check data filter */
+      if (check_data_filter && mvcc_data_filter)
+	{
+	  /* get record data */
+	  scan_code =
+	    heap_get (thread_p, &curr_row_version, &temp_recdes,
+		      p_scan_cache, true, NULL_CHN);
+	  if (scan_code != S_SUCCESS)
+	    {
+	      goto error;
+	    }
+
+	  /* eval data filter */
+	  if (eval_data_filter
+	      (thread_p, (OID *) & curr_row_version, &temp_recdes,
+	       (FILTER_INFO *) mvcc_data_filter) != V_TRUE)
+	    {
+	      new_oid = NULL;
+	      break;
+	    }
+	}
+
+      if (forward_pgptr)
+	{
+	  pgbuf_unfix_and_init (thread_p, forward_pgptr);
+	}
+
+      if (hdr_pgptr)
+	{
+	  pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+	}
+
+      if (p_scan_cache != NULL && p_scan_cache->cache_last_fix_page
+	  && p_scan_cache->pgptr != NULL)
+	{
+	  /* need to unlock the page here, in order to avoid page deadlock
+	   * that may occur when find the best page for mvcc insertion
+	   */
+	  pgbuf_unfix_and_init (thread_p, p_scan_cache->pgptr);
+	}
+
+      oid = &curr_row_version;
+    }
+
+end:
+  /* do not release current row version lock, even
+   * if was not updated
+   */
+
+  if (forward_pgptr)
+    {
+      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+    }
+
+  if (hdr_pgptr)
+    {
+      pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+    }
+
+  if (!OID_ISNULL (&prev_row_locked) && curr_row_locked)
+    {
+      /* remove lock on previous row in chain since current row is locked */
+      lock_unlock_object (thread_p, &prev_row_locked, class_oid,
+			  X_LOCK, true);
+      OID_SET_NULL (&prev_row_locked);
+    }
+
+  if (scan_cache_updated)
+    {
+      /* restore saved snapshot */
+      if (scan_cache == p_scan_cache)
+	{
+	  scan_cache->mvcc_snapshot = saved_snapshot;
+	}
+      else
+	{
+	  /* restore common area */
+	  scan_cache->area_size = local_scan_cache.area_size;
+	  scan_cache->area = local_scan_cache.area;
+
+	  /* end local scan cache */
+	  local_scan_cache.area_size = 0;
+	  local_scan_cache.area = NULL;
+	  heap_scancache_end (thread_p, &local_scan_cache);
+	}
+    }
+  return new_oid;
+
+error:
+  new_oid = NULL;
+  goto end;
+}
+
+/*
+ * heap_perform_update () - Perform heap update
+ *
+ *   return: OID *(oid on success or NULL on failure)
+ *   hfid(in): Heap file identifier
+ *   class_oid(in):
+ *   oid(in): Object identifier
+ *   recdes(in): Record descriptor
+ *   old(in/out): Flag. Set to true, if content of object has been stored
+ *                it is set to false (i.e., only the address was stored)
+ *   scan_cache(in/out): Scan cache
+ *   mvcc_data_filter(in): mvcc data filter
+ */
+const OID *
+heap_perform_update (THREAD_ENTRY * thread_p, const HFID * hfid,
+		     const OID * class_oid, const OID * oid, RECDES * recdes,
+		     bool * old, HEAP_SCANCACHE * scan_cache,
+		     void *mvcc_data_filter)
+{
+  if (mvcc_Enabled == false)
+    {
+      return heap_update (thread_p, hfid, class_oid, oid, recdes, old,
+			  scan_cache, NULL);
+    }
+  else
+    {
+      return heap_mvcc_update (thread_p, hfid, class_oid, oid, recdes, old,
+			       scan_cache, mvcc_data_filter);
+    }
+}
+
+/*
+ * heap_mvcc_delete () - Delete an object in mvcc
+ *   return: OID *(oid on success or NULL on failure)
+ *   hfid(in): Heap file identifier
+ *   oid(in): Object identifier
+ *   scan_cache(in/out): Scan cache
+ *   mvcc_data_filter(in): mvcc data filter
+ */
+const OID *
+heap_mvcc_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
+		  const OID * oid, HEAP_SCANCACHE * scan_cache,
+		  void *mvcc_data_filter)
+{
+  const OID *new_oid = NULL;
+  HEAP_SCANCACHE local_scan_cache;
+  MVCC_SNAPSHOT mvcc_snapshot_dirty;
+  SCAN_CODE scan_code;
+  RECDES temp_recdes;
+  MVCCID prev_row_delid;
+  bool row_found = false;
+  HEAP_MVCC_DELETE_INFO mvcc_delete_info;
+  MVCC_SNAPSHOT *saved_snapshot = NULL;
+  bool curr_row_locked = false;
+  HEAP_SCANCACHE *p_scan_cache = NULL;
+  bool scan_cache_updated = false;
+  /* current row in chain */
+  OID curr_row_version = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
+  /* previously locked row in chain */
+  OID prev_row_locked = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
+  PAGE_PTR hdr_pgptr = NULL, forward_pgptr = NULL;
+  bool check_data_filter = false, wait = false;
+
+  assert (mvcc_Enabled == true);
+
+  mvcc_delete_info.row_lock = X_LOCK;
+  mvcc_delete_info.row_delid = MVCCID_NULL;
+  mvcc_snapshot_dirty.snapshot_fnc = mvcc_satisfies_dirty;
+  OID_SET_NULL (&mvcc_delete_info.next_row_version);
+
+  p_scan_cache = scan_cache;
+  while (true)
+    {
+      new_oid =
+	heap_delete (thread_p, hfid, oid, p_scan_cache, &mvcc_delete_info);
+
+      if (er_errid () != NO_ERROR || mvcc_Enabled == false)
+	{
+	  /* if no mvcc or error happened return */
+	  goto end;
+	}
+
+      if (new_oid != NULL)
+	{
+	  /* row successfully updated, nothing to do    */
+	  goto end;
+	}
+
+      /* need to update the next row version */
+      switch (mvcc_delete_info.satisfies_delete_result)
+	{
+	case DELETE_RECORD_DELETED:
+	  /* need to update next row version */
+	  check_data_filter = true;
+	  mvcc_delete_info.row_lock = X_LOCK;
+	  break;
+
+	default:
+	  /* return NULL, TODO - er_set */
+	  new_oid = NULL;
+	  goto end;
+	}
+
+      if (OID_ISNULL (&mvcc_delete_info.next_row_version))
+	{
+	  /* row deleted, nothing to do */
+	  new_oid = NULL;
+	  goto end;
+	}
+
+      prev_row_delid = mvcc_delete_info.row_delid;
+      if (scan_cache_updated == false)
+	{
+	  /* choose the best scan cache for our needs */
+	  if (scan_cache == NULL || scan_cache->cache_last_fix_page == true)
+	    {
+	      /* use the old scancache */
+	      p_scan_cache = scan_cache;
+	    }
+	  else
+	    {
+	      /* use a new scancache */
+	      if (heap_scancache_start_chain_update
+		  (thread_p, &local_scan_cache, scan_cache,
+		   &(mvcc_delete_info.next_row_version)) != NO_ERROR)
+		{
+		  goto end;
+		}
+	      p_scan_cache = &local_scan_cache;
+	    }
+	  /* need to check snapshot dirty */
+	  saved_snapshot = p_scan_cache->mvcc_snapshot;
+	  p_scan_cache->mvcc_snapshot = &mvcc_snapshot_dirty;
+	  scan_cache_updated = true;
+	}
+
+      COPY_OID (&prev_row_locked, oid);
+      COPY_OID (&curr_row_version, &mvcc_delete_info.next_row_version);
+      curr_row_locked = false;
+      while (true)
+	{
+	  /* get pages for read */
+	  if (heap_get_pages_for_mvcc_chain_read
+	      (thread_p, &curr_row_version, &p_scan_cache->hfid,
+	       &p_scan_cache->pgptr, &forward_pgptr) != NO_ERROR)
+	    {
+	      goto error;
+	    }
+
+	  scan_code =
+	    heap_peek_mvcc_data (thread_p, &curr_row_version,
+				 &temp_recdes, p_scan_cache->pgptr,
+				 forward_pgptr, p_scan_cache->mvcc_snapshot);
+	  if (scan_code == S_SUCCESS)
+	    {
+	      if (!MVCCID_IS_EQUAL
+		  (HEAP_GET_MVCC_INS_ID
+		   ((MVCC_REC_HEADER *) temp_recdes.data), prev_row_delid))
+		{
+		  /* the slot was reused, since transaction id differ
+		   * by our expectation - delete id of previous row from chain
+		   */
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      if (MVCCID_IS_VALID (mvcc_snapshot_dirty.lowest_active_mvccid))
+		{
+		  /* TO DO er_set */
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      if (MVCCID_IS_VALID
+		  (mvcc_snapshot_dirty.highest_completed_mvccid))
+		{
+		  /* next row has been updated by other active transaction,
+		   * wait for commit/abort of that transaction
+		   */
+		  if (curr_row_locked == false)
+		    {
+		      if (lock_object (thread_p, &curr_row_version,
+				       (const OID *) &p_scan_cache->class_oid,
+				       X_LOCK, LK_COND_LOCK) != LK_GRANTED)
+			{
+			  if (p_scan_cache->pgptr != NULL)
+			    {
+			      pgbuf_unfix_and_init (thread_p,
+						    p_scan_cache->pgptr);
+			    }
+
+			  if (lock_object (thread_p, &curr_row_version,
+					   (const OID *) &p_scan_cache->
+					   class_oid, X_LOCK,
+					   LK_UNCOND_LOCK) != LK_GRANTED)
+			    {
+			      new_oid = NULL;
+			      goto end;
+			    }
+
+			  curr_row_locked = true;
+
+			  /* fetch the row again,
+			   * checking whether is visible or not for dirty snapshot
+			   */
+			  continue;
+			}
+		    }
+		}
+
+	      /* get pages for write */
+	      if (heap_get_pages_for_mvcc_chain_write
+		  (thread_p, &curr_row_version, hfid,
+		   &p_scan_cache->pgptr, &forward_pgptr, &hdr_pgptr,
+		   &wait) != NO_ERROR)
+		{
+		  goto error;
+		}
+
+	      if (wait == true)
+		{
+		  /* fetch the row again,
+		   * checking whether is visible or not for dirty snapshot
+		   */
+		  continue;
+		}
+
+	      /* the row is candidate for update - not updated by other
+	       * transactions, prepare it for update
+	       */
+	      mvcc_delete_info.row_lock =
+		(curr_row_locked == false) ? X_LOCK : NULL_LOCK;
+	      mvcc_delete_info.row_delid = MVCCID_NULL;
+	      OID_SET_NULL (&mvcc_delete_info.next_row_version);
+
+	      if (heap_mvcc_lock_for_delete (thread_p,
+					     hfid,
+					     &curr_row_version,
+					     &p_scan_cache->class_oid,
+					     (MVCC_REC_HEADER **)
+					     & temp_recdes.data,
+					     &p_scan_cache->pgptr,
+					     &forward_pgptr, &hdr_pgptr,
+					     &mvcc_delete_info) != NO_ERROR)
+		{
+		  goto error;
+		}
+
+	      switch (mvcc_delete_info.satisfies_delete_result)
+		{
+		case DELETE_RECORD_CAN_DELETE:
+		  /* satisfies update, successfully locked */
+		  curr_row_locked = true;
+		  if (!OID_ISNULL (&prev_row_locked))
+		    {
+		      /* release previously locked row in chain */
+		      lock_unlock_object (thread_p, &prev_row_locked,
+					  &p_scan_cache->class_oid, X_LOCK,
+					  true);
+		      OID_SET_NULL (&prev_row_locked);
+		    }
+
+		  /* already locked */
+		  mvcc_delete_info.row_lock = NULL_LOCK;
+		  break;
+
+		case DELETE_RECORD_DELETED:
+		  /* advance to the next row in chain */
+		  if (!OID_ISNULL (&mvcc_delete_info.next_row_version))
+		    {
+		      if (curr_row_locked == true)
+			{
+			  /* release current lock  */
+			  lock_unlock_object (thread_p, &curr_row_version,
+					      &p_scan_cache->class_oid,
+					      X_LOCK, true);
+			  curr_row_locked = false;
+			}
+
+		      /* row updated, fetch the updated version */
+		      COPY_OID (&curr_row_version,
+				&mvcc_delete_info.next_row_version);
+		      COPY_OID (&prev_row_delid, &mvcc_delete_info.row_delid);
+		      mvcc_delete_info.row_lock = X_LOCK;
+
+		      if (forward_pgptr)
+			{
+			  pgbuf_unfix_and_init (thread_p, forward_pgptr);
+			}
+
+		      if (hdr_pgptr)
+			{
+			  pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+			}
+		      continue;
+		    }
+
+		  /* there is no next version, the row has been deleted */
+		  new_oid = NULL;
+		  goto end;
+
+		default:
+		  /* something goes wrong - remove the lock */
+		  if (curr_row_locked == true)
+		    {
+		      lock_unlock_object (thread_p, &curr_row_version,
+					  &p_scan_cache->class_oid, X_LOCK,
+					  true);
+		      curr_row_locked = false;
+		    }
+
+		  /* TODO er-set */
+		  curr_row_locked = false;
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      break;
+	    }
+	  else if (scan_code != S_SNAPSHOT_NOT_SATISFIED)
+	    {
+	      new_oid = NULL;
+	      break;
+	    }
+	  else
+	    {
+	      /* check whether insert id is different than delete id of 
+	       * previous row in chain. If is true, it means that the 
+	       * row has been reused since the latest row version has
+	       * been deleted - nothing to update.
+	       */
+	      if (!MVCCID_IS_EQUAL
+		  (HEAP_GET_MVCC_INS_ID
+		   ((MVCC_REC_HEADER *) temp_recdes.data), prev_row_delid))
+		{
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      /* the row was updated or deleted by other committed transaction.
+	       * if updated, try to update the next version in chain
+	       */
+	      if (OID_ISNULL
+		  (&((MVCC_REC_HEADER *) temp_recdes.data)->next_version))
+		{
+		  /* there is no next version, the row has been deleted */
+		  new_oid = NULL;
+		  goto end;
+		}
+
+	      if (curr_row_locked == true)
+		{
+		  /* release current lock  */
+		  lock_unlock_object (thread_p, &curr_row_version,
+				      &p_scan_cache->class_oid, X_LOCK, true);
+		  curr_row_locked = false;
+		}
+
+	      prev_row_delid =
+		HEAP_GET_MVCC_DEL_ID ((MVCC_REC_HEADER *) temp_recdes.data);
+	      HEAP_GET_MVCC_NEXT_VERSION ((MVCC_REC_HEADER *)
+					  temp_recdes.data,
+					  &curr_row_version);
+	      mvcc_delete_info.row_lock = X_LOCK;
+
+	      if (forward_pgptr)
+		{
+		  pgbuf_unfix_and_init (thread_p, forward_pgptr);
+		}
+
+	      if (hdr_pgptr)
+		{
+		  pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+		}
+	    }
+	}
+
+      /* check data filter */
+      if (check_data_filter && mvcc_data_filter)
+	{
+	  /* get record data */
+	  scan_code =
+	    heap_get (thread_p, &curr_row_version, &temp_recdes,
+		      p_scan_cache, true, NULL_CHN);
+	  if (scan_code != S_SUCCESS)
+	    {
+	      goto error;
+	    }
+
+	  /* eval data filter */
+	  if (eval_data_filter
+	      (thread_p, (OID *) & curr_row_version, &temp_recdes,
+	       mvcc_data_filter) != V_TRUE)
+	    {
+	      new_oid = NULL;
+	      break;
+	    }
+	}
+
+      if (forward_pgptr)
+	{
+	  pgbuf_unfix_and_init (thread_p, forward_pgptr);
+	}
+
+      if (hdr_pgptr)
+	{
+	  pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+	}
+
+      oid = &curr_row_version;
+    }
+
+end:
+  /* do not release current row version lock, even
+   * if was not updated
+   */
+
+  if (forward_pgptr)
+    {
+      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+    }
+
+  if (hdr_pgptr)
+    {
+      pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+    }
+
+  if (!OID_ISNULL (&prev_row_locked) && curr_row_locked)
+    {
+      /* remove lock on previous row in chain since current row is locked */
+      lock_unlock_object (thread_p, &prev_row_locked, &scan_cache->class_oid,
+			  X_LOCK, true);
+      OID_SET_NULL (&prev_row_locked);
+    }
+
+  if (scan_cache_updated)
+    {
+      /* restore saved snapshot */
+      if (scan_cache == p_scan_cache)
+	{
+	  scan_cache->mvcc_snapshot = saved_snapshot;
+	}
+      else
+	{
+	  /* restore common area */
+	  scan_cache->area_size = local_scan_cache.area_size;
+	  scan_cache->area = local_scan_cache.area;
+
+	  /* end local scan cache */
+	  local_scan_cache.area_size = 0;
+	  local_scan_cache.area = NULL;
+	  heap_scancache_end (thread_p, &local_scan_cache);
+	}
+    }
+  return new_oid;
+
+error:
+  new_oid = NULL;
+  goto end;
+}
+
+/*
+ * heap_delete () - Perform heap delete
+ *
+ *   return: OID *(oid on success or NULL on failure)
+ *   hfid(in): Heap file identifier
+ *   oid(in): Object identifier
+ *   scan_cache(in/out): Scan cache
+ *   mvcc_data_filter(in): mvcc data filter
+ */
+const OID *
+heap_perform_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
+		     const OID * oid, HEAP_SCANCACHE * scan_cache,
+		     void *mvcc_data_filter)
+{
+  if (mvcc_Enabled == false)
+    {
+      return heap_delete (thread_p, hfid, oid, scan_cache, NULL);
+    }
+  else
+    {
+      return heap_mvcc_delete (thread_p, hfid, oid, scan_cache,
+			       mvcc_data_filter);
+    }
 }

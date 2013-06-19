@@ -230,6 +230,7 @@ extern const LOG_LSA *pgbuf_set_lsa (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
 extern void pgbuf_reset_temp_lsa (PAGE_PTR pgptr);
 extern void pgbuf_get_vpid (PAGE_PTR pgptr, VPID * vpid);
 extern VPID *pgbuf_get_vpid_ptr (PAGE_PTR pgptr);
+extern int pgbuf_get_latch_mode (PAGE_PTR pgptr);
 extern PAGEID pgbuf_get_page_id (PAGE_PTR pgptr);
 extern VOLID pgbuf_get_volume_id (PAGE_PTR pgptr);
 extern const char *pgbuf_get_volume_label (PAGE_PTR pgptr);
