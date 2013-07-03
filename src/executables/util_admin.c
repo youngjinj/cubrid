@@ -233,6 +233,7 @@ static UTIL_ARG_MAP ua_Space_Option_Map[] = {
   {SPACE_SIZE_UNIT_S, {ARG_STRING}, {(void *) "h"}},
 #endif
   {SPACE_SUMMARIZE_S, {ARG_BOOLEAN}, {0}},
+  {SPACE_PURPOSE_S, {ARG_BOOLEAN}, {0}},
   {0, {0}, {0}}
 };
 
@@ -242,6 +243,7 @@ static GETOPT_LONG ua_Space_Option[] = {
   {SPACE_CS_MODE_L, 0, 0, SPACE_CS_MODE_S},
   {SPACE_SIZE_UNIT_L, 1, 0, SPACE_SIZE_UNIT_S},
   {SPACE_SUMMARIZE_L, 0, 0, SPACE_SUMMARIZE_S},
+  {SPACE_PURPOSE_L, 0, 0, SPACE_PURPOSE_S},
   {0, 0, 0, 0}
 };
 
@@ -682,7 +684,7 @@ static GETOPT_LONG ua_SyncCollDB_Option[] = {
 };
 
 static UTIL_MAP ua_Utility_Map[] = {
-  {CREATEDB, SA_ONLY, 1, UTIL_OPTION_CREATEDB, "createdb",
+  {CREATEDB, SA_ONLY, 2, UTIL_OPTION_CREATEDB, "createdb",
    ua_Create_Option, ua_Create_Option_Map},
   {RENAMEDB, SA_ONLY, 2, UTIL_OPTION_RENAMEDB, "renamedb",
    ua_Rename_Option, ua_Rename_Option_Map},

@@ -49,6 +49,7 @@
 #include "message_catalog.h"
 #include "log_impl.h"
 #include "perf_monitor.h"
+#include "event_log.h"
 #if defined(WINDOWS)
 #include "wintcp.h"
 #endif /* WINDOWS */
@@ -615,9 +616,9 @@ net_server_init (void)
   req_p->processing_function = sdk_purpose;
   req_p->name = "NET_SERVER_DISK_PURPOSE";
 
-  req_p = &net_Requests[NET_SERVER_DISK_PURPOSE_TOTALPGS_AND_FREEPGS];
-  req_p->processing_function = sdk_purpose_totalpgs_and_freepgs;
-  req_p->name = "NET_SERVER_DISK_PURPOSE_TOTALPGS_AND_FREEPGS";
+  req_p = &net_Requests[NET_SERVER_DISK_GET_PURPOSE_AND_SPACE_INFO];
+  req_p->processing_function = sdisk_get_purpose_and_space_info;
+  req_p->name = "NET_SERVER_DISK_GET_PURPOSE_AND_SPACE_INFO";
 
   req_p = &net_Requests[NET_SERVER_DISK_VLABEL];
   req_p->processing_function = sdk_vlabel;
@@ -1383,6 +1384,8 @@ net_server_start (const char *server_name)
       status = -1;
       goto end;
     }
+
+  event_log_init (server_name);
 
   net_server_init ();
   css_initialize_server_interfaces (net_server_request, net_server_conn_down);

@@ -4249,7 +4249,7 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	    }
 	  else
 	    {
-	      /* for CUME_DIST and PERCENT_RANK function, 
+	      /* for CUME_DIST and PERCENT_RANK function,
 	       * take sort list as variables as well
 	       */
 	      regu = pt_to_cume_dist_percent_rank_regu_variable (parser,
@@ -4487,7 +4487,7 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	}
       else
 	{
-	  /* only GROUP_CONCAT, CUME_DIST and PERCENT_RANK agg 
+	  /* only GROUP_CONCAT, CUME_DIST and PERCENT_RANK agg
 	     supports ORDER BY */
 	  assert (tree->info.function.order_by == NULL);
 	  assert (group_concat_sep_node_save == NULL);
@@ -6945,6 +6945,34 @@ pt_set_numbering_node_etc_pre (PARSER_CONTEXT * parser, PT_NODE * node,
 }
 
 /*
+ * pt_get_numbering_node_etc () - get the DB_VALUE reference of the
+ *				  ORDERBY_NUM expression
+ * return : node
+ * parser (in) : parser context
+ * node (in)   : node
+ * arg (in)    : pointer to DB_VALUE *
+ * continue_walk (in) :
+ */
+PT_NODE *
+pt_get_numbering_node_etc (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+			   int *continue_walk)
+{
+  if (node == NULL)
+    {
+      return node;
+    }
+
+  if (PT_IS_EXPR_NODE (node) && node->info.expr.op == PT_ORDERBY_NUM)
+    {
+      DB_VALUE **val_ptr = (DB_VALUE **) arg;
+      *continue_walk = PT_STOP_WALK;
+      *val_ptr = (DB_VALUE *) node->etc;
+    }
+
+  return node;
+}
+
+/*
  * pt_set_numbering_node_etc () - set etc values of parse tree nodes INST_NUM
  *                                and ORDERBY_NUM to pointers of corresponding
  *                                reguvars from XASL node
@@ -7597,6 +7625,9 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  || node->info.expr.op == PT_DIVIDE
 		  || node->info.expr.op == PT_MODULUS
 		  || node->info.expr.op == PT_POWER
+		  || node->info.expr.op == PT_AES_ENCRYPT
+		  || node->info.expr.op == PT_AES_DECRYPT
+		  || node->info.expr.op == PT_SHA_TWO
 		  || node->info.expr.op == PT_ROUND
 		  || node->info.expr.op == PT_LOG
 		  || node->info.expr.op == PT_TRUNC
@@ -7778,6 +7809,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		       || node->info.expr.op == PT_DECRYPT
 		       || node->info.expr.op == PT_BIN
 		       || node->info.expr.op == PT_MD5
+		       || node->info.expr.op == PT_SHA_ONE
 		       || node->info.expr.op == PT_SPACE
 		       || node->info.expr.op == PT_PRIOR
 		       || node->info.expr.op == PT_CONNECT_BY_ROOT
@@ -8110,6 +8142,18 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 					    node->info.expr.arg2, unbox);
 		  r3 = pt_to_regu_variable (parser,
 					    node->info.expr.arg3, unbox);
+
+		  domain = pt_xasl_node_to_domain (parser, node);
+		  if (domain == NULL)
+		    {
+		      goto end_expr_op_switch;
+		    }
+		}
+	      else if (node->info.expr.op == PT_TRACE_STATS)
+		{
+		  r1 = NULL;
+		  r2 = NULL;
+		  r3 = NULL;
 
 		  domain = pt_xasl_node_to_domain (parser, node);
 		  if (domain == NULL)
@@ -8714,6 +8758,24 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  regu = pt_make_regu_arith (r1, r2, NULL, T_MD5, domain);
 		  break;
 
+		case PT_SHA_ONE:
+		  regu = pt_make_regu_arith (r1, r2, NULL, T_SHA_ONE, domain);
+		  break;
+
+		case PT_AES_ENCRYPT:
+		  regu =
+		    pt_make_regu_arith (r1, r2, NULL, T_AES_ENCRYPT, domain);
+		  break;
+
+		case PT_AES_DECRYPT:
+		  regu =
+		    pt_make_regu_arith (r1, r2, NULL, T_AES_DECRYPT, domain);
+		  break;
+
+		case PT_SHA_TWO:
+		  regu = pt_make_regu_arith (r1, r2, NULL, T_SHA_TWO, domain);
+		  break;
+
 		case PT_SPACE:
 		  regu = pt_make_regu_arith (r1, r2, NULL, T_SPACE, domain);
 		  break;
@@ -9249,7 +9311,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 			assert (domain->collation_id
 				== PT_GET_COLLATION_MODIFIER (node));
 			/* COLLATE modifier eliminates extra T_CAST operator
-			 * with some exceptions: 
+			 * with some exceptions:
 			 * 1. argument is PT_NAME; attributes may be
 			 * fetched from shared DB_VALUEs, and we may end up
 			 * overwriting collation of the same attribute used in
@@ -9435,6 +9497,11 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		case PT_WIDTH_BUCKET:
 		  regu =
 		    pt_make_regu_arith (r1, r2, r3, T_WIDTH_BUCKET, domain);
+		  break;
+
+		case PT_TRACE_STATS:
+		  regu =
+		    pt_make_regu_arith (r1, r2, r3, T_TRACE_STATS, domain);
 		  break;
 
 		default:
@@ -14794,7 +14861,8 @@ pt_optimize_analytic_list (ANALYTIC_INFO * info)
 	  while (curr_s != NULL && list_s != NULL)
 	    {
 	      if (curr_s->pos_descr.pos_no != list_s->pos_descr.pos_no
-		  || curr_s->s_order != list_s->s_order)
+		  || curr_s->s_order != list_s->s_order
+		  || curr_s->s_nulls != list_s->s_nulls)
 		{
 		  break;
 		}
@@ -14906,6 +14974,7 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
   if (select_node == NULL || select_node->node_type != PT_SELECT)
     {
+      assert (false);
       return NULL;
     }
 
@@ -16228,7 +16297,7 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
 {
   XASL_NODE *xasl;
   QO_PLAN *plan = NULL;
-  int level;
+  int level, trace_format;
   bool hint_ignored = false;
 
   if (select_node->node_type != PT_SELECT)
@@ -16356,7 +16425,7 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
       parser->custom_print = save_custom;
     }
 
-  if (xasl && plan)
+  if (xasl != NULL && plan != NULL)
     {
       size_t plan_len, sizeloc;
       char *ptr, *sql_plan = "";
@@ -16421,8 +16490,22 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
 	}
     }
 
+  if (plan != NULL && xasl != NULL && parser->query_trace == true)
+    {
+      trace_format = prm_get_integer_value (PRM_ID_QUERY_TRACE_FORMAT);
+
+      if (trace_format == QUERY_TRACE_TEXT)
+	{
+	  qo_top_plan_print_text (parser, xasl, select_node, plan);
+	}
+      else if (trace_format == QUERY_TRACE_JSON)
+	{
+	  qo_top_plan_print_json (parser, xasl, select_node, plan);
+	}
+    }
+
 error_exit:
-  if (plan)
+  if (plan != NULL)
     {
       qo_plan_discard (plan);
     }
@@ -22599,6 +22682,10 @@ validate_regu_key_function_index (REGU_VARIABLE * regu_var)
 	case T_FROM_UNIXTIME:
 	case T_SUBSTRING_INDEX:
 	case T_MD5:
+	case T_AES_ENCRYPT:
+	case T_AES_DECRYPT:
+	case T_SHA_ONE:
+	case T_SHA_TWO:
 	case T_LPAD:
 	case PT_RPAD:
 	case T_REPLACE:
@@ -24098,6 +24185,7 @@ pt_is_sort_list_covered (PARSER_CONTEXT * parser, SORT_LIST * covering_list_p,
        s1 && s2; s1 = s1->next, s2 = s2->next)
     {
       if (s1->s_order != s2->s_order
+	  || s1->s_nulls != s2->s_nulls
 	  || s1->pos_descr.pos_no != s2->pos_descr.pos_no)
 	{
 	  return false;
@@ -24272,9 +24360,6 @@ pt_to_cume_dist_percent_rank_regu_variable (PARSER_CONTEXT * parser,
 					    PT_NODE * tree, UNBOX unbox)
 {
   REGU_VARIABLE *regu = NULL;
-  XASL_NODE *xasl = NULL;
-  TP_DOMAIN *domain = NULL;
-  DB_VALUE *value, *val = NULL;
   PT_NODE *arg_list = NULL, *orderby_list = NULL, *node = NULL;
   REGU_VARIABLE_LIST regu_var_list, regu_var;
 

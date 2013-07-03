@@ -3280,8 +3280,8 @@ catcls_put_or_value_into_record (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   REPR_ID repr_id;
   int error = NO_ERROR;
 
-  error =
-    catalog_get_last_representation_id (thread_p, class_oid_p, &repr_id);
+  error = catalog_get_last_representation_id (thread_p, class_oid_p,
+					      &repr_id);
   if (error != NO_ERROR)
     {
       return error;
@@ -3299,9 +3299,8 @@ catcls_put_or_value_into_record (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   buf_p = &repr_buffer;
   or_init (buf_p, record_p->data, record_p->length);
 
-  error =
-    catcls_put_or_value_into_buffer (value_p, chn, buf_p, class_oid_p,
-				     repr_p);
+  error = catcls_put_or_value_into_buffer (value_p, chn, buf_p,
+					   class_oid_p, repr_p);
   if (error != NO_ERROR)
     {
       catalog_free_representation (repr_p);
@@ -3329,7 +3328,7 @@ catcls_get_or_value_from_class_record (THREAD_ENTRY * thread_p,
   value_p = catcls_allocate_or_value (1);
   if (value_p == NULL)
     {
-      return (NULL);
+      return NULL;
     }
 
   assert (OR_GET_OFFSET_SIZE (record_p->data) == BIG_VAR_OFFSET_SIZE);
@@ -3341,10 +3340,10 @@ catcls_get_or_value_from_class_record (THREAD_ENTRY * thread_p,
   if (catcls_get_or_value_from_class (thread_p, buf_p, value_p) != NO_ERROR)
     {
       catcls_free_or_value (value_p);
-      return (NULL);
+      return NULL;
     }
 
-  return (value_p);
+  return value_p;
 }
 
 /*
@@ -3399,7 +3398,7 @@ catcls_get_or_value_from_record (THREAD_ENTRY * thread_p, RECDES * record_p,
     }
 
   catalog_free_representation (repr_p);
-  return (value_p);
+  return value_p;
 
 error:
 
@@ -3413,7 +3412,7 @@ error:
       catalog_free_representation (repr_p);
     }
 
-  return (NULL);
+  return NULL;
 }
 
 /*
@@ -4324,13 +4323,13 @@ catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 
   if (csect_enter (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) != NO_ERROR)
     {
-      return ER_FAILED;
+      goto error;
     }
 
   if (catcls_remove_entry (class_oid_p) != NO_ERROR)
     {
       csect_exit (CSECT_CT_OID_TABLE);
-      return ER_FAILED;
+      goto error;
     }
 
   csect_exit (CSECT_CT_OID_TABLE);
@@ -4488,6 +4487,7 @@ catcls_compile_catalog_classes (THREAD_ENTRY * thread_p)
       if (heap_get (thread_p, class_oid_p, &class_record, &scan, PEEK,
 		    NULL_CHN) != S_SUCCESS)
 	{
+	  (void) heap_scancache_end (thread_p, &scan);
 	  return ER_FAILED;
 	}
 
@@ -4557,6 +4557,8 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
   int charset_att_id = -1, lang_att_id = -1;
   int i;
   int error = NO_ERROR;
+  bool scan_cache_inited = false;
+  bool attr_info_inited = false;
 
   assert (charset_id_p != NULL);
   assert (lang_buf != NULL);
@@ -4564,8 +4566,8 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
   OID_SET_NULL (&class_oid);
   OID_SET_NULL (&inst_oid);
 
-  error =
-    catcls_find_class_oid_by_class_name (thread_p, class_name, &class_oid);
+  error = catcls_find_class_oid_by_class_name (thread_p, class_name,
+					       &class_oid);
   if (error != NO_ERROR)
     {
       goto exit;
@@ -4573,8 +4575,9 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
 
   if (OID_ISNULL (&class_oid))
     {
-      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME,
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME,
 	      1, class_name);
+      error = ER_LC_UNKNOWN_CLASSNAME;
       goto exit;
     }
 
@@ -4583,12 +4586,15 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
     {
       goto exit;
     }
+  attr_info_inited = true;
 
   (void) heap_scancache_quick_start (&scan_cache);
+  scan_cache_inited = true;
 
   if (heap_get (thread_p, &class_oid, &recdes, &scan_cache, PEEK,
 		NULL_CHN) != S_SUCCESS)
     {
+      error = ER_FAILED;
       goto exit;
     }
 
@@ -4597,6 +4603,7 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
       const char *rec_attr_name_p = or_get_attrname (&recdes, i);
       if (rec_attr_name_p == NULL)
 	{
+	  error = ER_FAILED;
 	  goto exit;
 	}
 
@@ -4619,25 +4626,21 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
 	}
     }
 
-  if (charset_att_id == -1)
+  if (charset_att_id == -1 || lang_att_id == -1)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+      error = ER_FAILED;
       goto exit;
     }
 
-  /* TODO: backward compatibility : support DB without lang */
-  if (lang_att_id == -1)
-    {
-      assert (strlen (LANG_NAME_ENGLISH) < lang_buf_size);
-      strcpy (lang_buf, LANG_NAME_ENGLISH);
-    }
-
   (void) heap_scancache_end (thread_p, &scan_cache);
+  scan_cache_inited = false;
 
   /* read values of the single record in heap */
   error = heap_get_hfid_from_class_oid (thread_p, &class_oid, &hfid);
   if (error != NO_ERROR || HFID_IS_NULL (&hfid))
     {
+      error = ER_FAILED;
       goto exit;
     }
 
@@ -4647,6 +4650,7 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
     {
       goto exit;
     }
+  scan_cache_inited = true;
 
   while (heap_next (thread_p, &hfid, NULL, &inst_oid, &recdes,
 		    &scan_cache, PEEK) == S_SUCCESS)
@@ -4656,6 +4660,7 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
       if (heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &recdes,
 				       &attr_info) != NO_ERROR)
 	{
+	  error = ER_FAILED;
 	  goto exit;
 	}
 
@@ -4688,8 +4693,16 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
     }
 
 exit:
-  (void) heap_scancache_end (thread_p, &scan_cache);
-  heap_attrinfo_end (thread_p, &attr_info);
+  if (scan_cache_inited == true)
+    {
+      (void) heap_scancache_end (thread_p, &scan_cache);
+      scan_cache_inited = false;
+    }
+  if (attr_info_inited == true)
+    {
+      heap_attrinfo_end (thread_p, &attr_info);
+      attr_info_inited = false;
+    }
 
   return error;
 }
@@ -4724,6 +4737,8 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
   int coll_id_att_id = -1, coll_name_att_id = -1, charset_id_att_id = -1,
     checksum_att_id = -1;
   int alloc_size;
+  bool attr_info_inited = false;
+  bool scan_cache_inited = false;
 
   assert (db_collations != NULL);
   assert (coll_cnt != NULL);
@@ -4731,8 +4746,8 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
   OID_SET_NULL (&class_oid);
   OID_SET_NULL (&inst_oid);
 
-  error =
-    catcls_find_class_oid_by_class_name (thread_p, class_name, &class_oid);
+  error = catcls_find_class_oid_by_class_name (thread_p, class_name,
+					       &class_oid);
   if (error != NO_ERROR)
     {
       goto exit;
@@ -4740,8 +4755,9 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
 
   if (OID_ISNULL (&class_oid))
     {
-      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME,
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME,
 	      1, class_name);
+      error = ER_LC_UNKNOWN_CLASSNAME;
       goto exit;
     }
 
@@ -4750,12 +4766,15 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
     {
       goto exit;
     }
+  attr_info_inited = true;
 
   (void) heap_scancache_quick_start (&scan_cache);
+  scan_cache_inited = true;
 
   if (heap_get (thread_p, &class_oid, &recdes, &scan_cache, PEEK,
 		NULL_CHN) != S_SUCCESS)
     {
+      error = ER_FAILED;
       goto exit;
     }
 
@@ -4764,6 +4783,7 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
       const char *rec_attr_name_p = or_get_attrname (&recdes, i);
       if (rec_attr_name_p == NULL)
 	{
+	  error = ER_FAILED;
 	  goto exit;
 	}
 
@@ -4796,15 +4816,18 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
   if (att_id_cnt != 4)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+      error = ER_FAILED;
       goto exit;
     }
 
   (void) heap_scancache_end (thread_p, &scan_cache);
+  scan_cache_inited = false;
 
   /* read values of all records in heap */
   error = heap_get_hfid_from_class_oid (thread_p, &class_oid, &hfid);
   if (error != NO_ERROR || HFID_IS_NULL (&hfid))
     {
+      error = ER_FAILED;
       goto exit;
     }
 
@@ -4814,6 +4837,7 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
     {
       goto exit;
     }
+  scan_cache_inited = true;
 
   max_coll_cnt = LANG_MAX_COLLATIONS;
   alloc_size = max_coll_cnt * sizeof (LANG_COLL_COMPAT);
@@ -4835,6 +4859,7 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
       if (heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &recdes,
 				       &attr_info) != NO_ERROR)
 	{
+	  error = ER_FAILED;
 	  goto exit;
 	}
 
@@ -4909,8 +4934,17 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
     }
 
 exit:
-  (void) heap_scancache_end (thread_p, &scan_cache);
-  heap_attrinfo_end (thread_p, &attr_info);
+  if (scan_cache_inited == true)
+    {
+      (void) heap_scancache_end (thread_p, &scan_cache);
+      scan_cache_inited = false;
+    }
+
+  if (attr_info_inited == true)
+    {
+      heap_attrinfo_end (thread_p, &attr_info);
+      attr_info_inited = false;
+    }
 
   return error;
 }

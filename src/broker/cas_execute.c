@@ -408,11 +408,7 @@ static T_FETCH_FUNC fetch_func[] = {
   fetch_foreign_keys,		/* SCH_CROSS_REFERENCE */
 };
 
-#if defined(CURBID_SAHRD)
 static char database_name[MAX_HA_DBNAME_LENGTH] = "";
-#else /* CUBRID_SHARD */
-static char database_name[SRV_CON_DBNAME_SIZE] = "";
-#endif /* !CUBRID_SHARD */
 static char database_user[SRV_CON_DBUSER_SIZE] = "";
 static char database_passwd[SRV_CON_DBPASSWD_SIZE] = "";
 static char cas_db_sys_param[128] = "";
@@ -448,11 +444,7 @@ ux_check_connection (void)
 	    }
 	  else
 	    {
-#if defined(CUBRID_SHARD)
 	      char dbname[MAX_HA_DBNAME_LENGTH];
-#else /* CUBRID_SHARD */
-	      char dbname[SRV_CON_DBNAME_SIZE];
-#endif /* !CUBRID_SHARD */
 	      char dbuser[SRV_CON_DBUSER_SIZE];
 	      char dbpasswd[SRV_CON_DBPASSWD_SIZE];
 
@@ -545,11 +537,7 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd,
       cas_log_debug (ARG_FILE_LINE,
 		     "ux_database_connect: db_login(%s) db_restart(%s) at %s",
 		     db_user, db_name, host_connected);
-#if defined(CUBRID_SHARD)
       strncpy (as_info->database_name, db_name, MAX_HA_DBNAME_LENGTH - 1);
-#else /* CUBRID_SHARD */
-      strncpy (as_info->database_name, db_name, SRV_CON_DBNAME_SIZE - 1);
-#endif /* !CUBRID_SHARD */
       strncpy (as_info->database_host, host_connected, MAXHOSTNAMELEN);
       as_info->last_connect_time = time (NULL);
 
@@ -1194,7 +1182,9 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
   DB_QUERY_RESULT *result = NULL;
   DB_SESSION *session;
   T_BROKER_VERSION client_version = req_info->client_version;
+#ifndef LIBCAS_FOR_JSP
   char stmt_type;
+#endif /* !LIBCAS_FOR_JSP */
 
   hm_qresult_end (srv_handle, FALSE);
 
@@ -1278,8 +1268,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
       stmt_id = srv_handle->q_result->stmt_id;
     }
 
-  if (((flag & CCI_EXEC_ASYNC) || (max_row > 0))
-      && db_is_query_async_executable (session, stmt_id))
+  if ((flag & CCI_EXEC_ASYNC) || (max_row > 0))
     {
       db_set_session_mode_async (session);
       srv_handle->q_result->async_flag = TRUE;
@@ -1480,11 +1469,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
 
   if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V5))
     {
-#if defined(CUBRID_SHARD)
       net_buf_cp_int (net_buf, shm_shard_id, NULL);
-#else /* CUBRID_SHARD */
-      net_buf_cp_int (net_buf, SHARD_ID_UNSUPPORTED, NULL);
-#endif /* !CUBRID_SHARD */
     }
 
   return err_code;
@@ -1529,7 +1514,7 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
   DB_SESSION *session = NULL;
   T_BROKER_VERSION client_version = req_info->client_version;
   T_QUERY_RESULT *q_result;
-  char savepoint[PATH_MAX];
+  char savepoint[BROKER_PATH_MAX];
   char is_savepoint = FALSE;
 
   srv_handle->query_info_flag = FALSE;
@@ -1581,7 +1566,8 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
     {
       static unsigned long long savepoint_count = 0;
 
-      snprintf (savepoint, PATH_MAX, "__MSS$%20lld__", savepoint_count++);
+      snprintf (savepoint, BROKER_PATH_MAX, "__MSS$%20lld__",
+		savepoint_count++);
       db_savepoint_transaction (savepoint);
       is_savepoint = TRUE;
     }
@@ -1609,8 +1595,7 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
 	    }
 	}
 
-      if (((flag & CCI_EXEC_ASYNC) || (max_row > 0))
-	  && db_is_query_async_executable (session, stmt_id))
+      if ((flag & CCI_EXEC_ASYNC) || (max_row > 0))
 	{
 	  db_set_session_mode_async (session);
 	  async_flag = TRUE;
@@ -1824,11 +1809,7 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
 
   if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V5))
     {
-#if defined(CUBRID_SHARD)
       net_buf_cp_int (net_buf, shm_shard_id, NULL);
-#else /* CUBRID_SHARD */
-      net_buf_cp_int (net_buf, SHARD_ID_UNSUPPORTED, NULL);
-#endif /* !CUBRID_SHARD */
     }
 
   return err_code;
@@ -1878,7 +1859,9 @@ ux_execute_call (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
   DB_SESSION *session;
   T_BROKER_VERSION client_version = req_info->client_version;
   T_PREPARE_CALL_INFO *call_info;
+#ifndef LIBCAS_FOR_JSP
   char stmt_type;
+#endif /* !LIBCAS_FOR_JSP */
 
   call_info = srv_handle->prepare_call_info;
   srv_handle->query_info_flag = FALSE;
@@ -2019,11 +2002,7 @@ ux_execute_call (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
 
   if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V5))
     {
-#if defined(CUBRID_SHARD)
       net_buf_cp_int (net_buf, shm_shard_id, NULL);
-#else /* CUBRID_SHARD */
-      net_buf_cp_int (net_buf, SHARD_ID_UNSUPPORTED, NULL);
-#endif /* !CUBRID_SHARD */
     }
 
   return err_code;
@@ -2145,9 +2124,11 @@ ux_execute_batch (int argc, void **argv, T_NET_BUF * net_buf,
       use_query_cache = false;
 
       net_arg_get_str (&sql_stmt, &sql_size, argv[query_index]);
-
-      cas_log_write_nonl (0, false, "batch %d : %s", query_index + 1,
-			  (sql_stmt ? sql_stmt : ""));
+      cas_log_write_nonl (0, false, "batch %d : ", query_index + 1);
+      if (sql_stmt != NULL)
+	{
+	  cas_log_write_query_string_nonl (sql_stmt, strlen (sql_stmt));
+	}
 
       session = db_open_buffer (sql_stmt);
       if (!session)
@@ -2277,11 +2258,7 @@ ux_execute_batch (int argc, void **argv, T_NET_BUF * net_buf,
 
   if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V5))
     {
-#if defined(CUBRID_SHARD)
       net_buf_cp_int (net_buf, shm_shard_id, NULL);
-#else /* CUBRID_SHARD */
-      net_buf_cp_int (net_buf, SHARD_ID_UNSUPPORTED, NULL);
-#endif /* !CUBRID_SHARD */
     }
 
   return 0;
@@ -2520,11 +2497,7 @@ ux_execute_array (T_SRV_HANDLE * srv_handle, int argc, void **argv,
 return_success:
   if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V5))
     {
-#if defined(CUBRID_SHARD)
       net_buf_cp_int (net_buf, shm_shard_id, NULL);
-#else /* CUBRID_SHARD */
-      net_buf_cp_int (net_buf, SHARD_ID_UNSUPPORTED, NULL);
-#endif /* !CUBRID_SHARD */
     }
 
   return 0;
@@ -2645,13 +2618,12 @@ ux_fetch (T_SRV_HANDLE * srv_handle, int cursor_pos, int fetch_count,
 fetch_error:
   NET_BUF_ERR_SET (net_buf);
 
-#if defined(CUBRID_SHARD)
-  if (srv_handle->auto_commit_mode == TRUE
+  if (cas_shard_flag == ON
+      && srv_handle->auto_commit_mode == TRUE
       && srv_handle->forward_only_cursor == TRUE)
     {
       req_info->need_auto_commit = TRAN_AUTOROLLBACK;
     }
-#endif /* CUBRID_SHARD */
 
   errors_in_transaction++;
   return err_code;
@@ -3337,6 +3309,15 @@ get_set_domain (DB_DOMAIN * set_domain, int *precision, short *scale,
   DB_DOMAIN *ele_domain;
   int set_domain_count = 0;
   int set_type = DB_TYPE_NULL;
+
+  if (precision)
+    {
+      *precision = 0;
+    }
+  if (scale)
+    {
+      *scale = 0;
+    }
 
   ele_domain = db_domain_set (set_domain);
   for (; ele_domain; ele_domain = db_domain_next (ele_domain))
@@ -4077,7 +4058,7 @@ netval_to_dbval (void *net_type, void *net_value, DB_VALUE * out_val,
 	  {
 	    char msg[12];
 	    off_t p = invalid_pos != NULL ? (invalid_pos - value) : 0;
-	    snprintf (msg, sizeof (msg), "%ld", p);
+	    snprintf (msg, sizeof (msg), "%llu", (long long unsigned int) p);
 	    return ERROR_INFO_SET_WITH_MSG (ER_INVALID_CHAR,
 					    DBMS_ERROR_INDICATOR, msg);
 	  }
@@ -4156,7 +4137,7 @@ netval_to_dbval (void *net_type, void *net_value, DB_VALUE * out_val,
 	  {
 	    char msg[12];
 	    off_t p = invalid_pos != NULL ? (invalid_pos - value) : 0;
-	    snprintf (msg, sizeof (msg), "%ld", p);
+	    snprintf (msg, sizeof (msg), "%llu", (long long unsigned int) p);
 	    return ERROR_INFO_SET_WITH_MSG (ER_INVALID_CHAR,
 					    DBMS_ERROR_INDICATOR, msg);
 	  }
@@ -5260,6 +5241,7 @@ fetch_result (T_SRV_HANDLE * srv_handle, int cursor_pos, int fetch_count,
   int err_code;
   int num_tuple_msg_offset;
   int num_tuple;
+  int net_buf_size;
   DB_QUERY_RESULT *result;
   T_QUERY_RESULT *q_result;
   char sensitive_flag = fetch_flag & CCI_FETCH_SENSITIVE;
@@ -5337,8 +5319,17 @@ fetch_result (T_SRV_HANDLE * srv_handle, int cursor_pos, int fetch_count,
       net_buf_cp_int (net_buf, 0, &num_tuple_msg_offset);
     }
 
+  if (cas_shard_flag == ON)
+    {
+      net_buf_size = SHARD_NET_BUF_SIZE;
+    }
+  else
+    {
+      net_buf_size = NET_BUF_SIZE;
+    }
+
   num_tuple = 0;
-  while (CHECK_NET_BUF_SIZE (net_buf))
+  while (CHECK_NET_BUF_SIZE (net_buf, net_buf_size))
     {				/* currently, don't check fetch_count */
       memset ((char *) &tuple_obj, 0, sizeof (T_OBJECT));
 

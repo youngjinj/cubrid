@@ -360,6 +360,8 @@ extern int db_Disable_modifications;
 #define MSGCAT_LOG_LOGINFO_COMMENT_UNUSED_ARCHIVE_NAME	29
 #define MSGCAT_LOG_MAX_ARCHIVES_HAS_BEEN_EXCEEDED	30
 
+#define MAX_NUM_EXEC_QUERY_HISTORY                      100
+
 typedef enum log_flush LOG_FLUSH;
 enum log_flush
 { LOG_DONT_NEED_FLUSH, LOG_NEED_FLUSH };
@@ -844,6 +846,10 @@ struct log_tdes
 
   TRAN_ABORT_REASON tran_abort_reason;
 
+  /* bind values of executed queries in transaction */
+  int num_exec_queries;
+  DB_VALUE_ARRAY bind_history[MAX_NUM_EXEC_QUERY_HISTORY];
+
 #if defined(MVCC_USE_COMMAND_ID)
   MVCC_COMMAND_ID mvcc_comm_id;	/* MVCC command id - increase with each
 				 * command that modified the data, 
@@ -943,7 +949,10 @@ struct log_header
   DKNPAGES npages;		/* Number of pages in the active log portion.
 				 * Does not include the log header page.
 				 */
-  INT32 dummy2;			/* Dummy field for 8byte align */
+  INT8 db_charset;
+  INT8 dummy2;			/* Dummy fields for 8byte align */
+  INT8 dummy3;
+  INT8 dummy4;
   LOG_PAGEID fpageid;		/* Logical pageid at physical location 1 in
 				 * active log
 				 */
@@ -997,9 +1006,12 @@ struct log_header
      0, 0, 0,                                    \
      /* next_trid */                             \
      NULL_TRANID,                                \
-     /* mvcc_id */				  \
+     /* mvcc_id */				 \
      MVCCID_NULL,                                \
-     0, 0, 0, 0, 0,                              \
+     0, 0, 0,					 \
+     /* db_charset */				 \
+     0,						 \
+     0, 0, 0, 0,				 \
      /* append_lsa */                            \
      {NULL_PAGEID, NULL_OFFSET},                 \
      /* chkpt_lsa */                             \
@@ -1042,8 +1054,11 @@ struct log_header
      /* next_trid */                             \
      NULL_TRANID,                                \
      /* mvcc_next_id */                          \
-     MVCCID_NULL,                               \
-     0, 0, 0, 0, 0,                              \
+     MVCCID_NULL,                                \
+     0, 0, 0,					 \
+     /* db_charset */				 \
+     0,						 \
+     0, 0, 0, 0,				 \
      /* append_lsa */                            \
      {NULL_PAGEID, NULL_OFFSET},                 \
      /* chkpt_lsa */                             \
@@ -1800,7 +1815,8 @@ extern PGLENGTH logpb_find_header_parameters (THREAD_ENTRY * thread_p,
 					      PGLENGTH * io_page_size,
 					      PGLENGTH * log_page_size,
 					      INT64 * db_creation,
-					      float *db_compatibility);
+					      float *db_compatibility,
+					      int *db_charset);
 extern LOG_PAGE *logpb_fetch_start_append_page (THREAD_ENTRY * thread_p);
 extern LOG_PAGE *logpb_fetch_start_append_page_new (THREAD_ENTRY * thread_p);
 extern void logpb_flush_pages_direct (THREAD_ENTRY * thread_p);

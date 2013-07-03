@@ -1534,9 +1534,7 @@ get_string (OR_BUF * buf, int length)
    */
   my_domain.precision = DB_MAX_VARNCHAR_PRECISION;
 
-  assert (lang_server_charset_id () == LANG_SYS_CODESET);
-
-  my_domain.codeset = lang_server_charset_id ();
+  my_domain.codeset = lang_charset ();
   my_domain.collation_id = LANG_SYS_COLLATION;
 
   (*(tp_VarNChar.data_readval)) (buf, &value, &my_domain, length, true, NULL,

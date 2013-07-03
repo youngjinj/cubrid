@@ -24,6 +24,8 @@
 
 #include "assert.h"
 
+#include "porting.h"
+#include "environment_variable.h"
 #include "cas.h"
 #include "cas_execute.h"
 #include "cas_error.h"
@@ -75,15 +77,31 @@ cfg_get_dbinfo (char *alias, char *dbinfo)
   FILE *file;
   char *save, *token;
   char delim[] = "|";
-  char filename[PATH_MAX];
+  char filename[BROKER_PATH_MAX];
   char line[DBINFO_MAX_LENGTH];
   int ret = -1;
 
+  if (shm_appl->db_connection_file[0] == '\0')
+    {
 #if defined(CAS_FOR_ORACLE)
-  get_cubrid_file (FID_CAS_FOR_ORACLE_DBINFO, filename, PATH_MAX);
+      get_cubrid_file (FID_CAS_FOR_ORACLE_DBINFO, filename, BROKER_PATH_MAX);
 #elif defined(CAS_FOR_MYSQL)
-  get_cubrid_file (FID_CAS_FOR_MYSQL_DBINFO, filename, PATH_MAX);
+      get_cubrid_file (FID_CAS_FOR_MYSQL_DBINFO, filename, BROKER_PATH_MAX);
 #endif
+    }
+  else
+    {
+      if (IS_ABS_PATH (shm_appl->db_connection_file))
+	{
+	  strncpy (filename, shm_appl->db_connection_file,
+		   BROKER_PATH_MAX - 1);
+	}
+      else
+	{
+	  envvar_confdir_file (filename, BROKER_PATH_MAX,
+			       shm_appl->db_connection_file);
+	}
+    }
 
   file = fopen (filename, "r");
   if (file == NULL)
@@ -121,18 +139,35 @@ int
 cfg_read_dbinfo (DB_INFO ** db_info_p)
 {
   FILE *file;
-  char filename[PATH_MAX];
+  char filename[BROKER_PATH_MAX];
   char line[DBINFO_MAX_LENGTH];
   char *str = NULL;
   DB_INFO *databases, *db, *last;
 
   databases = last = NULL;
 
+  if (shm_appl->db_connection_file[0] == '\0')
+    {
 #if defined(CAS_FOR_ORACLE)
-  get_cubrid_file (FID_CAS_FOR_ORACLE_DBINFO, filename, PATH_MAX);
+      get_cubrid_file (FID_CAS_FOR_ORACLE_DBINFO, filename, BROKER_PATH_MAX);
 #elif defined(CAS_FOR_MYSQL)
-  get_cubrid_file (FID_CAS_FOR_MYSQL_DBINFO, filename, PATH_MAX);
+      get_cubrid_file (FID_CAS_FOR_MYSQL_DBINFO, filename, BROKER_PATH_MAX);
 #endif
+    }
+  else
+    {
+      if (IS_ABS_PATH (shm_appl->db_connection_file))
+	{
+	  strncpy (filename, shm_appl->db_connection_file,
+		   BROKER_PATH_MAX - 1);
+	}
+      else
+	{
+	  envvar_confdir_file (filename, BROKER_PATH_MAX,
+			       shm_appl->db_connection_file);
+	}
+    }
+
   file = fopen (filename, "r");
   if (file == NULL)
     {

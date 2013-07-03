@@ -30,12 +30,9 @@
 #define VISION3_EXE_ROOT_ENV_STR        "VISION3_EXE_ROOT"
 #define UNIWEB_EXE_ROOT_ENV_STR         "UNIWEB_EXE_ROOT"
 #define PORT_NUMBER_ENV_STR             "UTS_PORT"
-#define APPL_NAME_ENV_STR               "APPL_NAME"
 #define MASTER_SHM_KEY_ENV_STR		"MASTER_SHM_KEY"
 #define APPL_SERVER_SHM_KEY_STR		"APPL_SERVER_SHM_KEY"
 #define PROXY_SHM_KEY_STR           "PROXY_SHM_KEY"
-#define ACCESS_LOG_ENV_STR		"ACCESS_LOG_FILE"
-#define ERROR_LOG_ENV_STR		"ERROR_LOG_FILE"
 #define PORT_NAME_ENV_STR		"UW_PORT_NAME"
 
 #define SID_ENV_STR			"UW_SID"
@@ -50,13 +47,7 @@
 
 #define REMOTE_ADDR_ENV_STR		"REMOTE_ADDR"
 
-#define ERROR_LOG_LOCK_FILE_ENV_STR	"ERROR_LOG_LOCK_FILE"
-
-#if defined(CUBRID_SHARD)
 #define PROXY_ID_ENV_STR            "PROXY_ID"
-#define SHARD_ID_ENV_STR            "SHARD_ID"
-#define SHARD_CAS_ID_ENV_STR        "SHARD_CAS_ID"
 #define AS_ID_ENV_STR               "AS_ID"
-#endif /* CUBRID_SHARD */
 
 #endif /* _BROKER_ENV_DEF_H_ */

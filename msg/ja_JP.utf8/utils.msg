@@ -139,7 +139,6 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 正しい管理者ユーティリティー名:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
     on          <ブローカー名>\n\
     off         <ブローカー名>\n\
     reset       <ブローカー名>\n\
-    acl         <status|reload> [ブローカー名]\n
+    acl         <status|reload> [ブローカー名]\n\
+    getid       -b <ブローカー名> [-f] シャードキー\n
 27 cubridユーティリティー、バージョン %s\n\
 使い方: %s manager <コマンド>\n\
 \n\
@@ -230,20 +230,6 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
 36 サーバーがHAモードに設定されませんでした。\n
 38 HA環境で設定されているサーバーがha_db_listのリストにありません。
 39 HA環境で設定されているサーバーがha_node_listのリストにありません。
-62 cubridユーティリティー、バージョン %s\n\
-使い方: %s shard <コマンド> [パラメーター]\n\
-\n\
-正しいコマンド:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          <シャード名>\n\
-    off         <シャード名>\n\
-    reset       <シャード名>\n\
-    acl         <status|reload> [シャード名]\n\
-    getid       -b <ブローカー名> [-f] シャードキー\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 警告: -tオプションは独立実行モードでは無視されます。\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 正しくないコマンド「%s」\n
 43 出力ファイル「%s」が開けられません。\n
 44 既存データベースが削除できません。\n
-45 データベース(サイズ:%s)を生成しています。必要なディスクスペースは「%s」です。\n
+45 Creating database with %s size using default locale %s. The total amount of disk space needed is %s.\n
 46 データベースが生成できません。\n
 47 ユーザーファイル「%s」に問題があります。\n
 48 あげられたバリュー：「%s」。「%s」は範囲を超えてしまいました。「%s」と「%s」の内のバリューを入力してください。\n
 49 %sの内容の中で「%s」が正しくありません。\n
 60 \
 createdb: データベース生成。\n\
-使い方: %s createdb [オプション] <データベース名>\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 使い方:\n\
       --db-volume-size=SIZE           最初に生成されるボリューム(generic)のサイズ\n\
                                       デフォルト: 「cubrid.conf」の「db_volume_size」\n\
@@ -649,16 +636,26 @@ checkdb: データベース一貫性をチェック\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 データベース「%s」(ページサイズ%s)のボリューム情報(ルグページサイズ%s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 出力ファイル「%s」が見つかりません。\n
 18 \nデータベース「%s」(ページサイズ%s)の臨時ボリューム。\n\n
 19 番号  使い道       ページ数  フリーページ  ボリューム名\n\n
 20 番号  使い道       トータルサイズ    フリーサイズ  ボリューム名\n\n
 21 LOBスペース %s\n\n
+22 -------------------------------------------------------------------------------\n
 30 データベース「%s」(ページサイズ%s)ボリュームの使い道別の合算(ログページサイズ%s)\n\n
 31 使い道         ページ数  ユーズドページ  フリーページ  ボリューム数\n
 32 使い道         トータルサイズ    ユーズドスペース    フリースペース  ボリューム数\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: データベースのディスクスペース情報を出力\n\
 使い方: %s spacedb [オプション] <データベース名>\n\
@@ -669,7 +666,8 @@ spacedb: データベースのディスクスペース情報を出力\n\
   -C, --CS-mode                クライアントーサーバモードで実行\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                出力の単位(page, mega, giga, tera, human readable)設定; デフォルト: H\n\
-  -s, --summarize              ボリュームの使い道別に合算を出力\n
+  -s, --summarize              ボリュームの使い道別に合算を出力\n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -930,7 +928,7 @@ applyinfo: CUBRID HA Apply情報を出力。\n\
   -L, --copied-log-path=PATH  コピーしたログブリュームのパス; コピーしたログ情報を出力。\n\
   -p, --pageid=ID             ページID; デフォルト : 0(アクティブページ)\n\
   -v, --verbose               多様な進行情報を出力; デフォルト: 出力しない\n\
-  -i, --interval=S            S秒のたびに表示される情報を更新する。\n	
+  -i, --interval=S            S秒のたびに表示される情報を更新する。\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59  acldbはスタンドアロンモードで実行できません。\n

@@ -313,6 +313,11 @@ static void pt_check_unique_attr (PARSER_CONTEXT * parser,
 static void pt_check_function_index_expr (PARSER_CONTEXT * parser,
 					  PT_NODE * node);
 static void pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt);
+static PT_NODE *pt_replace_names_in_update_values (PARSER_CONTEXT * parser,
+						   PT_NODE * update);
+static PT_NODE *pt_replace_referenced_attributes (PARSER_CONTEXT * parser,
+						  PT_NODE * node, void *arg,
+						  int *continue_walk);
 static PT_NODE *pt_coerce_insert_values (PARSER_CONTEXT * parser,
 					 PT_NODE * stmt);
 static void pt_check_xaction_list (PARSER_CONTEXT * parser, PT_NODE * node);
@@ -10362,6 +10367,12 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
 	    }
 	}
 
+      /* Replace left to right attribute references in assignments before
+       * doing semantic check. The type checking phase might have to perform
+       * some coercions on the replaced names.
+       */
+      node = pt_replace_names_in_update_values (parser, node);
+
       node = pt_semantic_type (parser, node, info);
 
       if (node != NULL && node->info.update.order_by != NULL)
@@ -10931,10 +10942,6 @@ pt_path_chain (PARSER_CONTEXT * parser, PT_NODE * node,
 	}
       break;
 
-    case PT_VACUUM:
-      pt_check_vacuum (parser, node);
-      break;
-
     default:
       break;
     }
@@ -11403,6 +11410,10 @@ pt_check_with_info (PARSER_CONTEXT * parser,
 
     case PT_DROP:
       pt_check_drop (parser, node);
+      break;
+
+    case PT_VACUUM:
+      pt_check_vacuum (parser, node);
       break;
 
     case PT_GRANT:
@@ -11977,7 +11988,8 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 		  parser_free_tree (parser, lhs);	/* free exp, arg1 */
 		  parser_free_tree (parser, rhs);	/* free exp, arg1 */
 
-		  if ((e2 = parser_new_node (parser, PT_VALUE)) == NULL)
+		  e2 = parser_new_node (parser, PT_VALUE);
+		  if (e2 == NULL)
 		    {
 		      PT_ERRORm (parser, a,
 				 MSGCAT_SET_PARSER_SEMANTIC,
@@ -11997,7 +12009,8 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 		      e1_next = e1->next;
 		      e1->next = NULL;
 
-		      if ((e2 = parser_new_node (parser, PT_VALUE)) == NULL)
+		      e2 = parser_new_node (parser, PT_VALUE);
+		      if (e2 == NULL)
 			{
 			  PT_ERRORm (parser, a,
 				     MSGCAT_SET_PARSER_SEMANTIC,
@@ -12058,6 +12071,171 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 	  PT_INTERNAL_ERROR (parser, "semantic");
 	}
     }
+}
+
+/*
+ * pt_replace_names_in_update_values () - Walk through update assignments and
+ *					  replace references to attributes
+ *					  with assignments for those
+ *					  attributes
+ * return : UPDATE statement or NULL
+ * parser (in) : parser context
+ * update (in) : UPDATE parse tree
+ *
+ *  Note: Update assignments are considered to be evaluate left to right.
+ *   For each attribute referenced on the right side of an assignment, if the
+ *   attribute was referenced in an assignment which appears in the UPDATE
+ *   statement before this assignment (i.e.: to the left of this assigment)
+ *   replace the value with that assignment.
+ */
+static PT_NODE *
+pt_replace_names_in_update_values (PARSER_CONTEXT * parser, PT_NODE * update)
+{
+  PT_NODE *attr = NULL, *val = NULL;
+  PT_NODE *node = NULL, *prev = NULL, *save_next = NULL;
+
+  if (!prm_get_bool_value (PRM_ID_UPDATE_USE_ATTRIBUTE_REFERENCES))
+    {
+      /* Use SQL standard approach which always uses the existing value for
+       * an attribute rather than the updated value
+       */
+      return update;
+    }
+
+  if (update == NULL)
+    {
+      return NULL;
+    }
+
+  prev = update->info.update.assignment;
+  if (prev->next == NULL)
+    {
+      /* only one assignment, nothing to be done */
+      return update;
+    }
+
+  for (node = prev->next; node != NULL; prev = node, node = node->next)
+    {
+      if (!PT_IS_EXPR_NODE (node) || node->info.expr.op != PT_ASSIGN)
+	{
+	  /* this is probably an error but it will be caught later */
+	  continue;
+	}
+
+      attr = node->info.expr.arg1;
+      if (PT_IS_N_COLUMN_UPDATE_EXPR (attr))
+	{
+	  /* Cannot reference other assignments in N_COLUMN_UPDATE_EXPR */
+	  continue;
+	}
+
+      val = node->info.expr.arg2;
+      if (val == NULL || PT_IS_CONST (val))
+	{
+	  /* nothing to be done for constants */
+	  continue;
+	}
+
+      /* This assignment is attr = expr. Walk expr and replace all occurrences
+       * of attributes with previous assignments. Set prev->next to NULL so
+       * that we only search in assignments to the left of the current one.
+       */
+      prev->next = NULL;
+
+      val = parser_walk_tree (parser, val, pt_replace_referenced_attributes,
+			      update->info.update.assignment, NULL, NULL);
+
+      if (val != NULL && val != node->info.expr.arg2)
+	{
+	  parser_free_tree (parser, node->info.expr.arg2);
+	  node->info.expr.arg2 = val;
+	}
+
+      /* repair node and list */
+      prev->next = node;
+    }
+
+  return update;
+}
+
+/*
+ * pt_replace_referenced_attributes () - replace an attributes with
+ *					 expressions from previous assignments
+ * return : node or NULL
+ * parser (in) :
+ * node (in) :
+ * arg (in) :
+ * continue_walk (in) :
+ */
+static PT_NODE *
+pt_replace_referenced_attributes (PARSER_CONTEXT * parser, PT_NODE * node,
+				  void *arg, int *continue_walk)
+{
+  PT_NODE *assignment = NULL, *val = NULL;
+  PT_NODE *assignments = (PT_NODE *) arg;
+
+  *continue_walk = PT_CONTINUE_WALK;
+
+  if (!pt_is_attr (node))
+    {
+      return node;
+    }
+
+  if (node->node_type != PT_NAME)
+    {
+      /* this is a PT_DOT, we don't have to go further */
+      *continue_walk = PT_LIST_WALK;
+    }
+
+  if (assignments == NULL)
+    {
+      assert_release (assignments != NULL);
+      return node;
+    }
+
+  /* search for name in assignments */
+  for (assignment = assignments; assignment != NULL;
+       assignment = assignment->next)
+    {
+      if (PT_IS_N_COLUMN_UPDATE_EXPR (assignment))
+	{
+	  continue;
+	}
+
+      if (pt_name_equal (parser, assignment->info.expr.arg1, node))
+	{
+	  /* Found the attribute we're looking for */
+	  break;
+	}
+    }
+
+  if (assignment == NULL)
+    {
+      /* Did not find the attribute. This means that UPDATE should use the
+       * existing value
+       */
+      return node;
+    }
+
+  /* Replace node with rhs from the assignment. Notice that we're stopping
+   * at the first encounter of this attribute. Normally, we should find
+   * the last assignment (from left to right), but, since CUBRID does not
+   * allow multiple assignments to the same attribute, the first
+   * occurrence is the only one.
+   */
+  val = parser_copy_tree (parser, assignment->info.expr.arg2);
+
+  if (val == NULL)
+    {
+      /* set error and return original node */
+      PT_INTERNAL_ERROR (parser, "allocate new node");
+      return node;
+    }
+
+  /* do not recurse into this node */
+  *continue_walk = PT_LIST_WALK;
+
+  return val;
 }
 
 /*
@@ -13647,9 +13825,6 @@ pt_coerce_insert_values (PARSER_CONTEXT * parser, PT_NODE * stmt)
 	    }
 	  else
 	    {
-	      pt_cast_select_list_to_arg_list (parser,
-					       crt_list->info.node_list.list,
-					       attr_list);
 	      continue;
 	    }
 	}

@@ -2551,6 +2551,10 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
 	}
     }
 
+  memset (&xasl->orderby_stats, 0, sizeof (xasl->orderby_stats));
+  memset (&xasl->groupby_stats, 0, sizeof (xasl->groupby_stats));
+  memset (&xasl->xasl_stats, 0, sizeof (xasl->xasl_stats));
+
   return ptr;
 
 error:
@@ -6459,7 +6463,6 @@ stx_build_connectby_proc (THREAD_ENTRY * thread_p, char *ptr,
 
   ptr = or_unpack_int (ptr, &tmp);
   stx_connectby_proc->single_table_opt = (bool) tmp;
-
   stx_connectby_proc->curr_tuple = NULL;
 
   return ptr;

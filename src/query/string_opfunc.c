@@ -49,6 +49,7 @@
 #include "misc_string.h"
 #include "md5.h"
 #include "porting.h"
+#include "crypt_opfunc.h"
 
 /* this must be the last header file included!!! */
 #include "dbval.h"
@@ -1839,11 +1840,11 @@ db_string_space (DB_VALUE const *count, DB_VALUE * result)
 	  len = 0;
 	}
 
-      if (len > prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES))
+      if (len > (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES))
 	{
 	  er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
 		  ER_QPROC_STRING_SIZE_TOO_BIG, 2, len,
-		  prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES));
+		  (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES));
 	  DB_MAKE_NULL (result);
 	  return NO_ERROR;
 	}
@@ -2610,6 +2611,314 @@ exit:
 
   return error_status;
 }
+
+/*
+ * db_string_shaone - sha1 encrypt function
+ *   return: If success, return 0. 
+ *   src(in): source string
+ *	 result(out): the encrypted data.
+ * Note:
+ */
+int
+db_string_sha_one (DB_VALUE const *src, DB_VALUE * result)
+{
+  int error_status = NO_ERROR;
+  char *result_strp = NULL;
+  int result_len = 0;
+
+  assert (src != (DB_VALUE *) NULL);
+  assert (result != (DB_VALUE *) NULL);
+
+  if (DB_IS_NULL (src))
+    {
+      DB_MAKE_NULL (result);	/* SH1(NULL) returns NULL */
+      return error_status;
+    }
+  else
+    {
+      DB_TYPE val_type = DB_VALUE_DOMAIN_TYPE (src);
+
+      if (QSTR_IS_ANY_CHAR (val_type))
+	{
+	  error_status =
+	    sha_one (NULL, DB_PULL_STRING (src), DB_GET_STRING_LENGTH (src),
+		     &result_strp, &result_len);
+	  if (error_status != NO_ERROR)
+	    {
+	      goto error;
+	    }
+
+	  qstr_make_typed_string (DB_TYPE_CHAR, result, result_len,
+				  result_strp, result_len,
+				  LANG_COERCIBLE_CODESET,
+				  LANG_COERCIBLE_COLL);
+	  result->need_clear = true;
+	}
+      else
+	{
+	  error_status = ER_QSTR_INVALID_DATA_TYPE;
+	  goto error;
+	}
+    }
+
+  return error_status;
+
+error:
+  DB_MAKE_NULL (result);
+  if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+    {
+      return NO_ERROR;
+    }
+  else
+    {
+      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+	}
+      return error_status;
+    }
+}
+
+/*
+ * db_string_shatwo - sha2 encrypt function
+ *   return: If success, return 0. 
+ *   src(in): source string
+ *	 hash_len(in): the hash length
+ *	 result(out): the encrypted data.
+ * Note:
+ */
+int
+db_string_sha_two (DB_VALUE const *src, DB_VALUE const *hash_len,
+		   DB_VALUE * result)
+{
+  int error_status = NO_ERROR;
+
+  DB_TYPE src_type = DB_VALUE_DOMAIN_TYPE (src);
+  DB_TYPE hash_len_type = DB_VALUE_DOMAIN_TYPE (hash_len);
+  char *result_strp = NULL;
+  int result_len = 0;
+  int len = 0;
+
+  assert (src != (DB_VALUE *) NULL);
+  assert (hash_len != (DB_VALUE *) NULL);
+  assert (result != (DB_VALUE *) NULL);
+
+  if (DB_IS_NULL (src) || DB_IS_NULL (hash_len))
+    {
+      DB_MAKE_NULL (result);	/* sha2(NULL, ...) or sha2(..., NULL) returns NULL */
+      return error_status;
+    }
+
+  switch (hash_len_type)
+    {
+    case DB_TYPE_SHORT:
+      len = DB_GET_SHORT (hash_len);
+      break;
+    case DB_TYPE_INTEGER:
+      len = DB_GET_INT (hash_len);
+      break;
+    case DB_TYPE_BIGINT:
+      len = DB_GET_BIGINT (hash_len);
+      break;
+    default:
+      return ER_QSTR_INVALID_DATA_TYPE;
+    }
+
+  if (QSTR_IS_ANY_CHAR (src_type))
+    {
+      error_status =
+	sha_two (NULL, DB_PULL_STRING (src), DB_GET_STRING_LENGTH (src), len,
+		 &result_strp, &result_len);
+      if (error_status != NO_ERROR)
+	{
+	  goto error;
+	}
+
+      /* It means that the hash_len is wrong. */
+      if (result_strp == NULL)
+	{
+	  DB_MAKE_NULL (result);
+	  return error_status;
+	}
+
+      qstr_make_typed_string (DB_TYPE_VARCHAR, result, result_len,
+			      result_strp, result_len, LANG_COERCIBLE_CODESET,
+			      LANG_COERCIBLE_COLL);
+      result->need_clear = true;
+    }
+  else
+    {
+      error_status = ER_QSTR_INVALID_DATA_TYPE;
+      goto error;
+    }
+
+  return error_status;
+
+error:
+  DB_MAKE_NULL (result);
+  if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+    {
+      return NO_ERROR;
+    }
+  else
+    {
+      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+	}
+      return error_status;
+    }
+}
+
+/*
+ * db_string_aes_encrypt - aes encrypt function
+ *   return: If success, return 0. 
+ *   src(in): source string
+ *	 key(in): the encrypt key
+ *	 result(out): the encrypted data.
+ * Note:
+ */
+int
+db_string_aes_encrypt (DB_VALUE const *src, DB_VALUE const *key,
+		       DB_VALUE * result)
+{
+  int error_status = NO_ERROR;
+
+  DB_TYPE src_type = DB_VALUE_DOMAIN_TYPE (src);
+  DB_TYPE key_type = DB_VALUE_DOMAIN_TYPE (key);
+  char *result_strp = NULL;
+  int result_len = 0;
+
+  assert (src != (DB_VALUE *) NULL);
+  assert (key != (DB_VALUE *) NULL);
+  assert (result != (DB_VALUE *) NULL);
+
+  if (DB_IS_NULL (src) || DB_IS_NULL (key))
+    {
+      /* aes_encypt(NULL, ...) or aes_encypt(..., NULL) returns NULL */
+      DB_MAKE_NULL (result);
+      return error_status;
+    }
+
+  if (QSTR_IS_ANY_CHAR (src_type) && QSTR_IS_ANY_CHAR (key_type))
+    {
+      error_status =
+	aes_default_encrypt (NULL, DB_PULL_STRING (src),
+			     DB_GET_STRING_LENGTH (src), DB_PULL_STRING (key),
+			     DB_GET_STRING_LENGTH (key), &result_strp,
+			     &result_len);
+      if (error_status != NO_ERROR)
+	{
+	  goto error;
+	}
+
+      qstr_make_typed_string (DB_TYPE_VARCHAR, result, result_len,
+			      result_strp, result_len, LANG_COERCIBLE_CODESET,
+			      LANG_COERCIBLE_COLL);
+      result->need_clear = true;
+    }
+  else
+    {
+      error_status = ER_QSTR_INVALID_DATA_TYPE;
+      goto error;
+    }
+
+  return error_status;
+
+error:
+  DB_MAKE_NULL (result);
+  if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+    {
+      return NO_ERROR;
+    }
+  else
+    {
+      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+	}
+      return error_status;
+    }
+}
+
+/*
+ * db_string_aes_decrypt - aes decrypt function
+ *   return: If success, return 0. 
+ *   src(in): source string
+ *	 key(in): the encrypt key
+ *	 result(out): the decrypted data.
+ * Note:
+ */
+int
+db_string_aes_decrypt (DB_VALUE const *src, DB_VALUE const *key,
+		       DB_VALUE * result)
+{
+  int error_status = NO_ERROR;
+
+  DB_TYPE src_type = DB_VALUE_DOMAIN_TYPE (src);
+  DB_TYPE key_type = DB_VALUE_DOMAIN_TYPE (key);
+  char *result_strp = NULL;
+  int result_len = 0;
+
+  assert (src != (DB_VALUE *) NULL);
+  assert (key != (DB_VALUE *) NULL);
+  assert (result != (DB_VALUE *) NULL);
+
+  if (DB_IS_NULL (src) || DB_IS_NULL (key))
+    {
+      /* aes_decypt(NULL, ...) or aes_decypt(..., NULL) returns NULL */
+      DB_MAKE_NULL (result);
+      return error_status;
+    }
+
+  if (QSTR_IS_ANY_CHAR (src_type) && QSTR_IS_ANY_CHAR (key_type))
+    {
+      error_status =
+	aes_default_decrypt (NULL, DB_PULL_STRING (src),
+			     DB_GET_STRING_LENGTH (src), DB_PULL_STRING (key),
+			     DB_GET_STRING_LENGTH (key), &result_strp,
+			     &result_len);
+      if (error_status != NO_ERROR)
+	{
+	  goto error;
+	}
+
+      if (result_strp == NULL)
+	{
+	  /* it means the src isn't aes_encrypted string, we return NULL like mysql */
+	  DB_MAKE_NULL (result);
+	  return error_status;
+	}
+
+      qstr_make_typed_string (DB_TYPE_VARCHAR, result, result_len,
+			      result_strp, result_len, LANG_COERCIBLE_CODESET,
+			      LANG_COERCIBLE_COLL);
+      result->need_clear = true;
+    }
+  else
+    {
+      error_status = ER_QSTR_INVALID_DATA_TYPE;
+      goto error;
+    }
+
+  return error_status;
+
+error:
+  DB_MAKE_NULL (result);
+  if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+    {
+      return NO_ERROR;
+    }
+  else
+    {
+      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+	}
+      return error_status;
+    }
+}
+
 
 /*
  * MD5('str')
@@ -7685,11 +7994,11 @@ qstr_grow_string (DB_VALUE * src_string, DB_VALUE * result, int new_size)
   result_size = MAX (result_size, new_size);
   result_size = MAX (result_size, src_size);
 
-  if (result_size > prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES))
+  if (result_size > (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES))
     {
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
 	      ER_QPROC_STRING_SIZE_TOO_BIG, 2, result_size,
-	      prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES));
+	      (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES));
 
       DB_MAKE_NULL (result);
       return NO_ERROR;
@@ -8077,7 +8386,8 @@ qstr_concatenate (const unsigned char *s1,
 	  *result_type = DB_TYPE_CHAR;
 	}
 
-      if (*result_size > prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES))
+      if (*result_size >
+	  (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES))
 	{
 	  goto size_error;
 	}
@@ -8165,7 +8475,8 @@ qstr_concatenate (const unsigned char *s1,
 
       *result_size = s1_size + s2_size;
 
-      if (*result_size > prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES))
+      if (*result_size >
+	  (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES))
 	{
 	  goto size_error;
 	}
@@ -8241,7 +8552,7 @@ size_error:
   error_status = ER_QPROC_STRING_SIZE_TOO_BIG;
   er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 	  error_status, 2, *result_size,
-	  prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES));
+	  (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES));
   return error_status;
   /*
    * Error handler
@@ -8353,7 +8664,8 @@ qstr_bit_concatenate (const unsigned char *s1,
       *result_size = QSTR_NUM_BYTES (*result_length);
 
 
-      if (*result_size > prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES))
+      if (*result_size >
+	  (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES))
 	{
 	  goto size_error;
 	}
@@ -8421,7 +8733,8 @@ qstr_bit_concatenate (const unsigned char *s1,
 
       *result_size = QSTR_NUM_BYTES (*result_length);
 
-      if (*result_size > prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES))
+      if (*result_size >
+	  (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES))
 	{
 	  goto size_error;
 	}
@@ -8483,7 +8796,7 @@ size_error:
   error_status = ER_QPROC_STRING_SIZE_TOO_BIG;
   er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 	  error_status, 2, *result_size,
-	  prm_get_integer_value (PRM_ID_STRING_MAX_SIZE_BYTES));
+	  (int) prm_get_bigint_value (PRM_ID_STRING_MAX_SIZE_BYTES));
   return error_status;
 
   /*
@@ -24499,7 +24812,7 @@ db_hex (const DB_VALUE * param, DB_VALUE * result)
       domain = tp_domain_resolve_default (DB_TYPE_BIGINT);
       /* don't mind error code here, we need to know if param is
        * out of range */
-      tp_value_auto_cast (param, &param_db_bigint, domain);
+      (void) tp_value_auto_cast (param, &param_db_bigint, domain);
       if (DB_IS_NULL (&param_db_bigint))
 	{
 	  /* param is out of range, set it to max */

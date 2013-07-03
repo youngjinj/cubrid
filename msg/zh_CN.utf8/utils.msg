@@ -139,7 +139,6 @@ cubrid 管理工具，版本 %s\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 可用的管理员工具:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ cubrid 管理工具，版本 %s\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
-    acl         <status|reload> [broker-name]\n
+    acl         <status|reload> [broker-name]\n\
+    getid       -b <broker-name> [-f] shard-key\n
 27 cubrid 应用工具, 版本 %s\n\
 用法: %s manager <命令>\n\
 \n\
@@ -230,20 +230,6 @@ cubrid 管理工具，版本 %s\n\
 36 服务器没有为HA进行设置.\n
 38 为HA配置的服务器没有列在 ha_db_list 列表中.\n
 39 为HA配置的服务器没有列在 ha_node_list 列表中.\n
-62 cubrid 工具, 版本 %s\n\
-用法: %s shard <命令> [参数]\n\
-\n\
-可用命令:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          shard-name\n\
-    off         shard-name\n\
-    reset       shard-name\n\
-    acl         <status|reload> [shard-name]\n\
-    getid       -b <broker-name> [-f] shard-key\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 警告: 在单机模式下 -t 选项将被忽略.\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 未知的命令 '%s'\n
 43 无法打开输出文件 '%s'\n
 44 无法移除已存在的数据库.\n
-45 创建数据库大小为 %s. 总共需要磁盘空间为 %s.\n
+45 Creating database with %s size using locale %s. The total amount of disk space needed is %s.\n
 46 无法创建数据库.\n
 47 用户文件 '%s' 存在问题\n
 48 给定值 '%s', %s 超过了范围. 选择大小在 %s 和 %s之间的数.\n
 49 %s '%s'的值是非法的.\n
 60 \
 createdb: 创建一个数据库.\n\
-用法: %s createdb [选项] 数据库名\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 可用选项:\n\
       --db-volume-size=SIZE           设置数据卷大小\n\
                                       默认: db_volume_size 在 cubrid.conf 文件中\n\
@@ -649,16 +636,26 @@ checkdb: 监测数据库一致性.\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 数据库 '%s' 的空间描述 页大小 %s. (日志页大小: %s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 无法打开输出文件 '%s'\n
 18 数据库 '%s' 临时卷的空间描述 页大小 %s.\n\n
 19 卷标识  用途  页总数  空闲页  卷名\n\n
 20 卷标识  用途  总大小  空闲空间  卷名\n\n
 21 LOB 空间描述 %s \n\n
+22 -------------------------------------------------------------------------------\n
 30 数据 '%s' 的 汇总空间描述 页大小 %s. (日志页大小: %s)\n\n
 31 设定的    总页数  已用页数  空闲页数  卷数\n
 32 设定的     总大小   已用大小   空闲大小  卷数\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: 显示数据库的使用/空闲空间.\n\
 usage: %s spacedb [选项] 数据库名\n\
@@ -669,7 +666,8 @@ usage: %s spacedb [选项] 数据库名\n\
   -C, --CS-mode                客户端服务端模式执行\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                设置显示单元 (页, M, G, T, 人类可读);默认 : 人类可读\n\
-  -s, --summarize              为每个设定的卷只显示一个总结\n
+  -s, --summarize              为每个设定的卷只显示一个总结\n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -930,7 +928,7 @@ applyinfo: 显示 CUBRID HA 应用信息.\n\
   -L, --copied-log-path=PATH  设置复制的日志卷路径; 显示复制的日志信息 \n\
   -p, --pageid=ID             页 id; 默认: 0(活动页)\n\
   -v, --verbose               显示详细状态信息; 默认 : 关闭\n\
-  -i, --interval=S            print information every S secs\n	
+  -i, --interval=S            print information every S secs\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59 acldb 无法在单机模式下运行.\n

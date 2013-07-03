@@ -139,7 +139,6 @@ Mevcut hizmetin programları:\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 Mevcut yönetici programları:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ Mevcut komut:\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
-    acl         <status|reload> [broker-name]\n
+    acl         <status|reload> [broker-name]\n\
+    getid       -b <broker-name> [-f] shard-key\n
 27 cubrid yardımcı programı, sürüm %s\n\
 kullanım: %s manager <komut>\n\
 \n\
@@ -230,20 +230,6 @@ Mevcut komut:\n\
 36 Sunucu HA için yapılandırıldı.\n
 38 HA için ayarlanan sunucu ha_db_list.\n görülmedi. \n Listesinde
 39 HA için ayarlanan sunucu in_ ha_node_list.\n görülmedi. \n Listesinde
-62 Cubrid kullanım amacı, Versiyon %s\n\
-kullanım: %s shard <komut> [args]\n\
-\n\
-Mevcut komut:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          shard-adı\n\
-    off         shard-adı\n\
-    reset       shard-adı\n\
-    acl         <status|reload> [shard-adı]\n\
-    getid       -b <broker-name> [-f] shard-key\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 UYARI: -t seçeneği stand-alone modu yürütülmesine göz ardı edilir.\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 Bilinmeyen komut '%s'\n
 43 Çıktı dosyası '%s' açılamadı\n
 44 Varolan veritabanı kaldırılamadı\n
-45 %s boyut ile veri tabanı oluşturulması. Gerekli olan disk alanı toplam miktarı %s.\n
+45 Creating database with %s size using locale %s. The total amount of disk space needed is %s.\n
 46 Veritabanı oluşturulamadı.\n
 47 '%s' Kullanıcı dosya ile ilgili sorun\n
 48 Verilen '%s', %s kapsam dışı. %s ve %s arasında bir boyut seçin.\n
 49 %s Sayısal değeri '%s' geçersiz. \n
 60 \
 createdb: Bir veritabanı oluştur.\n\
-kullanım: %s createdb [SEÇENEK] database-name\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 geçerli seçenekler:\n\
       --db-volume-size=SIZE           ilk bilgi yoğunluğunun büyüklüğün\
                                       varsayılan: cubrid.conf içinde db_volume_size\n\
@@ -649,16 +636,26 @@ geçerli seçenekler:\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 Sayfa boyutu %s ile veritabanı '%s' için alan açıklaması. (log sayfa boyutu:%s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 Çıktı dosyası '%s' açılamadı\n
 18 Veritabanı '%s' sayfa boyutu %s için geçici yoğunlukları için alan açıklaması.\n\n
-19 Volid Amacı toplam_sayfa free_pages Vol Name\n\n
-20 Volid Amacı total_size free_size Vol Name\n\n
+19 Volid Amacı  toplam_sayfa free_pages Vol Name\n\n
+20 Volid Amacı  total_size free_size Vol Name\n\n
 21 LOB alanı açıklaması %s\n\n
+22 -------------------------------------------------------------------------------\n
 30 sayfa boyutu %s ile veritabanı '%s' için özet alan açıklama. (sayfa boyutu log:%s)\n\n
 31 Amaç toplam_sayfa used_pages free_pages volume_count\n
 32 Amaç total_size used_size free_size volume_count\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: Kullanım / veritabanı boş alanı gösterir.\n\
 kullanım: %s spacedb [SEÇENEK] database-name\n\
@@ -669,7 +666,8 @@ geçerli seçenekler:\n\
   -C, --CS-mode                istemci-sunucu modunda yürütme\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                gösterge ünitesi (sayfa, mega, giga, tera, insanların okuyabileceği); varsayılan: H\n\
-  -s, --summarize              her birim bir amaç için sadece özet görüntüler\n
+  -s, --summarize              her birim bir amaç için sadece özet görüntüler\n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -930,7 +928,7 @@ geçerli seçenekler:\n\
   -L, --copied-log-path=PATH  Kopyalanan log yoğunlukların path; görüntü kopyalanan log bilgileri \n\
   -p, --pageid=ID             sayfa id; varsayılan: 0 (etkin sayfa)\n\
   -v, --verbose               Ayrıntılı durum mesajları sağlamak; varsayılan: devre dışı bırakmak\n\
-  -i, --interval=S            print information every S secs\n	
+  -i, --interval=S            print information every S secs\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59 acldb bağımsız modu olarak çalıştıramazsınız.\n

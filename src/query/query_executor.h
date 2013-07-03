@@ -31,6 +31,9 @@
 #ident "$Id$"
 
 #include <time.h>
+#if defined(SERVER_MODE)
+#include "jansson.h"
+#endif
 
 #include "storage_common.h"
 #include "oid.h"
@@ -556,6 +559,35 @@ struct topn_tuples
   int values_count;		/* number of values in a tuple */
 };
 
+typedef struct orderby_stat ORDERBY_STATS;
+struct orderby_stat
+{
+  struct timeval orderby_time;
+  bool orderby_filesort;
+  bool orderby_topnsort;
+  UINT64 orderby_pages;
+  UINT64 orderby_ioreads;
+};
+
+typedef struct groupby_stat GROUPBY_STATS;
+struct groupby_stat
+{
+  struct timeval groupby_time;
+  UINT64 groupby_pages;
+  UINT64 groupby_ioreads;
+  int rows;
+  bool run_groupby;
+  bool groupby_sort;
+};
+
+typedef struct xasl_stat XASL_STATS;
+struct xasl_stat
+{
+  struct timeval elapsed_time;
+  UINT64 fetches;
+  UINT64 ioreads;
+};
+
 struct xasl_node
 {
   XASL_NODE_HEADER header;	/* XASL header */
@@ -648,6 +680,10 @@ struct xasl_node
   } proc;
 
   double cardinality;		/* estimated cardinality of result */
+
+  ORDERBY_STATS orderby_stats;
+  GROUPBY_STATS groupby_stats;
+  XASL_STATS xasl_stats;
 
   /* XASL cache related information */
   OID creator_oid;		/* OID of the user who created this XASL */
@@ -947,5 +983,9 @@ extern void qexec_replace_prior_regu_vars_prior_expr (THREAD_ENTRY * thread_p,
 						      XASL_NODE * xasl,
 						      XASL_NODE *
 						      connect_by_ptr);
-
+#if defined (SERVER_MODE)
+extern void qdump_print_stats_json (XASL_NODE * xasl_p, json_t * parent);
+extern void qdump_print_stats_text (FILE * fp, XASL_NODE * xasl_p,
+				    int indent);
+#endif /* SERVER_MODE */
 #endif /* _QUERY_EXECUTOR_H_ */

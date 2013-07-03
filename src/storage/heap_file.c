@@ -647,6 +647,7 @@ static int heap_classrepr_entry_free (HEAP_CLASSREPR_ENTRY * cache_entry);
 static int heap_stats_get_min_freespace (HEAP_HDR_STATS * heap_hdr);
 static void heap_stats_update (THREAD_ENTRY * thread_p,
 			       PAGE_PTR pgptr, const HFID * hfid,
+			       FILE_IS_NEW_FILE is_new_file,
 			       int prev_freespace);
 static int heap_stats_update_internal (THREAD_ENTRY * thread_p,
 				       const HFID * hfid,
@@ -726,7 +727,7 @@ static PAGE_PTR heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid,
 				 PAGE_PTR hdr_pgptr,
 				 HEAP_HDR_STATS * heap_hdr, int needed_space,
 				 HEAP_SCANCACHE * scan_cache,
-				 FILE_IS_NEW_FILE new_valid);
+				 FILE_IS_NEW_FILE is_new_file);
 static VPID *heap_vpid_remove (THREAD_ENTRY * thread_p, const HFID * hfid,
 			       HEAP_HDR_STATS * heap_hdr, VPID * rm_vpid);
 
@@ -958,6 +959,21 @@ static int heap_read_or_partition (THREAD_ENTRY * thread_p,
 				   HEAP_SCANCACHE * scan_cache,
 				   ATTR_ID type_id, ATTR_ID values_id,
 				   OR_PARTITION * or_part);
+static HEAP_STATS_ENTRY *heap_stats_add_bestspace (THREAD_ENTRY * thread_p,
+						   const HFID * hfid,
+						   VPID * vpid,
+						   int freespace);
+
+static void heap_stats_dump_bestspace_information (FILE * out_fp);
+static int heap_stats_print_hash_entry (FILE * outfp, const void *key,
+					void *ent, void *ignore);
+static unsigned int heap_hash_vpid (const void *key_vpid,
+				    unsigned int htsize);
+static int heap_compare_vpid (const void *key_vpid1, const void *key_vpid2);
+static unsigned int heap_hash_hfid (const void *key_hfid,
+				    unsigned int htsize);
+static int heap_compare_hfid (const void *key_hfid1, const void *key_hfid2);
+
 static int heap_set_mvcc_info (RECDES * recdes, MVCCID mvcc_ins_id,
 			       MVCCID mvcc_del_id,
 #if defined(MVCC_USE_COMMAND_ID)
@@ -982,6 +998,7 @@ static void heap_log_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
 static int heap_execute_clean_page (THREAD_ENTRY * thread_p,
 				    const HFID * hfid, PAGE_PTR page_p,
 				    SPAGE_CLEAN_STRUCT page_clean);
+
 
 /*
  * heap_hash_vpid () - Hash a page identifier
@@ -1039,6 +1056,52 @@ heap_compare_hfid (const void *key_hfid1, const void *key_hfid2)
   const HFID *hfid2 = (HFID *) key_hfid2;
 
   return HFID_EQ (hfid1, hfid2);
+}
+
+/*
+ * heap_stats_dump_bestspace_information () -
+ *   return:
+ *
+ *     out_fp(in/out):
+ */
+static void
+heap_stats_dump_bestspace_information (FILE * out_fp)
+{
+  int rc;
+
+  rc = pthread_mutex_lock (&heap_Bestspace->bestspace_mutex);
+
+  mht_dump (out_fp, heap_Bestspace->hfid_ht, false,
+	    heap_stats_print_hash_entry, NULL);
+  mht_dump (out_fp, heap_Bestspace->vpid_ht, false,
+	    heap_stats_print_hash_entry, NULL);
+
+  pthread_mutex_unlock (&heap_Bestspace->bestspace_mutex);
+}
+
+/*
+ * heap_stats_print_hash_entry()- Print the entry
+ *                              Will be used by mht_dump() function
+ *  return:
+ *
+ *   outfp(in):
+ *   key(in):
+ *   ent(in):
+ *   ignore(in):
+ */
+static int
+heap_stats_print_hash_entry (FILE * outfp, const void *key, void *ent,
+			     void *ignore)
+{
+  HEAP_STATS_ENTRY *entry = (HEAP_STATS_ENTRY *) ent;
+
+  fprintf (outfp, "HFID:Volid = %6d, Fileid = %6d, Header-pageid = %6d"
+	   ",VPID = %4d|%4d, freespace = %6d\n",
+	   entry->hfid.vfid.volid, entry->hfid.vfid.fileid, entry->hfid.hpgid,
+	   entry->best.vpid.volid, entry->best.vpid.pageid,
+	   entry->best.freespace);
+
+  return true;
 }
 
 /*
@@ -2905,6 +2968,7 @@ heap_stats_get_min_freespace (HEAP_HDR_STATS * heap_hdr)
  *   return: NO_ERROR
  *   pgptr(in): Page pointer
  *   hfid(in): Object heap file identifier
+ *   is_new_file(in): is new file
  *   prev_freespace(in):
  *
  * NOTE: There should be at least HEAP_DROP_FREE_SPACE in order to
@@ -2917,7 +2981,7 @@ heap_stats_get_min_freespace (HEAP_HDR_STATS * heap_hdr)
  */
 static void
 heap_stats_update (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, const HFID * hfid,
-		   int prev_freespace)
+		   FILE_IS_NEW_FILE is_new_file, int prev_freespace)
 {
   VPID *vpid;
   int freespace, error;
@@ -2930,8 +2994,13 @@ heap_stats_update (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, const HFID * hfid,
     {
       int rc;
 
-      if (prev_freespace < freespace)
+      /*
+       * do can not register vpid of new file.
+       * because the vpid can be dealloced when rollback.
+       */
+      if (prev_freespace < freespace && is_new_file != FILE_NEW_FILE)
 	{
+	  assert (is_new_file != FILE_ERROR);
 	  vpid = pgbuf_get_vpid_ptr (pgptr);
 	  assert_release (vpid != NULL);
 
@@ -2993,16 +3062,16 @@ heap_stats_update_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
   RECDES recdes;		/* Header record descriptor */
   LOG_DATA_ADDR addr;		/* Address of logging data */
   int i, best;
-  FILE_IS_NEW_FILE new_valid;
+  FILE_IS_NEW_FILE is_new_file;
   int ret = NO_ERROR;
 
-  new_valid = file_is_new_file (thread_p, &(hfid->vfid));
-  if (new_valid == FILE_ERROR)
+  is_new_file = file_is_new_file (thread_p, &(hfid->vfid));
+  if (is_new_file == FILE_ERROR)
     {
       return ER_FAILED;
     }
 
-  if (new_valid == FILE_NEW_FILE
+  if (is_new_file == FILE_NEW_FILE
       && log_is_tran_in_system_op (thread_p) == true)
     {
       return NO_ERROR;
@@ -3139,16 +3208,16 @@ heap_stats_update_all (THREAD_ENTRY * thread_p, const HFID * hfid,
   LOG_DATA_ADDR addr;		/* Address of logging data     */
   int i, best;
   int min_freespace;
-  FILE_IS_NEW_FILE new_valid;
+  FILE_IS_NEW_FILE is_new_file;
   int ret = NO_ERROR;
 
-  new_valid = file_is_new_file (thread_p, &(hfid->vfid));
-  if (new_valid == FILE_ERROR)
+  is_new_file = file_is_new_file (thread_p, &(hfid->vfid));
+  if (is_new_file == FILE_ERROR)
     {
       return ER_FAILED;
     }
 
-  if (new_valid == FILE_NEW_FILE
+  if (is_new_file == FILE_NEW_FILE
       && log_is_tran_in_system_op (thread_p) == true)
     {
       return NO_ERROR;
@@ -3417,13 +3486,21 @@ heap_stats_copy_cache_to_hdr (THREAD_ENTRY * thread_p,
 			      HEAP_SCANCACHE * scan_cache)
 {
   int i, j, best, ncopies;
-  FILE_IS_NEW_FILE new_valid;
+  FILE_IS_NEW_FILE is_new_file;
   int ret = NO_ERROR;
 
-  new_valid = file_is_new_file (thread_p, &(scan_cache->hfid.vfid));
-  if (new_valid == FILE_ERROR)
+  if (scan_cache != NULL)
     {
-      return ER_FAILED;
+      assert (scan_cache->is_new_file != FILE_ERROR);
+      is_new_file = scan_cache->is_new_file;
+    }
+  else
+    {
+      is_new_file = file_is_new_file (thread_p, &(scan_cache->hfid.vfid));
+      if (is_new_file == FILE_ERROR)
+	{
+	  return ER_FAILED;
+	}
     }
 
   /*
@@ -3434,7 +3511,7 @@ heap_stats_copy_cache_to_hdr (THREAD_ENTRY * thread_p,
   scan_cache->collect_nrecs = 0;
   scan_cache->collect_recs_sumlen = 0;
 
-  if (new_valid == FILE_OLD_FILE
+  if (is_new_file == FILE_OLD_FILE
       || log_is_tran_in_system_op (thread_p) == false)
     {
       best = 0;
@@ -3860,6 +3937,7 @@ heap_stats_find_best_page (THREAD_ENTRY * thread_p, const HFID * hfid,
   int total_space;
   int try_find, try_sync;
   int num_pages_found;
+  FILE_IS_NEW_FILE is_new_file = FILE_ERROR;
 
   /*
    * Try to use the space cache for as much information as possible to avoid
@@ -3964,7 +4042,16 @@ heap_stats_find_best_page (THREAD_ENTRY * thread_p, const HFID * hfid,
        * The followings will try to find free pages and fill best hints with them.
        */
 
-      if (file_is_new_file (thread_p, &(hfid->vfid)) == FILE_NEW_FILE
+      if (scan_cache != NULL)
+	{
+	  assert (scan_cache->is_new_file != FILE_ERROR);
+	  is_new_file = scan_cache->is_new_file;
+	}
+      else
+	{
+	  is_new_file = file_is_new_file (thread_p, &(hfid->vfid));
+	}
+      if (is_new_file == FILE_NEW_FILE
 	  && log_is_tran_in_system_op (thread_p) == true)
 	{
 	  log_append_undo_data (thread_p, RVHF_STATS, &addr_hdr,
@@ -4020,17 +4107,23 @@ heap_stats_find_best_page (THREAD_ENTRY * thread_p, const HFID * hfid,
        * be accurate.
        */
 
-      FILE_IS_NEW_FILE new_valid;
-
-      new_valid = file_is_new_file (thread_p, &(hfid->vfid));
-      if (new_valid == FILE_ERROR)
+      if (scan_cache != NULL)
+	{
+	  assert (scan_cache->is_new_file != FILE_ERROR);
+	  is_new_file = scan_cache->is_new_file;
+	}
+      else
+	{
+	  is_new_file = file_is_new_file (thread_p, &(hfid->vfid));
+	}
+      if (is_new_file == FILE_ERROR)
 	{
 	  assert_release (false);
 	  pgbuf_unfix_and_init (thread_p, addr_hdr.pgptr);
 	  return NULL;
 	}
 
-      if (new_valid == FILE_NEW_FILE
+      if (is_new_file == FILE_NEW_FILE
 	  && log_is_tran_in_system_op (thread_p) == true)
 	{
 	  log_append_undo_data (thread_p, RVHF_STATS, &addr_hdr,
@@ -4038,7 +4131,7 @@ heap_stats_find_best_page (THREAD_ENTRY * thread_p, const HFID * hfid,
 	}
 
       pgptr = heap_vpid_alloc (thread_p, hfid, addr_hdr.pgptr, heap_hdr,
-			       total_space, scan_cache, new_valid);
+			       total_space, scan_cache, is_new_file);
       assert (pgptr != NULL
 	      || er_errid () == ER_INTERRUPTED
 	      || er_errid () == ER_FILE_NOT_ENOUGH_PAGES_IN_DATABASE);
@@ -5040,7 +5133,7 @@ heap_vpid_prealloc_set (THREAD_ENTRY * thread_p, const HFID * hfid,
  *   heap_hdr(in): The heap header structure
  *   needed_space(in): The minimal space needed on new page
  *   scan_cache(in): Scan cache
- *   new_valid(in): is new file
+ *   is_new_file(in): is new file
  *
  * Note: Allocate and initialize a new heap page. The heap header is
  * updated to reflect a newly allocated best space page and
@@ -5051,7 +5144,7 @@ static PAGE_PTR
 heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid,
 		 PAGE_PTR hdr_pgptr, HEAP_HDR_STATS * heap_hdr,
 		 int needed_space, HEAP_SCANCACHE * scan_cache,
-		 FILE_IS_NEW_FILE new_valid)
+		 FILE_IS_NEW_FILE is_new_file)
 {
   VPID vpid;			/* Volume and page identifiers */
   LOG_DATA_ADDR addr;		/* Address of logging data */
@@ -5158,7 +5251,7 @@ heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid,
   heap_hdr->estimates.best[best].freespace =
     spage_max_space_for_new_record (thread_p, new_pgptr);
 
-  if (new_valid == FILE_NEW_FILE)
+  if (is_new_file == FILE_NEW_FILE)
     {
       /* do can not register vpid of new file.
        * because the vpid can be dealloced when rollback.
@@ -5166,6 +5259,7 @@ heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid,
     }
   else
     {
+      assert (is_new_file == FILE_OLD_FILE);
       if (prm_get_integer_value (PRM_ID_HF_MAX_BESTSPACE_ENTRIES) > 0)
 	{
 	  int rc;
@@ -5747,8 +5841,8 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, int exp_npgs,
 	  && file_find_nthpages (thread_p, &hfid->vfid, &vpid, 0, 1) == 1)
 	{
 	  hfid->hpgid = vpid.pageid;
-	  if (heap_reuse (thread_p, hfid, &hfdes.class_oid, reuse_oid) !=
-	      NULL)
+	  if (heap_reuse (thread_p, hfid, &hfdes.class_oid,
+			  reuse_oid) != NULL)
 	    {
 	      /* A heap has been reused */
 	      return hfid;
@@ -5790,6 +5884,20 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, int exp_npgs,
       return NULL;
     }
   hfid->hpgid = vpid.pageid;
+
+  if (prm_get_integer_value (PRM_ID_HF_MAX_BESTSPACE_ENTRIES) > 0)
+    {
+      int del_cnt, rc;
+
+      rc = pthread_mutex_lock (&heap_Bestspace->bestspace_mutex);
+      /* delete all entries of hfid. is impossible, set as a defense code */
+      del_cnt = heap_stats_del_bestspace (thread_p, hfid, -1 /* no stop */ ,
+					  INT_MAX);
+      assert (del_cnt == 0);
+      assert (mht_count (heap_Bestspace->vpid_ht) ==
+	      mht_count (heap_Bestspace->hfid_ht));
+      pthread_mutex_unlock (&heap_Bestspace->bestspace_mutex);
+    }
 
   /* Initialize header page */
   spage_initialize (thread_p, addr_hdr.pgptr, heap_get_spage_type (),
@@ -6358,17 +6466,17 @@ int
 xheap_destroy_newly_created (THREAD_ENTRY * thread_p, const HFID * hfid)
 {
   VFID vfid;
-  FILE_IS_NEW_FILE new_valid;
+  FILE_IS_NEW_FILE is_new_file;
   FILE_TYPE file_type;
   int ret;
 
-  new_valid = file_is_new_file (thread_p, &(hfid->vfid));
-  if (new_valid == FILE_ERROR)
+  is_new_file = file_is_new_file (thread_p, &(hfid->vfid));
+  if (is_new_file == FILE_ERROR)
     {
       return ER_FAILED;
     }
 
-  if (new_valid == FILE_NEW_FILE)
+  if (is_new_file == FILE_NEW_FILE)
     {
       return xheap_destroy (thread_p, hfid);
     }
@@ -8513,6 +8621,7 @@ heap_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
   VPID home_vpid;
   bool reuse_oid = false;
   FILE_TYPE file_type = FILE_UNKNOWN_TYPE;
+  FILE_IS_NEW_FILE is_new_file = FILE_ERROR;
   bool need_update;
   bool use_mvcc = mvcc_Enabled;
   bool record_locked = false;
@@ -8538,11 +8647,15 @@ heap_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
     {
       assert (HFID_EQ (hfid, &scan_cache->hfid));
       assert (scan_cache->file_type != FILE_UNKNOWN_TYPE);
+      assert (scan_cache->is_new_file != FILE_ERROR);
+
       file_type = scan_cache->file_type;
+      is_new_file = scan_cache->is_new_file;
     }
   else
     {
       file_type = file_get_type (thread_p, &hfid->vfid);
+      is_new_file = file_is_new_file (thread_p, &hfid->vfid);
     }
   if (file_type != FILE_HEAP && file_type != FILE_HEAP_REUSE_SLOTS)
     {
@@ -8751,7 +8864,8 @@ try_again:
 			       NULL);
 	}
 
-      heap_stats_update (thread_p, addr.pgptr, hfid, prev_freespace);
+      heap_stats_update (thread_p, addr.pgptr, hfid, is_new_file,
+			 prev_freespace);
 
       pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
 
@@ -8778,7 +8892,8 @@ try_again:
       log_append_postpone (thread_p, RVHF_MARK_REUSABLE_SLOT, &forward_addr,
 			   0, NULL);
 
-      heap_stats_update (thread_p, forward_addr.pgptr, hfid, prev_freespace);
+      heap_stats_update (thread_p, forward_addr.pgptr, hfid, is_new_file,
+			 prev_freespace);
 
       pgbuf_set_dirty (thread_p, forward_addr.pgptr, FREE);
       forward_addr.pgptr = NULL;
@@ -8938,7 +9053,8 @@ try_again:
 			       NULL);
 	}
 
-      heap_stats_update (thread_p, addr.pgptr, hfid, prev_freespace);
+      heap_stats_update (thread_p, addr.pgptr, hfid, is_new_file,
+			 prev_freespace);
 
       pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
 
@@ -9033,7 +9149,8 @@ try_again:
 			       NULL);
 	}
 
-      heap_stats_update (thread_p, addr.pgptr, hfid, prev_freespace);
+      heap_stats_update (thread_p, addr.pgptr, hfid, is_new_file,
+			 prev_freespace);
 
       pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
       break;
@@ -9251,15 +9368,15 @@ xheap_reclaim_addresses (THREAD_ENTRY * thread_p, const HFID * hfid)
   int ret = NO_ERROR;
   int free_space;
   int npages, nrecords, rec_length;
-  FILE_IS_NEW_FILE new_valid;
+  FILE_IS_NEW_FILE is_new_file;
   bool need_update;
 
-  new_valid = file_is_new_file (thread_p, &hfid->vfid);
-  if (new_valid == FILE_ERROR)
+  is_new_file = file_is_new_file (thread_p, &hfid->vfid);
+  if (is_new_file == FILE_ERROR)
     {
       goto exit_on_error;
     }
-  if (new_valid == FILE_NEW_FILE)
+  if (is_new_file == FILE_NEW_FILE)
     {
       /*
        * This function should not be called for new files. It should work for
@@ -9397,6 +9514,7 @@ xheap_reclaim_addresses (THREAD_ENTRY * thread_p, const HFID * hfid)
 	    {
 	      int rc;
 
+	      assert (is_new_file == FILE_OLD_FILE);
 	      rc = pthread_mutex_lock (&heap_Bestspace->bestspace_mutex);
 
 	      (void) heap_stats_add_bestspace (thread_p, hfid, &vpid,
@@ -9877,6 +9995,7 @@ heap_scancache_start_internal (THREAD_ENTRY * thread_p,
       HFID_SET_NULL (&scan_cache->hfid);
       scan_cache->hfid.vfid.volid = NULL_VOLID;
       scan_cache->file_type = FILE_UNKNOWN_TYPE;
+      scan_cache->is_new_file = FILE_ERROR;
     }
   else
     {
@@ -9904,6 +10023,11 @@ heap_scancache_start_internal (THREAD_ENTRY * thread_p,
       scan_cache->hfid.hpgid = hfid->hpgid;
       scan_cache->file_type = file_get_type (thread_p, &hfid->vfid);
       if (scan_cache->file_type == FILE_UNKNOWN_TYPE)
+	{
+	  goto exit_on_error;
+	}
+      scan_cache->is_new_file = file_is_new_file (thread_p, &hfid->vfid);
+      if (scan_cache->is_new_file == FILE_ERROR)
 	{
 	  goto exit_on_error;
 	}
@@ -10016,6 +10140,7 @@ exit_on_error:
   db_private_free_and_init (thread_p, scan_cache->collect_best);
   scan_cache->collect_maxbest = 0;
   scan_cache->file_type = FILE_UNKNOWN_TYPE;
+  scan_cache->is_new_file = FILE_ERROR;
   scan_cache->debug_initpattern = 0;
   scan_cache->mvcc_snapshot = NULL;
 
@@ -10208,8 +10333,7 @@ heap_scancache_force_modify (THREAD_ENTRY * thread_p,
       pgbuf_unfix_and_init (thread_p, scan_cache->pgptr);
     }
 
-  if (scan_cache->collect_nbest > 0
-      && scan_cache->collect_recs_sumlen > 0.0
+  if (scan_cache->collect_nbest > 0 && scan_cache->collect_recs_sumlen > 0.0
       && (file_is_new_file (thread_p,
 			    &(scan_cache->hfid.vfid)) != FILE_NEW_FILE
 	  || log_is_tran_in_system_op (thread_p) != true))
@@ -10297,6 +10421,17 @@ heap_scancache_reset_modify (THREAD_ENTRY * thread_p,
       scan_cache->hfid.vfid.volid = hfid->vfid.volid;
       scan_cache->hfid.vfid.fileid = hfid->vfid.fileid;
       scan_cache->hfid.hpgid = hfid->hpgid;
+
+      scan_cache->file_type = file_get_type (thread_p, &hfid->vfid);
+      if (scan_cache->file_type == FILE_UNKNOWN_TYPE)
+	{
+	  return ER_FAILED;
+	}
+      scan_cache->is_new_file = file_is_new_file (thread_p, &hfid->vfid);
+      if (scan_cache->is_new_file == FILE_ERROR)
+	{
+	  return ER_FAILED;
+	}
 
       ret = heap_get_best_estimates_stats (thread_p, hfid,
 					   &scan_cache->known_nbest,
@@ -10400,6 +10535,7 @@ heap_scancache_quick_start_internal (HEAP_SCANCACHE * scan_cache)
   scan_cache->num_btids = 0;
   scan_cache->index_stat_info = NULL;
   scan_cache->file_type = FILE_UNKNOWN_TYPE;
+  scan_cache->is_new_file = FILE_ERROR;
   scan_cache->debug_initpattern = HEAP_DEBUG_SCANCACHE_INITPATTERN;
   scan_cache->mvcc_snapshot = NULL;
 
@@ -10478,6 +10614,7 @@ heap_scancache_quick_end (THREAD_ENTRY * thread_p,
   scan_cache->collect_nother_best = 0;
   scan_cache->collect_best = NULL;
   scan_cache->file_type = FILE_UNKNOWN_TYPE;
+  scan_cache->is_new_file = FILE_ERROR;
   scan_cache->debug_initpattern = 0;
 
   return ret;
@@ -12857,8 +12994,7 @@ heap_scanrange_next (THREAD_ENTRY * thread_p, OID * next_oid, RECDES * recdes,
 }
 
 /*
- * heap_scanrange_prev () -
- * heap_scanrange_prev: RETRIEVE OR PEEK NEXT OBJECT IN THE SCANRANGE
+ * heap_scanrange_prev () - RETRIEVE OR PEEK NEXT OBJECT IN THE SCANRANGE
  *   return:
  * returns/side-effects: SCAN_CODE
  *              (Either of S_SUCCESS, S_DOESNT_FIT, S_END,
@@ -15747,25 +15883,12 @@ heap_attrinfo_set (const OID * inst_oid, ATTR_ID attrid, DB_VALUE * attr_val,
   else
     {
       /* the domains don't match, must attempt coercion */
-      dom_status = tp_value_coerce (attr_val, &value->dbvalue,
-				    value->last_attrepr->domain);
-      if (dom_status != DOMAIN_COMPATIBLE)
+      ret = tp_value_auto_cast (attr_val, &value->dbvalue,
+				value->last_attrepr->domain);
+      if (ret != NO_ERROR)
 	{
-	  if (dom_status == DOMAIN_OVERFLOW)
-	    {
-	      ret =
-		tp_domain_status_er_set (dom_status, ARG_FILE_LINE, attr_val,
-					 value->last_attrepr->domain);
-	    }
-	  else
-	    {
-	      /* set an error of some sort, we really shouldn't get here
-	       * on the server, the coercion rules should have been
-	       * checked by now.
-	       */
-	      ret = ER_OBJ_DOMAIN_CONFLICT;
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ret, 1, "*noname*");
-	    }
+	  assert (er_errid () != NO_ERROR);
+
 	  DB_MAKE_NULL (&value->dbvalue);
 	}
     }
@@ -22470,7 +22593,7 @@ heap_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
 	{
 	  /* Get unconditional latch */
 	  new_page_p =
-	    pgbuf_fix (thread_p, *page_p, OLD_PAGE, PGBUF_LATCH_WRITE,
+	    pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
 		       PGBUF_UNCONDITIONAL_LATCH);
 	  if (new_page_p == NULL)
 	    {

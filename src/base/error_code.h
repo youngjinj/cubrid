@@ -1423,6 +1423,11 @@
 
 #define ER_QUERY_EXECUTION_ERROR                    -1124
 
+#define ER_BTREE_CREATED_OVERFLOW_KEY                 -1125
+
+#define ER_BTREE_CREATED_OVERFLOW_PAGE                -1126
+#define ER_BTREE_DELETED_OVERFLOW_PAGE                -1127
+
 #define ER_LOG_RECOVERY_STARTED                     -1128
 
 #define ER_LOG_RECOVERY_FINISHED                    -1129
@@ -1431,7 +1436,9 @@
 
 #define ER_SP_INVALID_HEADER                        -1131
 
-#define ER_LAST_ERROR                               -1132
+#define ER_ENCRYPTION_LIB_FAILED                    -1132
+
+#define ER_LAST_ERROR                               -1133
 
 /*
  * CAUTION!

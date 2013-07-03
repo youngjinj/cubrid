@@ -3527,6 +3527,10 @@ get_opcode_rank (PT_OP_TYPE opcode)
     case PT_NOT_RLIKE_BINARY:
 
     case PT_MD5:
+    case PT_AES_ENCRYPT:
+    case PT_AES_DECRYPT:
+    case PT_SHA_ONE:
+    case PT_SHA_TWO:
     case PT_ENCRYPT:
     case PT_DECRYPT:
     case PT_INDEX_CARDINALITY:
@@ -3992,6 +3996,7 @@ pt_is_pseudo_const (PT_NODE * expr)
 	case PT_REVERSE:
 	case PT_SPACE:
 	case PT_MD5:
+	case PT_SHA_ONE:
 	case PT_BIN:
 	  return pt_is_pseudo_const (expr->info.expr.arg1);
 	case PT_TRIM:
@@ -4000,6 +4005,9 @@ pt_is_pseudo_const (PT_NODE * expr)
 	case PT_LIKE_LOWER_BOUND:
 	case PT_LIKE_UPPER_BOUND:
 	case PT_FROM_UNIXTIME:
+	case PT_AES_ENCRYPT:
+	case PT_AES_DECRYPT:
+	case PT_SHA_TWO:
 	  return (pt_is_pseudo_const (expr->info.expr.arg1)
 		  && (expr->info.expr.arg2 ?
 		      pt_is_pseudo_const (expr->info.
@@ -4798,7 +4806,7 @@ add_using_index (QO_ENV * env, PT_NODE * using_index)
 	    {
 	      /* USING INDEX ALL EXCEPT case */
 	      QO_UI_INDEX (uip, n) = indexp->info.name.resolved;
-	      QO_UI_FORCE (uip, n++) = (int) (indexp->etc);
+	      QO_UI_FORCE (uip, n++) = (int) (UINT64) (indexp->etc);
 	    }
 	  if (indexp->info.name.original
 	      && !intl_identifier_casecmp (QO_NODE_NAME (nodep),
@@ -4806,7 +4814,7 @@ add_using_index (QO_ENV * env, PT_NODE * using_index)
 	    {
 	      QO_UI_INDEX (uip, n) = indexp->info.name.original;
 	      QO_UI_KEYLIMIT (uip, n) = indexp->info.name.indx_key_limit;
-	      QO_UI_FORCE (uip, n++) = (int) (indexp->etc);
+	      QO_UI_FORCE (uip, n++) = (int) (UINT64) (indexp->etc);
 	    }
 	}
     }
@@ -8655,6 +8663,18 @@ qo_discover_sort_limit_nodes (QO_ENV * env)
 
   env->use_sort_limit = QO_SL_INVALID;
 
+  /* Verify that we don't have terms qualified as after join. These terms will
+   * be evaluated after the SORT-LIMIT plan and might invalidate tuples the
+   * plan returned. 
+   */
+  for (i = 0; i < env->nterms; i++)
+    {
+      if (QO_TERM_CLASS (&env->terms[i]) == QO_TC_AFTER_JOIN)
+	{
+	  goto abandon_stop_limit;
+	}
+    }
+
   /* Start by assuming that evaluation of the limit clause depends on all
    * nodes in the query. Since we only have one partition, we can get the
    * bitset of nodes from there.
@@ -9434,8 +9454,10 @@ qo_discover_sort_limit_join_nodes (QO_ENV * env, QO_NODE * node,
       if (BITSET_MEMBER (QO_TERM_NODES (term), QO_NODE_IDX (node)))
 	{
 	  if (QO_TERM_CLASS (term) == QO_TC_JOIN
-	      && IS_OUTER_JOIN_TYPE (QO_TERM_JOIN_TYPE (term))
-	      && QO_TERM_HEAD (term) == node)
+	      && ((QO_TERM_JOIN_TYPE (term) == JOIN_LEFT
+		   && QO_TERM_HEAD (term) == node)
+		  || (QO_TERM_JOIN_TYPE (term) == JOIN_RIGHT
+		      && QO_TERM_TAIL (term) == node)))
 	    {
 	      /* Other nodes in this term are outer joined with our node. We
 	       * can safely add them to dep_nodes if we're not ordering on

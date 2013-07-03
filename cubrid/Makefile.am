@@ -102,7 +102,8 @@ BASE_SOURCES = \
 	$(BASE_DIR)/variable_string.c \
 	$(BASE_DIR)/stringl.c \
 	$(BASE_DIR)/getopt_long.c \
-	$(BASE_DIR)/binaryheap.c
+	$(BASE_DIR)/binaryheap.c \
+	$(BASE_DIR)/event_log.c
 
 EXECUTABLE_SOURCES = \
 	$(EXECUTABLE_DIR)/util_common.c
@@ -145,6 +146,7 @@ QUERY_SOURCES = \
 	$(QUERY_DIR)/partition.c \
 	$(QUERY_DIR)/query_opfunc.c \
 	$(QUERY_DIR)/stream_to_xasl.c \
+	$(QUERY_DIR)/crypt_opfunc.c \
 	$(QUERY_DIR)/vacuum.c
 
 OBJECT_SOURCES = \

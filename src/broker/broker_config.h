@@ -80,22 +80,23 @@
 #define BROKER_NAME_LEN		64
 #define BROKER_LOG_MSG_SIZE	64
 
-#if defined(CUBRID_SHARD)
-#define SHARD_NAME_LEN 		64
-#define DEFAULT_MIN_NUM_PROXY	1
-#define DEFAULT_MAX_NUM_PROXY	1
-#define DEFAULT_MAX_CLIENT 	10
+#if !defined(BROKER_PATH_MAX)
+#define BROKER_PATH_MAX       (PATH_MAX)
+#endif
 
-#define DEFAULT_PROXY_LOG_MAX_SIZE	"100M"
-#define MAX_PROXY_LOG_MAX_SIZE		1048576	/* about 1G */
-#endif /* CUBRID_SHARD */
+#define SHARD_NAME_LEN 		      64
+#define DEFAULT_SHARD_NUM_PROXY	 1
+#define DEFAULT_SHARD_MAX_CLIENTS 	 10
+
+#define DEFAULT_SHARD_PROXY_LOG_MAX_SIZE	"100M"
+#define MAX_PROXY_LOG_MAX_SIZE		        1048576	/* about 1G */
 
 #define SHARD_CONN_STAT_SIZE_LIMIT       256
 #define SHARD_KEY_STAT_SIZE_LIMIT        2
 #define CLIENT_INFO_SIZE_LIMIT           10000
 #define SHARD_INFO_SIZE_LIMIT            256
 
-#define BROKER_INFO_PATH_MAX             (1024)
+#define BROKER_INFO_PATH_MAX             (PATH_MAX)
 #define BROKER_INFO_NAME_MAX             (BROKER_INFO_PATH_MAX)
 
 typedef enum t_sql_log_mode_value T_SQL_LOG_MODE_VALUE;
@@ -134,7 +135,6 @@ enum t_access_mode_value
   PH_READ_ONLY_ACCESS_MODE = 3
 };
 
-#if defined(CUBRID_SHARD)
 typedef enum t_proxy_log_value T_PROXY_LOG_MODE_VALUE;
 enum t_proxy_log_mode_value
 {
@@ -148,7 +148,6 @@ enum t_proxy_log_mode_value
   PROXY_LOG_MODE_ALL = 7,
   PROXY_LOG_MODE_DEFAULT = SQL_LOG_MODE_ERROR
 };
-#endif /* CUBRID_SHARD */
 
 typedef struct t_broker_info T_BROKER_INFO;
 struct t_broker_info
@@ -204,6 +203,7 @@ struct t_broker_info
   char source_env[CONF_LOG_FILE_LEN];
   char acl_file[CONF_LOG_FILE_LEN];
   char preferred_hosts[BROKER_INFO_NAME_MAX];
+  char db_connection_file[BROKER_INFO_PATH_MAX];
 
   char jdbc_cache;
   char jdbc_cache_only_hint;
@@ -213,11 +213,12 @@ struct t_broker_info
   char cci_default_autocommit;
 
   int monitor_hang_interval;
-  char monitor_hang_flag;
   int hang_timeout;
-  char reject_client_flag;	/* reject clients due to hanging cas/proxy */
   int reject_client_count;
 
+  char monitor_hang_flag;
+  char reject_client_flag;	/* reject clients due to hanging cas/proxy */
+  char shard_flag;
   /*from here, these are used only in shard */
   int proxy_shm_id;
 
@@ -260,12 +261,10 @@ extern int conf_get_value_sql_log_mode (const char *value);
 extern int conf_get_value_keep_con (const char *value);
 extern int conf_get_value_access_mode (const char *value);
 
-#if defined(CUBRID_SHARD)
 extern int conf_get_value_proxy_log_mode (const char *value);
-#endif /* CUBRID_SHARD */
+
 extern void dir_repath (char *path, size_t path_len);
 
-#if defined(CUBRID_SHARD)
 #if defined(SHARD_VERBOSE_DEBUG)
 #if defined (WINDOWS)
 #define SHARD_ERR(f, ...) do { \
@@ -293,6 +292,5 @@ fprintf(stdout, "[%-35s:%05d] <INF> "f, __FILE__, __LINE__, ##a); \
 #define SHARD_INF(f, a...)
 #endif /* !WINDOWS */
 #endif
-#endif /* CUBRID_SHARD */
 
 #endif /* _BROKER_CONFIG_H_ */

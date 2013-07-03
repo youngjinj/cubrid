@@ -453,11 +453,11 @@ thread_start_workers (void)
 
 #if defined(_POSIX_THREAD_ATTR_STACKSIZE)
   r = pthread_attr_getstacksize (&thread_attr, &ts_size);
-  if (ts_size != (size_t) prm_get_integer_value (PRM_ID_THREAD_STACKSIZE))
+  if (ts_size != (size_t) prm_get_bigint_value (PRM_ID_THREAD_STACKSIZE))
     {
       r =
 	pthread_attr_setstacksize (&thread_attr,
-				   prm_get_integer_value
+				   prm_get_bigint_value
 				   (PRM_ID_THREAD_STACKSIZE));
       if (r != 0)
 	{
@@ -1154,6 +1154,17 @@ thread_initialize_entry (THREAD_ENTRY * entry_p)
 
   entry_p->sort_stats_active = false;
 
+  entry_p->cs_waits.tv_sec = 0;
+  entry_p->cs_waits.tv_usec = 0;
+  entry_p->lock_waits.tv_sec = 0;
+  entry_p->lock_waits.tv_usec = 0;
+  entry_p->latch_waits.tv_sec = 0;
+  entry_p->latch_waits.tv_usec = 0;
+
+  entry_p->on_trace = false;
+  entry_p->clear_trace = false;
+  entry_p->sort_stats_active = false;
+
   return NO_ERROR;
 }
 
@@ -1495,12 +1506,18 @@ thread_suspend_wakeup_and_unlock_entry (THREAD_ENTRY * thread_p,
 {
   int r;
   int old_status;
+  struct timeval start, end;
 
   assert (thread_p->status == TS_RUN || thread_p->status == TS_CHECK);
   old_status = thread_p->status;
   thread_p->status = TS_WAIT;
 
   thread_p->resume_status = suspended_reason;
+
+  if (prm_get_integer_value (PRM_ID_SQL_TRACE_SLOW_MSECS) >= 0)
+    {
+      gettimeofday (&start, NULL);
+    }
 
   r = pthread_cond_wait (&thread_p->wakeup_cond, &thread_p->th_entry_lock);
   if (r != 0)
@@ -1510,6 +1527,18 @@ thread_suspend_wakeup_and_unlock_entry (THREAD_ENTRY * thread_p,
       return ER_CSS_PTHREAD_COND_WAIT;
     }
 
+  if (prm_get_integer_value (PRM_ID_SQL_TRACE_SLOW_MSECS) >= 0)
+    {
+      gettimeofday (&end, NULL);
+      if (suspended_reason == THREAD_LOCK_SUSPENDED)
+	{
+	  ADD_TIMEVAL (thread_p->lock_waits, start, end);
+	}
+      else if (suspended_reason == THREAD_PGBUF_SUSPENDED)
+	{
+	  ADD_TIMEVAL (thread_p->latch_waits, start, end);
+	}
+    }
 
   thread_p->status = old_status;
 
@@ -2407,6 +2436,14 @@ thread_worker (void *arg_p)
       tsd_ptr->tran_index = -1;
       pthread_mutex_unlock (&tsd_ptr->tran_index_lock);
       tsd_ptr->check_interrupt = true;
+
+      tsd_ptr->cs_waits.tv_sec = 0;
+      tsd_ptr->cs_waits.tv_usec = 0;
+      tsd_ptr->lock_waits.tv_sec = 0;
+      tsd_ptr->lock_waits.tv_usec = 0;
+      tsd_ptr->latch_waits.tv_sec = 0;
+      tsd_ptr->latch_waits.tv_usec = 0;
+      tsd_ptr->on_trace = false;
     }
 
   er_final (0);
@@ -2794,7 +2831,7 @@ thread_checkpoint_thread (void *arg_p)
 
       to.tv_sec =
 	time (NULL) +
-	prm_get_integer_value (PRM_ID_LOG_CHECKPOINT_INTERVAL_MINUTES) * 60;
+	prm_get_integer_value (PRM_ID_LOG_CHECKPOINT_INTERVAL_SECS);
 
       rv = pthread_mutex_lock (&thread_Checkpoint_thread.lock);
       pthread_cond_timedwait (&thread_Checkpoint_thread.cond,
@@ -4647,3 +4684,86 @@ thread_rc_track_meter_at (THREAD_RC_METER * meter,
   return;
 }
 #endif
+
+/*
+ * thread_trace_on () -
+ *   return:
+ *   thread_p(in):
+ */
+void
+thread_trace_on (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  thread_p->on_trace = true;
+}
+
+/*
+ * thread_set_trace_format () -
+ *   return:
+ *   thread_p(in):
+ *   format(in):
+ */
+void
+thread_set_trace_format (THREAD_ENTRY * thread_p, int format)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  thread_p->trace_format = format;
+}
+
+/*
+ * thread_is_on_trace () -
+ *   return:
+ *   thread_p(in):
+ */
+bool
+thread_is_on_trace (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  return thread_p->on_trace;
+}
+
+/*
+ * thread_set_clear_trace () -
+ *   return:
+ *   thread_p(in):
+ *   clear(in):
+ */
+void
+thread_set_clear_trace (THREAD_ENTRY * thread_p, bool clear)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  thread_p->clear_trace = clear;
+}
+
+/*
+ * thread_need_clear_trace() -
+ *   return:
+ *   thread_p(in):
+ */
+bool
+thread_need_clear_trace (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  return thread_p->clear_trace;
+}
+

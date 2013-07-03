@@ -48,6 +48,8 @@
 #include "broker_filename.h"
 #include "broker_util.h"
 #include "cas_sql_log2.h"
+#include "shard_shm.h"
+#include "shard_metadata.h"
 
 #include "ini_parser.h"
 
@@ -65,11 +67,9 @@
 #define DEFAULT_MONITOR_HANG_INTERVAL 60
 #define DEFAULT_HANG_TIMEOUT    60
 
-#if defined(CUBRID_SHARD)
-#define DEFAULT_PROXY_LOG_MODE		"ERROR"
+#define DEFAULT_SHARD_PROXY_LOG_MODE		"ERROR"
 #define DEFAULT_SHARD_KEY_MODULAR	256
-#define DEFAULT_PROXY_TIMEOUT 		"30s"
-#endif /* CUBRID_SHARD */
+#define DEFAULT_SHARD_PROXY_TIMEOUT 		"30s"
 
 #define	TRUE	1
 #define	FALSE	0
@@ -91,7 +91,6 @@ static void conf_file_has_been_loaded (const char *conf_path);
 static int check_port_number (T_BROKER_INFO * br_info, int num_brs);
 static int get_conf_value (const char *string, T_CONF_TABLE * conf_table);
 static const char *get_conf_string (int value, T_CONF_TABLE * conf_table);
-
 
 static T_CONF_TABLE tbl_appl_server[] = {
   {APPL_SERVER_CAS_TYPE_NAME, APPL_SERVER_CAS},
@@ -131,7 +130,6 @@ static T_CONF_TABLE tbl_access_mode[] = {
   {NULL, 0}
 };
 
-#if defined(CUBRID_SHARD)
 static T_CONF_TABLE tbl_proxy_log_mode[] = {
   {"ALL", PROXY_LOG_MODE_ALL},
   {"ON", PROXY_LOG_MODE_ALL},
@@ -144,13 +142,8 @@ static T_CONF_TABLE tbl_proxy_log_mode[] = {
   {"OFF", PROXY_LOG_MODE_NONE},
   {NULL, 0}
 };
-#endif /* CUBRID_SHARD */
 
-#if defined(CUBRID_SHARD)
-static const char SECTION_NAME[] = "shard";
-#else
 static const char SECTION_NAME[] = "broker";
-#endif /* CUBRID_SHARD */
 
 static const char *tbl_conf_err_msg[] = {
   "",
@@ -163,10 +156,6 @@ static const char *tbl_conf_err_msg[] = {
 /* conf files that have been loaded */
 #define MAX_NUM_OF_CONF_FILE_LOADED     5
 static char *conf_file_loaded[MAX_NUM_OF_CONF_FILE_LOADED];
-
-#if defined(CUBRID_SHARD)
-extern void shard_shm_dump_appl_server (FILE * fp, int shmid);
-#endif /* CUBRID_SHARD */
 
 /*
  * conf_file_has_been_loaded - record the file path that has been loaded
@@ -230,7 +219,7 @@ check_port_number (T_BROKER_INFO * br_info, int num_brs)
 void
 dir_repath (char *path, size_t path_len)
 {
-  char tmp_str[PATH_MAX];
+  char tmp_str[BROKER_PATH_MAX];
 
   trim (path);
 
@@ -239,7 +228,7 @@ dir_repath (char *path, size_t path_len)
       return;
     }
 
-  strncpy (tmp_str, path, PATH_MAX);
+  strncpy (tmp_str, path, BROKER_PATH_MAX);
   snprintf (path, path_len, "%s/%s", get_cubrid_home (), tmp_str);
 }
 
@@ -313,9 +302,7 @@ broker_config_read_internal (const char *conf_file,
   int lineno = 0;
   int errcode = 0;
   const char *ini_string;
-#if defined(CUBRID_SHARD)
-  char library_name[PATH_MAX];
-#endif
+  char library_name[BROKER_PATH_MAX];
   char size_str[LINE_MAX];
   char time_str[LINE_MAX];
 
@@ -515,10 +502,12 @@ broker_config_read_internal (const char *conf_file,
 	ini_getstr (ini, sec_name, "ERROR_LOG_DIR", DEFAULT_ERR_DIR, &lineno);
       MAKE_FILEPATH (br_info[num_brs].err_log_dir, ini_string,
 		     CONF_LOG_FILE_LEN);
+      ini_string = ini_getstr (ini, sec_name, "DATABASES_CONNECTION_FILE",
+			       DEFAULT_EMPTY_STRING, &lineno);
+      MAKE_FILEPATH (br_info[num_brs].db_connection_file, ini_string,
+		     BROKER_INFO_PATH_MAX);
 
-#if !defined(CUBRID_SHARD)
       strcpy (br_info[num_brs].access_log_file, CUBRID_BASE_DIR);
-#endif /* CUBRID_SHARD */
       strcpy (br_info[num_brs].error_log_file, CUBRID_BASE_DIR);
 
       br_info[num_brs].max_prepared_stmt_count =
@@ -797,61 +786,38 @@ broker_config_read_internal (const char *conf_file,
 	    DEFAULT_MONITOR_HANG_INTERVAL;
 	  br_info[num_brs].hang_timeout = DEFAULT_HANG_TIMEOUT;
 	}
-#if defined(CUBRID_SHARD)
-      /* SHARD PHASE0 */
 
-      proxy_shm_id =
-	ini_gethex (ini, sec_name, "METADATA_SHM_ID", 0, &lineno);
-
-      br_info[num_brs].proxy_shm_id =
-	ini_gethex (ini, sec_name, "PROXY_SHM_ID", 0, &lineno);
-
-      if (br_info[num_brs].proxy_shm_id == 0)
-	{
-	  br_info[num_brs].proxy_shm_id = proxy_shm_id;
-	}
-
-      if (br_info[num_brs].proxy_shm_id == 0)
+      br_info[num_brs].shard_flag =
+	conf_get_value_table_on_off (ini_getstr (ini, sec_name,
+						 "SHARD", "OFF", &lineno));
+      if (br_info[num_brs].shard_flag < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
 	  goto conf_error;
 	}
+
+      /* SHARD PHASE0 */
+      br_info[num_brs].proxy_shm_id =
+	ini_gethex (ini, sec_name, "SHARD_PROXY_SHM_ID", 0, &lineno);
 
       strncpy (br_info[num_brs].shard_db_name,
 	       ini_getstr (ini, sec_name, "SHARD_DB_NAME",
 			   DEFAULT_EMPTY_STRING, &lineno),
 	       sizeof (br_info[num_brs].shard_db_name));
-      if (br_info[num_brs].shard_db_name[0] == '\0')
-	{
-	  errcode = PARAM_BAD_VALUE;
-	  goto conf_error;
-	}
 
       strncpy (br_info[num_brs].shard_db_user,
 	       ini_getstr (ini, sec_name, "SHARD_DB_USER",
 			   DEFAULT_EMPTY_STRING, &lineno),
 	       sizeof (br_info[num_brs].shard_db_user));
-      if (br_info[num_brs].shard_db_user[0] == '\0')
-	{
-	  errcode = PARAM_BAD_VALUE;
-	  goto conf_error;
-	}
 
       strncpy (br_info[num_brs].shard_db_password,
 	       ini_getstr (ini, sec_name, "SHARD_DB_PASSWORD",
 			   DEFAULT_EMPTY_STRING, &lineno),
 	       sizeof (br_info[num_brs].shard_db_password));
 
-      num_proxy = ini_getuint (ini, sec_name, "MAX_NUM_PROXY",
-			       DEFAULT_MAX_NUM_PROXY, &lineno);
-
       br_info[num_brs].num_proxy =
-	ini_getuint (ini, sec_name, "NUM_PROXY",
-		     DEFAULT_MAX_NUM_PROXY, &lineno);
-      if (num_proxy > br_info[num_brs].num_proxy)
-	{
-	  br_info[num_brs].num_proxy = num_proxy;
-	}
+	ini_getuint (ini, sec_name, "SHARD_NUM_PROXY",
+		     DEFAULT_SHARD_NUM_PROXY, &lineno);
 
       if (br_info[num_brs].num_proxy > MAX_PROXY_NUM)
 	{
@@ -860,13 +826,14 @@ broker_config_read_internal (const char *conf_file,
 	}
 
       strcpy (br_info[num_brs].proxy_log_dir,
-	      ini_getstr (ini, sec_name, "PROXY_LOG_DIR",
-			  DEFAULT_PROXY_LOG_DIR, &lineno));
+	      ini_getstr (ini, sec_name, "SHARD_PROXY_LOG_DIR",
+			  DEFAULT_SHARD_PROXY_LOG_DIR, &lineno));
 
       br_info[num_brs].proxy_log_mode =
 	conf_get_value_proxy_log_mode (ini_getstr
-				       (ini, sec_name, "PROXY_LOG",
-					DEFAULT_PROXY_LOG_MODE, &lineno));
+				       (ini, sec_name, "SHARD_PROXY_LOG",
+					DEFAULT_SHARD_PROXY_LOG_MODE,
+					&lineno));
       if (br_info[num_brs].proxy_log_mode < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
@@ -874,8 +841,8 @@ broker_config_read_internal (const char *conf_file,
 	}
 
       br_info[num_brs].max_client =
-	ini_getuint (ini, sec_name, "MAX_CLIENT",
-		     DEFAULT_MAX_CLIENT, &lineno);
+	ini_getuint (ini, sec_name, "SHARD_MAX_CLIENTS",
+		     DEFAULT_SHARD_MAX_CLIENTS, &lineno);
       if (br_info[num_brs].max_client >
 	  CLIENT_INFO_SIZE_LIMIT * br_info[num_brs].num_proxy)
 	{
@@ -918,12 +885,12 @@ broker_config_read_internal (const char *conf_file,
       if (library_name[0] != 0 && !IS_ABS_PATH (library_name))
 	{
 	  envvar_libdir_file (br_info[num_brs].shard_key_library_name,
-			      PATH_MAX, library_name);
+			      BROKER_PATH_MAX, library_name);
 	}
       else
 	{
-	  snprintf (br_info[num_brs].shard_key_library_name, PATH_MAX, "%s",
-		    library_name);
+	  snprintf (br_info[num_brs].shard_key_library_name, BROKER_PATH_MAX,
+		    "%s", library_name);
 	}
 
       strcpy (br_info[num_brs].shard_key_function_name,
@@ -931,8 +898,8 @@ broker_config_read_internal (const char *conf_file,
 			  DEFAULT_EMPTY_STRING, &lineno));
 
       strncpy (size_str,
-	       ini_getstr (ini, sec_name, "PROXY_LOG_MAX_SIZE",
-			   DEFAULT_PROXY_LOG_MAX_SIZE, &lineno),
+	       ini_getstr (ini, sec_name, "SHARD_PROXY_LOG_MAX_SIZE",
+			   DEFAULT_SHARD_PROXY_LOG_MAX_SIZE, &lineno),
 	       sizeof (size_str));
       br_info[num_brs].proxy_log_max_size =
 	(int) ut_size_string_to_kbyte (size_str, "K");
@@ -948,7 +915,7 @@ broker_config_read_internal (const char *conf_file,
 	}
 
       br_info[num_brs].proxy_max_prepared_stmt_count =
-	ini_getint (ini, sec_name, "PROXY_MAX_PREPARED_STMT_COUNT",
+	ini_getint (ini, sec_name, "SHARD_MAX_PREPARED_STMT_COUNT",
 		    DEFAULT_MAX_PREPARED_STMT_COUNT, &lineno);
       if (br_info[num_brs].proxy_max_prepared_stmt_count < 1)
 	{
@@ -958,7 +925,7 @@ broker_config_read_internal (const char *conf_file,
 
       br_info[num_brs].ignore_shard_hint =
 	conf_get_value_table_on_off (ini_getstr (ini, sec_name,
-						 "IGNORE_SHARD_HINT", "OFF",
+						 "SHARD_IGNORE_HINT", "OFF",
 						 &lineno));
       if (br_info[num_brs].ignore_shard_hint < 0)
 	{
@@ -967,8 +934,8 @@ broker_config_read_internal (const char *conf_file,
 	}
 
       strncpy (time_str,
-	       ini_getstr (ini, sec_name, "PROXY_TIMEOUT",
-			   DEFAULT_PROXY_TIMEOUT, &lineno),
+	       ini_getstr (ini, sec_name, "SHARD_PROXY_TIMEOUT",
+			   DEFAULT_SHARD_PROXY_TIMEOUT, &lineno),
 	       sizeof (time_str));
       br_info[num_brs].proxy_timeout =
 	(int) ut_time_string_to_sec (time_str, "sec");
@@ -982,7 +949,7 @@ broker_config_read_internal (const char *conf_file,
 	  errcode = PARAM_BAD_RANGE;
 	  goto conf_error;
 	}
-#endif /* CUBRID_SHARD */
+
       num_brs++;
     }
 
@@ -1048,6 +1015,28 @@ broker_config_read_internal (const char *conf_file,
 	      break;
 #endif
 	    }
+
+	  if (br_info[i].shard_flag == ON)
+	    {
+	      if (br_info[i].proxy_shm_id <= 0)
+		{
+		  PRINTERROR ("config error, %s, SHARD_PROXY_SHM_ID\n",
+			      br_info[i].name);
+		  error_flag = TRUE;
+		}
+	      if (br_info[i].shard_db_name[0] == '\0')
+		{
+		  PRINTERROR ("config error, %s, SHARD_DB_NAME\n",
+			      br_info[i].name);
+		  error_flag = TRUE;
+		}
+	      if (br_info[i].shard_db_user[0] == '\0')
+		{
+		  PRINTERROR ("config error, %s, SHARD_DB_USER\n",
+			      br_info[i].name);
+		  error_flag = TRUE;
+		}
+	    }
 	}			/* end for (i) */
     }				/* end if (admin_flag) */
   if (error_flag == TRUE)
@@ -1064,9 +1053,7 @@ broker_config_read_internal (const char *conf_file,
 
       for (i = 0; i < num_brs; i++)
 	{
-#if !defined(CUBRID_SHARD)
 	  dir_repath (br_info[i].access_log_file, CONF_LOG_FILE_LEN);
-#endif /* CUBRID_SHARD */
 	  dir_repath (br_info[i].error_log_file, CONF_LOG_FILE_LEN);
 	  if (br_info[i].source_env[0] != '\0')
 	    {
@@ -1076,9 +1063,10 @@ broker_config_read_internal (const char *conf_file,
 	    {
 	      dir_repath (br_info[i].acl_file, CONF_LOG_FILE_LEN);
 	    }
-#if defined(CUBRID_SHARD)
-	  dir_repath (br_info[i].proxy_log_dir, CONF_LOG_FILE_LEN);
-#endif /* CUBRID_SHARD */
+	  if (br_info[i].proxy_log_dir[0] != '\0')
+	    {
+	      dir_repath (br_info[i].proxy_log_dir, CONF_LOG_FILE_LEN);
+	    }
 	}
       if (admin_log_file != NULL)
 	{
@@ -1134,8 +1122,8 @@ broker_config_read (const char *conf_file, T_BROKER_INFO * br_info,
 {
   int err = 0;
   bool is_conf_found = false;
-  char default_conf_file_path[PATH_MAX], file_name[PATH_MAX],
-    file_being_dealt_with[PATH_MAX];
+  char default_conf_file_path[BROKER_PATH_MAX], file_name[BROKER_PATH_MAX],
+    file_being_dealt_with[BROKER_PATH_MAX];
   struct stat stat_buf;
 
 #if !defined (_UC_ADMIN_SO_)
@@ -1145,21 +1133,16 @@ broker_config_read (const char *conf_file, T_BROKER_INFO * br_info,
 
   memset (br_info, 0, sizeof (T_BROKER_INFO) * MAX_BROKER_NUM);
 
-#if defined(CUBRID_SHARD)
-  get_cubrid_file (FID_SHARD_CONF, default_conf_file_path, PATH_MAX);
-#else
-  get_cubrid_file (FID_CUBRID_BROKER_CONF, default_conf_file_path, PATH_MAX);
-#endif /* CUBRID_SHARD */
-  basename_r (default_conf_file_path, file_name, PATH_MAX);
+  get_cubrid_file (FID_CUBRID_BROKER_CONF, default_conf_file_path,
+		   BROKER_PATH_MAX);
+
+  basename_r (default_conf_file_path, file_name, BROKER_PATH_MAX);
 
   if (conf_file == NULL)
     {
       /* use environment variable's value if exist */
-#if defined(CUBRID_SHARD)
-      conf_file = envvar_get ("SHARD_CONF_FILE");
-#else
       conf_file = envvar_get ("BROKER_CONF_FILE");
-#endif /* CUBRID_SHARD */
+
       if (conf_file != NULL && *conf_file == '\0')
 	{
 	  conf_file = NULL;
@@ -1190,7 +1173,8 @@ broker_config_read (const char *conf_file, T_BROKER_INFO * br_info,
 #if defined (WINDOWS)
       sprintf (file_being_dealt_with, ".\\%s", file_name);
 #else /* WINDOWS */
-      snprintf (file_being_dealt_with, (PATH_MAX - 1), "./%s", file_name);
+      snprintf (file_being_dealt_with, (BROKER_PATH_MAX - 1), "./%s",
+		file_name);
 #endif /* WINDOWS */
       if (stat (file_being_dealt_with, &stat_buf) == 0)
 	{
@@ -1392,21 +1376,26 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 	  fprintf (fp, "REJECT_CLIENT_FLAG\t=%s\n", tmp_str);
 	}
 
-#if defined(CUBRID_SHARD)
+      if (br_info[i].shard_flag == OFF)
+	{
+	  fprintf (fp, "\n");
+	  continue;
+	}
+
       fprintf (fp, "SHARD_DB_NAME\t\t=%s\n", br_info[i].shard_db_name);
       fprintf (fp, "SHARD_DB_USER\t\t=%s\n", br_info[i].shard_db_user);
       fprintf (fp, "SHARD_DB_PASSWORD\t\t=%s\n",
 	       br_info[i].shard_db_password);
 
-      fprintf (fp, "NUM_PROXY\t\t=%d\n", br_info[i].num_proxy);
-      fprintf (fp, "PROXY_LOG_DIR\t\t=%s\n", br_info[i].proxy_log_dir);
+      fprintf (fp, "SHARD_NUM_PROXY\t\t=%d\n", br_info[i].num_proxy);
+      fprintf (fp, "SHARD_PROXY_LOG_DIR\t\t=%s\n", br_info[i].proxy_log_dir);
       tmp_str =
 	get_conf_string (br_info[i].proxy_log_mode, tbl_proxy_log_mode);
       if (tmp_str)
 	{
-	  fprintf (fp, "PROXY_LOG\t\t\t=%s\n", tmp_str);
+	  fprintf (fp, "SHARD_PROXY_LOG\t\t\t=%s\n", tmp_str);
 	}
-      fprintf (fp, "MAX_CLIENT\t\t=%d\n", br_info[i].max_client);
+      fprintf (fp, "SHARD_MAX_CLIENTS\t\t=%d\n", br_info[i].max_client);
 
       fprintf (fp, "SHARD_CONNECTION_FILE\t\t=%s\n",
 	       br_info[i].shard_connection_file);
@@ -1418,27 +1407,25 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 	       br_info[i].shard_key_library_name);
       fprintf (fp, "SHARD_KEY_FUNCTION_NAME\t\t=%s\n",
 	       br_info[i].shard_key_function_name);
-      fprintf (fp, "PROXY_LOG_MAX_SIZE\t\t=%d\n",
+      fprintf (fp, "SHARD_PROXY_LOG_MAX_SIZE\t\t=%d\n",
 	       br_info[i].proxy_log_max_size);
-      fprintf (fp, "PROXY_MAX_PREPARED_STMT_COUNT\t\t=%d\n",
+      fprintf (fp, "SHARD_MAX_PREPARED_STMT_COUNT\t\t=%d\n",
 	       br_info[i].proxy_max_prepared_stmt_count);
       tmp_str = get_conf_string (br_info[i].ignore_shard_hint, tbl_on_off);
       if (tmp_str)
 	{
-	  fprintf (fp, "IGNORE_SHARD_HINT\t\t=%s\n", tmp_str);
+	  fprintf (fp, "SHARD_IGNORE_HINT\t\t=%s\n", tmp_str);
 	}
-      fprintf (fp, "PROXY_TIMEOUT\t\t=%d\n", br_info[i].proxy_timeout);
-      fprintf (fp, "PROXY_SHM_ID\t\t=%d\n", br_info[i].proxy_shm_id);
+      fprintf (fp, "SHARD_PROXY_TIMEOUT\t\t=%d\n", br_info[i].proxy_timeout);
+      fprintf (fp, "SHARD_PROXY_SHM_ID\t\t=%d\n", br_info[i].proxy_shm_id);
 
       shard_metadata_dump (fp, br_info[i].proxy_shm_id);
       shard_shm_dump_appl_server (fp, br_info[i].proxy_shm_id);
-#endif /* CUBRID_SHARD */
 
       fprintf (fp, "\n");
     }
 
   return;
-
 }
 
 /*
@@ -1485,7 +1472,6 @@ conf_get_value_access_mode (const char *value)
   return (get_conf_value (value, tbl_access_mode));
 }
 
-#if defined(CUBRID_SHARD)
 /*
  * conf_get_value_proxy_log_mode - get value from proxy_log_mode table
  *   return: -1 if fail
@@ -1496,4 +1482,3 @@ conf_get_value_proxy_log_mode (const char *value)
 {
   return (get_conf_value (value, tbl_proxy_log_mode));
 }
-#endif /* CUBRID_SHARD */

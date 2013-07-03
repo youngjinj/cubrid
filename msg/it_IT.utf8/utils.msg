@@ -139,7 +139,6 @@ Servizi disponibili:\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 Utilità amministrazione disponibili:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ Commandi disponibili:\n\
     on          nome-broker\n\
     off         nome-broker\n\
     reset       nome-broker\n\
-    acl         <status|reload> [nome-broker]\n
+    acl         <status|reload> [nome-broker]\n\
+    getid       -b <broker-name> [-f] shard-key\n
 27 utilità cubrid, versione %s\n\
 uso: %s manager <commando>\n\
 \n\
@@ -230,20 +230,6 @@ Commandi disponibili:\n\
 36 Il server non è stato configurato per HA.\n
 38 Il server configurato per HA non è registrato nel ha_db_list.\n
 39 Il server configurato per HA non è registrato nel ha_node_list.\n
-62 utilità cubrid, versione %s\n\
-uso: %s shard <commando> [args]\n\
-\n\
-Commandi disponibili:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          nome-shard\n\
-    off         nome-shard\n\
-    reset       nome-shard\n\
-    acl         <status|reload> [nome-shard]\n\
-    getid       -b <broker-name> [-f] shard-key\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 ATTENZIONE: opzione -t viene ignorata in modalità di esecuzione stand-alone.\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 Comando sconosciuto '%s'\n
 43 Impossibile aprire il file di output '%s'\n
 44 Impossibile rimuovere database esistente.\n
-45 Creazione di database con dimensione %s. La quantità totale di spazio necessario è %s.\n
+45 Creating database with %s size using default locale %s. The total amount of disk space needed is %s.\n
 46 Impossibile creare database.\n
 47 Problema con file utente '%s'\n
 48 La data '%s', %s è fuori portata. Scegliere una dimensione tra %s e %s.\n
 49 Il valore di %s '%s' non è valido.\n
 60 \
 createdb: Creare un database.\n\
-uso: %s createdb [OPZIONE] nome-database\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 opzioni valide:\n\
       --db-volume-size=SIZE           dimensioni del primo volume di informazioni\n\
                                       predefinito: db_volume_size nel cubrid.conf\n\
@@ -649,16 +636,26 @@ opzioni valide:\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 Descrizione dello spazio per il database '%s' con pagesize %s. (log pagesize: %s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 Impossibile aprire il file di output '%s'\n
 18 Descrizione dello spazio per volumi temporanee per database '%s' con pagesize %s.\n\n
-19 Volid  Scopo    total_pages  free_pages  Vol Name\n\n
-20 Volid  Scopo     total_size   free_size  Vol Name\n\n
+19 Volid  Scopo     total_pages  free_pages  Vol Name\n\n
+20 Volid  Scopo      total_size   free_size  Vol Name\n\n
 21 Descrizione dello spazio LOB %s \n\n
+22 -------------------------------------------------------------------------------\n
 30 Riassunto descrizione spazio per database '%s' con pagesize %s. (log pagesize: %s)\n\n
 31 Scopo      total_pages  used_pages  free_pages  volume_count\n
 32 Scopo       total_size   used_size   free_size  volume_count\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: Visualizzazione utilizzo / spazio libero del database.\n\
 uso: %s spacedb [OPZIONE] nome-database\n\
@@ -669,7 +666,8 @@ opzioni valide:\n\
   -C, --CS-mode                modalità di esecuzione client-server\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                impostare l'unità di visualizzazione (page, mega, giga, tera, human readable); predefinito: H\n\
-  -s, --summarize              visualizzare solo un riepilogo per ogni scopo del volume\n
+  -s, --summarize              visualizzare solo un riepilogo per ogni scopo del volume\n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -930,7 +928,7 @@ opzioni valide:\n\
   -L, --copied-log-path=PATH  path di volumi di registrazione copiate; informazioni del log copiate \n\
   -p, --pageid=ID             page id; predefinito : 0(pagina attiva)\n\
   -v, --verbose               attivare i messaggi dettagliati di stato; predefinito : non attivo\n\
-  -i, --interval=S            print information every S secs\n	
+  -i, --interval=S            print information every S secs\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59 acldb non è possibile eseguire come modalità standalone.\n

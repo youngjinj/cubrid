@@ -191,6 +191,10 @@ static FUNCTION_MAP functions[] = {
   {"substring_index", PT_SUBSTRING_INDEX},
   {"find_in_set", PT_FINDINSET},
   {"md5", PT_MD5},
+  {"aes_encrypt", PT_AES_ENCRYPT},
+  {"aes_decrypt", PT_AES_DECRYPT},	
+  {"sha1", PT_SHA_ONE},	
+  {"sha2", PT_SHA_TWO},	
   {"substrb", PT_SUBSTRING},
   {"tan", PT_TAN},
   {"time_format", PT_TIME_FORMAT},
@@ -217,7 +221,8 @@ static FUNCTION_MAP functions[] = {
   {"inet_aton", PT_INET_ATON},
   {"inet_ntoa", PT_INET_NTOA},
   {"coercibility", PT_COERCIBILITY},
-  {"width_bucket", PT_WIDTH_BUCKET}
+  {"width_bucket", PT_WIDTH_BUCKET},
+  {"trace_stats", PT_TRACE_STATS}
 };
 
 
@@ -641,6 +646,8 @@ typedef struct YYLTYPE
 %type <number> of_cume_dist_percent_rank_function
 %type <number> negative_prec_cast_type
 %type <number> opt_nulls_first_or_last
+%type <number> query_trace_spec
+%type <number> opt_trace_output_format
 /*}}}*/
 
 /* define rule type (node) */
@@ -1429,6 +1436,7 @@ typedef struct YYLTYPE
 %token <cptr> ISNULL
 %token <cptr> KEYS
 %token <cptr> JAVA
+%token <cptr> JSON
 %token <cptr> LAG
 %token <cptr> LAST_VALUE
 %token <cptr> LCASE
@@ -1481,6 +1489,7 @@ typedef struct YYLTYPE
 %token <cptr> SUBDATE
 %token <cptr> SYSTEM
 %token <cptr> TABLES
+%token <cptr> TEXT
 %token <cptr> THAN
 %token <cptr> TIMEOUT
 %token <cptr> TRACE
@@ -2049,6 +2058,46 @@ set_stmt
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
+		DBG_PRINT}}
+	| SET TRACE query_trace_spec opt_trace_output_format
+		{{
+
+			PT_NODE *node = parser_new_node (this_parser, PT_QUERY_TRACE);
+
+			if (node)
+			  {
+			    node->info.trace.on_off = $3;
+			    node->info.trace.format = $4;
+			  }
+
+			$$ = node;
+
+		DBG_PRINT}}
+	;
+
+query_trace_spec
+	: ON_
+		{{
+			$$ = PT_TRACE_ON;
+		DBG_PRINT}}
+	| OFF_
+		{{
+			$$ = PT_TRACE_OFF;
+		DBG_PRINT}}
+	;
+
+opt_trace_output_format
+	: /* empty */
+		{{
+			$$ = PT_TRACE_FORMAT_TEXT;
+		DBG_PRINT}}
+	| OUTPUT TEXT
+		{{
+			$$ = PT_TRACE_FORMAT_TEXT;
+		DBG_PRINT}}
+	| OUTPUT JSON
+		{{
+			$$ = PT_TRACE_FORMAT_JSON;
 		DBG_PRINT}}
 	;
 
@@ -6424,6 +6473,15 @@ show_stmt
 
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}						
+	| SHOW TRACE
+		{{
+			PT_NODE *node = NULL;
+			
+			node = pt_make_query_show_trace (this_parser);
+
+			$$ = node;
 
 		DBG_PRINT}}						
 	;
@@ -17886,9 +17944,7 @@ primitive_type
 			int coll_id = -1;
 
 			int elem_cs = -1;
-			int elem_coll = -1;
 			int list_cs = -1;
-			int list_coll = -1;
 			bool has_cs_introducer = false;
 			int has_error = 0;
 
@@ -17905,19 +17961,20 @@ primitive_type
 				elem = elem->next;
 				continue;
 			      }
+
+			    assert (elem->node_type == PT_VALUE);
+			    elem->info.value.print_collation = false;
+			    elem->info.value.print_charset = false;
+
 			    elem_cs = elem->data_type->info.data_type.units;
-			    elem_coll =
-			      elem->data_type->info.data_type.collation_id;
 			    if (elem->info.value.has_cs_introducer)
 			      {
 				if (list_cs == -1)
 				  {
 				    list_cs = elem_cs;
-				    list_coll = elem_coll;
 				    has_cs_introducer = true;
 				  }
-				else if (list_cs != elem_cs
-					 || list_coll != elem_coll)
+				else if (list_cs != elem_cs)
 				  {
 				    PT_ERRORm (this_parser, elem, 
 					       MSGCAT_SET_PARSER_SEMANTIC,
@@ -17941,7 +17998,7 @@ primitive_type
 				if (has_cs_introducer)
 				  {
 				    charset = list_cs;
-				    coll_id = list_coll;
+				    coll_id = LANG_GET_BINARY_COLLATION (list_cs);
 				    dt->info.data_type.has_cs_spec = true;
 				  }
 				else
@@ -17957,8 +18014,7 @@ primitive_type
 					coll_node, &charset,
 					&coll_id) == NO_ERROR)
 			      {
-				if (has_cs_introducer
-				    && (list_cs != charset || list_coll != coll_id))
+				if (has_cs_introducer && list_cs != charset)
 				  {
 				    charset = -1;
 				    coll_id = -1;
@@ -19148,6 +19204,15 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| JSON
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+
+		DBG_PRINT}}
 	| KEYS
 		{{
 
@@ -19568,6 +19633,15 @@ identifier
 			  p->info.name.original = $1;
 			$$ = p;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| TEXT
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
 
 		DBG_PRINT}}
 	| THAN
@@ -22502,6 +22576,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 
     case PT_ROW_COUNT:
     case PT_LAST_INSERT_ID:
+    case PT_TRACE_STATS:
       if (c != 0)
 	{
 	  return NULL;
@@ -22573,6 +22648,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
     case PT_INET_ATON:
     case PT_INET_NTOA:
     case PT_COERCIBILITY:
+    case PT_SHA_ONE:	
       if (c != 1)
         {
 	  return NULL;
@@ -22617,6 +22693,9 @@ parser_keyword_func (const char *name, PT_NODE * args)
     case PT_MAKEDATE:
     case PT_ADDTIME:
     case PT_FINDINSET:
+    case PT_AES_ENCRYPT:
+    case PT_AES_DECRYPT:
+    case PT_SHA_TWO:
       if (c != 2)
 	return NULL;
       a1 = args;

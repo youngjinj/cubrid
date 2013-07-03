@@ -3425,8 +3425,10 @@ pt_sort_spec_cover (PT_NODE * cur_list, PT_NODE * new_list)
 	}
 
       /* equality check */
-      if (p1->pos_no != p2->pos_no ||
-	  s1->info.sort_spec.asc_or_desc != s2->info.sort_spec.asc_or_desc)
+      if (p1->pos_no != p2->pos_no
+	  || s1->info.sort_spec.asc_or_desc != s2->info.sort_spec.asc_or_desc
+	  || (s1->info.sort_spec.nulls_first_or_last !=
+	      s2->info.sort_spec.nulls_first_or_last))
 	{
 	  return false;
 	}
@@ -10216,8 +10218,11 @@ pt_sort_spec_cover_groupby (PARSER_CONTEXT * parser, PT_NODE * sort_list,
       CAST_POINTER_TO_NODE (s1->info.sort_spec.expr);
 
       if (!pt_name_equal (parser, s1->info.sort_spec.expr,
-			  s2->info.sort_spec.expr) ||
-	  s1->info.sort_spec.asc_or_desc != s2->info.sort_spec.asc_or_desc)
+			  s2->info.sort_spec.expr)
+	  || (s1->info.sort_spec.asc_or_desc !=
+	      s2->info.sort_spec.asc_or_desc)
+	  || (s1->info.sort_spec.nulls_first_or_last !=
+	      s2->info.sort_spec.nulls_first_or_last))
 	{
 	  s1->info.sort_spec.expr = save_node;
 	  return false;
@@ -11850,4 +11855,35 @@ pt_recompile_for_limit_optimizations (PARSER_CONTEXT * parser,
     }
 
   return false;
+}
+
+/*
+ * pt_make_query_show_trace () -
+ *   return: node
+ */
+PT_NODE *
+pt_make_query_show_trace (PARSER_CONTEXT * parser)
+{
+  PT_NODE *select, *trace_func;
+
+  select = parser_new_node (parser, PT_SELECT);
+  if (select == NULL)
+    {
+      return NULL;
+    }
+
+  trace_func = parser_make_expression (PT_TRACE_STATS, NULL, NULL, NULL);
+  if (trace_func == NULL)
+    {
+      return NULL;
+    }
+
+  trace_func->alias_print = pt_append_string (parser, NULL, "trace");
+  select->info.query.q.select.list =
+    parser_append_node (trace_func, select->info.query.q.select.list);
+
+  parser->dont_collect_exec_stats = true;
+  parser->query_trace = false;
+
+  return select;
 }

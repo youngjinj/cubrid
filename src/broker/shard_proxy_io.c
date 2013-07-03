@@ -58,6 +58,8 @@
 #define CAS_READ_ERROR(i)       io_error(i, PROC_TYPE_CAS, READ_TYPE)
 #define CAS_WRITE_ERROR(i)      io_error(i, PROC_TYPE_CAS, WRITE_TYPE)
 
+#define MAX_NUM_NEW_CLIENT	5
+
 #define PROXY_START_PORT	1
 #define GET_CLIENT_PORT(broker_port, proxy_index)	(broker_port) + PROXY_START_PORT + (proxy_index)
 #define GET_CAS_PORT(broker_port, proxy_index, proxy_max_count)	(broker_port) + PROXY_START_PORT + (proxy_max_count) + (proxy_index)
@@ -562,7 +564,7 @@ proxy_io_make_ex_get_int (char *driver_info, char **buffer, int *argv)
   assert (*buffer == NULL);
   assert (argv != NULL);
 
-  error = proxy_make_net_buf (&net_buf, NET_BUF_ALLOC_SIZE);
+  error = proxy_make_net_buf (&net_buf, SHARD_NET_BUF_ALLOC_SIZE);
   if (error)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
@@ -605,7 +607,7 @@ proxy_io_make_error_msg (char *driver_info, char **buffer,
 
   client_version = CAS_MAKE_PROTO_VER (driver_info);
 
-  error = proxy_make_net_buf (&net_buf, NET_BUF_ALLOC_SIZE);
+  error = proxy_make_net_buf (&net_buf, SHARD_NET_BUF_ALLOC_SIZE);
   if (error)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to make net buffer. "
@@ -707,7 +709,7 @@ proxy_io_make_end_tran_request (char *driver_info, char **buffer, bool commit)
   assert (buffer);
   assert (*buffer == NULL);
 
-  error = proxy_make_net_buf (&net_buf, NET_BUF_ALLOC_SIZE);
+  error = proxy_make_net_buf (&net_buf, SHARD_NET_BUF_ALLOC_SIZE);
   if (error)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
@@ -765,7 +767,7 @@ proxy_io_make_close_req_handle_ok (char *driver_info,
   assert (buffer);
   assert (*buffer == NULL);
 
-  error = proxy_make_net_buf (&net_buf, NET_BUF_ALLOC_SIZE);
+  error = proxy_make_net_buf (&net_buf, SHARD_NET_BUF_ALLOC_SIZE);
   if (error)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
@@ -833,7 +835,7 @@ proxy_io_make_get_db_version (char *driver_info, char **buffer)
   assert (buffer);
   assert (*buffer == NULL);
 
-  error = proxy_make_net_buf (&net_buf, NET_BUF_ALLOC_SIZE);
+  error = proxy_make_net_buf (&net_buf, SHARD_NET_BUF_ALLOC_SIZE);
   if (error)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
@@ -1278,7 +1280,9 @@ proxy_socket_io_print (bool print_all)
 static T_SOCKET_IO *
 proxy_socket_io_add (SOCKET fd, bool from_cas)
 {
+#if defined(LINUX)
   int error;
+#endif
   T_SOCKET_IO *sock_io_p;
 
   assert (proxy_Socket_io.ent);
@@ -1414,7 +1418,10 @@ int
 proxy_socket_set_write_event (T_SOCKET_IO * sock_io_p,
 			      T_PROXY_EVENT * event_p)
 {
+#if defined(LINUX)
   int error;
+#endif
+
   assert (sock_io_p);
   assert (event_p);
 
@@ -1772,8 +1779,10 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
 	  if (shm_as_p->access_log == ON)
 	    {
 	      proxy_access_log (&client_start_time,
-				sock_io_p->ip_addr, (db_name) ? db_name : "-",
-				(db_user) ? db_user : "-", true);
+				sock_io_p->ip_addr,
+				(db_name) ? (const char *) db_name : "-",
+				(db_user) ? (const char *) db_user : "-",
+				true);
 	    }
 
 	  goto connection_established;
@@ -1828,8 +1837,9 @@ connection_established:
   if (shm_as_p->access_log == ON)
     {
       proxy_access_log (&client_start_time,
-			sock_io_p->ip_addr, (db_name) ? db_name : "-",
-			(db_user) ? db_user : "-", true);
+			sock_io_p->ip_addr,
+			(db_name) ? (const char *) db_name : "-",
+			(db_user) ? (const char *) db_user : "-", true);
     }
 
 clear_event_and_return:
@@ -3290,7 +3300,7 @@ proxy_shard_io_initialize (void)
       return -1;
     }
 
-  shard_info_p = shard_shm_get_first_shard_info (proxy_info_p);
+  shard_info_p = shard_shm_find_shard_info (proxy_info_p, 0);
   max_appl_server = shard_info_p->max_appl_server;
 
   for (i = 0; i < proxy_Shard_io.max_shard; i++)
@@ -4133,7 +4143,7 @@ proxy_io_connect_to_broker (void)
   struct sockaddr_un shard_sock_addr;
   char *port_name;
 
-  if ((port_name = getenv (PORT_NAME_ENV_STR)) == NULL)
+  if ((port_name = shm_as_p->port_name) == NULL)
     {
       return (-1);
     }
@@ -4437,9 +4447,6 @@ int
 proxy_io_initialize (void)
 {
   int error;
-#if defined(WINDOWS)
-  char *port;
-#endif /* WINDOWS */
 
 #if defined(LINUX)
   max_Socket = proxy_get_max_socket ();
@@ -4471,11 +4478,12 @@ proxy_io_initialize (void)
 #endif /* !LINUX */
 
 #if defined(WINDOWS)
-  if ((port = getenv (PORT_NUMBER_ENV_STR)) == NULL)
+  broker_port = shm_as_p->broker_port;
+
+  if (broker_port <= 0)
     {
       return (-1);
     }
-  broker_port = atoi (port);
 
   /* make listener for client */
   error = proxy_io_client_lsnr ();
@@ -4597,7 +4605,6 @@ proxy_io_close_all_fd (void)
 int
 proxy_io_process (void)
 {
-  int error;
   int cas_fd;
   int i;
 #if defined(WINDOWS)
@@ -4609,7 +4616,6 @@ proxy_io_process (void)
   int sock_fd;
   int timeout;
 #else /* LINUX */
-  fd_set eset;
   struct timeval tv;
 #endif /* !LINUX */
 
@@ -4637,7 +4643,7 @@ proxy_io_process (void)
     }
   else if (n == 0)
     {
-      // print_statistics ();
+      /* print_statistics (); */
       return 0;			/* or -1 */
     }
 
@@ -4895,7 +4901,7 @@ proxy_get_max_socket (void)
   int max_socket = 0;
   T_SHARD_INFO *first_shard_info_p;
 
-  first_shard_info_p = shard_shm_get_first_shard_info (proxy_info_p);
+  first_shard_info_p = shard_shm_find_shard_info (proxy_info_p, 0);
   assert (first_shard_info_p != NULL);
 
   max_socket = proxy_info_p->max_context;

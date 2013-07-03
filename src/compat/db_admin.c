@@ -109,9 +109,20 @@ install_static_methods (void)
  * return           : Error Indicator.
  * program(in)      : the program name from argv[0]
  * print_version(in): a flag enabling an initial "herald" message
- * volume(in)       : the name of the database (server name)
+ * dbname(in)	    : the name of the database (server name)
+ * db_path(in)	    :
+ * vol_path(in)     :
+ * log_path(in)     :
+ * lob_path(in)     :
+ * host_name(in)    :
+ * overwrite(in)    :
  * comments(in)     : additional comments to be added to the label
- * pages(in)        : the initial page allocation
+ * addmore_vols_file(in):
+ * npages(in)       : the initial page allocation
+ * desired_pagesize(in):
+ * log_npages(in):
+ * desired_log_page_size(in):
+ * lang_charset(in): string for language and charset (ko_KR.utf8)
  *
  */
 
@@ -121,7 +132,7 @@ db_init (const char *program, int print_version,
 	 const char *log_path, const char *lob_path, const char *host_name,
 	 const bool overwrite, const char *comments,
 	 const char *addmore_vols_file, int npages, int desired_pagesize,
-	 int log_npages, int desired_log_page_size)
+	 int log_npages, int desired_log_page_size, const char *lang_charset)
 {
 #if defined (CUBRID_DEBUG)
   int value;
@@ -238,7 +249,8 @@ db_init (const char *program, int print_version,
 				  (bool) overwrite, addmore_vols_file,
 				  npages, (PGLENGTH) desired_pagesize,
 				  log_npages,
-				  (PGLENGTH) desired_log_page_size);
+				  (PGLENGTH) desired_log_page_size,
+				  lang_charset);
 
   if (more_vol_info_file != NULL)
     {
@@ -1777,15 +1789,22 @@ db_purpose_totalpgs_freepgs (int volid,
 			     int *vol_ntotal_pages, int *vol_nfree_pages)
 {
   int retval;
-  int dummy;
+  VOL_SPACE_INFO space_info;
 
   CHECK_CONNECT_ZERO ();
 
   retval =
-    ((int)
-     disk_get_purpose_and_total_free_numpages (volid, vol_purpose,
-					       vol_ntotal_pages,
-					       vol_nfree_pages, &dummy));
+    (int) disk_get_purpose_and_space_info (volid, vol_purpose, &space_info);
+
+  if (vol_ntotal_pages)
+    {
+      *vol_ntotal_pages = space_info.total_pages;
+    }
+  if (vol_nfree_pages)
+    {
+      *vol_nfree_pages = space_info.free_pages;
+    }
+
   return (retval);
 }
 

@@ -139,7 +139,6 @@ cubrid 관리자 유틸리티, 버전 %s\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 가용한 관리자 유틸리티 이름:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ cubrid 관리자 유틸리티, 버전 %s\n\
     on          <브로커 이름>\n\
     off         <브로커 이름>\n\
     reset       <브로커 이름>\n\
-    acl         <status|reload> [브로커 이름]\n
+    acl         <status|reload> [브로커 이름]\n\
+    getid       -b <broker-name> [-f] shard-key\n
 27 cubrid 유틸리티, 버전 %s\n\
 사용법: %s manager <명령어>\n\
 \n\
@@ -230,20 +230,6 @@ cubrid 관리자 유틸리티, 버전 %s\n\
 36 서버가 HA 모드로 설정되지 않았습니다.\n
 38 서버가 HA 모드로 설정되어 있으나, ha_db_list 목록에는 설정되어 있지 않습니다.\n
 39 서버가 HA 모드로 설정되어 있으나, ha_node_list 목록에는 설정되어 있지 않습니다.\n
-62 cubrid 유틸리티, 버전 %s\n\
-사용법: %s shard <명령어> [인자]\n\
-\n\
-가용한 명령어:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          <샤드 이름>\n\
-    off         <샤드 이름>\n\
-    reset       <샤드 이름>\n\
-    acl         <status|reload> [샤드 이름]\n\
-    getid       -b <broker-name> [-f] shard-key\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 경고: -t 옵션은 독립 실행 모드에서는 무시 됩니다.\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 알 수 없는 명령어 '%s'\n
 43 출력 파일 '%s' 을(를) 열 수 없습니다.\n
 44 기존 데이터베이스를 삭제할 수 없습니다.\n
-45 Creating database with %s size. The total amount of disk space needed is %s.\n
+45 Creating database with %s size using default locale %s. The total amount of disk space needed is %s.\n
 46 데이터베이스를 생성할 수 없습니다.\n
 47 user file '%s'에 오류가 있습니다.\n
 48 The given '%s', %s is out of range. Choose a size between %s and %s.\n
 49 %s의 값 '%s'은 유효하지 않습니다.\n
 60 \
 createdb: 데이터베이스 생성.\n\
-사용법: %s createdb [옵션] <데이터베이스 이름>\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 옵션:\n\
       --db-volume-size=SIZE           처음 생성되는 볼륨(generic)의 크기\n\
                                       기본값: cubrid.conf의 db_volume_size의 값\n\
@@ -650,16 +637,26 @@ checkdb: 데이터베이스 일관성 검사.\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 데이터베이스 '%s'의 (페이지 크기 %s) 볼륨 정의 (로그 페이지 크기 %s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 출력파일 '%s' 을(를) 열 수 없습니다\n
 18 \n데이터베이스 '%s'의 (페이지크기 %s) 임시 볼륨\n\n
-19 번호  용도       페이지수  여유페이지  볼륨이름\n\n
-20 번호  용도       전체크기    여유공간  볼륨이름\n\n
+19 번호  용도        페이지수  여유페이지  볼륨이름\n\n
+20 번호  용도        전체크기    여유공간  볼륨이름\n\n
 21 LOB 파일 저장소 %s\n\n
+22 -------------------------------------------------------------------------------\n
 30 데이터베이스 '%s'(페이지 크기 %s)의 볼륨 용도별 합산 (로그 페이지 크기 %s)\n\n
 31 용도         페이지수  사용된페이지  여유페이지  볼륨개수\n
 32 용도         전체크기    사용된공간    여유공간  볼륨개수\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 번호   용도      페이지수     여유페이지 데이터페이지 인덱스페이지 임시페이지 볼륨이름\n\n
+41 번호   용도      전체크기       여유공간   데이터공간   인덱스공간   임시공간 볼륨이름\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 용도        페이지수  사용된페이지 여유페이지 데이터페이지 인덱스페이지 임시페이지  볼륨개수\n
+51 용도        전체크기    사용된공간   여유공간   데이터공간   인덱스공간   임시공간  볼륨개수\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: 데이터베이스 디스크 공간 정보 출력\n\
 사용법: %s spacedb [옵션] <데이터베이스 이름>\n\
@@ -670,7 +667,8 @@ spacedb: 데이터베이스 디스크 공간 정보 출력\n\
   -C, --CS-mode                클라이언트 서버 모드 실행\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                출력 단위(page, mega, giga, tera, human readable) 설정; 기본값: H\n\
-  -s, --summarize              볼륨 용도별 합계 결과 출력\n
+  -s, --summarize              볼륨 용도별 합계 결과 출력\n\
+  -p, --purpose                각 볼륨의 목적별 (데이터/인덱스/임시) 사용량을 출력\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA

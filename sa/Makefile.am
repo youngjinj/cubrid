@@ -215,6 +215,7 @@ QUERY_SOURCES = \
 	$(QUERY_DIR)/query_opfunc.c \
 	$(QUERY_DIR)/xasl_to_stream.c \
 	$(QUERY_DIR)/stream_to_xasl.c \
+	$(QUERY_DIR)/crypt_opfunc.c \
 	$(QUERY_DIR)/vacuum.c
 
 OBJECT_SOURCES = \

@@ -57,8 +57,8 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
 			 TRAN_ISOLATION client_isolation);
 extern const char *xboot_get_server_session_key (void);
 extern int xboot_register_client (THREAD_ENTRY * thread_p,
-				  const BOOT_CLIENT_CREDENTIAL *
-				  client_credential, int client_lock_wait,
+				  BOOT_CLIENT_CREDENTIAL * client_credential,
+				  int client_lock_wait,
 				  TRAN_ISOLATION client_isolation,
 				  TRAN_STATE * tran_state,
 				  BOOT_SERVER_CREDENTIAL * server_credential);
@@ -326,16 +326,11 @@ extern char *xdisk_get_fullname (THREAD_ENTRY * thread_p, VOLID volid,
 				 char *vol_fullname);
 extern DISK_VOLPURPOSE xdisk_get_purpose (THREAD_ENTRY * thread_p,
 					  VOLID volid);
-extern VOLID xdisk_get_purpose_and_total_free_numpages (THREAD_ENTRY *
-							thread_p, VOLID volid,
-							DISK_VOLPURPOSE *
-							vol_purpose,
-							DKNPAGES *
-							vol_ntotal_pages,
-							DKNPAGES *
-							vol_nfree_pages,
-							DKNPAGES *
-							vol_nmax_pages);
+extern VOLID xdisk_get_purpose_and_space_info (THREAD_ENTRY * thread_p,
+					       VOLID volid,
+					       DISK_VOLPURPOSE * vol_purpose,
+					       VOL_SPACE_INFO * space_info);
+
 extern int xqfile_get_list_file_page (THREAD_ENTRY * thread_p,
 				      QUERY_ID query_id, VOLID volid,
 				      PAGEID pageid, char *page_bufp,
@@ -351,7 +346,7 @@ extern QFILE_LIST_ID *xqmgr_execute_query (THREAD_ENTRY * thrd,
 					   const XASL_ID * xasl_id,
 					   QUERY_ID * query_idp,
 					   int dbval_cnt,
-					   const char *data,
+					   void *data,
 					   QUERY_FLAG * flagp,
 					   CACHE_TIME * clt_cache_time,
 					   CACHE_TIME * srv_cache_time,
@@ -362,7 +357,7 @@ extern QFILE_LIST_ID *xqmgr_prepare_and_execute_query (THREAD_ENTRY * thrd,
 						       int xasl_stream_size,
 						       QUERY_ID * query_id,
 						       int dbval_cnt,
-						       const char *data,
+						       void *data,
 						       QUERY_FLAG * flag,
 						       int query_timeout);
 extern int xqmgr_end_query (THREAD_ENTRY * thrd, QUERY_ID query_id);

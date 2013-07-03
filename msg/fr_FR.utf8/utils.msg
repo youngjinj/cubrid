@@ -139,7 +139,6 @@ Utilitaires de service disponibles\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 Utilitaires d'administrateur disponibles:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ Commandes disponibles:\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
-    acl         <status|reload> [broker-name]\n
+    acl         <status|reload> [broker-name]\n\
+    getid       -b <broker-name> [-f] shard-key\n
 27 utilitaire CUBRID, version %s\n\
 usage: %s manager <command>\n\
 \n\
@@ -230,20 +230,6 @@ Commandes disponibles:\n\
 36 Le serveur n'a pas été configuré pour HA.\n
 38 Le serveur configuré pour HA n'apparaît pas dans ha_db_list.\n
 39 Le serveur configuré pour HA n'apparaît pas dans ha_node_list.\n
-62 utilitaire CUBRID, version %s\n\
-usage: %s shard <command> [args]\n\
-\n\
-Commandes disponibles:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          shard-name\n\
-    off         shard-name\n\
-    reset       shard-name\n\
-    acl         <status|reload> [shard-name]\n\
-    getid       -b <broker-name> [-f] shard-key\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 AVERTISSEMENT: l'option -t est ignoré dans le mode d'exécution autonome.\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 Commande inconnue '%s'\n
 43 Impossible d'ouvrir le fichier de sortie '%s'\n
 44 Impossible de supprimer la base de données existante.\n
-45 Création de base de données avec une taille de %s. Le montant total de l'espace disque nécessaire est %s.\n
+45 Creating database with %s size using default locale %s. The total amount of disk space needed is %s.\n
 46 Impossible de créer la base de données.\n
 47 Problème avec le fichier '%s' d'utilisateur\n
 48 Le donné '%s', %s est hors plage. Choisissez une taille comprise entre %s et %s.\n
 49 La valeur de %s '%s' n'est pas valide.\n
 60 \
 createdb: crée une base de données.\n\
-usage: %s createdb [OPTION] database-name\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 options valids:\n\
       --db-volume-size=TAILLE         TAILLE de premier volume d'informations\n\
                                       par défaut:: db_volume_size dans cubrid.conf\n\
@@ -652,16 +639,26 @@ options valids:\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 Description de l'espace pour la base de données '%s' avec la taille de page de %s. (taille de page du journal: %s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 Impossible d'ouvrir le fichier de sortie '%s'\n
 18 Description de l'espace pour les volumes temporaires pour la base de données '%s' avec la taille de page de %s.\n\n
-19 Volid  Purpose  total_pages  free_pages  Vol Name\n\n
-20 Volid  Purpose   total_size   free_size  Vol Name\n\n
+19 Volid  Purpose   total_pages  free_pages  Vol Name\n\n
+20 Volid  Purpose    total_size   free_size  Vol Name\n\n
 21 Description de l'espace LOB %s \n\n
+22 -------------------------------------------------------------------------------\n
 30 Description résumée de l'espace de base de données '%s' avec la taille de page de %s. (taille de page du journal: %s)\n\n
 31 Purpose    total_pages  used_pages  free_pages  volume_count\n
 32 Purpose     total_size   used_size   free_size  volume_count\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: afficha l'espace utilisé/libre de la base de données.\n\
 usage: %s spacedb [OPTION] database-name\n\
@@ -672,7 +669,8 @@ options valids:\n\
   -C, --CS-mode                exécution en mode client-serveur\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                définir l'unité d'affichage (page, mega, giga, tera, human readable); par défaut: H\n\
-  -s, --summarize              afficher seulement un sommaire pour chaque but de volume\n
+  -s, --summarize              afficher seulement un sommaire pour chaque but de volume\n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -933,7 +931,7 @@ options valids:\n\
   -L, --copied-log-path=CHEMIN  CHEMIN de volumes du journal copiés; affiche les informations du journal copié\n\
   -p, --pageid=ID               id de page; par défaut : 0(page active)\n\
   -v, --verbose                 active les messages verbeux d'état; par défaut: désactivé\n\
-  -i, --interval=S            print information every S secs\n	
+  -i, --interval=S            print information every S secs\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59 acldb ne peut pas fonctionner en mode autonome.\n

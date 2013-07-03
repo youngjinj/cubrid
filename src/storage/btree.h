@@ -92,8 +92,8 @@ typedef enum
 #define BTREE_OVERFLOW_KEY 1
 
 #define BTREE_SET_UNIQUE_VIOLATION_ERROR(THREAD,KEY,OID,C_OID,BTID) \
-        btree_set_unique_violation_error(THREAD, KEY, OID, C_OID, BTID, \
-                                         __FILE__, __LINE__)
+		btree_set_error(THREAD, KEY, OID, C_OID, BTID, \
+		ER_ERROR_SEVERITY, ER_BTREE_UNIQUE_FAILED, __FILE__, __LINE__)
 
 /* BTID_INT structure from btree_load.h */
 typedef struct btid_int BTID_INT;
@@ -168,6 +168,10 @@ struct btree_scan
 
   int use_desc_index;		/* use descending index */
 
+  /* for query trace */
+  int read_keys;
+  int qualified_keys;
+
 #if defined(SERVER_MODE)
   OID cls_oid;			/* class OID */
 
@@ -206,7 +210,6 @@ struct btree_scan
    * cur_leaf_lsa
    */
   LOG_LSA cur_leaf_lsa;		/* page LSA of current leaf page */
-
 #endif				/* SERVER_MODE */
 };
 
@@ -267,7 +270,7 @@ struct btree_capacity
 typedef struct btree_node_scan_queue_item BTREE_NODE_SCAN_QUEUE_ITEM;
 struct btree_node_scan_queue_item
 {
-  VPID crt_vpid;			/* VPID for current node */
+  VPID crt_vpid;		/* VPID for current node */
   BTREE_NODE_SCAN_QUEUE_ITEM *next;	/* Next node */
 };
 
@@ -275,13 +278,13 @@ struct btree_node_scan_queue_item
 typedef struct btree_node_scan BTREE_NODE_SCAN;
 struct btree_node_scan
 {
-  BTID_INT btid_int;			    /* index btid_int structure */
-  VPID crt_vpid;			    /* VPID for current node */
-  PAGE_PTR crt_page;			    /* Current node PAGE_PTR */
-  bool first_call;			    /* First call for node info scan */
+  BTID_INT btid_int;		/* index btid_int structure */
+  VPID crt_vpid;		/* VPID for current node */
+  PAGE_PTR crt_page;		/* Current node PAGE_PTR */
+  bool first_call;		/* First call for node info scan */
 
-  BTREE_NODE_SCAN_QUEUE_ITEM *queue_head;   /* B-tree node queue head */
-  BTREE_NODE_SCAN_QUEUE_ITEM *queue_tail;   /* B-tree node queue tail */
+  BTREE_NODE_SCAN_QUEUE_ITEM *queue_head;	/* B-tree node queue head */
+  BTREE_NODE_SCAN_QUEUE_ITEM *queue_tail;	/* B-tree node queue tail */
 };
 
 /* Initialize BTREE_NODE_SCAN stucture for node info scan */
@@ -523,12 +526,10 @@ extern int btree_attrinfo_read_dbvalues (THREAD_ENTRY * thread_p,
 					 int func_index_col_id);
 extern int btree_coerce_key (DB_VALUE * src_keyp, int keysize,
 			     TP_DOMAIN * btree_domainp, int key_minmax);
-extern int btree_set_unique_violation_error (THREAD_ENTRY * thread_p,
-					     DB_VALUE * key,
-					     OID * obj_oid,
-					     OID * class_oid, BTID * btid,
-					     const char *filename,
-					     int lineno);
+extern int btree_set_error (THREAD_ENTRY * thread_p, DB_VALUE * key,
+			    OID * obj_oid, OID * class_oid, BTID * btid,
+			    int severity, int err_id,
+			    const char *filename, int lineno);
 extern BTREE_LOCKED_KEYS btree_get_locked_keys (BTID * delete_btid,
 						BTID * search_btid,
 						bool duplicate_key_locked);

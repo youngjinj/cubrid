@@ -1191,13 +1191,15 @@ $ LOADDB
 1122 Time out in receiving data.
 1123 pthread_cond_timedwait() timed out.
 1124 Query execution error. ERROR_CODE = %1$d, /* SQL_ID: %2$s */ %3$s
-1125 Unused error code.
-1126 Unused error code.
-1127 Unused error code.
+1125 Create the overflow key file. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
+1126 Create a new overflow page. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
+1127 Delete an empty overflow page. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
 1128 Log recovery is started. The number of log records to be applied: %1$lld. Log page: %2$lld ~ %3$lld.
 1129 Log recovery is finished.
 1130 Transaction is aborted because transaction lock counts exceeds %1$d.
-1131 Last Error
+1131 Internal error: The page %1 of volume %2 may be corrupted.\n%3
+1132 Encryption library failure: %s
+1133 Last Error
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Error in error subsystem (line %d):
@@ -1559,7 +1561,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 210 Host variable is not allowed on columns in the query specification.
 211 %s can not be an ORDER BY column
 212 %s can not be an GROUP BY column
-213 Can not define '%1$s of %2$s' as an column type.
+213 Can not define '%1$s of %2$s' as a column type.
 214 Invalid value "%s" for prefix length of the index.
 215 '%s' function is not defined on types %s, %s, %s and %s.
 216 '%s' function is not defined on types %s, %s and %s.

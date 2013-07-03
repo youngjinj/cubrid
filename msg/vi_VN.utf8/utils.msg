@@ -139,7 +139,6 @@ Các tiện ích của dịch vụ có thể dùng:\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 Các tiện ích của quản trị viên có thể dùng:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ Lệnh có thể dùng :\n\
     on          tên-trung gian\n\
     off         tên-trung gian\n\
     reset       tên-trung gian\n\
-    acl         <status|reload> [tên-trung gian]\n
+    acl         <status|reload> [tên-trung gian]\n\
+    getid       -b <broker-name> [-f] shard-key\n
 27 tiện ích cubrid, phiên bản %s\n\
 cách sử dụng: %s manager <lệnh>\n\
 \n\
@@ -230,20 +230,6 @@ Lệnh có thể dùng :\n\
 36 The server was not configured for HA.\n
 38 Máy chủ được cấu hình cho HA không được liệt kê trong ha_db_list.\n
 39 Máy chủ được cấu hình cho HA không được liệt kê trong ha_node_list.\n
-62 cubrid utility, phiên bản %s\n\
-sử dụng: %s mảnh <lệnh> [args]\n\
-\n\
-Lệnh khả dụng:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          tên mảnh\n\
-    off         tên mảnh\n\
-    reset       tên mảnh\n\
-    acl         <status|reload> [tên mảnh]\n\
-    getid       -b <broker-name> [-f] shard-key\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 CẢNH BÁO: tùy chọn -t bị bỏ qua trong thực thi chế độ độc lập.\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 Lệnh '%s' không rõ\n
 43 Không thể mở tệp tin đầu ra '%s'\n
 44 Không thể gỡ bỏ cơ sở dữ liệu hiện có.\n
-45 Lập cơ sở dữ liệu với kích thước %s. Tổng dung lượng trống cần bằng %s.\n
+45 Creating database with %s size using locale %s. The total amount of disk space needed is %s.\n
 46 Không thể tạo cơ sở dữ liệu.\n
 47 Vấn đề với tệp tin người dùng '%s'\n
 48 Với '%s' đã cho, %s nằm ngoài khoảng. Lựa chọn kích thước giữa %s và %s.\n
 49 Giá trị %s '%s' vô hiệu.\n
 60 \
 createdb: Tạo một cơ sở dữ liệu.\n\
-cách sử dụng: %s createdb [TÙY CHỌN] tên-cơ sở dữ liệu\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 các tùy chọn hợp lệ:\n\
       --db-volume-size=SIZE           kích cỡ của bộ đĩa thông tin đầu tiên\n\
                                       mặc định: db_volume_size trong cubrid.conf\n\
@@ -649,16 +636,26 @@ các tùy chọn hợp lệ:\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 Mô tả không gian cho cơ sở dữ liệu '%s' với kích cỡ trang %s. (kích cỡ trang bản ghi: %s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 Không thể mở tệp tin đầu vào '%s'\n
 18 Mô tả không gian cho bộ đĩa tạm thời cho cơ sở dữ liệu '%s' với kích cỡ trang %s.\n\n
 19 id bộ đĩa  Mục đích  tổng số trang  trang còn trống  Tên bộ đĩa\n\n
 20 id bộ đĩa  Mục đích  tổng dung lượng  dung lượng còn trống  Tên bộ đĩa\n\n
 21 Mô tả không gian LOB %s \n\n
+22 -------------------------------------------------------------------------------\n
 30 Mô tả tóm tắt không gian cho cơ sở dữ liệu '%s' với kích cỡ trang %s. (kích cỡ bản ghi: %s)\n\n
 31 Mục đích    tổng số trangt  số trang đã dùng   số trang còn trống  đếm bộ đĩa\n
 32 Mục đích     tổng dung lượng   dung lượng đã dùng   dung lượng còn trống  đếm bộ đĩa\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: Hiển thị cách sử dụng/không gian trống của cơ sở dữ liệu.\n\
 cách sử dụng: %s spacedb [TÙY CHỌN] tên-cơ sở dữ liệu\n\
@@ -669,7 +666,8 @@ các tùy chọn hợp lệ:\n\
   -C, --CS-mode                thực thi chế độ client-server\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                thiết lập đơn vị hiển thị (page, mega, giga, tera, human readable); mặc định: H\n\
-  -s, --summarize              chỉ hiển thị một tóm tắt cho mỗi mục đích ổ\n
+  -s, --summarize              chỉ hiển thị một tóm tắt cho mỗi mục đích ổ\n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -930,7 +928,7 @@ các tùy chọn hợp lệ:\n\
   -L, --copied-log-path=PATH  đường dẫn của ổ ghi sao chép, hiển thị đăng nhập sao chép thông tin \n\
   -p, --pageid=ID             page id; mặc định : 0(active page)\n\
   -v, --verbose               kích hoạt các thông báo trạng thái tiết; mặc định : vô hiệu hóa\n\
-  -i, --interval=S            print information every S secs\n	
+  -i, --interval=S            print information every S secs\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59 acldb không thể chạy như chế độ độc lập.\n

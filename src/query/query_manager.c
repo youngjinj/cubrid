@@ -282,6 +282,8 @@ static void qmgr_put_temp_file_into_list (QMGR_TEMP_FILE * temp_file_p);
 static void qmgr_set_query_exec_info_to_tdes (int tran_index,
 					      int query_timeout,
 					      const XASL_ID * xasl_id);
+static int copy_bind_value_to_tdes (THREAD_ENTRY * thread_p,
+				    int num_bind_vals, DB_VALUE * bind_vals);
 
 static bool
 qmgr_is_page_in_temp_file_buffer (PAGE_PTR page_p,
@@ -1946,7 +1948,7 @@ exit_on_error:
  *   xasl_id(in)        : XASL file id that was a result of prepare_query()
  *   query_idp(out)     : query id to be used for getting results
  *   dbval_count(in)      : number of host variables
- *   data(in) : array of host variables (query input parameters)
+ *   dbval_p(in) : array of host variables (query input parameters)
  *   flagp(in)  : flag to determine if this is an asynchronous query
  *   clt_cache_time(in) :
  *   srv_cache_time(in) :
@@ -1962,9 +1964,8 @@ exit_on_error:
  */
 QFILE_LIST_ID *
 xqmgr_execute_query (THREAD_ENTRY * thread_p,
-		     const XASL_ID * xasl_id_p,
-		     QUERY_ID * query_id_p, int dbval_count,
-		     const char *data,
+		     const XASL_ID * xasl_id_p, QUERY_ID * query_id_p,
+		     int dbval_count, void *dbval_p,
 		     QUERY_FLAG * flag_p,
 		     CACHE_TIME * client_cache_time_p,
 		     CACHE_TIME * server_cache_time_p,
@@ -1972,9 +1973,12 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 {
   XASL_CACHE_ENTRY *xasl_cache_entry_p;
   QFILE_LIST_CACHE_ENTRY *list_cache_entry_p;
-  DB_VALUE *dbvals_p, *dbval;
-  HL_HEAPID old_pri_heap_id;
+  DB_VALUE *dbvals_p;
 #if defined (SERVER_MODE)
+  DB_VALUE *dbval;
+  HL_HEAPID old_pri_heap_id;
+  char *data;
+  int i;
   bool use_global_heap;
 #endif
   DB_VALUE_ARRAY params;
@@ -1982,10 +1986,10 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   int tran_index = -1;
   QMGR_TRAN_ENTRY *tran_entry_p;
   QFILE_LIST_ID *list_id_p, *tmp_list_id_p;
-  bool cached_result;
   XASL_CACHE_CLONE *cache_clone_p;
+  bool cached_result;
   bool saved_is_stats_on;
-  int i;
+  bool xasl_trace;
   bool error_flag = false;
 
   cached_result = false;
@@ -1998,7 +2002,9 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   dbvals_p = NULL;
 #if defined (SERVER_MODE)
   use_global_heap = false;
+  data = (char *) dbval_p;
 #endif
+
   assert_release (IS_SYNC_EXEC_MODE (*flag_p));
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
@@ -2014,9 +2020,29 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
     }
 
   saved_is_stats_on = mnt_server_is_stats_on (thread_p);
-  if (DO_NOT_COLLECT_EXEC_STATS (*flag_p) && saved_is_stats_on == true)
+
+  xasl_trace = IS_XASL_TRACE_TEXT (*flag_p) || IS_XASL_TRACE_JSON (*flag_p);
+
+  if (DO_NOT_COLLECT_EXEC_STATS (*flag_p))
     {
-      xmnt_server_stop_stats (thread_p);
+      if (saved_is_stats_on == true)
+	{
+	  xmnt_server_stop_stats (thread_p);
+	}
+    }
+  else if (xasl_trace == true)
+    {
+      thread_trace_on (thread_p);
+      xmnt_server_start_stats (thread_p, false);
+
+      if (IS_XASL_TRACE_TEXT (*flag_p))
+	{
+	  thread_set_trace_format (thread_p, QUERY_TRACE_TEXT);
+	}
+      else if (IS_XASL_TRACE_JSON (*flag_p))
+	{
+	  thread_set_trace_format (thread_p, QUERY_TRACE_JSON);
+	}
     }
 
   /* Check the existance of the given XASL. If someone marked it
@@ -2101,7 +2127,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 #else
   *flag_p &= ~ASYNC_EXEC;	/* treat as sync query */
 
-  dbvals_p = (DB_VALUE *) data;
+  dbvals_p = (DB_VALUE *) dbval_p;
 #endif
 
   /* If it is not inhibited from getting the cached result, inspect the list
@@ -2113,6 +2139,12 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
      the XASL cache entry. */
   params.size = dbval_count;
   params.vals = dbvals_p;
+
+  if (copy_bind_value_to_tdes (thread_p, dbval_count, dbvals_p) != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
   if (qmgr_can_get_result_from_cache (*flag_p))
     {
       /* lookup the list cache with the parameter values (DB_VALUE array) */
@@ -2454,7 +2486,77 @@ exit_on_error:
       QFILE_FREE_AND_INIT_LIST_ID (list_id_p);
     }
 
+  if (DO_NOT_COLLECT_EXEC_STATS (*flag_p))
+    {
+      if (saved_is_stats_on == true)
+	{
+	  xmnt_server_start_stats (thread_p, false);
+	}
+    }
+  else if (xasl_trace == true && saved_is_stats_on == false)
+    {
+      xmnt_server_stop_stats (thread_p);
+    }
+
   goto end;
+}
+
+/*
+ * copy_bind_value_to_tdes - copy bind values to transaction descriptor
+ * return:
+ *   thread_p(in):
+ *   num_bind_vals(in):
+ *   bind_vals(in):
+ */
+static int
+copy_bind_value_to_tdes (THREAD_ENTRY * thread_p, int num_bind_vals,
+			 DB_VALUE * bind_vals)
+{
+  LOG_TDES *tdes;
+  DB_VALUE *vals;
+  int i;
+  HL_HEAPID save_heap_id;
+
+  tdes = LOG_FIND_CURRENT_TDES (thread_p);
+  if (tdes == NULL)
+    {
+      return ER_FAILED;
+    }
+
+  if (tdes != NULL && tdes->num_exec_queries < MAX_NUM_EXEC_QUERY_HISTORY)
+    {
+      tdes->bind_history[tdes->num_exec_queries].vals = NULL;
+      tdes->bind_history[tdes->num_exec_queries].size = num_bind_vals;
+
+      if (num_bind_vals > 0)
+	{
+	  save_heap_id = db_change_private_heap (thread_p, 0);
+
+	  vals = (DB_VALUE *) db_private_alloc (thread_p,
+						sizeof (DB_VALUE) *
+						num_bind_vals);
+	  if (vals == NULL)
+	    {
+	      (void) db_change_private_heap (thread_p, save_heap_id);
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_OUT_OF_VIRTUAL_MEMORY, 1,
+		      sizeof (DB_VALUE) * num_bind_vals);
+
+	      return ER_OUT_OF_VIRTUAL_MEMORY;
+	    }
+
+	  for (i = 0; i < num_bind_vals; i++)
+	    {
+	      pr_clone_value (&bind_vals[i], &vals[i]);
+	    }
+
+	  tdes->bind_history[tdes->num_exec_queries].vals = vals;
+	  (void) db_change_private_heap (thread_p, save_heap_id);
+	}
+    }
+
+  tdes->num_exec_queries++;
+  return NO_ERROR;
 }
 
 /*
@@ -2465,7 +2567,7 @@ exit_on_error:
  *   xasl_stream_size(in)      : memory area size pointed by the xasl_stream
  *   query_id(in)       :
  *   dbval_count(in)      : Number of positional values
- *   data(in)      : List of positional values
+ *   dbval_p(in)      : List of positional values
  *   flag(in)   :
  *   query_timeout(in): set a timeout only if it is positive
  *
@@ -2480,21 +2582,23 @@ QFILE_LIST_ID *
 xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
 				 char *xasl_stream, int xasl_stream_size,
 				 QUERY_ID * query_id_p,
-				 int dbval_count,
-				 const char *data,
+				 int dbval_count, void *dbval_p,
 				 QUERY_FLAG * flag_p, int query_timeout)
 {
-  DB_VALUE *dbvals_p, *dbval;
-  HL_HEAPID old_pri_heap_id;
 #if defined (SERVER_MODE)
+  DB_VALUE *dbval;
+  HL_HEAPID old_pri_heap_id;
+  char *data;
+  int i;
   bool use_global_heap;
 #endif
+  DB_VALUE *dbvals_p;
   QMGR_QUERY_ENTRY *query_p;
   QFILE_LIST_ID *list_id_p;
   int tran_index;
   QMGR_TRAN_ENTRY *tran_entry_p;
   bool saved_is_stats_on;
-  int i;
+  bool xasl_trace;
   bool error_flag = false;
 
   query_p = NULL;
@@ -2504,12 +2608,32 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   dbvals_p = NULL;
 #if defined (SERVER_MODE)
   use_global_heap = false;
+  data = (char *) dbval_p;
 #endif
 
   saved_is_stats_on = mnt_server_is_stats_on (thread_p);
-  if (DO_NOT_COLLECT_EXEC_STATS (*flag_p) && saved_is_stats_on == true)
+  xasl_trace = IS_XASL_TRACE_TEXT (*flag_p) || IS_XASL_TRACE_JSON (*flag_p);
+
+  if (DO_NOT_COLLECT_EXEC_STATS (*flag_p))
     {
-      xmnt_server_stop_stats (thread_p);
+      if (saved_is_stats_on == true)
+	{
+	  xmnt_server_stop_stats (thread_p);
+	}
+    }
+  else if (xasl_trace == true)
+    {
+      thread_trace_on (thread_p);
+      xmnt_server_start_stats (thread_p, false);
+
+      if (IS_XASL_TRACE_TEXT (*flag_p))
+	{
+	  thread_set_trace_format (thread_p, QUERY_TRACE_TEXT);
+	}
+      else if (IS_XASL_TRACE_JSON (*flag_p))
+	{
+	  thread_set_trace_format (thread_p, QUERY_TRACE_JSON);
+	}
     }
 
   /* Make an query entry */
@@ -2591,7 +2715,7 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
 #else
   *flag_p &= ~ASYNC_EXEC;	/* treat as sync query */
 
-  dbvals_p = (DB_VALUE *) data;
+  dbvals_p = (DB_VALUE *) dbval_p;
 #endif
 
   /* allocate a new query entry */
@@ -2746,6 +2870,18 @@ exit_on_async_error:
   if (list_id_p)
     {
       QFILE_FREE_AND_INIT_LIST_ID (list_id_p);
+    }
+
+  if (DO_NOT_COLLECT_EXEC_STATS (*flag_p))
+    {
+      if (saved_is_stats_on == true)
+	{
+	  xmnt_server_start_stats (thread_p, false);
+	}
+    }
+  else if (xasl_trace == true && saved_is_stats_on == false)
+    {
+      xmnt_server_stop_stats (thread_p);
     }
 
   goto end;

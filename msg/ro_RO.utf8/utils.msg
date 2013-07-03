@@ -139,7 +139,6 @@ Utilitare de serviciu disponibile:\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 Utilitare de administrare disponibile:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ Comenzi disponibile:\n\
     on          nume-broker\n\
     off         nume-broker\n\
     reset       nume-broker\n\
-    acl         <status|reload> [nume-broker]\n
+    acl         <status|reload> [nume-broker]\n\
+    getid       -b <nume-broker> [-f] cheie-shard\n
 27 utilitar CUBRID, versiunea %s\n\
 utilizare: %s manager <command>\n\
 \n\
@@ -230,20 +230,6 @@ Comenzi disponibile:\n\
 36 Serverul nu a fost configurat pentru HA.\n
 38 Serverul configurat pentru HA nu se regăseşte în ha_db_list.\n
 39 Serverul configurat pentru HA nu se regăseşte în ha_node_list.\n
-62 utilitar CUBRID, versiunea %s\n\
-utilizare: %s shard <comanda> [argumente]\n\
-\n\
-Comenzi disponibile:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          nume-shard\n\
-    off         nume-shard\n\
-    reset       nume-shard\n\
-    acl         <status|reload> [nume-shard]\n\
-    getid       -b <nume-broker> [-f] cheie-shard\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 AVERTIESMENT: opţiunea -t este ignorată în modul de execuţie independent.\n
@@ -301,15 +287,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 Comandă necunoscută '%s'\n
 43 Nu s-a putut deschide fişierul de ieşire '%s'\n
 44 Baza de date existentă nu a putut fi eliminată.\n
-45 Se creează o bază de date de dimensiune %s. Cantitatea totală de spaţiu necesar pe disc este %s.\n
+45 Se creează o bază de date de dimensiune %s si localizare %s. Cantitatea totală de spaţiu necesar pe disc este %s.\n
 46 Baza de date nu a putut fi creată.\n
 47 S-a întâmpinat o problemă cu fişierul '%s' dat de utilizator\n
 48 S-a furnizat '%s', %s este în afara domeniului. Alegeţi o dimensiune cuprinsă între %s şi %s.\n
 49 Valoarea lui %s '%s' nu este validă.\n
 60 \
 createdb: Creează o baza de date.\n\
-utilizare: %s createdb [OPTIUNE] nume-bază-de-date\n\
+utilizare: %s createdb [OPTIUNE] <nume-bază-de-date> <localizare>\n\
 \n\
+localizarea este in formatul <limbă>.<charset>; exemple : en_US.iso88591, ko_KR.utf8\n\
 opţiuni valide:\n\
       --db-volume-size=MĂRIME            mărimea primului volum de informaţii\n\
                                          implicit: valoarea lui db_volume_size din cubrid.conf\n\
@@ -670,16 +657,26 @@ opţiuni valide:\n\
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 Descrierea spaţiului pentru baza de date '%s' cu pagini de dimensiune %s. (dimensiunea unei pagini de log: %s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 Nu s-a putut deschide fişierul de ieşire '%s'\n
 18 Descrierea spaţiului pentru volumele temporare ale bazei de date '%s' cu pagini de dimensiune %s.\n\n
-19 Volid  Purpose  total_pages  free_pages  Vol Name\n\n
-20 Volid  Purpose   total_size   free_size  Vol Name\n\n
+19 Volid  Purpose   total_pages  free_pages  Vol Name\n\n
+20 Volid  Purpose    total_size   free_size  Vol Name\n\n
 21 Descrierea spaţiului pentru LOB %s \n\n
+22 -------------------------------------------------------------------------------\n
 30 Descrierea sumarizată a spaţiului pentru baza de date '%s' cu pagini de dimensiune %s. (dimensiunea unei pagini de log: %s)\n\n
 31 Purpose    total_pages  used_pages  free_pages  volume_count\n
 32 Purpose     total_size   used_size   free_size  volume_count\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: Afişează spaţiul utilizat/liber al bazei de date.\n\
 utilizare: %s spacedb [OPŢIUNI] nume-bază-de-date\n\
@@ -690,7 +687,8 @@ opţiuni valide:\n\
   -C, --CS-mode                mod de execuţie client-server\n\
       --size-unit={PAGE|M|G|T|H}\n\
                                setează unitatea de afişare (pagina, mega, giga, tera, format lizibil); implicit: H\n\
-  -s, --summarize              afişează doar un sumar pentru fiecare scop de volum\n
+  -s, --summarize              afişează doar un sumar pentru fiecare scop de volum\n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -951,7 +949,7 @@ opţiuni valide:\n\
   -L, --copied-log-path=CALE  calea către volumele de log copiate; afişează informaţii despre logurile copiate\n\
   -p, --pageid=ID             id de pagina; implicit : 0 (pagina activă)\n\
   -v, --verbose               activează mesaje de stare detaliate; implicit : dezactivate\n\
-  -i, --interval=S            afişează informaţii la fiecare S secunde\n	
+  -i, --interval=S            afişează informaţii la fiecare S secunde\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59 acldb nu poate fi executat în modul independent.\n

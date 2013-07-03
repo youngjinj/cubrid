@@ -70,6 +70,7 @@
 #include "databases_file.h"
 #include "es.h"
 #include "es_posix.h"
+#include "event_log.h"
 #include "vacuum.h"
 
 #define NET_COPY_AREA_SENDRECV_SIZE (OR_INT_SIZE * 3)
@@ -88,6 +89,19 @@ static int check_client_capabilities (int client_cap, int rel_compare,
 static void sbtree_find_unique_internal (THREAD_ENTRY * thread_p,
 					 unsigned int rid, char *request,
 					 int reqlen, bool is_replication);
+static int er_log_slow_query (THREAD_ENTRY * thread_p,
+			      EXECUTION_INFO * info,
+			      int time,
+			      MNT_SERVER_EXEC_STATS * diff_stats,
+			      char *queryinfo_string);
+static void event_log_slow_query (THREAD_ENTRY * thread_p,
+				  EXECUTION_INFO * info,
+				  int time,
+				  MNT_SERVER_EXEC_STATS * diff_stats);
+static void event_log_many_ioreads (THREAD_ENTRY * thread_p,
+				    EXECUTION_INFO * info,
+				    int time,
+				    MNT_SERVER_EXEC_STATS * diff_stats);
 
 /*
  * return_error_to_client -
@@ -145,7 +159,7 @@ return_error_to_client (THREAD_ENTRY * thread_p, unsigned int rid)
    * it means that the user tried to update the database
    * when the server was disabled to modify. (aka standby mode)
    */
-  if (flag_abort)
+  if (flag_abort == true)
     {
       tran_server_unilaterally_abort_tran (thread_p);
     }
@@ -163,7 +177,10 @@ return_error_to_client (THREAD_ENTRY * thread_p, unsigned int rid)
       conn->db_error = 0;
     }
 
-  tdes->tran_abort_reason = TRAN_NORMAL;
+  if (tdes != NULL)
+    {
+      tdes->tran_abort_reason = TRAN_NORMAL;
+    }
 }
 
 /*
@@ -305,14 +322,11 @@ server_ping_with_handshake (THREAD_ENTRY * thread_p, unsigned int rid,
       ptr = or_unpack_int (ptr, &client_bit_platform);
       ptr = or_unpack_int (ptr, &client_type);
       ptr = or_unpack_string_nocopy (ptr, &client_host);
-      client_release =
-	css_add_client_version_string (thread_p, client_release);
       if (client_release != NULL)
 	{
-	  client_release =
-	    css_add_client_version_string (thread_p, client_release);
+	  client_release = css_add_client_version_string (thread_p,
+							  client_release);
 	}
-
     }
   else
     {
@@ -3571,7 +3585,7 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
   int tran_index, client_lock_wait;
   TRAN_ISOLATION client_isolation;
   TRAN_STATE tran_state;
-  int area_size, strlen1, strlen2, strlen3;
+  int area_size, strlen1, strlen2, strlen3, strlen4;
   char *reply, *area, *ptr;
   char server_session_key[SERVER_SESSION_KEY_SIZE];
   SESSION_KEY session_key;
@@ -3665,6 +3679,9 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
 							    area_size);
     }
 
+  area_size += OR_INT_SIZE;	/* db_charset */
+  area_size += or_packed_string_length (server_credential.db_lang, &strlen4);
+
   area = db_private_alloc (thread_p, area_size);
   if (area == NULL)
     {
@@ -3697,6 +3714,9 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
 	{
 	  ptr = sysprm_pack_session_parameters (ptr, session_params);
 	}
+      ptr = or_pack_int (ptr, server_credential.db_charset);
+      ptr = or_pack_string_with_length (ptr, server_credential.db_lang,
+					strlen4);
     }
 
   ptr = or_pack_int (reply, area_size);
@@ -5395,7 +5415,7 @@ sdk_purpose (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
 }
 
 /*
- * sdk_purpose_totalpgs_and_freepgs -
+ * sdisk_get_purpose_and_space_info -
  *
  * return:
  *
@@ -5406,36 +5426,30 @@ sdk_purpose (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
  * NOTE:
  */
 void
-sdk_purpose_totalpgs_and_freepgs (THREAD_ENTRY * thread_p,
+sdisk_get_purpose_and_space_info (THREAD_ENTRY * thread_p,
 				  unsigned int rid, char *request, int reqlen)
 {
   int int_volid;
   VOLID volid;
   DISK_VOLPURPOSE vol_purpose;
-  DKNPAGES vol_ntotal_pages;
-  DKNPAGES vol_nfree_pages;
-  DKNPAGES vol_nmax_pages;
+  VOL_SPACE_INFO space_info;
   char *ptr;
-  OR_ALIGNED_BUF (OR_INT_SIZE * 5) a_reply;
+  OR_ALIGNED_BUF (OR_INT_SIZE * 2 + OR_VOL_SPACE_INFO_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
 
   (void) or_unpack_int (request, &int_volid);
   volid = (VOLID) int_volid;
 
-  volid = xdisk_get_purpose_and_total_free_numpages (thread_p, volid,
-						     &vol_purpose,
-						     &vol_ntotal_pages,
-						     &vol_nfree_pages,
-						     &vol_nmax_pages);
+  volid = xdisk_get_purpose_and_space_info (thread_p, volid,
+					    &vol_purpose, &space_info);
+
   if (volid == NULL_VOLID)
     {
       return_error_to_client (thread_p, rid);
     }
 
   ptr = or_pack_int (reply, vol_purpose);
-  ptr = or_pack_int (ptr, vol_ntotal_pages);
-  ptr = or_pack_int (ptr, vol_nfree_pages);
-  ptr = or_pack_int (ptr, vol_nmax_pages);
+  OR_PACK_VOL_SPACE_INFO (ptr, (&space_info));
   ptr = or_pack_int (ptr, (int) volid);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
@@ -5591,7 +5605,7 @@ sqmgr_prepare_query (THREAD_ENTRY * thread_p, unsigned int rid,
   XASL_ID xasl_id, *p;
   char *ptr;
   char *reply = NULL, *reply_buffer = NULL;
-  int csserror, xasl_size, reply_buffer_size = 0, get_xasl_header = 0;
+  int csserror, reply_buffer_size = 0, get_xasl_header = 0;
   OID user_oid;
   XASL_NODE_HEADER xasl_header;
   OR_ALIGNED_BUF (OR_INT_SIZE + OR_INT_SIZE + OR_XASL_ID_SIZE) a_reply;
@@ -5735,7 +5749,6 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   QUERY_FLAG query_flag;
   OR_ALIGNED_BUF (OR_INT_SIZE * 4 + OR_PTR_ALIGNED_SIZE
 		  + OR_CACHE_TIME_SIZE) a_reply;
-  int i;
   CACHE_TIME clt_cache_time;
   CACHE_TIME srv_cache_time;
   int query_timeout;
@@ -5747,13 +5760,16 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   char queryinfo_string[QUERY_INFO_BUF_SIZE];
 
   MNT_SERVER_EXEC_STATS base_stats, current_stats, diff_stats;
-  char stat_buf[STATDUMP_BUF_SIZE];
   char *sql_id = NULL;
   int error_code = NO_ERROR;
+  int trace_slow_msec, trace_ioreads;
 
   EXECUTION_INFO info = { NULL, NULL, NULL };
 
-  if (prm_get_integer_value (PRM_ID_SQL_TRACE_SLOW_MSECS) >= 0)
+  trace_slow_msec = prm_get_integer_value (PRM_ID_SQL_TRACE_SLOW_MSECS);
+  trace_ioreads = prm_get_integer_value (PRM_ID_SQL_TRACE_IOREADS);
+
+  if (trace_slow_msec >= 0 || trace_ioreads > 0)
     {
       xmnt_server_start_stats (thread_p, false);
       xmnt_server_copy_stats (thread_p, &base_stats);
@@ -5906,61 +5922,30 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   /* pack size of a page to return as a third argumnet of the reply */
   ptr = or_pack_int (ptr, page_size);
 
-  if (prm_get_integer_value (PRM_ID_SQL_TRACE_SLOW_MSECS) >= 0)
+  if (trace_slow_msec >= 0 || trace_ioreads > 0)
     {
       gettimeofday (&end, NULL);
       response_time =
 	(end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec -
 					      start.tv_usec) / 1000;
+      xmnt_server_copy_stats (thread_p, &current_stats);
+      mnt_calc_diff_stats (&diff_stats, &current_stats, &base_stats);
 
-      if (response_time >=
-	  prm_get_integer_value (PRM_ID_SQL_TRACE_SLOW_MSECS))
+      if (response_time >= trace_slow_msec)
 	{
-	  const char *line =
-	    "--------------------------------------------------------------------------------";
-	  const char *title = "Operation";
-
-	  if (prm_get_bool_value (PRM_ID_SQL_TRACE_EXECUTION_PLAN) == true)
-	    {
-	      xmnt_server_copy_stats (thread_p, &current_stats);
-	      mnt_calc_diff_stats (&diff_stats, &current_stats, &base_stats);
-
-	      mnt_server_dump_stats_to_buffer (&diff_stats, stat_buf,
-					       STATDUMP_BUF_SIZE, NULL);
-	    }
-	  else
-	    {
-	      info.sql_plan_text = "";
-	      stat_buf[0] = '\0';
-	    }
-
-	  if (sql_id == NULL)
-	    {
-	      if (qmgr_get_sql_id (thread_p, &sql_id, info.sql_hash_text,
-				   strlen (info.sql_hash_text)) != NO_ERROR)
-		{
-		  sql_id = NULL;
-		}
-	    }
-
-	  queryinfo_string_length =
-	    snprintf (queryinfo_string, QUERY_INFO_BUF_SIZE,
-		      "%s\n%s\n%s\n %s\n\n /* SQL_ID: %s */ %s%s \n\n%s\n%s\n",
-		      line, title, line,
-		      info.sql_user_text,
-		      sql_id ? sql_id : "(null)",
-		      info.sql_hash_text, info.sql_plan_text, stat_buf, line);
-
-	  if (queryinfo_string_length >= QUERY_INFO_BUF_SIZE)
-	    {
-	      /* string is truncated */
-	      queryinfo_string_length = QUERY_INFO_BUF_SIZE - 1;
-	      queryinfo_string[queryinfo_string_length] = '\0';
-	    }
-
-	  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
-		  ER_SLOW_QUERY, 2, response_time, queryinfo_string);
+	  queryinfo_string_length = er_log_slow_query (thread_p, &info,
+						       response_time,
+						       &diff_stats,
+						       queryinfo_string);
+	  event_log_slow_query (thread_p, &info, response_time, &diff_stats);
 	}
+
+      if (trace_ioreads > 0 && diff_stats.pb_num_ioreads >= trace_ioreads)
+	{
+	  event_log_many_ioreads (thread_p, &info, response_time,
+				  &diff_stats);
+	}
+
       xmnt_server_stop_stats (thread_p);
     }
 
@@ -5995,6 +5980,161 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 }
 
 /*
+ * er_log_slow_query - log slow query to error log file
+ * return:
+ *   thread_p(in):
+ *   info(in):
+ *   time(in):
+ *   diff_stats(in):
+ *   queryinfo_string(out):
+ */
+static int
+er_log_slow_query (THREAD_ENTRY * thread_p, EXECUTION_INFO * info,
+		   int time, MNT_SERVER_EXEC_STATS * diff_stats,
+		   char *queryinfo_string)
+{
+  char stat_buf[STATDUMP_BUF_SIZE];
+  char *sql_id;
+  int queryinfo_string_length;
+  const char *line =
+    "--------------------------------------------------------------------------------";
+  const char *title = "Operation";
+
+  if (prm_get_bool_value (PRM_ID_SQL_TRACE_EXECUTION_PLAN) == true)
+    {
+      mnt_server_dump_stats_to_buffer (diff_stats, stat_buf,
+				       STATDUMP_BUF_SIZE, NULL);
+    }
+  else
+    {
+      info->sql_plan_text = (char *) "";
+      stat_buf[0] = '\0';
+    }
+
+  if (qmgr_get_sql_id (thread_p, &sql_id, info->sql_hash_text,
+		       strlen (info->sql_hash_text)) != NO_ERROR)
+    {
+      sql_id = NULL;
+    }
+
+  queryinfo_string_length =
+    snprintf (queryinfo_string, QUERY_INFO_BUF_SIZE,
+	      "%s\n%s\n%s\n %s\n\n /* SQL_ID: %s */ %s%s \n\n%s\n%s\n",
+	      line, title, line,
+	      info->sql_user_text,
+	      sql_id ? sql_id : "(null)",
+	      info->sql_hash_text, info->sql_plan_text, stat_buf, line);
+
+  if (sql_id != NULL)
+    {
+      free (sql_id);
+    }
+
+  if (queryinfo_string_length >= QUERY_INFO_BUF_SIZE)
+    {
+      /* string is truncated */
+      queryinfo_string_length = QUERY_INFO_BUF_SIZE - 1;
+      queryinfo_string[queryinfo_string_length] = '\0';
+    }
+
+  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
+	  ER_SLOW_QUERY, 2, time, queryinfo_string);
+
+  return queryinfo_string_length;
+}
+
+/*
+ * event_log_slow_query - log slow query to event log file
+ * return:
+ *   thread_p(in):
+ *   info(in):
+ *   time(in):
+ *   diff_stats(in):
+ *   num_bind_vals(in):
+ *   bind_vals(in):
+ */
+static void
+event_log_slow_query (THREAD_ENTRY * thread_p, EXECUTION_INFO * info,
+		      int time, MNT_SERVER_EXEC_STATS * diff_stats)
+{
+  FILE *log_fp;
+  int indent = 2;
+  LOG_TDES *tdes;
+  int tran_index;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  tdes = LOG_FIND_TDES (tran_index);
+  log_fp = event_log_start (thread_p, "SLOW_QUERY");
+
+  if (tdes == NULL || log_fp == NULL)
+    {
+      return;
+    }
+
+  event_log_print_client_info (tran_index, indent);
+  fprintf (log_fp, "%*csql: %s\n", indent, ' ', info->sql_hash_text);
+
+  if (tdes->num_exec_queries <= MAX_NUM_EXEC_QUERY_HISTORY)
+    {
+      event_log_bind_values (log_fp, tran_index, tdes->num_exec_queries - 1);
+    }
+
+  fprintf (log_fp, "%*ctime: %d\n", indent, ' ', time);
+  fprintf (log_fp, "%*cbuffer: fetch=%lld, ioread=%lld, iowrite=%lld\n",
+	   indent, ' ', (long long int) diff_stats->pb_num_fetches,
+	   (long long int) diff_stats->pb_num_ioreads,
+	   (long long int) diff_stats->pb_num_iowrites);
+  fprintf (log_fp, "%*cwait: cs=%d, lock=%d, latch=%d\n\n", indent, ' ',
+	   TO_MSEC (thread_p->cs_waits), TO_MSEC (thread_p->lock_waits),
+	   TO_MSEC (thread_p->latch_waits));
+
+  event_log_end (thread_p);
+}
+
+/*
+ * event_log_many_ioreads - log many ioreads to event log file
+ * return:
+ *   thread_p(in):
+ *   info(in):
+ *   time(in):
+ *   diff_stats(in):
+ *   num_bind_vals(in):
+ *   bind_vals(in):
+ */
+static void
+event_log_many_ioreads (THREAD_ENTRY * thread_p, EXECUTION_INFO * info,
+			int time, MNT_SERVER_EXEC_STATS * diff_stats)
+{
+  FILE *log_fp;
+  int indent = 2;
+  LOG_TDES *tdes;
+  int tran_index;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  tdes = LOG_FIND_TDES (tran_index);
+  log_fp = event_log_start (thread_p, "MANY_IOREADS");
+
+  if (tdes == NULL || log_fp == NULL)
+    {
+      return;
+    }
+
+  event_log_print_client_info (tran_index, indent);
+  fprintf (log_fp, "%*csql: %s\n", indent, ' ', info->sql_hash_text);
+
+  if (tdes->num_exec_queries <= MAX_NUM_EXEC_QUERY_HISTORY)
+    {
+      event_log_bind_values (log_fp, tran_index, tdes->num_exec_queries - 1);
+    }
+
+  fprintf (log_fp, "%*ctime: %d\n", indent, ' ', time);
+  fprintf (log_fp, "%*cioreads: %lld\n\n", indent, ' ',
+	   (long long int) diff_stats->pb_num_ioreads);
+
+  event_log_end (thread_p);
+}
+
+/*
  * sqmgr_prepare_and_execute_query -
  *
  * return:
@@ -6013,7 +6153,7 @@ sqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   int var_count, var_datasize, var_actual_datasize;
   QUERY_ID query_id;
   QFILE_LIST_ID *q_result;
-  int csserror, i, listid_length;
+  int csserror, listid_length;
   char *xasl_stream;
   int xasl_stream_size;
   char *ptr, *var_data, *list_data;
@@ -8626,16 +8766,16 @@ slogwr_get_log_pages (THREAD_ENTRY * thread_p, unsigned int rid,
       return_error_to_client (thread_p, rid);
     }
 
-  if (error == NO_ERROR || error == ER_INTERRUPTED)
+  if (error == ER_NET_DATA_RECEIVE_TIMEDOUT)
+    {
+      css_end_server_request (thread_p->conn_entry);
+    }
+  else
     {
       ptr = or_pack_int (reply, (int) END_CALLBACK);
       ptr = or_pack_int (ptr, error);
       (void) css_send_data_to_client (thread_p->conn_entry, rid, reply,
 				      OR_ALIGNED_BUF_SIZE (a_reply));
-    }
-  else if (error == ER_NET_DATA_RECEIVE_TIMEDOUT)
-    {
-      css_end_server_request (thread_p->conn_entry);
     }
 
   return;
@@ -9398,7 +9538,7 @@ ssession_check_session (THREAD_ENTRY * thread_p, unsigned int rid,
 /*
  * ssession_end_session -
  *
- * return: error code or NO_ERROR
+ * return: void
  *
  *   rid(in):
  *   request(in):
@@ -9406,7 +9546,7 @@ ssession_check_session (THREAD_ENTRY * thread_p, unsigned int rid,
  *
  * NOTE: This function ends the session with the id contained in the request
  */
-int
+void
 ssession_end_session (THREAD_ENTRY * thread_p, unsigned int rid,
 		      char *request, int reqlen)
 {
@@ -9424,13 +9564,12 @@ ssession_end_session (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_pack_int (reply, err);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
-  return err;
 }
 
 /*
  * ssession_set_row_count - set the count of affected rows for a session
  *
- * return: error code or NO_ERROR
+ * return: void
  *
  *   rid(in):
  *   request(in):
@@ -9438,7 +9577,7 @@ ssession_end_session (THREAD_ENTRY * thread_p, unsigned int rid,
  *
  * NOTE:
  */
-int
+void
 ssession_set_row_count (THREAD_ENTRY * thread_p, unsigned int rid,
 			char *request, int reqlen)
 {
@@ -9459,18 +9598,17 @@ ssession_set_row_count (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_pack_int (reply, err);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
-  return err;
 }
 
 /*
  * ssession_get_row_count - get the count of affected rows for a session
- * return: error code or NO_ERROR
+ * return: void
  *   rid(in):
  *   request(in):
  *   reqlen(in):
  * NOTE:
  */
-int
+void
 ssession_get_row_count (THREAD_ENTRY * thread_p, unsigned int rid,
 			char *request, int reqlen)
 {
@@ -9489,7 +9627,6 @@ ssession_get_row_count (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_pack_int (reply, row_count);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
-  return err;
 }
 
 /*

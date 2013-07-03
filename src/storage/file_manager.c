@@ -568,6 +568,12 @@ static DISK_ISVALID file_make_idsmap_image (THREAD_ENTRY * thread_p,
 static DISK_ISVALID set_bitmap (char *vol_ids_map, INT32 pageid);
 static DISK_ISVALID file_verify_idsmap_image (THREAD_ENTRY * thread_p,
 					      INT16 volid, char *vol_ids_map);
+static DISK_PAGE_TYPE file_get_disk_page_type (FILE_TYPE ftype);
+static DISK_ISVALID
+file_construct_space_info (THREAD_ENTRY * thread_p,
+			   VOL_SPACE_INFO * space_info,
+			   const VFID * vfid, int nperm_vols);
+
 
 /* check not use */
 //#if 0
@@ -1407,6 +1413,51 @@ file_get_primary_vol_purpose (FILE_TYPE ftype)
   return purpose;
 }
 
+
+/*
+ * file_get_disk_page_type ()
+ *   return:
+ *   ftype(in):
+ */
+static DISK_PAGE_TYPE
+file_get_disk_page_type (FILE_TYPE ftype)
+{
+  DISK_PAGE_TYPE page_type;
+
+  switch (ftype)
+    {
+    case FILE_TRACKER:
+    case FILE_HEAP:
+    case FILE_HEAP_REUSE_SLOTS:
+    case FILE_MULTIPAGE_OBJECT_HEAP:
+    case FILE_CATALOG:
+    case FILE_EXTENDIBLE_HASH:
+    case FILE_EXTENDIBLE_HASH_DIRECTORY:
+    case FILE_LONGDATA:
+      page_type = DISK_PAGE_DATA_TYPE;
+      break;
+
+    case FILE_BTREE:
+    case FILE_BTREE_OVERFLOW_KEY:
+      page_type = DISK_PAGE_INDEX_TYPE;
+      break;
+
+    case FILE_TMP_TMP:
+    case FILE_QUERY_AREA:
+    case FILE_EITHER_TMP:
+    case FILE_TMP:
+      page_type = DISK_PAGE_TEMP_TYPE;
+      break;
+
+    case FILE_UNKNOWN_TYPE:
+    default:
+      page_type = DISK_PAGE_UNKNOWN_TYPE;
+      break;
+    }
+
+  return page_type;
+}
+
 /*
  * file_find_goodvol () - Find a volume with at least the expected number of free
  *                 pages
@@ -1621,6 +1672,8 @@ file_ftabvpid_alloc (THREAD_ENTRY * thread_p, INT16 hint_volid,
       if (hint_volid != NULL_VOLID)
 	{
 	  bool search_wrap_around;
+	  DISK_PAGE_TYPE alloc_page_type =
+	    file_get_disk_page_type (file_type);
 
 	  search_wrap_around = (create_or_expand_file_table
 				== FILE_CREATE_FILE_TABLE);
@@ -1630,7 +1683,8 @@ file_ftabvpid_alloc (THREAD_ENTRY * thread_p, INT16 hint_volid,
 	  pageid = disk_alloc_page (thread_p, hint_volid,
 				    DISK_SECTOR_WITH_ALL_PAGES,
 				    num_ftb_pages, hint_pageid,
-				    search_wrap_around);
+				    search_wrap_around, alloc_page_type);
+
 	  if (pageid != NULL_PAGEID
 	      && pageid != DISK_NULL_PAGEID_WITH_ENOUGH_DISK_PAGES)
 	    {
@@ -3397,6 +3451,7 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
   bool out_of_range = false;
   int cached_volid_bound = -1;
   int ret = NO_ERROR;
+  DISK_PAGE_TYPE page_type;
 
   addr.vfid = vfid;
 
@@ -3620,6 +3675,7 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
 
   fhdr = (FILE_HEADER *) (fhdr_pgptr + FILE_HEADER_OFFSET);
   file_type = fhdr->type;
+  page_type = file_get_disk_page_type (file_type);
 
   if (!VFID_EQ (vfid, &fhdr->vfid))
     {
@@ -3747,7 +3803,8 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
 			      (void) disk_dealloc_page (thread_p,
 							allocset->volid,
 							batch_firstid,
-							batch_ndealloc);
+							batch_ndealloc,
+							page_type);
 			      /* Start again */
 			      batch_firstid = *aid_ptr;
 			      batch_ndealloc = 1;
@@ -3791,7 +3848,8 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
 		    }
 
 		  (void) disk_dealloc_page (thread_p, allocset->volid,
-					    batch_firstid, batch_ndealloc);
+					    batch_firstid, batch_ndealloc,
+					    page_type);
 		}
 
 	      /* Get next page in the allocation set */
@@ -4004,7 +4062,8 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
 		   * Deallocate as much as we can.
 		   */
 		  (void) disk_dealloc_page (thread_p, batch_volid,
-					    batch_firstid, batch_ndealloc);
+					    batch_firstid, batch_ndealloc,
+					    page_type);
 		  /* Start again */
 		  batch_volid = curftb_vpid.volid;
 		  batch_firstid = curftb_vpid.pageid;
@@ -4016,7 +4075,7 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
   if (batch_ndealloc > 0)
     {
       (void) disk_dealloc_page (thread_p, batch_volid, batch_firstid,
-				batch_ndealloc);
+				batch_ndealloc, page_type);
     }
 
   ret = file_descriptor_destroy_rest_pages (thread_p, fhdr);
@@ -4090,8 +4149,8 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
 	  pgbuf_unfix_and_init (thread_p, fhdr_pgptr);
 
 	  /* remove header page */
-	  if (disk_dealloc_page (thread_p, vfid->volid, vfid->fileid, 1) !=
-	      NO_ERROR)
+	  if (disk_dealloc_page (thread_p, vfid->volid, vfid->fileid,
+				 1, page_type) != NO_ERROR)
 	    {
 	      goto exit_on_error;
 	    }
@@ -4111,8 +4170,8 @@ file_destroy (THREAD_ENTRY * thread_p, const VFID * vfid)
       pgbuf_unfix_and_init (thread_p, fhdr_pgptr);
 
       /* Now throw away the header page */
-      if (disk_dealloc_page (thread_p, vfid->volid, vfid->fileid, 1) !=
-	  NO_ERROR)
+      if (disk_dealloc_page (thread_p, vfid->volid, vfid->fileid, 1,
+			     page_type) != NO_ERROR)
 	{
 	  goto exit_on_error;
 	}
@@ -4433,13 +4492,6 @@ file_get_type (THREAD_ENTRY * thread_p, const VFID * vfid)
   vpid.volid = vfid->volid;
   vpid.pageid = vfid->fileid;
 
-  /*
-   * Technically, this routine should be locking the page with an S_LOCK
-   * in order to read the header, however, since we know that file types
-   * are not changed once the file is created, this is reasonably safe.
-   * This optimization is done because this routine is called frequenty.
-   */
-
   fhdr_pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_READ,
 			  PGBUF_UNCONDITIONAL_LATCH);
   if (fhdr_pgptr == NULL)
@@ -4450,7 +4502,7 @@ file_get_type (THREAD_ENTRY * thread_p, const VFID * vfid)
   file_type = fhdr->type;
   if (file_type_cache_add_entry (vfid, file_type) != NO_ERROR)
     {
-      return FILE_UNKNOWN_TYPE;
+      file_type = FILE_UNKNOWN_TYPE;
     }
 
   pgbuf_unfix_and_init (thread_p, fhdr_pgptr);
@@ -6535,6 +6587,7 @@ file_allocset_alloc_pages (THREAD_ENTRY * thread_p, PAGE_PTR fhdr_pgptr,
 #if !defined (NDEBUG)
   int retry = 0;
 #endif
+  DISK_PAGE_TYPE alloc_page_type;
 
   /*
    * Allocation of pages and sectors is done only from the last allocation set.
@@ -6571,11 +6624,12 @@ file_allocset_alloc_pages (THREAD_ENTRY * thread_p, PAGE_PTR fhdr_pgptr,
    * the previous allocated sectors. However, we do this only when we think
    * there are enough free pages on such sectors.
    */
+  alloc_page_type = file_get_disk_page_type (fhdr->type);
 
   alloc_pageid = ((sectid != NULL_SECTID)
 		  ? disk_alloc_page (thread_p, allocset->volid, sectid,
 				     npages,
-				     near_pageid, true) :
+				     near_pageid, true, alloc_page_type) :
 		  DISK_NULL_PAGEID_WITH_ENOUGH_DISK_PAGES);
 
   if (alloc_pageid == DISK_NULL_PAGEID_WITH_ENOUGH_DISK_PAGES
@@ -6613,7 +6667,7 @@ file_allocset_alloc_pages (THREAD_ENTRY * thread_p, PAGE_PTR fhdr_pgptr,
 	      sectid = *aid_ptr;
 	      alloc_pageid = disk_alloc_page (thread_p, allocset->volid,
 					      sectid, npages, near_pageid,
-					      true);
+					      true, alloc_page_type);
 	    }
 
 	  /* Was page found ? */
@@ -6664,7 +6718,8 @@ file_allocset_alloc_pages (THREAD_ENTRY * thread_p, PAGE_PTR fhdr_pgptr,
 	}
 
       alloc_pageid = disk_alloc_page (thread_p, allocset->volid, sectid,
-				      npages, near_pageid, true);
+				      npages, near_pageid, true,
+				      alloc_page_type);
 #if !defined (NDEBUG)
       if (++retry > 1)
 	{
@@ -7671,6 +7726,7 @@ file_allocset_dealloc_contiguous_pages (THREAD_ENTRY * thread_p,
   bool old_val;
 #endif /* SERVER_MODE */
   int ret = NO_ERROR;
+  DISK_PAGE_TYPE page_type;
 
   if (log_start_system_op (thread_p) == NULL)
     {
@@ -7693,8 +7749,9 @@ file_allocset_dealloc_contiguous_pages (THREAD_ENTRY * thread_p,
 
   if (ret == NO_ERROR)
     {
+      page_type = file_get_disk_page_type (fhdr->type);
       ret = disk_dealloc_page (thread_p, allocset->volid, *first_aid_ptr,
-			       ncont_page_entries);
+			       ncont_page_entries, page_type);
     }
 
   if (ret == NO_ERROR)
@@ -9033,6 +9090,7 @@ file_allocset_compact_page_table (THREAD_ENTRY * thread_p,
   FILE_RECV_FTB_EXPANSION recv_ftb_undo;
   FILE_RECV_FTB_EXPANSION recv_ftb_redo;
   int ret = NO_ERROR;
+  DISK_PAGE_TYPE page_type;
 
   fhdr = (FILE_HEADER *) (fhdr_pgptr + FILE_HEADER_OFFSET);
 
@@ -9375,6 +9433,7 @@ file_allocset_compact_page_table (THREAD_ENTRY * thread_p,
 
   /* If last allocation set, remove any of the unused file table pages */
   allocset_vpidptr = pgbuf_get_vpid_ptr (allocset_pgptr);
+  page_type = file_get_disk_page_type (fhdr->type);
 
   if (allocset_offset == fhdr->last_allocset_offset
       && VPID_EQ (allocset_vpidptr, &fhdr->last_allocset_vpid)
@@ -9409,7 +9468,8 @@ file_allocset_compact_page_table (THREAD_ENTRY * thread_p,
 	  pgbuf_unfix_and_init (thread_p, from_pgptr);
 
 	  /* Does not matter the return value of disk_dealloc_page */
-	  (void) disk_dealloc_page (thread_p, vpid.volid, vpid.pageid, 1);
+	  (void) disk_dealloc_page (thread_p, vpid.volid, vpid.pageid,
+				    1, page_type);
 	  num_ftb_pages_deleted++;
 	}
 
@@ -11080,6 +11140,8 @@ file_tracker_create (THREAD_ENTRY * thread_p, VFID * vfid)
   VPID allocset_vpid;
   INT16 allocset_offset;
 
+  file_Tracker->vfid = NULL;
+
   if (file_create (thread_p, vfid, 0, FILE_TRACKER, NULL, NULL, 0) == NULL)
     {
       goto exit_on_error;
@@ -11657,7 +11719,6 @@ file_make_idsmap_image (THREAD_ENTRY * thread_p,
 {
   DISK_ISVALID valid = DISK_VALID;
 #if defined (SA_MODE)
-  FILE_FTAB_CHAIN *chain;
   FILE_HEADER *fhdr;
   PAGE_PTR fhdr_pgptr = NULL;
   PAGE_PTR pgptr = NULL;
@@ -11802,7 +11863,7 @@ static DISK_ISVALID
 set_bitmap (char *vol_ids_map, INT32 pageid)
 {
   char *at_chptr;
-  int page_num, byte_offset, bit_offset, j;
+  int page_num, byte_offset, bit_offset;
 
   if (vol_ids_map == NULL)
     {
@@ -13964,4 +14025,322 @@ file_print_name_of_class_with_attrid (THREAD_ENTRY * thread_p, FILE * fp,
     {
       fprintf (fp, "\n");
     }
+}
+
+/*
+ * file_update_used_pages_of_vol_header () -
+ *   This function is used in migration tool (migration_91_to_92).
+ *   Calculates used_data_npages and used_index_npages
+ *   of each volume with fileTracker and Updates volume header.
+ *
+ *   return: either: DISK_INVALID, DISK_VALID, DISK_ERROR
+ *
+ * Note:
+ */
+DISK_ISVALID
+file_update_used_pages_of_vol_header (THREAD_ENTRY * thread_p)
+{
+#if defined (SA_MODE)
+  DISK_ISVALID allvalid = DISK_VALID;
+  DISK_ISVALID valid = DISK_VALID;
+  PAGE_PTR vhdr_pgptr;
+  DISK_VAR_HEADER *vhdr;
+  int num_files, num_found;
+  VPID set_vpids[FILE_SET_NUMVPIDS], vpid;
+  VFID vfid;
+  int i, j, nperm_vols;
+  VOL_SPACE_INFO *space_info = NULL;
+
+  if (file_Tracker->vfid == NULL)
+    {
+      return DISK_ERROR;
+    }
+
+  nperm_vols = xboot_find_number_permanent_volumes (thread_p);
+  if (nperm_vols <= 0)
+    {
+      return DISK_ERROR;
+    }
+
+  space_info = (VOL_SPACE_INFO *) calloc (nperm_vols,
+					  sizeof (VOL_SPACE_INFO));
+  if (space_info == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+	      1, sizeof (VOL_SPACE_INFO) * nperm_vols);
+      return DISK_ERROR;
+    }
+
+  /* phase 1. construct space_info with file tracker */
+  num_files = file_get_numpages (thread_p, file_Tracker->vfid);
+  for (i = 0; i < num_files && allvalid != DISK_ERROR; i += num_found)
+    {
+      num_found = file_find_nthpages (thread_p, file_Tracker->vfid,
+				      &set_vpids[0], i,
+				      ((num_files - i < FILE_SET_NUMVPIDS)
+				       ? num_files - i : FILE_SET_NUMVPIDS));
+      if (num_found <= 0)
+	{
+	  allvalid = DISK_ERROR;
+	  break;
+	}
+
+      for (j = 0; j < num_found && allvalid != DISK_ERROR; j++)
+	{
+	  vfid.volid = set_vpids[j].volid;
+	  vfid.fileid = set_vpids[j].pageid;
+
+	  valid = file_construct_space_info (thread_p, space_info,
+					     &vfid, nperm_vols);
+	  if (valid != DISK_VALID)
+	    {
+	      allvalid = valid;
+	    }
+	}
+    }
+
+  if (allvalid != DISK_ERROR && i != num_files)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_FILE_MISMATCH_NFILES, 2,
+	      num_files, i);
+      allvalid = DISK_ERROR;
+    }
+
+  for (i = 0; i < nperm_vols; i++)
+    {
+      vpid.volid = i + LOG_DBFIRST_VOLID;
+      vpid.pageid = DISK_VOLHEADER_PAGE;
+
+      vhdr_pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_READ,
+			      PGBUF_UNCONDITIONAL_LATCH);
+      if (vhdr_pgptr == NULL)
+	{
+	  allvalid = DISK_ERROR;
+	  goto end;
+	}
+
+      vhdr = (DISK_VAR_HEADER *) vhdr_pgptr;
+
+      vhdr->used_data_npages = space_info[i].used_data_npages;
+      vhdr->used_index_npages = space_info[i].used_index_npages;
+
+      if (vhdr->purpose == DISK_PERMVOL_DATA_PURPOSE)
+	{
+	  if (space_info[i].used_index_npages != 0
+	      || (space_info[i].used_data_npages + vhdr->sys_lastpage + 1
+		  != vhdr->total_pages - vhdr->free_pages))
+	    {
+	      /* Inconsistency is found */
+	      assert_release (space_info[i].used_index_npages == 0
+			      && (space_info[i].used_data_npages +
+				  vhdr->sys_lastpage + 1 ==
+				  vhdr->total_pages - vhdr->free_pages));
+
+	      pgbuf_unfix_and_init (thread_p, vhdr_pgptr);
+
+	      allvalid = DISK_ERROR;
+	      goto end;
+	    }
+	}
+      else if (vhdr->purpose == DISK_PERMVOL_INDEX_PURPOSE)
+	{
+	  if (space_info[i].used_data_npages != 0
+	      || (space_info[i].used_index_npages + vhdr->sys_lastpage + 1
+		  != vhdr->total_pages - vhdr->free_pages))
+	    {
+	      /* Inconsistency is found */
+	      assert_release (space_info[i].used_data_npages == 0
+			      && (space_info[i].used_index_npages +
+				  vhdr->sys_lastpage + 1 ==
+				  vhdr->total_pages - vhdr->free_pages));
+
+	      pgbuf_unfix_and_init (thread_p, vhdr_pgptr);
+
+	      allvalid = DISK_ERROR;
+	      goto end;
+	    }
+	}
+      else if (vhdr->purpose == DISK_PERMVOL_GENERIC_PURPOSE)
+	{
+	  if ((space_info[i].used_data_npages +
+	       space_info[i].used_index_npages +
+	       vhdr->sys_lastpage + 1)
+	      != vhdr->total_pages - vhdr->free_pages)
+	    {
+	      /* Inconsistency is found */
+	      assert_release ((space_info[i].used_data_npages +
+			       space_info[i].used_index_npages +
+			       vhdr->sys_lastpage + 1)
+			      == vhdr->total_pages - vhdr->free_pages);
+
+	      pgbuf_unfix_and_init (thread_p, vhdr_pgptr);
+
+	      allvalid = DISK_ERROR;
+	      goto end;
+	    }
+	}
+      else
+	{
+	  pgbuf_unfix_and_init (thread_p, vhdr_pgptr);
+	  continue;
+	}
+
+      pgbuf_set_dirty (thread_p, vhdr_pgptr, FREE);
+    }
+
+end:
+  if (space_info)
+    {
+      free_and_init (space_info);
+    }
+
+  return allvalid;
+#else /* !SA_MODE */
+  return DISK_ERROR;
+#endif /* !SA_MODE */
+}
+
+/*
+ * file_construct_space_info () -
+ *   return: either: DISK_INVALID, DISK_VALID, DISK_ERROR
+ *   space_info(out):
+ *   vfid(in):
+ *   nperm_vols(in):
+ */
+static DISK_ISVALID
+file_construct_space_info (THREAD_ENTRY * thread_p,
+			   VOL_SPACE_INFO * space_info,
+			   const VFID * vfid, int nperm_vols)
+{
+#if defined (SA_MODE)
+  DISK_ISVALID valid = DISK_VALID;
+  FILE_FTAB_CHAIN *chain;
+  FILE_HEADER *fhdr;
+  PAGE_PTR fhdr_pgptr = NULL;
+  PAGE_PTR pgptr = NULL;
+  VPID set_vpids[FILE_SET_NUMVPIDS];
+  int num_found;
+  int i, j;
+  VPID next_ftable_vpid;
+  int num_user_pages;
+  DISK_PAGE_TYPE page_type;
+
+  if (space_info == NULL)
+    {
+      assert (space_info != NULL);
+      return DISK_ERROR;
+    }
+
+  set_vpids[0].volid = vfid->volid;
+  set_vpids[0].pageid = vfid->fileid;
+
+  fhdr_pgptr = pgbuf_fix (thread_p, &set_vpids[0], OLD_PAGE, PGBUF_LATCH_READ,
+			  PGBUF_UNCONDITIONAL_LATCH);
+  if (fhdr_pgptr == NULL)
+    {
+      return DISK_ERROR;
+    }
+
+  fhdr = (FILE_HEADER *) (fhdr_pgptr + FILE_HEADER_OFFSET);
+
+  page_type = file_get_disk_page_type (fhdr->type);
+  if (page_type != DISK_PAGE_DATA_TYPE && page_type != DISK_PAGE_INDEX_TYPE)
+    {
+      goto end;
+    }
+
+  /* 1. set file header page to space_info */
+  if (page_type == DISK_PAGE_DATA_TYPE)
+    {
+      space_info[vfid->volid].used_data_npages++;
+    }
+  else if (page_type == DISK_PAGE_INDEX_TYPE)
+    {
+      space_info[vfid->volid].used_index_npages++;
+    }
+
+  /* 2. set file table pages to space_info */
+  if (file_ftabvpid_next (fhdr, fhdr_pgptr, &next_ftable_vpid) != NO_ERROR)
+    {
+      valid = DISK_ERROR;
+      goto end;
+    }
+
+  /* next pages */
+  while (!VPID_ISNULL (&next_ftable_vpid))
+    {
+      if (page_type == DISK_PAGE_DATA_TYPE)
+	{
+	  space_info[next_ftable_vpid.volid].used_data_npages++;
+	}
+      else if (page_type == DISK_PAGE_INDEX_TYPE)
+	{
+	  space_info[next_ftable_vpid.volid].used_index_npages++;
+	}
+
+      pgptr = pgbuf_fix (thread_p, &next_ftable_vpid, OLD_PAGE,
+			 PGBUF_LATCH_READ, PGBUF_UNCONDITIONAL_LATCH);
+      if (pgptr == NULL)
+	{
+	  valid = DISK_ERROR;
+	  goto end;
+	}
+
+      if (file_ftabvpid_next (fhdr, pgptr, &next_ftable_vpid) != NO_ERROR)
+	{
+	  pgbuf_unfix_and_init (thread_p, pgptr);
+
+	  valid = DISK_ERROR;
+	  goto end;
+	}
+
+      pgbuf_unfix_and_init (thread_p, pgptr);
+    }
+
+  if (VFID_EQ (vfid, file_Tracker->vfid))
+    {
+      /* This file is tracker file.
+       * User pages in this file will be added later as a file header page.
+       */
+      goto end;
+    }
+
+  num_user_pages = fhdr->num_user_pages;
+
+  /* 3. set user pages */
+  for (i = 0; i < num_user_pages; i += num_found)
+    {
+      num_found =
+	file_find_nthpages (thread_p, vfid, &set_vpids[0], i,
+			    ((num_user_pages - i < FILE_SET_NUMVPIDS)
+			     ? (num_user_pages - i) : FILE_SET_NUMVPIDS));
+      if (num_found <= 0)
+	{
+	  valid = DISK_ERROR;
+	  goto end;
+	}
+
+      for (j = 0; j < num_found; j++)
+	{
+	  if (page_type == DISK_PAGE_DATA_TYPE)
+	    {
+	      space_info[set_vpids[j].volid].used_data_npages++;
+	    }
+	  else if (page_type == DISK_PAGE_INDEX_TYPE)
+	    {
+	      space_info[set_vpids[j].volid].used_index_npages++;
+	    }
+	}
+    }
+
+end:
+  if (fhdr_pgptr)
+    {
+      pgbuf_unfix_and_init (thread_p, fhdr_pgptr);
+    }
+
+  return valid;
+#else /* !SA_MODE */
+  return DISK_ERROR;
+#endif /* !SA_MODE */
 }

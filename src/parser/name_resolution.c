@@ -1466,7 +1466,7 @@ pt_bind_names_post (PARSER_CONTEXT * parser,
 	      parser_free_tree (parser, node);
 	      return NULL;
 	    }
-	  
+
 	  if (key_domain == NULL)
 	    {
 	      /* do nothing */
@@ -1476,8 +1476,7 @@ pt_bind_names_post (PARSER_CONTEXT * parser,
 	  /* Generate one data_type sample */
 	  key_type.type_enum =
 	    pt_db_to_type_enum (TP_DOMAIN_TYPE (key_domain));
-	  key_type.data_type =
-	    pt_domain_to_data_type (parser, key_domain);
+	  key_type.data_type = pt_domain_to_data_type (parser, key_domain);
 	  if (key_type.data_type == NULL)
 	    {
 	      PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,

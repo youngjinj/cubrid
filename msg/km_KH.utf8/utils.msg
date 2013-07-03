@@ -139,7 +139,6 @@ service's utilitiesដែលមាន:\n\
     broker\n\
     manager\n\
     heartbeat\n\
-    shard\n\
 \n\
 administrator's utilitiesដែលមាន:\n\
     addvoldb\n\
@@ -204,7 +203,8 @@ commandដែលមាន:\n\
     on          ឈ្មោះbroker\n\
     off         ឈ្មោះbroker\n\
     reset       ឈ្មោះbroker\n\
-    acl         <status|reload> [ឈ្មោះbroker]\n
+    acl         <status|reload> [ឈ្មោះbroker]\n\
+    getid       -b <broker-name> [-f] shard-key\n
 27 cubrid utility, version %s\n\
 usage: %s manager <command>\n\
 \n\
@@ -230,20 +230,6 @@ commandដែលមាន:\n\
 36 The server was not configured for HA.\n
 38 ៣៨កំព្យួទ័របំរើសេវាដែលបានត្រូវកំណត់អោយHAមិនចេញពីបញ្ជី ha_db_list.\n
 39 ៣៩កំព្យួទ័របំរើសេវាដែលបានត្រូវកំណត់អោយHAមិនចេញពី ha_node_list.\n
-62 ៦២ឧបករប្រើប្រាស់cubrid កំណែ %s\n\
-usage: %s shard <command> [args]\n\
-\n\
-Available command:\n\
-    start\n\
-    stop\n\
-    restart\n\
-    info\n\
-    status      [-b] [-f] [-t] [-s <sec>] [<expr>]\n\
-    on          shard-name\n\
-    off         shard-name\n\
-    reset       shard-name\n\
-    acl         <status|reload> [shard-name]\n\
-    getid       -b <broker-name> [-f] shard-key\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 WARNING: ជម្រើស -t មិនស្គាល់ក្នុងប្រតិបត្តិការ stand-alone mode។\n
@@ -297,15 +283,16 @@ $set 4 MSGCAT_UTIL_SET_CREATEDB
 42 commandដែលមិនស្គាល់ `%s'\n
 43 មិនអាចបើក output file `%s'\n
 44 មិនអាចផ្លាស់ប្តូរទីតាំងដែលតាបេសដែលមាន។\n
-45 បងើ្កតទិន្នន័យដែលមានទំហំ %s. ទំហំថាសដែលត្រូវការស្មើនឹង%s.\n
+45 Creating database with %s size using default locale %s. The total amount of disk space needed is %s.\n
 46 មិនអាំចបង្កើតដែលតាបេស\n
 47 បញ្ហាជាមួយ user file `%s'\n
 48 ទំហំ '%s', %s ហួសកំណត់. សូមជ្រើសរើសទំហំរវាង %s និង %s.\n
 49 តំលៃនៃ%s'%s'មោឃ\n
 60 \
 createdb: បង្កើតដែលតាបេស\n\
-usage: %s createdb [OPTION] ឈ្មោះដែលតាបេស\n\
+usage: %s createdb [OPTION] database-name database-locale\n\
 \n\
+database-locale format is <language>.<charset>; examples : en_US.iso88591, ko_KR.utf8\n\
 ជម្រើសសុពល:\n\
       --db-volume-size=SIZE           ទំហំនៃvolumeពត៌មានទីមួយ\n\
                                       default: db_volume_size ក្នុង cubrid.conf\n\
@@ -649,16 +636,26 @@ usage: %s checkdb [OPTION] ឈ្មោះដែលតាបេស [class_name1 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
 15 ការពិពណ៌នាអំពីទីទំនេរសម្រាប់ដែលតាបេស  '%s' ជាមួយទំហំទំព័រ %s. ( ទំហំទំព័រlog : %s)\n\n
-16 %5d %8s  %s %s  %s\n
+16 %5d %9s  %s %s  %s\n
 17 មិនអាចបើក output file `%s'\n
 18 ការពិពណ៌នាអំពីទីទំនេរសម្រាប់volumesបណ្តោះអាសន្ន សម្រាប់ដែលតាបេស '%s' ជាមួយទំហំទំព័រ %s។ \n\n
 19 បំណងសុពល  total_pages  free_pages  ឈ្មោះVol \n\n
 20 បំណងសុពល   total_size   free_size  ឈ្មោះVol \n\n
 21 ការពិពណ៌នាអំពីទីទំនេរLOB  %s \n\n
+22 -------------------------------------------------------------------------------\n
 30 ការពិពណ៌នាអំពីទីទំនេរដែលត្រូវបានសង្ខេបសម្រាប់ ដែលតាបេស '%s' ជាមួយទំងំទំព័រ %s. ( ទំហំទំព័រlog : %s)\n\n
 31 បំណង total_pages  used_pages  free_pages  volume_count\n
 32 បំណង total_size   used_size   free_size  volume_count\n
 33 %10s %s %s %s %10d\n
+34 -------------------------------------------------------------\n
+40 Volid  Purpose   total_pages  free_pages  data_pages index_pages  temp_pages  Vol Name\n\n
+41 Volid  Purpose    total_size   free_size   data_size  index_size   temp_size  Vol Name\n\n
+42 %5d %9s  %s %s %s %s %s  %s\n
+43 ----------------------------------------------------------------------------------------------------\n
+50 Purpose    total_pages  used_pages  free_pages  data_pages index_pages  temp_pages  volume_count\n
+51 Purpose     total_size   used_size   free_size   data_size  index_size   temp_size  volume_count\n
+52 %10s %s %s %s %s %s %s %10d\n
+53 -------------------------------------------------------------------------------------------------\n
 60 \
 spacedb: បង្ហាញ usage/ទីទំនេរសេរីនៃដែលតាបេស ។ \n\
 usage: %s spacedb [OPTION] ឈ្មោះដែលតាបេស \n\
@@ -669,7 +666,8 @@ usage: %s spacedb [OPTION] ឈ្មោះដែលតាបេស \n\
   -C, --CS-mode                ការប្រតិបត្តិ client-server mode \n\
       --size-unit={PAGE|M|G|T|H}\n\
                                set the display unit (page, mega, giga, tera, human readable); default: H\n\
-  -s, --summarize              បង្ហាញតែសេចក្តីសង្ខេបមួយសម្រាប់បំណង volumeនីមួយៗ \n
+  -s, --summarize              បង្ហាញតែសេចក្តីសង្ខេបមួយសម្រាប់បំណង volumeនីមួយៗ \n\
+  -p, --purpose                display the used size of each purpose(data/index/temp) of each volume\n
 
 
 $set 20 MSGCAT_UTIL_SET_ESTIMATEDB_DATA
@@ -930,7 +928,7 @@ usage: %s applyinfo [OPTION] ឈ្មោះដែលតាបេស \n\
   -L, --copied-log-path=PATH  path នៃlog volumesដែលថតចម្លងរួច; បង្ហាញពត៌មានlogដែលថតចម្លងរួច \n\
   -p, --pageid=ID             ទំព័រ id; default : 0(ទំព័រសកម្ម)\n\
   -v, --verbose               បង្កើនសមត្ថភាពសារ verbose status ; default : មិនអាច\n\
-  -i, --interval=S            បោះពុម្ពព័ត៌មានអំពី S secs\n	
+  -i, --interval=S            បោះពុម្ពព័ត៌មានអំពី S secs\n
 
 $set 45 MSGCAT_UTIL_SET_ACLDB
 59 acldb មិនអាចដំណើរការជា standalone modeទេ។ \n
