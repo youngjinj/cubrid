@@ -5107,7 +5107,19 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
 
       /* need to lock class for read
        * We may have already locked it for write, but that is ok, isn't it? */
-      spec->lock_hint = lock_hint;
+      if (spec->lock_hint == LOCKHINT_NONE)
+	{
+	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true)
+	    {
+	      if (!sm_is_system_class (class_))
+		{
+		  /* no need to acquire any instance/key locks
+		   * when scanning tables in mvcc
+		   */
+		  spec->lock_hint = LOCKHINT_READ_UNCOMMITTED;
+		}
+	    }
+	}
       if (locator_fetch_class (class_, DB_FETCH_CLREAD_INSTREAD) == NULL)
 	{
 	  PT_ERRORc (parser, flat, er_msg ());

@@ -21348,7 +21348,7 @@ btree_range_search_init_helper (THREAD_ENTRY * thread_p,
 
   btrs_helper->rec.data = NULL;
 
-  if (SCAN_IS_INDEX_COVERED (index_scan_id_p))
+  if (SCAN_IS_INDEX_COVERED (index_scan_id_p) && mvcc_Enabled == false)
     {
       btrs_helper->pg_oid_cnt = index_scan_id_p->indx_cov.max_tuples;
       btrs_helper->mem_oid_ptr = NULL;
@@ -21859,6 +21859,13 @@ btree_handle_current_oid (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 				       inst_oid, index_scan_id_p) != NO_ERROR)
 		{
 		  return ER_FAILED;
+		}
+
+	      if (mvcc_Enabled)
+		{
+		  /* need to check whether tuple is valid */
+		  COPY_OID (btrs_helper->mem_oid_ptr, inst_oid);
+		  btrs_helper->mem_oid_ptr++;
 		}
 	    }
 	  else

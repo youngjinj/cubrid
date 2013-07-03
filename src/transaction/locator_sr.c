@@ -4377,7 +4377,15 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 						      NULL, NULL, NULL);
 		      if (error_code != NO_ERROR)
 			{
-			  goto error1;
+			  if (error_code == ER_MVCC_ROW_ALREADY_DELETED)
+			    {
+			      er_clear ();
+			      error_code = NO_ERROR;
+			    }
+			  else
+			    {
+			      goto error1;
+			    }
 			}
 		    }
 		  else
@@ -4885,7 +4893,15 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 							     NULL);
 		  if (error_code != NO_ERROR)
 		    {
-		      goto error1;
+		      if (error_code == ER_MVCC_ROW_ALREADY_DELETED)
+			{
+			  er_clear ();
+			  error_code = NO_ERROR;
+			}
+		      else
+			{
+			  goto error1;
+			}
 		    }
 		}
 	    }
@@ -4985,6 +5001,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
   OID null_oid = {
     NULL_PAGEID, NULL_SLOTID, NULL_VOLID
   };
+  OID new_oid;
 
   assert (class_oid != NULL && !OID_ISNULL (class_oid));
 
@@ -5191,7 +5208,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	      /* Cache object has been updated, we need update the value again */
 	      if (heap_perform_update
 		  (thread_p, &real_hfid, &real_class_oid, oid, recdes,
-		   &isold_object, local_scan_cache, NULL) == NULL)
+		   &new_oid, &isold_object, local_scan_cache, NULL) == NULL)
 		{
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
@@ -5416,6 +5433,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
   LC_COPYAREA *cache_attr_copyarea = NULL;
   int error_code = NO_ERROR;
   HEAP_SCANCACHE *local_scan_cache;
+  OID new_oid;
 
   assert (class_oid != NULL && !OID_ISNULL (class_oid));
 
@@ -5496,14 +5514,18 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	}
 
       if (heap_perform_update
-	  (thread_p, hfid, class_oid, oid, recdes, &isold_object,
+	  (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
 	   scan_cache, mvcc_data_filter) == NULL)
 	{
 	  /*
 	   * Problems updating the object...Maybe, the transaction should be
 	   * aborted by the caller...Quit..
 	   */
-	  error_code = ER_FAILED;
+	  error_code = er_errid ();
+	  if (error_code == NO_ERROR)
+	    {
+	      error_code = ER_FAILED;
+	    }
 	  goto error;
 	}
 
@@ -5660,10 +5682,9 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	   */
 	}
 
-      /* AN INSTANCE: Update indices if any */
-
       if (has_index)
 	{
+	  /* get the old record first */
 	  if (oldrecdes == NULL)
 	    {
 	      local_scan_cache->mvcc_snapshot =
@@ -5677,17 +5698,54 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    {
 	      scan = S_SUCCESS;
 	    }
+	}
 
+      if (mvcc_Enabled)
+	{
+	  /* in mvcc update heap and then indexes */
+	  if (heap_perform_update
+	      (thread_p, hfid, class_oid, oid, recdes, &new_oid,
+	       &isold_object, local_scan_cache, mvcc_data_filter) == NULL)
+	    {
+	      /*
+	       * Problems updating the object...Maybe, the transaction should be
+	       * aborted by the caller...Quit..
+	       */
+	      error_code = er_errid ();
+	      if (error_code == NO_ERROR)
+		{
+		  error_code = ER_FAILED;
+		}
+
+	      goto error;
+	    }
+	}
+      /* AN INSTANCE: Update indices if any */
+
+      if (has_index)
+	{
 	  if (scan == S_SUCCESS)
 	    {
-	      /* Update the indices */
-	      error_code =
-		locator_update_index (thread_p, recdes, oldrecdes,
-				      att_id, n_att_id, oid, class_oid,
-				      search_btid,
-				      search_btid_duplicate_key_locked,
-				      op_type, local_scan_cache, true, true,
-				      repl_info);
+	      if (mvcc_Enabled && !OID_ISNULL (&new_oid))
+		{
+		  error_code =
+		    locator_update_index (thread_p, recdes, oldrecdes,
+					  att_id, n_att_id, &new_oid,
+					  class_oid, NULL, false, op_type,
+					  local_scan_cache, true, true,
+					  repl_info);
+		}
+	      else
+		{
+		  /* Update the indices */
+		  error_code =
+		    locator_update_index (thread_p, recdes, oldrecdes,
+					  att_id, n_att_id, oid, class_oid,
+					  search_btid,
+					  search_btid_duplicate_key_locked,
+					  op_type, local_scan_cache, true,
+					  true, repl_info);
+		}
 	      if (error_code != NO_ERROR)
 		{
 		  /*
@@ -5761,16 +5819,24 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    }
 	}
 
-      if (heap_perform_update
-	  (thread_p, hfid, class_oid, oid, recdes, &isold_object,
-	   local_scan_cache, mvcc_data_filter) == NULL)
+      /* in non-mvcc update indexes and then heap */
+      if (mvcc_Enabled == false)
 	{
-	  /*
-	   * Problems updating the object...Maybe, the transaction should be
-	   * aborted by the caller...Quit..
-	   */
-	  error_code = ER_FAILED;
-	  goto error;
+	  if (heap_perform_update
+	      (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
+	       local_scan_cache, NULL) == NULL)
+	    {
+	      /*
+	       * Problems updating the object...Maybe, the transaction should be
+	       * aborted by the caller...Quit..
+	       */
+	      error_code = er_errid ();
+	      if (error_code == NO_ERROR)
+		{
+		  error_code = ER_FAILED;
+		}
+	      goto error;
+	    }
 	}
 
       /*
@@ -7059,6 +7125,12 @@ locator_add_or_remove_index (THREAD_ENTRY * thread_p, RECDES * recdes,
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
 
+  if (mvcc_Enabled && scan_cache != NULL
+      && scan_cache->delete_old_row == false && is_insert == false)
+    {
+      /* mvcc case, delete does not remove the old record */
+      return NO_ERROR;
+    }
   /*
    *  Populate the index_attrinfo structure.
    *  Return the number of indexed attributes found.
@@ -7760,8 +7832,9 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 	    {
 	      if (ev_results[1] != V_TRUE)
 		{
-		  /*the old rec and the new rec does not satisfied
-		     the filter predicate */
+		  /* the old rec and the new rec does not satisfied
+		   * the filter predicate
+		   */
 		  continue;
 		}
 	      else
@@ -7775,21 +7848,33 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 	    {
 	      if (ev_results[1] != V_TRUE)
 		{
-		  /*the old rec satisfied the filter predicate */
-		  /*the new rec does not satisfied the filter predicate */
+		  /* the old rec satisfied the filter predicate
+		   * the new rec does not satisfied the filter predicate
+		   */
 		  do_delete_only = true;
 		}
 	      else
 		{
 		  if (found_btid == false)
 		    {
-		      /*the old rec satisfied the filter predicate */
-		      /*the new rec satisfied the filter predicate */
-		      /*the index does not contain updated attributes */
+		      /* the old rec satisfied the filter predicate
+		       * the new rec satisfied the filter predicate
+		       * the index does not contain updated attributes
+		       */
 		      continue;
 		    }
-		  /*nothing to do - update operation */
+		  /* nothing to do - update operation */
 		}
+	    }
+	}
+
+      if (do_delete_only)
+	{
+	  if (mvcc_Enabled && scan_cache != NULL
+	      && scan_cache->delete_old_row == false)
+	    {
+	      /* mvcc case - delete does not remove the old key */
+	      continue;
 	    }
 	}
 
@@ -7900,8 +7985,11 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 			}
 		    }
 		}
-	      else if (do_insert_only)
+	      else if ((do_insert_only == true) ||
+		       (mvcc_Enabled && scan_cache != NULL
+			&& scan_cache->delete_old_row == false))
 		{
+		  /* in mvcc - update index key means insert index key */
 		  if (btree_insert (thread_p, &old_btid, new_key,
 				    class_oid, inst_oid, op_type,
 				    unique_stat_info, &unique) == NULL)

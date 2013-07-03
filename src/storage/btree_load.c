@@ -2390,9 +2390,17 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
 					  NULL, NULL);
       if (ret != NO_ERROR)
 	{
-	  heap_attrinfo_end (thread_p, &attr_info);
-	  heap_scancache_end_modify (thread_p, &upd_scancache);
-	  goto exit_on_error;
+	  if (ret == ER_MVCC_ROW_ALREADY_DELETED)
+	    {
+	      er_clear ();
+	      ret = NO_ERROR;
+	    }
+	  else
+	    {
+	      heap_attrinfo_end (thread_p, &attr_info);
+	      heap_scancache_end_modify (thread_p, &upd_scancache);
+	      goto exit_on_error;
+	    }
 	}
 
       heap_attrinfo_end (thread_p, &attr_info);

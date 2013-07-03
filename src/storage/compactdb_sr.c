@@ -192,6 +192,7 @@ process_object (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scancache,
   HEAP_ATTRVALUE *value = NULL;
   int force_count = 0, updated_n_attrs_id = 0;
   int *atts_id = NULL;
+  int error_code;
 
   if (upd_scancache == NULL || attr_info == NULL || oid == NULL)
     {
@@ -220,20 +221,32 @@ process_object (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scancache,
       (attr_info->read_classrepr != NULL && attr_info->last_classrepr != NULL
        && attr_info->read_classrepr->id != attr_info->last_classrepr->id))
     {
-      if (locator_attribute_info_force (thread_p, &upd_scancache->hfid, oid,
-					NULL, false, attr_info,
-					atts_id, updated_n_attrs_id,
-					LC_FLUSH_UPDATE,
-					SINGLE_ROW_UPDATE, upd_scancache,
-					&force_count, false,
-					REPL_INFO_TYPE_STMT_NORMAL,
-					DB_NOT_PARTITIONED_CLASS, NULL,
-					NULL, NULL) != NO_ERROR)
+      error_code =
+	locator_attribute_info_force (thread_p, &upd_scancache->hfid, oid,
+				      NULL, false, attr_info,
+				      atts_id, updated_n_attrs_id,
+				      LC_FLUSH_UPDATE,
+				      SINGLE_ROW_UPDATE, upd_scancache,
+				      &force_count, false,
+				      REPL_INFO_TYPE_STMT_NORMAL,
+				      DB_NOT_PARTITIONED_CLASS, NULL,
+				      NULL, NULL);
+      if (error_code != NO_ERROR)
 	{
-	  result = -1;
+	  if (error_code == ER_MVCC_ROW_ALREADY_DELETED)
+	    {
+	      result = 0;
+	      er_clear ();
+	    }
+	  else
+	    {
+	      result = -1;
+	    }
 	}
-
-      result = 1;
+      else
+	{
+	  result = 1;
+	}
     }
 
   if (atts_id)

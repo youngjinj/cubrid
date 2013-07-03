@@ -3284,7 +3284,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 
   /* OID buffer */
   isidp->oid_list.oid_cnt = 0;
-  if (coverage_enabled)
+  if (coverage_enabled && mvcc_Enabled == false)
     {
       /* Covering index do not use an oid buffer. */
       isidp->oid_list.oidp = NULL;
@@ -5687,8 +5687,10 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
       scan_id->stats.key_qualified_rows++;
 
-      if (!SCAN_IS_INDEX_COVERED (isidp))
+      /* get pages for read */
+      if (!SCAN_IS_INDEX_COVERED (isidp) || mvcc_Enabled == true)
 	{
+	  /* in mvcc, check whether the heap tuple satisfies snapshot */
 	  mnt_bt_noncovered (thread_p);
 
 	  if (thread_is_on_trace (thread_p))
@@ -5795,6 +5797,21 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  if (sp_scan == S_SNAPSHOT_NOT_SATISFIED)
 	    {
 	      ev_res = false;
+
+	      if (SCAN_IS_INDEX_COVERED (isidp) && mvcc_Enabled == true)
+		{
+		  /* goto the next tuple */
+		  if (!isidp->multi_range_opt.use)
+		    {
+		      if (qfile_scan_list_next
+			  (thread_p, isidp->indx_cov.lsid, &tplrec,
+			   PEEK) != S_SUCCESS)
+			{
+			  return S_ERROR;
+			}
+		    }
+		}
+
 	      continue;		/* not qualified, continue to the next tuple */
 	    }
 	  else

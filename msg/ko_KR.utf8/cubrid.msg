@@ -1199,7 +1199,8 @@ $ LOADDB
 1130 락 횟수가 %1$d 를 초과하여 트랜잭션이 취소되었습니다.
 1131 내부 에러: The page %1$d of volume "%2$s" may be corrupted.\n%3$s
 1132 Encryption library failure: %s
-1133 마지막 에러
+2000 MVCC row already deleted %1$d|%2$d|%3$d.
+2001 마지막 에러
 
 $set 6 MSGCAT_SET_INTERNAL
 1 에러 서브 시스템에 에러 발생(라인 %d):

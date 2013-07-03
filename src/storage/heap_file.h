@@ -315,12 +315,12 @@ extern OID *heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid,
 extern const OID *heap_perform_update (THREAD_ENTRY * thread_p,
 				       const HFID * hfid,
 				       const OID * class_oid, const OID * oid,
-				       RECDES * recdes, bool * old,
+				       RECDES * recdes, OID * new_oid,
+				       bool * old,
 				       HEAP_SCANCACHE * scan_cache,
 				       void *mvcc_data_filter);
 extern const OID *heap_perform_delete (THREAD_ENTRY * thread_p,
-				       const HFID * hfid,
-				       const OID * oid,
+				       const HFID * hfid, const OID * oid,
 				       HEAP_SCANCACHE * scan_cache,
 				       void *mvcc_data_filter);
 extern void heap_flush (THREAD_ENTRY * thread_p, const OID * oid);

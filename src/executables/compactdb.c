@@ -630,7 +630,7 @@ disk_update_instance (MOP classop, DESC_OBJ * obj, OID * oid)
     }
 
   if (heap_perform_update
-      (NULL, hfid, WS_OID (classop), oid, Diskrec, &oldflag, NULL,
+      (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL, &oldflag, NULL,
        NULL) != oid)
     {
       printf (msgcat_message (MSGCAT_CATALOG_UTILS,

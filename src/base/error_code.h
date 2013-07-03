@@ -1438,7 +1438,9 @@
 
 #define ER_ENCRYPTION_LIB_FAILED                    -1132
 
-#define ER_LAST_ERROR                               -1133
+#define ER_MVCC_ROW_ALREADY_DELETED		    -2000
+
+#define ER_LAST_ERROR                               -2001
 
 /*
  * CAUTION!

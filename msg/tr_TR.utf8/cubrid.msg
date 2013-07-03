@@ -1199,7 +1199,8 @@ $ LOADDB
 1130 Transaction is aborted because transaction lock counts exceeds %1$d.
 1131 Internal error: The page %1 of volume %2 may be corrupted.\n%3
 1132 Encryption library failure: %s
-1133 Son Hata
+2000 MVCC row already deleted %1$d|%2$d|%3$d.
+2001 Son Hata
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Alt Hata içinde hata (satır %d):
