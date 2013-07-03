@@ -487,4 +487,7 @@ extern void ssession_drop_session_variables (THREAD_ENTRY * thread_p,
 					     int reqlen);
 extern void sboot_get_locales_info (THREAD_ENTRY * thread_p, unsigned int rid,
 				    char *request, int reqlen);
+
+extern void svacuum (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
+		     int reqlen);
 #endif /* _NETWORK_INTERFACE_SR_H_ */

@@ -729,10 +729,6 @@ static PAGE_PTR heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid,
 				 FILE_IS_NEW_FILE new_valid);
 static VPID *heap_vpid_remove (THREAD_ENTRY * thread_p, const HFID * hfid,
 			       HEAP_HDR_STATS * heap_hdr, VPID * rm_vpid);
-static int heap_vpid_next (const HFID * hfid, PAGE_PTR pgptr,
-			   VPID * next_vpid);
-static int heap_vpid_prev (const HFID * hfid, PAGE_PTR pgptr,
-			   VPID * prev_vpid);
 
 static HFID *heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid,
 				   int exp_npgs, const OID * class_oid,
@@ -978,7 +974,7 @@ static int heap_get_mvcc_info (RECDES * recdes, MVCCID * mvcc_ins_id_p,
 			       int *mvcc_flags, OID * next_version);
 
 static int heap_check_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
-				  PAGE_PTR page_p,
+				  PAGE_PTR * page_p,
 				  MVCC_SNAPSHOT * mvcc_snapshot);
 static void heap_log_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
 				 PAGE_PTR page_p,
@@ -5479,7 +5475,7 @@ error:
  *
  * Note: Find the next page of heap file.
  */
-static int
+int
 heap_vpid_next (const HFID * hfid, PAGE_PTR pgptr, VPID * next_vpid)
 {
   HEAP_CHAIN *chain;		/* Chain to next and prev page      */
@@ -5524,7 +5520,7 @@ heap_vpid_next (const HFID * hfid, PAGE_PTR pgptr, VPID * next_vpid)
  *
  * Note: Find the previous page of heap file.
  */
-static int
+int
 heap_vpid_prev (const HFID * hfid, PAGE_PTR pgptr, VPID * prev_vpid)
 {
   HEAP_CHAIN *chain;		/* Chain to next and prev page      */
@@ -11759,7 +11755,7 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		      return S_ERROR;
 		    }
 		  if (heap_check_clean_page
-		      (thread_p, hfid, pgptr, mvcc_snapshot) != NO_ERROR)
+		      (thread_p, hfid, &pgptr, mvcc_snapshot) != NO_ERROR)
 		    {
 		      pgbuf_unfix_and_init (thread_p, pgptr);
 		      scan_cache->pgptr = NULL;
@@ -11793,8 +11789,8 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		  /* something went wrong, return */
 		  return S_ERROR;
 		}
-	      if (heap_check_clean_page (thread_p, hfid, pgptr, mvcc_snapshot)
-		  != NO_ERROR)
+	      if (heap_check_clean_page (thread_p, hfid, &pgptr,
+					 mvcc_snapshot) != NO_ERROR)
 		{
 		  pgbuf_unfix_and_init (thread_p, pgptr);
 		  scan_cache->pgptr = NULL;
@@ -12112,8 +12108,8 @@ heap_prev_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		      scan_cache->pgptr = NULL;
 		      return S_ERROR;
 		    }
-		  if (heap_check_clean_page
-		      (thread_p, hfid, pgptr, mvcc_snapshot) != NO_ERROR)
+		  if (heap_check_clean_page (thread_p, hfid, &pgptr,
+					     mvcc_snapshot) != NO_ERROR)
 		    {
 		      pgbuf_unfix_and_init (thread_p, pgptr);
 		      scan_cache->pgptr = NULL;
@@ -12147,8 +12143,8 @@ heap_prev_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		  /* something went wrong, return */
 		  return S_ERROR;
 		}
-	      if (heap_check_clean_page (thread_p, hfid, pgptr, mvcc_snapshot)
-		  != NO_ERROR)
+	      if (heap_check_clean_page (thread_p, hfid, &pgptr,
+					 mvcc_snapshot) != NO_ERROR)
 		{
 		  pgbuf_unfix_and_init (thread_p, pgptr);
 		  scan_cache->pgptr = NULL;
@@ -12226,7 +12222,7 @@ heap_prev_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	      if (scan == S_END)
 		{
 		  /* Find next page of heap and continue scanning */
-		  (void) heap_vpid_next (hfid, pgptr, &vpid);
+		  (void) heap_vpid_prev (hfid, pgptr, &vpid);
 		  pgbuf_unfix_and_init (thread_p, pgptr);
 		  oid.volid = vpid.volid;
 		  oid.pageid = vpid.pageid;
@@ -22382,28 +22378,28 @@ heap_update_mvcc_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
  */
 static int
 heap_check_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
-		       PAGE_PTR page_p, MVCC_SNAPSHOT * mvcc_snapshot)
+		       PAGE_PTR * page_p, MVCC_SNAPSHOT * mvcc_snapshot)
 {
   float free_space_ratio;
   float free_space;
   float page_total_space;
   SPAGE_HEADER *page_header_p = NULL;
 
-  if (page_p == NULL || mvcc_snapshot == NULL)
+  if (page_p == NULL || *page_p == NULL || mvcc_snapshot == NULL)
     {
       /* nothing to do */
       return NO_ERROR;
     }
 
   /* Check whether page is marked for cleaning */
-  if (!spage_should_clean_page (page_p, mvcc_snapshot->lowest_active_mvccid))
+  if (!spage_should_clean_page (*page_p, mvcc_snapshot->lowest_active_mvccid))
     {
       return NO_ERROR;
     }
 
   /* Check if page is full enough */
   page_total_space = (float) DB_PAGESIZE - spage_header_size ();
-  free_space = (float) spage_get_free_space (thread_p, page_p);
+  free_space = (float) spage_get_free_space (thread_p, *page_p);
   free_space_ratio = free_space / page_total_space;
 
   if (free_space_ratio >
@@ -22414,7 +22410,8 @@ heap_check_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
     }
 
   /* try to clean page */
-  return heap_clean_page (thread_p, hfid, page_p, mvcc_snapshot);
+  return heap_clean_page (thread_p, hfid, page_p,
+			  mvcc_snapshot->lowest_active_mvccid);
 }
 
 /*
@@ -22427,20 +22424,23 @@ heap_check_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
  * mvcc_snapshot (in) : MVCC snapshot data.
  */
 int
-heap_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid, PAGE_PTR page_p,
-		 MVCC_SNAPSHOT * mvcc_snapshot)
+heap_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
+		 PAGE_PTR * page_p, MVCCID lowest_active_mvccid)
 {
   SPAGE_CLEAN_STRUCT page_clean;
   int error = NO_ERROR;
+  VPID vpid;
+  PAGE_PTR new_page_p = NULL;
 
-  if (page_p == NULL || mvcc_snapshot == NULL)
+  if (page_p == NULL || *page_p == NULL)
     {
       /* nothing to do */
       return NO_ERROR;
     }
 
   /* Collect data for cleaning page */
-  error = spage_clean_page (thread_p, page_p, &page_clean, mvcc_snapshot);
+  error =
+    spage_clean_page (thread_p, *page_p, &page_clean, lowest_active_mvccid);
   if (error != NO_ERROR)
     {
       return error;
@@ -22452,15 +22452,48 @@ heap_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid, PAGE_PTR page_p,
       return NO_ERROR;
     }
 
+  /* The page will be modified so latch write is needed */
+  if (pgbuf_get_latch_mode (*page_p) == PGBUF_LATCH_READ)
+    {
+      /* Try to get write latch */
+
+      pgbuf_get_vpid (*page_p, &vpid);
+
+      /* Try to get conditional latch */
+      new_page_p = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
+			      PGBUF_CONDITIONAL_LATCH);
+
+      /* Unfix the old page */
+      pgbuf_unfix_and_init (thread_p, *page_p);
+
+      if (new_page_p == NULL)
+	{
+	  /* Get unconditional latch */
+	  new_page_p =
+	    pgbuf_fix (thread_p, *page_p, OLD_PAGE, PGBUF_LATCH_WRITE,
+		       PGBUF_UNCONDITIONAL_LATCH);
+	  if (new_page_p == NULL)
+	    {
+	      /* something wrong */
+	      return ER_FAILED;
+	    }
+	}
+
+      /* The write latch was obtained */
+      *page_p = new_page_p;
+    }
+
+  assert (pgbuf_get_latch_mode (*page_p) == PGBUF_LATCH_WRITE);
+
   /* Execute clean based on collected data */
-  error = heap_execute_clean_page (thread_p, hfid, page_p, page_clean);
+  error = heap_execute_clean_page (thread_p, hfid, *page_p, page_clean);
   if (error != NO_ERROR)
     {
       return error;
     }
 
   /* Log the page cleaning */
-  heap_log_clean_page (thread_p, hfid, page_p, page_clean);
+  heap_log_clean_page (thread_p, hfid, *page_p, page_clean);
   return NO_ERROR;
 }
 

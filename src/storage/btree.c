@@ -20186,7 +20186,6 @@ btree_verify_leaf_node (THREAD_ENTRY * thread_p, BTID_INT * btid,
 }
 #endif
 
-
 /*
  * btree_get_next_node_info () - Scans b-tree node by node and obtains info.
  *

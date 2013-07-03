@@ -925,10 +925,13 @@ net_server_init (void)
   req_p->processing_function = slogin_user;
   req_p->name = "NET_SERVER_SET_USERNAME";
 
-  net_Requests[NET_SERVER_FIND_MULTI_UNIQUES].processing_function =
-    sbtree_find_multi_uniques;
-  net_Requests[NET_SERVER_FIND_MULTI_UNIQUES].name =
-    "NET_SERVER_FIND_MULTI_UNIQUES";
+  req_p = &net_Requests[NET_SERVER_FIND_MULTI_UNIQUES];
+  req_p->processing_function = sbtree_find_multi_uniques;
+  req_p->name = "NET_SERVER_FIND_MULTI_UNIQUES";
+
+  req_p = &net_Requests[NET_SERVER_VACUUM];
+  req_p->processing_function = svacuum;
+  req_p->name = "NET_SERVER_VACUUM";
 }
 
 #if defined(CUBRID_DEBUG)

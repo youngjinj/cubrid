@@ -70,6 +70,7 @@
 #include "databases_file.h"
 #include "es.h"
 #include "es_posix.h"
+#include "vacuum.h"
 
 #define NET_COPY_AREA_SENDRECV_SIZE (OR_INT_SIZE * 3)
 #define NET_SENDRECV_BUFFSIZE (OR_INT_SIZE)
@@ -126,7 +127,8 @@ return_error_to_client (THREAD_ENTRY * thread_p, unsigned int rid)
    *  So, re-set that error to rollback in client side.
    */
   tdes = LOG_FIND_CURRENT_TDES (thread_p);
-  if (tdes != NULL && tdes->tran_abort_reason != TRAN_NORMAL && flag_abort == false)
+  if (tdes != NULL && tdes->tran_abort_reason != TRAN_NORMAL
+      && flag_abort == false)
     {
       flag_abort = true;
 
@@ -10013,6 +10015,81 @@ ssession_get_session_variable (THREAD_ENTRY * thread_p, unsigned int rid,
     {
       free_and_init (data_reply);
     }
+}
+
+/*
+ * svacuum () - Calls vacuum function.
+ *
+ * return	 :
+ * thread_p (in) :
+ * rid (in)	 :
+ * request (in)	 :
+ * reqlen (in)	 :
+ */
+void
+svacuum (THREAD_ENTRY * thread_p, unsigned int rid, char *request, int reqlen)
+{
+  int err = NO_ERROR;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = NULL, *ptr = NULL, *data_request = NULL;
+  int num_classes, data_size;
+  OID *class_oids = NULL;
+
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  /* Obtain data from client */
+  err =
+    css_receive_data_from_client (thread_p->conn_entry, rid, &data_request,
+				  &data_size);
+  if (err != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  /* Unpack request data */
+
+  /* Unpack num_classes */
+  ptr = or_unpack_int (data_request, &num_classes);
+  /* Unpack class_oids */
+  if (num_classes > 0)
+    {
+      class_oids = (OID *) malloc (num_classes * OR_OID_SIZE);
+
+      ptr = or_unpack_oid_array (ptr, num_classes, &class_oids);
+      if (ptr == NULL)
+	{
+	  err = er_errid ();
+	  err = (err != NO_ERROR) ? err : ER_FAILED;
+	  goto cleanup;
+	}
+
+      /* Call vacuum */
+      err = xvacuum (thread_p, num_classes, class_oids);
+    }
+
+cleanup:
+  if (class_oids != NULL)
+    {
+      db_private_free_and_init (NULL, class_oids);
+    }
+
+  if (data_request != NULL)
+    {
+      free_and_init (data_request);
+    }
+
+  if (err != NO_ERROR)
+    {
+      return_error_to_client (thread_p, rid);
+    }
+
+  /* Send error code as reply */
+  (void) or_pack_int (reply, err);
+
+  /* For now no results are required, just fail/success */
+  css_send_data_to_client (thread_p->conn_entry, rid,
+			   OR_ALIGNED_BUF_START (a_reply),
+			   OR_ALIGNED_BUF_SIZE (a_reply));
 }
 
 /*

@@ -2132,6 +2132,7 @@ extern void logpb_get_nxio_lsa (LOG_LSA * lsa_p);
 
 extern int logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 					 MVCC_SNAPSHOT * snapshot);
+extern MVCCID logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p);
 
 extern MVCCID logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes);
 extern MVCCID logtb_find_current_mvccid (THREAD_ENTRY * thread_p);

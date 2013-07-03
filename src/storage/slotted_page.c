@@ -3788,25 +3788,6 @@ spage_next_record (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
 }
 
 /*
- * spage_next_record_dont_skip_empty () - Get next slot without skipping
- *					  empty records.
- *
- * return		    : 
- * page_p (in)		    :
- * out_slot_id_p (in)	    :
- * record_descriptor_p (in) :
- * is_peeking (in)	    :
- */
-SCAN_CODE
-spage_next_record_dont_skip_empty (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
-				   RECDES * record_descriptor_p,
-				   int is_peeking)
-{
-  return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
-			      is_peeking, SPAGE_SEARCH_NEXT, false);
-}
-
-/*
  * spage_previous_record () - Get previous record
  *   return: Either of S_SUCCESS, S_DOESNT_FIT, S_END
  *   page_p(in): Pointer to slotted page
@@ -3840,72 +3821,6 @@ spage_previous_record (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
 {
   return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
 			      is_peeking, SPAGE_SEARCH_PREV, true);
-}
-
-/*
- * spage_previous_record_dont_skip_empty () - Get previous slot without
- *					      skipping empty records.
- *
- * return		    :
- * page_p (in)		    :
- * out_slot_id_p (in)	    :
- * record_descriptor_p (in) :
- * is_peeking (in)	    :
- */
-SCAN_CODE
-spage_previous_record_dont_skip_empty (PAGE_PTR page_p,
-				       PGSLOTID * out_slot_id_p,
-				       RECDES * record_descriptor_p,
-				       int is_peeking)
-{
-  return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
-			      is_peeking, SPAGE_SEARCH_PREV, false);
-}
-
-/*
- * spage_get_page_header_info () - Obtain page information for spage_header.
- *
- * return		 : 
- * page_p (in)		 :
- * page_header_info (in) :
- */
-SCAN_CODE
-spage_get_page_header_info (PAGE_PTR page_p, DB_VALUE ** page_header_info)
-{
-  SPAGE_HEADER *page_header_p;
-
-  if (page_p == NULL || page_header_info == NULL)
-    {
-      return S_SUCCESS;
-    }
-
-  page_header_p = (SPAGE_HEADER *) page_p;
-  SPAGE_VERIFY_HEADER (page_header_p);
-
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_NUM_SLOTS],
-	       page_header_p->num_slots);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_NUM_RECORDS],
-	       page_header_p->num_records);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_ANCHOR_TYPE],
-	       page_header_p->anchor_type);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_ALIGNMENT],
-	       page_header_p->alignment);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
-	       page_header_p->total_free);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
-	       page_header_p->total_free);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_CONT_FREE],
-	       page_header_p->cont_free);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA],
-	       page_header_p->offset_to_free_area);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_LAST_MVCCID],
-	       page_header_p->last_mvcc_id);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_IS_SAVING],
-	       page_header_p->is_saving);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_UPDATE_BEST],
-	       page_header_p->need_update_best_hint);
-
-  return S_SUCCESS;
 }
 
 /*
@@ -4150,59 +4065,6 @@ spage_get_record_length (PAGE_PTR page_p, PGSLOTID slot_id)
     }
 
   return slot_p->record_length;
-}
-
-/*
- * spage_get_record_offset () - Find the offset of the record associated with
- *                              the given slot on the given page
- *
- * return     : Record offset.
- * page_p (in): Pointer to slotted page.
- * slotid (in): Slot identifier of record.
- */
-int
-spage_get_record_offset (PAGE_PTR page_p, PGSLOTID slot_id)
-{
-  SPAGE_HEADER *page_header_p;
-  SPAGE_SLOT *slot_p;
-
-  assert (page_p != NULL);
-
-  page_header_p = (SPAGE_HEADER *) page_p;
-  SPAGE_VERIFY_HEADER (page_header_p);
-
-  slot_p = spage_find_slot (page_p, page_header_p, slot_id, true);
-  if (slot_p == NULL)
-    {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_UNKNOWN_SLOTID, 3,
-	      slot_id, pgbuf_get_page_id (page_p),
-	      pgbuf_get_volume_label (page_p));
-      return -1;
-    }
-
-  return slot_p->offset_to_record;
-}
-
-/*
- * spage_get_slot () - Looks for the slot with slot_id identifier in page_p
- *		       and returns a SPAGE_SLOT. Does not check for unknown
- *		       slots.
- *
- * return	: SPAGE_SLOT.
- * page_p (in)  : Pointer to slotted page.
- * slot_id (in) : Slot identifier.
- */
-SPAGE_SLOT *
-spage_get_slot (PAGE_PTR page_p, PGSLOTID slot_id)
-{
-  SPAGE_HEADER *page_header_p = NULL;
-
-  assert (page_p != NULL);
-
-  page_header_p = (SPAGE_HEADER *) page_p;
-  SPAGE_VERIFY_HEADER (page_header_p);
-
-  return spage_find_slot (page_p, page_header_p, slot_id, false);
 }
 
 /*
@@ -4592,7 +4454,7 @@ spage_dump_record (FILE * fp, PAGE_PTR page_p, PGSLOTID slot_id,
 /*
  * spage_dump () - Dump an slotted page
  *   return: void
- *   page_p(in): Pointer to slotted page
+ *   pgptr(in): Pointer to slotted page
  *   isrecord_printed(in): If true, records are printed in ascii format,
  *                         otherwise, the records are not printed.
  *
@@ -4643,7 +4505,7 @@ spage_dump (THREAD_ENTRY * thread_p, FILE * fp, PAGE_PTR page_p,
  * spage_check () - Check consistency of page. This function is used for
  *               debugging purposes
  *   return: void
- *   page_p(in): Pointer to slotted page
+ *   pgptr(in): Pointer to slotted page
  */
 static void
 spage_check (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
@@ -4954,6 +4816,144 @@ spage_reduce_contiguous_free_space (PAGE_PTR page_p, int space)
 }
 
 /*
+ * spage_next_record_dont_skip_empty () - Get next slot without skipping
+ *					  empty records.
+ *
+ * return		    : 
+ * page_p (in)		    :
+ * out_slot_id_p (in)	    :
+ * record_descriptor_p (in) :
+ * is_peeking (in)	    :
+ */
+SCAN_CODE
+spage_next_record_dont_skip_empty (PAGE_PTR page_p, PGSLOTID * out_slot_id_p,
+				   RECDES * record_descriptor_p,
+				   int is_peeking)
+{
+  return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
+			      is_peeking, SPAGE_SEARCH_NEXT, false);
+}
+
+/*
+ * spage_previous_record_dont_skip_empty () - Get previous slot without
+ *					      skipping empty records.
+ *
+ * return		    :
+ * page_p (in)		    :
+ * out_slot_id_p (in)	    :
+ * record_descriptor_p (in) :
+ * is_peeking (in)	    :
+ */
+SCAN_CODE
+spage_previous_record_dont_skip_empty (PAGE_PTR page_p,
+				       PGSLOTID * out_slot_id_p,
+				       RECDES * record_descriptor_p,
+				       int is_peeking)
+{
+  return spage_search_record (page_p, out_slot_id_p, record_descriptor_p,
+			      is_peeking, SPAGE_SEARCH_PREV, false);
+}
+
+/*
+ * spage_get_page_header_info () - Obtain page information for spage_header.
+ *
+ * return		 : 
+ * page_p (in)		 :
+ * page_header_info (in) :
+ */
+SCAN_CODE
+spage_get_page_header_info (PAGE_PTR page_p, DB_VALUE ** page_header_info)
+{
+  SPAGE_HEADER *page_header_p;
+
+  if (page_p == NULL || page_header_info == NULL)
+    {
+      return S_SUCCESS;
+    }
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_NUM_SLOTS],
+	       page_header_p->num_slots);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_NUM_RECORDS],
+	       page_header_p->num_records);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_ANCHOR_TYPE],
+	       page_header_p->anchor_type);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_ALIGNMENT],
+	       page_header_p->alignment);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
+	       page_header_p->total_free);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
+	       page_header_p->total_free);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_CONT_FREE],
+	       page_header_p->cont_free);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA],
+	       page_header_p->offset_to_free_area);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_LAST_MVCCID],
+	       page_header_p->last_mvcc_id);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_IS_SAVING],
+	       page_header_p->is_saving);
+  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_UPDATE_BEST],
+	       page_header_p->need_update_best_hint);
+
+  return S_SUCCESS;
+}
+
+/*
+ * spage_get_record_offset () - Find the offset of the record associated with
+ *                              the given slot on the given page
+ *
+ * return     : Record offset.
+ * page_p (in): Pointer to slotted page.
+ * slotid (in): Slot identifier of record.
+ */
+int
+spage_get_record_offset (PAGE_PTR page_p, PGSLOTID slot_id)
+{
+  SPAGE_HEADER *page_header_p;
+  SPAGE_SLOT *slot_p;
+
+  assert (page_p != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  slot_p = spage_find_slot (page_p, page_header_p, slot_id, true);
+  if (slot_p == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_UNKNOWN_SLOTID, 3,
+	      slot_id, pgbuf_get_page_id (page_p),
+	      pgbuf_get_volume_label (page_p));
+      return -1;
+    }
+
+  return slot_p->offset_to_record;
+}
+
+/*
+ * spage_get_slot () - Looks for the slot with slot_id identifier in page_p
+ *		       and returns a SPAGE_SLOT. Does not check for unknown
+ *		       slots.
+ *
+ * return	: SPAGE_SLOT.
+ * page_p (in)  : Pointer to slotted page.
+ * slot_id (in) : Slot identifier.
+ */
+SPAGE_SLOT *
+spage_get_slot (PAGE_PTR page_p, PGSLOTID slot_id)
+{
+  SPAGE_HEADER *page_header_p = NULL;
+
+  assert (page_p != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  return spage_find_slot (page_p, page_header_p, slot_id, false);
+}
+
+/*
  * spage_clean_page () - Collects clean page information: dead records and
  *			 overflow pages belonging to dead records.
  *
@@ -4966,7 +4966,7 @@ spage_reduce_contiguous_free_space (PAGE_PTR page_p, int space)
 int
 spage_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 		  SPAGE_CLEAN_STRUCT * page_clean_p,
-		  MVCC_SNAPSHOT * mvcc_snapshot)
+		  MVCCID lowest_active_mvccid)
 {
   SPAGE_HEADER *page_header_p = NULL;
   SPAGE_SLOT *slot_p = NULL;
@@ -5023,8 +5023,8 @@ spage_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 
       /* Get record status */
       record_status =
-	mvcc_satisfies_vacuum (thread_p, mvcc_header,
-			       mvcc_snapshot->lowest_active_mvccid, page_p);
+	mvcc_satisfies_vacuum (thread_p, mvcc_header, lowest_active_mvccid,
+			       page_p);
       if (record_status == VACUUM_RECORD_DEAD)
 	{
 	  /* Records is dead and is safe to remove it */

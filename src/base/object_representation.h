@@ -1022,6 +1022,7 @@ extern char *or_pack_string_with_length (char *ptr, const char *string,
 					 int length);
 extern char *or_pack_errcode (char *ptr, int error);
 extern char *or_pack_oid (char *ptr, OID * oid);
+extern char *or_pack_oid_array (char *ptr, int n, const OID * oids);
 extern char *or_pack_loid (char *ptr, LOID * loid);
 extern char *or_pack_hfid (const char *ptr, const HFID * hfid);
 extern char *or_pack_btid (char *buf, BTID * btid);

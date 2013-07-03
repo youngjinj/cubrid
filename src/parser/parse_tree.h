@@ -508,6 +508,9 @@
         ( (n) && (n)->node_type == PT_POINTER && \
           (n)->info.pointer.type == PT_POINTER_REF )
 
+#define PT_IS_VACUUM_NODE(n) \
+	( (n) && (n)->node_type == PT_VACUUM )
+
 #define PT_SET_ORDER_DEPENDENT_FLAG(n, f) \
         do { \
           if ((n)) \
@@ -860,6 +863,8 @@ enum pt_node_type
   PT_TABLE_OPTION,
   PT_ATTR_ORDERING,
   PT_TUPLE_VALUE,
+  PT_VACUUM,
+
   PT_NODE_NUMBER,		/* This is the number of node types */
   PT_LAST_NODE_NUMBER = PT_NODE_NUMBER
 };
@@ -1092,6 +1097,7 @@ typedef enum
   PT_NULLS_DEFAULT,
   PT_NULLS_FIRST,
   PT_NULLS_LAST,
+
   PT_CONSTRAINT_NAME
 } PT_MISC_TYPE;
 
@@ -1145,7 +1151,7 @@ typedef enum
   PT_HINT_SELECT_KEY_INFO = 0x4000000,	/* 0100 0000 0000 0000 0000 0000 0000 */
   /* SELECT key information from index b-tree instead of table record data */
   PT_HINT_SELECT_BTREE_NODE_INFO = 0x8000000	/* 1000 0000 0000 0000 0000 0000 */
-    /* SELECT b-tree node information */
+  /* SELECT b-tree node information */
 } PT_HINT_ENUM;
 
 
@@ -1581,6 +1587,8 @@ typedef struct parser_hint PT_HINT;
 typedef struct pt_set_names_info PT_SET_NAMES_INFO;
 
 typedef struct pt_tuple_value_info PT_TUPLE_VALUE_INFO;
+
+typedef struct pt_vacuum_info PT_VACUUM_INFO;
 
 typedef PT_NODE *(*PT_NODE_FUNCTION) (PARSER_CONTEXT * p, PT_NODE * tree,
 				      void *arg);
@@ -3086,6 +3094,12 @@ struct pt_tuple_value_info
   int index;			/* index of the value in cursor */
 };
 
+/* info structure used for VACUUM statement nodes */
+struct pt_vacuum_info
+{
+  PT_NODE *spec;		/* classes */
+};
+
 /* Info field of the basic NODE
   If 'xyz' is the name of the field, then the structure type should be
   struct PT_XYZ_INFO xyz;
@@ -3177,6 +3191,7 @@ union pt_statement_info
 #if defined (ENABLE_UNUSED_FUNCTION)
   PT_USE_INFO use;
 #endif
+  PT_VACUUM_INFO vacuum;
   PT_VALUE_INFO value;
   PT_POINTER_INFO pointer;
 };

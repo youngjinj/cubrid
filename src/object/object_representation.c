@@ -2672,6 +2672,34 @@ or_pack_oid (char *ptr, OID * oid)
 }
 
 /*
+ * or_pack_oid_array () - Pack an OID array.
+ *
+ * return    : Pointer in buffer after the packed OID array.
+ * ptr (in)  : Pointer in buffer where OID array should be packed.
+ * n (in)    : Length of OID array.
+ * oids (in) : OID array.
+ */
+char *
+or_pack_oid_array (char *ptr, int n, const OID * oids)
+{
+  int i;
+
+  ASSERT_ALIGN (ptr, INT_ALIGNMENT);
+
+  if (ptr == NULL)
+    {
+      return NULL;
+    }
+
+  assert (n > 0 && oids != NULL);
+  for (i = 0; i < n; i++)
+    {
+      ptr = or_pack_oid (ptr, &oids[i]);
+    }
+  return ptr;
+}
+
+/*
  * or_unpack_oid - read a OID value
  *    return: advanced buffer pointer
  *    ptr(in): input buffer

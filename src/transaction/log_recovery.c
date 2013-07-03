@@ -3169,7 +3169,6 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 			    (long long int) log_Gl.hdr.append_lsa.pageid,
 			    log_Gl.hdr.append_lsa.offset, tran_id);
 	      log_Gl.hdr.next_trid = tran_id;
-
 	      if (mvcc_id_precedes (log_Gl.hdr.mvcc_next_id, mvcc_id))
 		{
 		  log_Gl.hdr.mvcc_next_id = mvcc_id;

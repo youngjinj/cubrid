@@ -129,6 +129,7 @@ static CSQL_CMD_STRING_TABLE csql_Cmd_string_table[] = {
   {CUBRID_STMT_DROP_SESSION_VARIABLES, "DROP VARIABLE"},
   {CUBRID_STMT_DO, "DO"},
   {CUBRID_STMT_SET_NAMES, "SET NAMES"},
+  {CUBRID_STMT_VACUUM, "VACUUM"},
 };
 
 static const char *csql_Isolation_level_string[] = {

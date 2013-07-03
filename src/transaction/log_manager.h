@@ -76,6 +76,7 @@ struct log_topop_range
   LOG_LSA start_lsa;
   LOG_LSA end_lsa;
 };
+
 extern bool mvcc_Enabled;
 
 extern const char *log_to_string (LOG_RECTYPE type);

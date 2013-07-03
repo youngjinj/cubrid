@@ -24115,6 +24115,120 @@ pt_is_sort_list_covered (PARSER_CONTEXT * parser, SORT_LIST * covering_list_p,
 }
 
 /*
+ * pt_reserved_id_to_valuelist_index () - Generate the index of value for
+ *					  reserved attribute in the array
+ *					  of cached attribute values.
+ *
+ * return	    : Index of value.
+ * parser (in)	    : Parser context.
+ * reserved_id (in) : Reserved name id.
+ */
+static int
+pt_reserved_id_to_valuelist_index (PARSER_CONTEXT * parser,
+				   PT_RESERVED_NAME_ID reserved_id)
+{
+  switch (reserved_id)
+    {
+      /* Record info names */
+    case RESERVED_T_PAGEID:
+      return HEAP_RECORD_INFO_T_PAGEID;
+    case RESERVED_T_SLOTID:
+      return HEAP_RECORD_INFO_T_SLOTID;
+    case RESERVED_T_VOLUMEID:
+      return HEAP_RECORD_INFO_T_VOLUMEID;
+    case RESERVED_T_OFFSET:
+      return HEAP_RECORD_INFO_T_OFFSET;
+    case RESERVED_T_LENGTH:
+      return HEAP_RECORD_INFO_T_LENGTH;
+    case RESERVED_T_REC_TYPE:
+      return HEAP_RECORD_INFO_T_REC_TYPE;
+    case RESERVED_T_REPRID:
+      return HEAP_RECORD_INFO_T_REPRID;
+    case RESERVED_T_CHN:
+      return HEAP_RECORD_INFO_T_CHN;
+    case RESERVED_T_MVCC_INSID:
+      return HEAP_RECORD_INFO_T_MVCC_INSID;
+    case RESERVED_T_MVCC_DELID:
+      return HEAP_RECORD_INFO_T_MVCC_DELID;
+#if defined(MVCC_USE_COMMAND_ID)
+    case RESERVED_T_MVCC_INS_CID:
+      return HEAP_RECORD_INFO_T_MVCC_INS_CID;
+    case RESERVED_T_MVCC_DEL_CID:
+      return HEAP_RECORD_INFO_T_MVCC_DEL_CID;
+#endif /* MVCC_USE_COMMAND_ID */
+    case RESERVED_T_MVCC_FLAGS:
+      return HEAP_RECORD_INFO_T_MVCC_FLAGS;
+    case RESERVED_T_MVCC_NEXT_VERSION:
+      return HEAP_RECORD_INFO_T_MVCC_NEXT_VERSION;
+
+      /* Page info names */
+    case RESERVED_P_CLASS_OID:
+      return HEAP_PAGE_INFO_CLASS_OID;
+    case RESERVED_P_PREV_PAGEID:
+      return HEAP_PAGE_INFO_PREV_PAGE;
+    case RESERVED_P_NEXT_PAGEID:
+      return HEAP_PAGE_INFO_NEXT_PAGE;
+    case RESERVED_P_NUM_SLOTS:
+      return HEAP_PAGE_INFO_NUM_SLOTS;
+    case RESERVED_P_NUM_RECORDS:
+      return HEAP_PAGE_INFO_NUM_RECORDS;
+    case RESERVED_P_ANCHOR_TYPE:
+      return HEAP_PAGE_INFO_ANCHOR_TYPE;
+    case RESERVED_P_ALIGNMENT:
+      return HEAP_PAGE_INFO_ALIGNMENT;
+    case RESERVED_P_TOTAL_FREE:
+      return HEAP_PAGE_INFO_TOTAL_FREE;
+    case RESERVED_P_CONT_FREE:
+      return HEAP_PAGE_INFO_CONT_FREE;
+    case RESERVED_P_OFFSET_TO_FREE_AREA:
+      return HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA;
+    case RESERVED_P_IS_SAVING:
+      return HEAP_PAGE_INFO_IS_SAVING;
+    case RESERVED_P_UPDATE_BEST:
+      return HEAP_PAGE_INFO_UPDATE_BEST;
+    case RESERVED_P_LAST_MVCCID:
+      return HEAP_PAGE_INFO_LAST_MVCCID;
+
+      /* Key info names */
+    case RESERVED_KEY_VOLUMEID:
+      return BTREE_KEY_INFO_VOLUMEID;
+    case RESERVED_KEY_PAGEID:
+      return BTREE_KEY_INFO_PAGEID;
+    case RESERVED_KEY_SLOTID:
+      return BTREE_KEY_INFO_SLOTID;
+    case RESERVED_KEY_KEY:
+      return BTREE_KEY_INFO_KEY;
+    case RESERVED_KEY_OID_COUNT:
+      return BTREE_KEY_INFO_OID_COUNT;
+    case RESERVED_KEY_FIRST_OID:
+      return BTREE_KEY_INFO_FIRST_OID;
+    case RESERVED_KEY_OVERFLOW_KEY:
+      return BTREE_KEY_INFO_OVERFLOW_KEY;
+    case RESERVED_KEY_OVERFLOW_OIDS:
+      return BTREE_KEY_INFO_OVERFLOW_OIDS;
+
+      /* B-tree node info names */
+    case RESERVED_BT_NODE_VOLUMEID:
+      return BTREE_NODE_INFO_VOLUMEID;
+    case RESERVED_BT_NODE_PAGEID:
+      return BTREE_NODE_INFO_PAGEID;
+    case RESERVED_BT_NODE_TYPE:
+      return BTREE_NODE_INFO_NODE_TYPE;
+    case RESERVED_BT_NODE_KEY_COUNT:
+      return BTREE_NODE_INFO_KEY_COUNT;
+    case RESERVED_BT_NODE_FIRST_KEY:
+      return BTREE_NODE_INFO_FIRST_KEY;
+    case RESERVED_BT_NODE_LAST_KEY:
+      return BTREE_NODE_INFO_LAST_KEY;
+
+    default:
+      /* unknown reserved id or not handled */
+      assert (0);
+      return RESERVED_NAME_INVALID;
+    }
+}
+
+/*
  * pt_to_null_ordering () - get null ordering from a sort spec
  * return : null ordering
  * sort_spec (in) : sort spec
@@ -24283,118 +24397,4 @@ pt_set_limit_optimization_flags (PARSER_CONTEXT * parser, QO_PLAN * qo_plan,
     }
 
   return NO_ERROR;
-}
-
-/*
- * pt_reserved_id_to_valuelist_index () - Generate the index of value for
- *					  reserved attribute in the array
- *					  of cached attribute values.
- *
- * return	    : Index of value.
- * parser (in)	    : Parser context.
- * reserved_id (in) : Reserved name id.
- */
-static int
-pt_reserved_id_to_valuelist_index (PARSER_CONTEXT * parser,
-				   PT_RESERVED_NAME_ID reserved_id)
-{
-  switch (reserved_id)
-    {
-      /* Record info names */
-    case RESERVED_T_PAGEID:
-      return HEAP_RECORD_INFO_T_PAGEID;
-    case RESERVED_T_SLOTID:
-      return HEAP_RECORD_INFO_T_SLOTID;
-    case RESERVED_T_VOLUMEID:
-      return HEAP_RECORD_INFO_T_VOLUMEID;
-    case RESERVED_T_OFFSET:
-      return HEAP_RECORD_INFO_T_OFFSET;
-    case RESERVED_T_LENGTH:
-      return HEAP_RECORD_INFO_T_LENGTH;
-    case RESERVED_T_REC_TYPE:
-      return HEAP_RECORD_INFO_T_REC_TYPE;
-    case RESERVED_T_REPRID:
-      return HEAP_RECORD_INFO_T_REPRID;
-    case RESERVED_T_CHN:
-      return HEAP_RECORD_INFO_T_CHN;
-    case RESERVED_T_MVCC_INSID:
-      return HEAP_RECORD_INFO_T_MVCC_INSID;
-    case RESERVED_T_MVCC_DELID:
-      return HEAP_RECORD_INFO_T_MVCC_DELID;
-#if defined(MVCC_USE_COMMAND_ID)
-    case RESERVED_T_MVCC_INS_CID:
-      return HEAP_RECORD_INFO_T_MVCC_INS_CID;
-    case RESERVED_T_MVCC_DEL_CID:
-      return HEAP_RECORD_INFO_T_MVCC_DEL_CID;
-#endif /* MVCC_USE_COMMAND_ID */
-    case RESERVED_T_MVCC_FLAGS:
-      return HEAP_RECORD_INFO_T_MVCC_FLAGS;
-    case RESERVED_T_MVCC_NEXT_VERSION:
-      return HEAP_RECORD_INFO_T_MVCC_NEXT_VERSION;
-
-      /* Page info names */
-    case RESERVED_P_CLASS_OID:
-      return HEAP_PAGE_INFO_CLASS_OID;
-    case RESERVED_P_PREV_PAGEID:
-      return HEAP_PAGE_INFO_PREV_PAGE;
-    case RESERVED_P_NEXT_PAGEID:
-      return HEAP_PAGE_INFO_NEXT_PAGE;
-    case RESERVED_P_NUM_SLOTS:
-      return HEAP_PAGE_INFO_NUM_SLOTS;
-    case RESERVED_P_NUM_RECORDS:
-      return HEAP_PAGE_INFO_NUM_RECORDS;
-    case RESERVED_P_ANCHOR_TYPE:
-      return HEAP_PAGE_INFO_ANCHOR_TYPE;
-    case RESERVED_P_ALIGNMENT:
-      return HEAP_PAGE_INFO_ALIGNMENT;
-    case RESERVED_P_TOTAL_FREE:
-      return HEAP_PAGE_INFO_TOTAL_FREE;
-    case RESERVED_P_CONT_FREE:
-      return HEAP_PAGE_INFO_CONT_FREE;
-    case RESERVED_P_OFFSET_TO_FREE_AREA:
-      return HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA;
-    case RESERVED_P_IS_SAVING:
-      return HEAP_PAGE_INFO_IS_SAVING;
-    case RESERVED_P_UPDATE_BEST:
-      return HEAP_PAGE_INFO_UPDATE_BEST;
-    case RESERVED_P_LAST_MVCCID:
-      return HEAP_PAGE_INFO_LAST_MVCCID;
-
-      /* Key info names */
-    case RESERVED_KEY_VOLUMEID:
-      return BTREE_KEY_INFO_VOLUMEID;
-    case RESERVED_KEY_PAGEID:
-      return BTREE_KEY_INFO_PAGEID;
-    case RESERVED_KEY_SLOTID:
-      return BTREE_KEY_INFO_SLOTID;
-    case RESERVED_KEY_KEY:
-      return BTREE_KEY_INFO_KEY;
-    case RESERVED_KEY_OID_COUNT:
-      return BTREE_KEY_INFO_OID_COUNT;
-    case RESERVED_KEY_FIRST_OID:
-      return BTREE_KEY_INFO_FIRST_OID;
-    case RESERVED_KEY_OVERFLOW_KEY:
-      return BTREE_KEY_INFO_OVERFLOW_KEY;
-    case RESERVED_KEY_OVERFLOW_OIDS:
-      return BTREE_KEY_INFO_OVERFLOW_OIDS;
-
-      /* B-tree node info names */
-    case RESERVED_BT_NODE_VOLUMEID:
-      return BTREE_NODE_INFO_VOLUMEID;
-    case RESERVED_BT_NODE_PAGEID:
-      return BTREE_NODE_INFO_PAGEID;
-    case RESERVED_BT_NODE_TYPE:
-      return BTREE_NODE_INFO_NODE_TYPE;
-    case RESERVED_BT_NODE_KEY_COUNT:
-      return BTREE_NODE_INFO_KEY_COUNT;
-    case RESERVED_BT_NODE_FIRST_KEY:
-      return BTREE_NODE_INFO_FIRST_KEY;
-    case RESERVED_BT_NODE_LAST_KEY:
-      return BTREE_NODE_INFO_LAST_KEY;
-
-    default:
-      /* unknown reserved id or not handled */
-      assert (0);
-      return RESERVED_NAME_INVALID;
-    }
 }

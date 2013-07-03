@@ -266,6 +266,12 @@ MVCC_SATISFIES_VACUUM_RESULT
 mvcc_satisfies_vacuum (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
 		       MVCCID oldest_mvccid, PAGE_PTR page_p)
 {
+  if (HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_DISABLED))
+    {
+      /* do not vacuum this record ever */
+      return VACUUM_RECORD_ALIVE;
+    }
+
   if (!HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_INSID_COMMITTED))
     {
       /* The insert commit flag is not set */
@@ -683,3 +689,5 @@ mvcc_id_follow_or_equal (MVCCID id1, MVCCID id2)
   difference = (int) (id1 - id2);
   return (difference >= 0);
 }
+
+

@@ -937,6 +937,7 @@ typedef struct YYLTYPE
 %type <node> values_expression
 %type <node> values_expr_item
 %type <node> opt_partition_spec
+%type <node> vacuum_stmt
 /*}}}*/
 
 /* define rule type (cptr) */
@@ -1326,6 +1327,7 @@ typedef struct YYLTYPE
 %token USER
 %token USING
 %token Utime
+%token VACUUM
 %token VALUE
 %token VALUES
 %token VAR_ASSIGN
@@ -1870,6 +1872,8 @@ stmt_
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| vacuum_stmt
+		{ $$ = $1; }
 	;
 
 
@@ -21119,6 +21123,22 @@ bad_tokens_for_error_message_only_dont_mind_this_rule
 	| '~'*/
 	;
 
+vacuum_stmt
+	: VACUUM opt_table_type class_spec_list
+		{{
+			PT_NODE *node =
+			  parser_new_node (this_parser, PT_VACUUM);
+			if (node == NULL)
+			  {
+			    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				    ER_OUT_OF_VIRTUAL_MEMORY, 1,
+				    sizeof (PT_NODE));
+			  }
+			node->info.vacuum.spec = $3;
+			$$ = node;
+		DBG_PRINT}}
+	;
+			
 
 %%
 

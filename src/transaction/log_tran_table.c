@@ -3487,7 +3487,7 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 
   TR_TABLE_CS_EXIT ();
 
-  /* update global variabile */
+  /* update global variable */
   tdes->recent_snapshot_lowest_active_mvccid = lowest_active_mvccid;
 
   snapshot->lowest_active_mvccid = lowest_active_mvccid;
@@ -3495,6 +3495,47 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
   snapshot->cnt_active_child_ids = cnt_active_trans;
 
   return NO_ERROR;
+}
+
+/*
+ * logtb_get_lowest_active_mvccid () - Get MVCCID for oldest active
+ *				       transaction.
+ *
+ * return	 : MVCCID for oldest active transaction.
+ * thread_p (in) : Thread entry.
+ */
+MVCCID
+logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
+{
+  MVCCID lowest_active_mvccid = log_Gl.highest_completed_mvccid;
+  int i;
+  LOG_TDES *tdes = NULL;
+
+  MVCCID_FORWARD (lowest_active_mvccid);
+
+  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+
+  for (i = 0; i < log_Gl.trantable.num_total_indices; i++)
+    {
+      if (i == LOG_SYSTEM_TRAN_INDEX)
+	{
+	  continue;
+	}
+      tdes = LOG_FIND_TDES (i);
+      if (tdes == NULL || tdes->trid == NULL_TRANID)
+	{
+	  continue;
+	}
+      if (MVCCID_IS_NORMAL (tdes->mvcc_id)
+	  && mvcc_id_precedes (tdes->mvcc_id, lowest_active_mvccid))
+	{
+	  lowest_active_mvccid = tdes->mvcc_id;
+	}
+    }
+
+  TR_TABLE_CS_EXIT ();
+
+  return lowest_active_mvccid;
 }
 
 /*

@@ -261,7 +261,7 @@ extern PGSLOTID spage_find_free_slot (PAGE_PTR page_p,
 				      PGSLOTID start_id);
 extern int spage_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 			     SPAGE_CLEAN_STRUCT * page_clean_p,
-			     MVCC_SNAPSHOT * mvcc_snapshot);
+			     MVCCID lowest_active_mvccid);
 extern int spage_execute_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 				     SPAGE_CLEAN_STRUCT page_clean);
 extern bool spage_should_clean_page (PAGE_PTR page_ptr, MVCCID oldest_active);

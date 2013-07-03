@@ -673,9 +673,13 @@ extern SCAN_CODE heap_page_next (THREAD_ENTRY * thread_p,
 				 const HFID * hfid,
 				 VPID * next_vpid,
 				 DB_VALUE ** cache_pageinfo);
+extern int heap_vpid_next (const HFID * hfid, PAGE_PTR pgptr,
+			   VPID * next_vpid);
+extern int heap_vpid_prev (const HFID * hfid, PAGE_PTR pgptr,
+			   VPID * prev_vpid);
 
 extern int heap_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
-			    PAGE_PTR page_p, MVCC_SNAPSHOT * mvcc_snapshot);
+			    PAGE_PTR * page_p, MVCCID lowest_active_mvccid);
 extern int heap_rv_redo_clean_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 
 extern bool heap_set_record_header_flag (THREAD_ENTRY * thread_p,

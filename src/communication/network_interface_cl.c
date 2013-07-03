@@ -57,7 +57,7 @@
 #include "jsp_sr.h"
 #include "replication.h"
 #include "es.h"
-
+#include "vacuum.h"
 
 /*
  * Use db_clear_private_heap instead of db_destroy_private_heap
@@ -10757,6 +10757,65 @@ es_posix_get_file_size (const char *path)
 #else /* CS_MODE */
   return -1;
 #endif
+}
+
+/*
+ * cvacuum () - Client side function for vacuuming classes.
+ *
+ * return	    : Error code.
+ * num_classes (in) : Number of classes in class_oids array.
+ * class_oids (in)  : Class OID's array.
+ */
+int
+cvacuum (int num_classes, OID * class_oids)
+{
+#if defined(CS_MODE)
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *request_data = NULL, *ptr = NULL, *reply = NULL;
+  int err = NO_ERROR, request_data_size = 0;
+
+  /* Reply should include error code */
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  /* Request data size */
+  request_data_size += OR_INT_SIZE +	/* num_classes */
+    num_classes * OR_OID_SIZE;	/* class_oids */
+
+  request_data = (char *) malloc (request_data_size);
+  if (request_data == NULL)
+    {
+      err = ER_OUT_OF_VIRTUAL_MEMORY;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, err, 1, request_data_size);
+      return err;
+    }
+
+  /* Pack num_classes */
+  ptr = or_pack_int (request_data, num_classes);
+  /* Pack class_oids */
+  ptr = or_pack_oid_array (ptr, num_classes, class_oids);
+
+  /* Send request to server */
+  err =
+    net_client_request (NET_SERVER_VACUUM, NULL, 0,
+			reply, OR_ALIGNED_BUF_SIZE (a_reply),
+			request_data, request_data_size, NULL, 0);
+
+  /* Clean up */
+  if (request_data != NULL)
+    {
+      free_and_init (request_data);
+    }
+
+  if (err == NO_ERROR)
+    {
+      (void) or_unpack_int (reply, &err);
+    }
+
+  return err;
+#else /* !CS_MODE */
+  /* Call server function for vacuuming classes */
+  return xvacuum (NULL, num_classes, class_oids);
+#endif /* CS_MODE */
 }
 
 /*

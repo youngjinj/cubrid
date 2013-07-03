@@ -322,6 +322,8 @@ static PT_NODE *pt_apply_merge (PARSER_CONTEXT * parser, PT_NODE * p,
 				PT_NODE_FUNCTION g, void *arg);
 static PT_NODE *pt_apply_tuple_value (PARSER_CONTEXT * parser, PT_NODE * p,
 				      PT_NODE_FUNCTION g, void *arg);
+static PT_NODE *pt_apply_vacuum (PARSER_CONTEXT * parser, PT_NODE * p,
+				 PT_NODE_FUNCTION g, void *arg);
 
 static PARSER_APPLY_NODE_FUNC pt_apply_func_array[PT_NODE_NUMBER];
 
@@ -414,6 +416,7 @@ static PT_NODE *pt_init_update (PT_NODE * p);
 static PT_NODE *pt_init_value (PT_NODE * p);
 static PT_NODE *pt_init_merge (PT_NODE * p);
 static PT_NODE *pt_init_tuple_value (PT_NODE * p);
+static PT_NODE *pt_init_vacuum (PT_NODE * p);
 
 static PARSER_INIT_NODE_FUNC pt_init_func_array[PT_NODE_NUMBER];
 
@@ -586,6 +589,8 @@ static PARSER_VARCHAR *pt_print_index_columns (PARSER_CONTEXT * parser,
 
 static PARSER_VARCHAR *pt_print_tuple_value (PARSER_CONTEXT * parser,
 					     PT_NODE * p);
+
+static PARSER_VARCHAR *pt_print_vacuum (PARSER_CONTEXT * parser, PT_NODE * p);
 #if defined(ENABLE_UNUSED_FUNCTION)
 static PT_NODE *pt_apply_use (PARSER_CONTEXT * parser, PT_NODE * p,
 			      PT_NODE_FUNCTION g, void *arg);
@@ -597,7 +602,6 @@ static PARSER_PRINT_NODE_FUNC pt_print_func_array[PT_NODE_NUMBER];
 
 extern char *g_query_string;
 extern int g_query_string_len;
-
 
 /*
  * strcat_with_realloc () -
@@ -2965,6 +2969,8 @@ pt_show_node_type (PT_NODE * node)
       return "PARTS";
     case PT_NODE_LIST:
       return "NODE_LIST";
+    case PT_VACUUM:
+      return "VACUUM";
     default:
       return "NODE: type unknown";
     }
@@ -4887,6 +4893,7 @@ pt_init_apply_f (void)
     pt_apply_drop_session_variables;
   pt_apply_func_array[PT_MERGE] = pt_apply_merge;
   pt_apply_func_array[PT_TUPLE_VALUE] = pt_apply_tuple_value;
+  pt_apply_func_array[PT_VACUUM] = pt_apply_vacuum;
 
   pt_apply_f = pt_apply_func_array;
 }
@@ -4997,6 +5004,7 @@ pt_init_init_f (void)
     pt_init_drop_session_variables;
   pt_init_func_array[PT_MERGE] = pt_init_merge;
   pt_init_func_array[PT_TUPLE_VALUE] = pt_init_tuple_value;
+  pt_init_func_array[PT_VACUUM] = pt_init_vacuum;
 
   pt_init_f = pt_init_func_array;
 }
@@ -5108,6 +5116,7 @@ pt_init_print_f (void)
     pt_print_drop_session_variables;
   pt_print_func_array[PT_MERGE] = pt_print_merge;
   pt_print_func_array[PT_TUPLE_VALUE] = pt_print_tuple_value;
+  pt_print_func_array[PT_VACUUM] = pt_print_vacuum;
 
   pt_print_f = pt_print_func_array;
 }
@@ -6924,43 +6933,9 @@ pt_print_create_entity (PARSER_CONTEXT * parser, PT_NODE * p)
       if (p->info.create_entity.hint & PT_HINT_NO_STATS)
 	{
 	  q = pt_append_nulstring (parser, q, " NO_STATS");
-	    }
+	}
 
-	  if (p->info.query.q.select.hint & PT_HINT_SELECT_KEY_INFO)
-	    {
-	      q = pt_append_nulstring (parser, q, "SELECT_KEY_INFO");
-	      if (p->info.query.q.select.using_index)
-		{
-		  q = pt_append_nulstring (parser, q, "(");
-		  q =
-		    pt_append_nulstring (parser, q, p->info.query.q.select.
-					 using_index->info.name.original);
-		  q = pt_append_nulstring (parser, q, ")");
-		}
-	      else
-		{
-		  assert (0);
-		}
-	    }
-
-	  if (p->info.query.q.select.hint & PT_HINT_SELECT_BTREE_NODE_INFO)
-	    {
-	      q = pt_append_nulstring (parser, q, "SELECT_BTREE_NODE_INFO");
-	      if (p->info.query.q.select.using_index)
-		{
-		  q = pt_append_nulstring (parser, q, "(");
-		  q =
-		    pt_append_nulstring (parser, q, p->info.query.q.select.
-					 using_index->info.name.original);
-		  q = pt_append_nulstring (parser, q, ")");
-		}
-	      else
-		{
-		  assert (0);
-		}
-	    }
-
-	  q = pt_append_nulstring (parser, q, " */");
+      q = pt_append_nulstring (parser, q, " */");
     }
 
   q = pt_append_nulstring (parser, q,
@@ -14248,13 +14223,48 @@ pt_print_select (PARSER_CONTEXT * parser, PT_NODE * p)
 
 	  if (p->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
 	    {
-	      q = pt_append_nulstring (parser, q, "SELECT_RECORD_INFO");
+	      q = pt_append_nulstring (parser, q, "SELECT_RECORD_INFO ");
 	    }
 
 	  if (p->info.query.q.select.hint & PT_HINT_SELECT_PAGE_INFO)
 	    {
-	      q = pt_append_nulstring (parser, q, "SELECT_PAGE_INFO");
+	      q = pt_append_nulstring (parser, q, "SELECT_PAGE_INFO ");
 	    }
+
+	  if (p->info.query.q.select.hint & PT_HINT_SELECT_KEY_INFO)
+	    {
+	      q = pt_append_nulstring (parser, q, "SELECT_KEY_INFO ");
+	      if (p->info.query.q.select.using_index)
+		{
+		  q = pt_append_nulstring (parser, q, "(");
+		  q =
+		    pt_append_nulstring (parser, q, p->info.query.q.select.
+					 using_index->info.name.original);
+		  q = pt_append_nulstring (parser, q, ")");
+		}
+	      else
+		{
+		  assert (0);
+		}
+	    }
+
+	  if (p->info.query.q.select.hint & PT_HINT_SELECT_BTREE_NODE_INFO)
+	    {
+	      q = pt_append_nulstring (parser, q, "SELECT_BTREE_NODE_INFO ");
+	      if (p->info.query.q.select.using_index)
+		{
+		  q = pt_append_nulstring (parser, q, "(");
+		  q =
+		    pt_append_nulstring (parser, q, p->info.query.q.select.
+					 using_index->info.name.original);
+		  q = pt_append_nulstring (parser, q, ")");
+		}
+	      else
+		{
+		  assert (0);
+		}
+	    }
+
 	  q = pt_append_nulstring (parser, q, "*/ ");
 	}
 
@@ -18158,4 +18168,69 @@ pt_sort_spec_list_to_name_node_list (PARSER_CONTEXT * parser,
     }
 
   return name_list;
+}
+
+/*
+ * PT_VACUUM section
+ */
+
+/*
+ * pt_apply_vacuum () - Apply function "q" on all the children of a VACUUM
+ *			parse tree node.
+ *
+ * return      : Updated VACUUM parse tree node. 
+ * parser (in) : Parse context.
+ * p (in)      : VACUUM parse tree node.
+ * g (in)      : Function to apply on all node's children.
+ * arg (in)    : Argument for function g.
+ */
+static PT_NODE *
+pt_apply_vacuum (PARSER_CONTEXT * parser, PT_NODE * p, PT_NODE_FUNCTION g,
+		 void *arg)
+{
+  p->info.vacuum.spec = g (parser, p->info.vacuum.spec, arg);
+
+  return p;
+}
+
+/*
+ * pt_init_vacuum () - Initialize a VACUUM parse tree node.
+ *
+ * return : Initialized parse tree node.
+ * p (in) : VACUUM parse tree node.
+ */
+static PT_NODE *
+pt_init_vacuum (PT_NODE * p)
+{
+  assert (PT_IS_VACUUM_NODE (p));
+
+  p->info.vacuum.spec = NULL;
+  return p;
+}
+
+/*
+ * pt_print_vacuum () - Print a VACUUM parse tree node.
+ *
+ * return      : Return printed version of parse tree node.
+ * parser (in) : Parser context.
+ * p (in)      : 
+ */
+static PARSER_VARCHAR *
+pt_print_vacuum (PARSER_CONTEXT * parser, PT_NODE * p)
+{
+  PARSER_VARCHAR *q = NULL, *r1 = NULL;
+
+  assert (PT_IS_VACUUM_NODE (p));
+
+  if (p->info.vacuum.spec == NULL)
+    {
+      q = pt_append_nulstring (parser, q, "VACUUM");
+    }
+  else
+    {
+      r1 = pt_print_bytes_l (parser, p->info.vacuum.spec);
+      q = pt_append_nulstring (parser, q, "VACUUM ");
+      q = pt_append_varchar (parser, q, r1);
+    }
+  return q;
 }

@@ -386,6 +386,7 @@ static PT_NODE *pt_mark_union_leaf_nodes (PARSER_CONTEXT * parser,
 					  PT_NODE * node, void *arg,
 					  int *continue_walk);
 
+static void pt_check_vacuum (PARSER_CONTEXT * parser, PT_NODE * node);
 
 /* pt_combine_compatible_info () - combine two cinfo into cinfo1
  *   return: true if compatible, else false
@@ -10930,6 +10931,10 @@ pt_path_chain (PARSER_CONTEXT * parser, PT_NODE * node,
 	}
       break;
 
+    case PT_VACUUM:
+      pt_check_vacuum (parser, node);
+      break;
+
     default:
       break;
     }
@@ -16068,6 +16073,31 @@ pt_check_odku_assignments (PARSER_CONTEXT * parser, PT_NODE * insert)
     }
   return insert;
 }
+
+/*
+ * pt_check_vacuum () - Check VACUUM statement.
+ *
+ * return      : Void.
+ * parser (in) : Parser context.
+ * node (in)   : VACUUM parse tree node.
+ */
+static void
+pt_check_vacuum (PARSER_CONTEXT * parser, PT_NODE * node)
+{
+  PT_NODE *chk_parent = NULL;
+
+  assert (parser != NULL);
+  if (!PT_IS_VACUUM_NODE (node))
+    {
+      /* Not the scope of this function */
+      return;
+    }
+
+  /* Replace each Entity Spec with an Equivalent flat list */
+  parser_walk_tree (parser, node,
+		    pt_flat_spec_pre, &chk_parent, pt_continue_walk, NULL);
+}
+
 
 /*
  * pt_get_select_list_coll_compat () - scans a UNION parse tree and retains

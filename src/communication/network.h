@@ -256,6 +256,8 @@ enum net_server_request
   NET_SERVER_LOGIN_USER,
 
   NET_SERVER_FIND_MULTI_UNIQUES,
+
+  NET_SERVER_VACUUM,
   /*
    * This is the last entry. It is also used for the end of an
    * array of statistics information on client/server communication.

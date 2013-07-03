@@ -172,6 +172,8 @@ static PT_NODE *do_replace_names_for_insert_values_pre (PARSER_CONTEXT *
 							void *arg,
 							int *continue_walk);
 
+static int do_vacuum (PARSER_CONTEXT * parser, PT_NODE * statement);
+
 /*
  * initialize_serial_invariant() - initialize a serial invariant
  *   return: None
@@ -3265,6 +3267,9 @@ do_execute_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
       break;
     case PT_SET_NAMES:
       err = do_set_names (parser, statement);
+      break;
+    case PT_VACUUM:
+      err = do_vacuum (parser, statement);
       break;
     default:
       er_set (ER_ERROR_SEVERITY, __FILE__, statement->line_number,
@@ -16656,3 +16661,66 @@ do_replace_names_for_insert_values_pre (PARSER_CONTEXT * parser,
 
   return node;
 }
+
+/*
+ * do_vacuum () - Executes a VACUUM statement.
+ *
+ * return	  : Error code.
+ * parser (in)	  : Parser context.
+ * statement (in) : VACUUM parse tree node.
+ */
+static int
+do_vacuum (PARSER_CONTEXT * parser, PT_NODE * statement)
+{
+  int num_classes, error = NO_ERROR, i;
+  PT_NODE *crt_spec = NULL;
+  OID *class_oids = NULL;
+  OID *oid = NULL;
+
+  assert (parser != NULL && statement != NULL
+	  && PT_IS_VACUUM_NODE (statement));
+
+  num_classes = pt_length_of_list (statement->info.vacuum.spec);
+  if (num_classes <= 0)
+    {
+      return NO_ERROR;
+    }
+
+  /* Allocate memory for class oid array */
+  class_oids = (OID *) malloc (num_classes * OR_OID_SIZE);
+  if (class_oids == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      num_classes * OR_OID_SIZE);
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+  /* Get class OID's */
+  for (i = 0, crt_spec = statement->info.vacuum.spec; i < num_classes;
+       i++, crt_spec = crt_spec->next)
+    {
+      assert (crt_spec->info.spec.entity_name != NULL
+	      && (crt_spec->info.spec.entity_name->info.name.db_object
+		  != NULL));
+      oid = ws_oid (crt_spec->info.spec.entity_name->info.name.db_object);
+      if (oid == NULL)
+	{
+	  error = ER_FAILED;
+	  break;
+	}
+      COPY_OID (&class_oids[i], oid);
+    }
+
+  /* Call vacuum */
+  if (error == NO_ERROR)
+    {
+      error = cvacuum (num_classes, class_oids);
+    }
+
+  /* Clean up */
+  free_and_init (class_oids);
+
+  return error;
+}
+
+

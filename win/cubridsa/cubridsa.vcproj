@@ -535,6 +535,10 @@
 					>
 				</File>
 				<File
+					RelativePath="..\..\src\query\vacuum.c"
+					>
+				</File>
+				<File
 					RelativePath="..\..\src\query\xasl_to_stream.c"
 					>
 				</File>
@@ -1153,6 +1157,10 @@
 				</File>
 				<File
 					RelativePath="..\..\src\storage\system_catalog.c"
+					>
+				</File>
+				<File
+					RelativePath="..\..\src\storage\visibility_map.c"
 					>
 				</File>
 			</Filter>

@@ -7255,7 +7255,7 @@ qo_find_node_indexes (QO_ENV * env, QO_NODE * nodep)
       /* get constraints of the class */
       constraints = sm_class_constraints (class_entryp->mop);
 
-      /* count the number of INDEX and UNIQUE constraints contatined in this
+      /* count the number of INDEX and UNIQUE constraints contained in this
          class */
       n = 0;
       for (consp = constraints; consp; consp = consp->next)
