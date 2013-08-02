@@ -947,7 +947,8 @@ tp_domain_free (TP_DOMAIN * dom)
 static void
 domain_init (TP_DOMAIN * domain, DB_TYPE typeid_)
 {
-  assert ((typeid_ >= DB_TYPE_FIRST) && (typeid_ <= DB_TYPE_LAST));
+  assert (typeid_ >= DB_TYPE_FIRST);
+  assert (typeid_ <= DB_TYPE_LAST);
 
   domain->next = NULL;
   domain->next_list = NULL;
@@ -4425,6 +4426,11 @@ tp_can_steal_string (const DB_VALUE * val, const DB_DOMAIN * desired_domain)
   int original_length, desired_precision;
 
   original_type = DB_VALUE_DOMAIN_TYPE (val);
+  if (!TP_IS_CHAR_BIT_TYPE (original_type))
+    {
+      return 0;
+    }
+
   original_length = DB_GET_STRING_LENGTH (val);
   desired_type = TP_DOMAIN_TYPE (desired_domain);
   desired_precision = desired_domain->precision;
@@ -5642,7 +5648,7 @@ make_desired_string_db_value (DB_TYPE desired_type,
 
 /*
  * tp_value_coerce - Coerce a value into one of another domain.
- *    return: error code
+ *    return: TP_DOMAIN_STATUS
  *    src(in): source value
  *    dest(out): destination value
  *    desired_domain(in): destination domain
@@ -9504,7 +9510,8 @@ tp_value_equal (const DB_VALUE * value1, const DB_VALUE * value2,
 /*
  * tp_domain_disk_size - Caluclate the disk size necessary to store a value
  * for a particular domain.
- *    return: disk size in bytes. -1 if this is a variable width domain
+ *    return: disk size in bytes. -1 if this is a variable width domain or
+ *            floating precision in fixed domain.
  *    domain(in): domain to consider
  * Note:
  *    This is here because it takes a domain handle.
@@ -9521,6 +9528,17 @@ tp_domain_disk_size (TP_DOMAIN * domain)
     {
       return -1;
     }
+
+  if (domain->type->data_lengthmem != NULL
+      && (domain->type->id == DB_TYPE_CHAR
+	  || domain->type->id == DB_TYPE_NCHAR
+	  || domain->type->id == DB_TYPE_BIT)
+      && domain->precision == TP_FLOATING_PRECISION_VALUE)
+    {
+      return -1;
+    }
+
+  assert (domain->precision != TP_FLOATING_PRECISION_VALUE);
 
   /*
    * Use the "lengthmem" function here with a NULL pointer.  The size will
@@ -9551,6 +9569,15 @@ int
 tp_domain_memory_size (TP_DOMAIN * domain)
 {
   int size;
+
+  if (domain->type->data_lengthmem != NULL
+      && (domain->type->id == DB_TYPE_CHAR
+	  || domain->type->id == DB_TYPE_NCHAR
+	  || domain->type->id == DB_TYPE_BIT)
+      && domain->precision == TP_FLOATING_PRECISION_VALUE)
+    {
+      return -1;
+    }
 
   /*
    * Use the "lengthmem" function here with a NULL pointer and a "disk"
@@ -9951,26 +9978,22 @@ tp_domain_references_objects (const TP_DOMAIN * dom)
  *	   for implicit cast performed at type-checking for operators that do
  *	   not require late binding.
  */
-int
+TP_DOMAIN_STATUS
 tp_value_auto_cast (const DB_VALUE * src, DB_VALUE * dest,
 		    const TP_DOMAIN * desired_domain)
 {
   TP_DOMAIN_STATUS status;
-  int err = NO_ERROR;
 
   status = tp_value_cast (src, dest, desired_domain, false);
   if (status != DOMAIN_COMPATIBLE)
     {
       if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS) == true)
 	{
-	  return NO_ERROR;
+	  status = DOMAIN_COMPATIBLE;
 	}
-
-      err = tp_domain_status_er_set (status, ARG_FILE_LINE, src,
-				     desired_domain);
     }
 
-  return err;
+  return status;
 }
 
 /*
@@ -9989,6 +10012,7 @@ tp_value_str_auto_cast_to_number (DB_VALUE * src, DB_VALUE * dest,
 				  DB_TYPE * val_type)
 {
   TP_DOMAIN *cast_dom = NULL;
+  TP_DOMAIN_STATUS dom_status;
   int er_status = NO_ERROR;
 
   assert (src != NULL);
@@ -10006,9 +10030,12 @@ tp_value_str_auto_cast_to_number (DB_VALUE * src, DB_VALUE * dest,
       return ER_FAILED;
     }
 
-  er_status = tp_value_auto_cast (src, dest, cast_dom);
-  if (er_status != NO_ERROR)
+  dom_status = tp_value_auto_cast (src, dest, cast_dom);
+  if (dom_status != DOMAIN_COMPATIBLE)
     {
+      er_status = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   src, cast_dom);
+
       pr_clear_value (dest);
       return er_status;
     }

@@ -271,6 +271,7 @@ hm_con_handle_free (T_CON_HANDLE * con_handle)
       con_handle->sock_fd = INVALID_SOCKET;
     }
 
+  hm_req_handle_free_all (con_handle);
   con_handle_content_free (con_handle);
   FREE_MEM (con_handle);
 
@@ -453,6 +454,7 @@ hm_req_handle_alloc (T_CON_HANDLE * con_handle,
   req_handle->fetch_size = 100;
   req_handle->query_timeout = con_handle->query_timeout;
   req_handle->shard_id = CCI_SHARD_ID_INVALID;
+  req_handle->is_fetch_completed = 0;
 
   con_handle->req_handle_table[req_handle_id - 1] = req_handle;
   ++(con_handle->req_handle_count);
@@ -839,6 +841,7 @@ hm_req_handle_fetch_buf_free (T_REQ_HANDLE * req_handle)
   FREE_MEM (req_handle->msg_buf);
   req_handle->fetched_tuple_begin = req_handle->fetched_tuple_end = 0;
   req_handle->cur_fetch_tuple_index = -1;
+  req_handle->is_fetch_completed = 0;
 }
 
 int
@@ -926,6 +929,7 @@ req_handle_content_free (T_REQ_HANDLE * req_handle, int reuse)
   req_close_query_result (req_handle);
   req_handle_col_info_free (req_handle);
   req_handle->shard_id = CCI_SHARD_ID_INVALID;
+  req_handle->is_fetch_completed = 0;
 
   if (!reuse)
     {
@@ -1405,6 +1409,7 @@ con_handle_content_free (T_CON_HANDLE * con_handle)
   con_handle->url[0] = '\0';
   FREE_MEM (con_handle->req_handle_table);
   FREE_MEM (con_handle->deferred_close_handle_list);
+  FREE_MEM (con_handle->last_insert_id);
 
   if (con_handle->stmt_pool != NULL)
     {

@@ -1614,7 +1614,7 @@ stmt
 				g_query_string_len = len;
 			      }
 			    
-			    while (isspace (*g_query_string))
+			    while (char_isspace (*g_query_string))
 			      {
 			        g_query_string++;
 			      }
@@ -2124,7 +2124,7 @@ session_variable_assignment
 		{{
 
 			PT_NODE* expr =
-				parser_make_expression (PT_DEFINE_VARIABLE, $1, $3, NULL);
+				parser_make_expression (this_parser, PT_DEFINE_VARIABLE, $1, $3, NULL);
 			expr->do_not_fold = 1;
 			$$ = expr;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -2144,7 +2144,7 @@ session_variable_definition
 		{{
 
 			PT_NODE* expr =
-				parser_make_expression (PT_DEFINE_VARIABLE, $1, $3, NULL);
+				parser_make_expression (this_parser, PT_DEFINE_VARIABLE, $1, $3, NULL);
 			expr->do_not_fold = 1;
 			$$ = expr;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -2157,7 +2157,7 @@ session_variable_expression
 		{{
 
 			PT_NODE *expr = NULL;
-			expr = parser_make_expression (PT_EVALUATE_VARIABLE, $1, NULL,
+			expr = parser_make_expression (this_parser, PT_EVALUATE_VARIABLE, $1, NULL,
 										   NULL);
 			expr->do_not_fold = 1;		
 			$$ = expr;
@@ -2184,17 +2184,20 @@ session_variable_list
 	;
 
 session_variable
-	: '@' IdName
+	: '@' identifier
 		{{
 
 			PT_NODE *node = parser_new_node (this_parser, PT_VALUE);
+			PT_NODE *id = $2;
 
-			if (node)
+			if (node != NULL && id != NULL)
 			  {
 			    node->type_enum = PT_TYPE_CHAR;
 			    node->info.value.string_type = ' ';
 			    node->info.value.data_value.str =
-			      pt_append_bytes (this_parser, NULL, $2, strlen ($2));
+			      pt_append_bytes (this_parser, NULL, 
+			      				   id->info.name.original, 
+			      				   strlen (id->info.name.original));
 			    node->info.value.text =
 			      node->info.value.data_value.str->bytes;
 			  }
@@ -5827,7 +5830,7 @@ insert_assignment_list
 			  }
 			parser_make_link (CONTAINER_AT_0 ($1), $3);
 			parser_make_link (CONTAINER_AT_1 ($1),
-					  parser_make_expression (PT_DEFAULTF, arg, NULL, NULL));
+					  parser_make_expression (this_parser, PT_DEFAULTF, arg, NULL, NULL));
 
 			$$ = $1;
 
@@ -5852,7 +5855,7 @@ insert_assignment_list
 			    pt_set_fill_default_in_path_expression (arg);
 			  }
 			SET_CONTAINER_2 (ctn, $1,
-			  parser_make_expression (PT_DEFAULTF, arg, NULL, NULL));
+			  parser_make_expression (this_parser, PT_DEFAULTF, arg, NULL, NULL));
 
 			$$ = ctn;
 
@@ -6164,7 +6167,7 @@ insert_value
 			/* The argument will be filled in later, when the
 			   corresponding column name is known.
 			   See fill_in_insert_default_function_arguments(). */
-			$$ = parser_make_expression (PT_DEFAULTF, NULL, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_DEFAULTF, NULL, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -6760,7 +6763,7 @@ update_assignment
 	: path_expression '=' expression_
 		{{
 
-			$$ = parser_make_expression (PT_ASSIGN, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_ASSIGN, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -6772,16 +6775,16 @@ update_assignment
 			if (node)
 			  {
 			    pt_set_fill_default_in_path_expression (node);
-			    node_df = parser_make_expression (PT_DEFAULTF, node, NULL, NULL);
+			    node_df = parser_make_expression (this_parser, PT_DEFAULTF, node, NULL, NULL);
 			  }
-			$$ = parser_make_expression (PT_ASSIGN, $1, node_df, NULL);
+			$$ = parser_make_expression (this_parser, PT_ASSIGN, $1, node_df, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| paren_path_expression_set '=' primary_w_collate
 		{{
 
-			PT_NODE *exp = parser_make_expression (PT_ASSIGN, $1, NULL, NULL);
+			PT_NODE *exp = parser_make_expression (this_parser, PT_ASSIGN, $1, NULL, NULL);
 			PT_NODE *arg1, *arg2, *list, *tmp;
 			PT_NODE *e1, *e2 = NULL, *e1_next, *e2_next;
 			bool is_subquery = false;
@@ -12564,7 +12567,7 @@ incr_arg_name__inc
 			  }
 			else
 			  {
-			    node = parser_make_expression (PT_INCR, $1, NULL, NULL);
+			    node = parser_make_expression (this_parser, PT_INCR, $1, NULL, NULL);
                             node->is_hidden_column = 1;
 			  }
 
@@ -12606,7 +12609,7 @@ incr_arg_name__dec
 			  }
 			else
 			  {
-			    node = parser_make_expression (PT_DECR, $1, NULL, NULL);
+			    node = parser_make_expression (this_parser, PT_DECR, $1, NULL, NULL);
                             node->is_hidden_column = 1;
 			  }
 
@@ -13139,7 +13142,7 @@ expression_strcat
 	: expression_strcat STRCAT expression_bitor
 		{{
 
-			$$ = parser_make_expression (PT_STRCAT, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_STRCAT, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13156,7 +13159,7 @@ expression_bitor
 	: expression_bitor '|' expression_bitand
 		{{
 
-			$$ = parser_make_expression (PT_BIT_OR, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BIT_OR, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13173,7 +13176,7 @@ expression_bitand
 	: expression_bitand '&' expression_bitshift
 		{{
 
-			$$ = parser_make_expression (PT_BIT_AND, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BIT_AND, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13190,14 +13193,14 @@ expression_bitshift
 	: expression_bitshift BITSHIFT_LEFT expression_add_sub
 		{{
 
-			$$ = parser_make_expression (PT_BITSHIFT_LEFT, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BITSHIFT_LEFT, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_bitshift BITSHIFT_RIGHT expression_add_sub
 		{{
 
-			$$ = parser_make_expression (PT_BITSHIFT_RIGHT, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BITSHIFT_RIGHT, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13214,14 +13217,14 @@ expression_add_sub
 	: expression_add_sub '+' term
 		{{
 
-			$$ = parser_make_expression (PT_PLUS, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_PLUS, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_add_sub '-' term
 		{{
 
-			$$ = parser_make_expression (PT_MINUS, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_MINUS, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13238,28 +13241,28 @@ term
 	: term '*' factor
 		{{
 
-			$$ = parser_make_expression (PT_TIMES, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_TIMES, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| term '/' factor
 		{{
 
-			$$ = parser_make_expression (PT_DIVIDE, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_DIVIDE, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| term DIV factor
 		{{
 
-			$$ = parser_make_expression (PT_DIV, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_DIV, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| term MOD factor
 		{{
 
-			$$ = parser_make_expression (PT_MOD, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_MOD, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13276,7 +13279,7 @@ factor
 	: factor '^' factor_
 		{{
 
-			$$ = parser_make_expression (PT_BIT_XOR, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BIT_XOR, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13300,7 +13303,7 @@ factor_
 	| '-' factor_
 		{{
 
-			$$ = parser_make_expression (PT_UNARY_MINUS, $2, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_UNARY_MINUS, $2, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13314,7 +13317,7 @@ factor_
 	| '~' primary
 		{{
 
-			$$ = parser_make_expression (PT_BIT_NOT, $2, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_BIT_NOT, $2, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -13330,7 +13333,7 @@ factor_
 	  primary_w_collate
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_PRIOR, $3, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_PRIOR, $3, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT (node, @$.buffer_pos)
 
 			parser_restore_sysc ();
@@ -13359,7 +13362,7 @@ factor_
 	  primary_w_collate
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_CONNECT_BY_ROOT, $3, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_CONNECT_BY_ROOT, $3, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT (node, @$.buffer_pos)
 
 			parser_restore_sysc ();
@@ -13562,21 +13565,21 @@ pseudo_column
 	: CONNECT_BY_ISCYCLE
 		{{
 
-			$$ = parser_make_expression (PT_CONNECT_BY_ISCYCLE, NULL, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_CONNECT_BY_ISCYCLE, NULL, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| CONNECT_BY_ISLEAF
 		{{
 
-			$$ = parser_make_expression (PT_CONNECT_BY_ISLEAF, NULL, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_CONNECT_BY_ISLEAF, NULL, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| LEVEL
 		{{
 
-			$$ = parser_make_expression (PT_LEVEL, NULL, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_LEVEL, NULL, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14030,7 +14033,7 @@ reserved_func
 	| POSITION '(' expression_ IN_ expression_ ')'
 		{{
 
-			$$ = parser_make_expression (PT_POSITION, $3, $5, NULL);
+			$$ = parser_make_expression (this_parser, PT_POSITION, $3, $5, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14040,7 +14043,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SUBSTRING, $4, $6, $8);
+			PT_NODE *node = parser_make_expression (this_parser, PT_SUBSTRING, $4, $6, $8);
 			node->info.expr.qualifier = PT_SUBSTR_ORG;
 			PICE (node);
 			$$ = node;
@@ -14053,7 +14056,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SUBSTRING, $4, $6, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_SUBSTRING, $4, $6, NULL);
 			node->info.expr.qualifier = PT_SUBSTR_ORG;
 			PICE (node);
 			$$ = node;
@@ -14066,7 +14069,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SUBSTRING, $4, $6, $8);
+			PT_NODE *node = parser_make_expression (this_parser, PT_SUBSTRING, $4, $6, $8);
 			node->info.expr.qualifier = PT_SUBSTR_ORG;
 			PICE (node);
 			$$ = node;
@@ -14079,7 +14082,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SUBSTRING, $4, $6, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_SUBSTRING, $4, $6, NULL);
 			node->info.expr.qualifier = PT_SUBSTR_ORG;
 			PICE (node);
 			$$ = node;
@@ -14092,7 +14095,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_DATEF, $4, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_DATEF, $4, NULL, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14104,7 +14107,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_TIMEF, $4, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_TIMEF, $4, NULL, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14116,7 +14119,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_ADDDATE, $4, $6, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_ADDDATE, $4, $6, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14137,7 +14140,7 @@ reserved_func
 			    node_unit->type_enum = PT_TYPE_INTEGER;
 			  }
 
-			node = parser_make_expression (PT_DATE_ADD, $4, $7, node_unit);
+			node = parser_make_expression (this_parser, PT_DATE_ADD, $4, $7, node_unit);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14149,7 +14152,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SUBDATE, $4, $6, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_SUBDATE, $4, $6, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14170,7 +14173,7 @@ reserved_func
 			    node_unit->type_enum = PT_TYPE_INTEGER;
 			  }
 
-			node = parser_make_expression (PT_DATE_SUB, $4, $7, node_unit);
+			node = parser_make_expression (this_parser, PT_DATE_SUB, $4, $7, node_unit);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14189,7 +14192,7 @@ reserved_func
 			    DB_MAKE_INT(&arg2->info.value.db_value, 0);
 			    arg2->type_enum = PT_TYPE_INTEGER;
 			  }
-			node = parser_make_expression (PT_TIMESTAMP, $4, arg2, NULL); /* will call timestamp(arg1, 0) */
+			node = parser_make_expression (this_parser, PT_TIMESTAMP, $4, arg2, NULL); /* will call timestamp(arg1, 0) */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14201,7 +14204,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_TIMESTAMP, $4, $6, NULL); /* 2 parameters */
+			PT_NODE *node = parser_make_expression (this_parser, PT_TIMESTAMP, $4, $6, NULL); /* 2 parameters */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14213,7 +14216,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_YEARF, $4, NULL, NULL); /* 1 parameter */
+			PT_NODE *node = parser_make_expression (this_parser, PT_YEARF, $4, NULL, NULL); /* 1 parameter */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14225,7 +14228,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_MONTHF, $4, NULL, NULL); /* 1 parameter */
+			PT_NODE *node = parser_make_expression (this_parser, PT_MONTHF, $4, NULL, NULL); /* 1 parameter */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14237,7 +14240,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_DAYF, $4, NULL, NULL); /* 1 parameter */
+			PT_NODE *node = parser_make_expression (this_parser, PT_DAYF, $4, NULL, NULL); /* 1 parameter */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14249,7 +14252,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_HOURF, $4, NULL, NULL); /* 1 parameter */
+			PT_NODE *node = parser_make_expression (this_parser, PT_HOURF, $4, NULL, NULL); /* 1 parameter */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14261,7 +14264,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_MINUTEF, $4, NULL, NULL); /* 1 parameter */
+			PT_NODE *node = parser_make_expression (this_parser, PT_MINUTEF, $4, NULL, NULL); /* 1 parameter */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14273,7 +14276,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SECONDF, $4, NULL, NULL); /* 1 parameter */
+			PT_NODE *node = parser_make_expression (this_parser, PT_SECONDF, $4, NULL, NULL); /* 1 parameter */
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14285,7 +14288,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_DATABASE, NULL, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_DATABASE, NULL, NULL, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14297,7 +14300,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SCHEMA, NULL, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_SCHEMA, NULL, NULL, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14309,7 +14312,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_TRIM, $7, $5, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_TRIM, $7, $5, NULL);
 			node->info.expr.qualifier = $4;
 			PICE (node);
 			$$ = node;
@@ -14322,7 +14325,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_TRIM, $6, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_TRIM, $6, NULL, NULL);
 			node->info.expr.qualifier = $4;
 			PICE (node);
 			$$ = node;
@@ -14335,7 +14338,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_TRIM, $6, $4, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_TRIM, $6, $4, NULL);
 			node->info.expr.qualifier = PT_BOTH;
 			PICE (node);
 			$$ = node;
@@ -14348,7 +14351,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_TRIM, $4, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_TRIM, $4, NULL, NULL);
 			node->info.expr.qualifier = PT_BOTH;
 			PICE (node);
 			$$ = node;
@@ -14361,7 +14364,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_CHR, $4, $5, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_CHR, $4, $5, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14373,7 +14376,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_CLOB_TO_CHAR, $4, $5, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_CLOB_TO_CHAR, $4, $5, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14385,7 +14388,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *expr = parser_make_expression (PT_CAST, $4, NULL, NULL);
+			PT_NODE *expr = parser_make_expression (this_parser, PT_CAST, $4, NULL, NULL);
 			PT_TYPE_ENUM typ = TO_NUMBER (CONTAINER_AT_0 ($6));
 			PT_NODE *dt = CONTAINER_AT_1 ($6);
 			PT_NODE *set_dt;
@@ -14426,7 +14429,7 @@ reserved_func
 	| of_dates
 		{{
 
-			PT_NODE *expr = parser_make_expression (PT_SYS_DATE, NULL, NULL, NULL);
+			PT_NODE *expr = parser_make_expression (this_parser, PT_SYS_DATE, NULL, NULL, NULL);
 			$$ = expr;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -14434,7 +14437,7 @@ reserved_func
 	| of_times
 		{{
 
-			PT_NODE *expr = parser_make_expression (PT_SYS_TIME, NULL, NULL, NULL);
+			PT_NODE *expr = parser_make_expression (this_parser, PT_SYS_TIME, NULL, NULL, NULL);
 			$$ = expr;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -14442,7 +14445,7 @@ reserved_func
 	| of_timestamps
 		{{
 
-			PT_NODE *expr = parser_make_expression (PT_SYS_TIMESTAMP, NULL, NULL, NULL);
+			PT_NODE *expr = parser_make_expression (this_parser, PT_SYS_TIMESTAMP, NULL, NULL, NULL);
 			$$ = expr;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -14450,7 +14453,7 @@ reserved_func
 	| of_datetimes
 		{{
 
-			PT_NODE *expr = parser_make_expression (PT_SYS_DATETIME, NULL, NULL, NULL);
+			PT_NODE *expr = parser_make_expression (this_parser, PT_SYS_DATETIME, NULL, NULL, NULL);
 			$$ = expr;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -14473,7 +14476,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_USER, NULL, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_USER, NULL, NULL, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14491,7 +14494,7 @@ reserved_func
 			if (path != NULL)
 			  {
 			    pt_set_fill_default_in_path_expression (path);
-			    node = parser_make_expression (PT_DEFAULTF, path, NULL, NULL);
+			    node = parser_make_expression (this_parser, PT_DEFAULTF, path, NULL, NULL);
 			    PICE (node);
 			  }
 			$$ = node;
@@ -14538,7 +14541,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_ADD_MONTHS, $4, $6, NULL);
+			$$ = parser_make_expression (this_parser, PT_ADD_MONTHS, $4, $6, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14548,7 +14551,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_OCTET_LENGTH, $4, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_OCTET_LENGTH, $4, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14558,7 +14561,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_BIT_LENGTH, $4, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_BIT_LENGTH, $4, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14568,7 +14571,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_LOWER, $4, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_LOWER, $4, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14578,7 +14581,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_LOWER, $4, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_LOWER, $4, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14588,7 +14591,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_UPPER, $4, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_UPPER, $4, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14598,7 +14601,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_UPPER, $4, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_UPPER, $4, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14617,7 +14620,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_SYS_CONNECT_BY_PATH, $4, $6, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_SYS_CONNECT_BY_PATH, $4, $6, NULL);
 			PT_NODE *char_string_node = $6;
 
 			pt_value_set_collation_info (this_parser, char_string_node, NULL);
@@ -14642,7 +14645,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_IF, $4, $6, $8);
+			$$ = parser_make_expression (this_parser, PT_IF, $4, $6, $8);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14652,7 +14655,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_IFNULL, $4, $6, NULL);
+			$$ = parser_make_expression (this_parser, PT_IFNULL, $4, $6, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14662,7 +14665,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_ISNULL, $4, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_ISNULL, $4, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14672,7 +14675,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 			PT_NODE *node =
-			  parser_make_expression (PT_LEFT, $4, $6, NULL);
+			  parser_make_expression (this_parser, PT_LEFT, $4, $6, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14684,7 +14687,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 			PT_NODE *node =
-			  parser_make_expression (PT_RIGHT, $4, $6, NULL);
+			  parser_make_expression (this_parser, PT_RIGHT, $4, $6, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14696,7 +14699,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 			PT_NODE *node =
-			  parser_make_expression (PT_MODULUS, $4, $6, NULL);
+			  parser_make_expression (this_parser, PT_MODULUS, $4, $6, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14708,7 +14711,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_TRUNC, $4, $6, NULL);
+			$$ = parser_make_expression (this_parser, PT_TRUNC, $4, $6, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14718,7 +14721,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_TRANSLATE, $4, $6, $8);
+			$$ = parser_make_expression (this_parser, PT_TRANSLATE, $4, $6, $8);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14728,7 +14731,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_REPLACE, $4, $6, $8);
+			$$ = parser_make_expression (this_parser, PT_REPLACE, $4, $6, $8);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14738,7 +14741,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_REPLACE, $4, $6, NULL);
+			$$ = parser_make_expression (this_parser, PT_REPLACE, $4, $6, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14748,7 +14751,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 
-			$$ = parser_make_expression (PT_STR_TO_DATE, $4, $6, parser_make_date_lang (2, NULL));
+			$$ = parser_make_expression (this_parser, PT_STR_TO_DATE, $4, $6, parser_make_date_lang (2, NULL));
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14764,7 +14767,7 @@ reserved_func
 			    node->is_added_by_parser = 1;
 			  }
 
-			$$ = parser_make_expression (PT_STR_TO_DATE, $4, node, parser_make_date_lang (2, NULL));
+			$$ = parser_make_expression (this_parser, PT_STR_TO_DATE, $4, node, parser_make_date_lang (2, NULL));
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -14774,7 +14777,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 			PT_NODE *node =
-			  parser_make_expression (PT_CHARSET, $4, NULL, NULL);
+			  parser_make_expression (this_parser, PT_CHARSET, $4, NULL, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -14786,7 +14789,7 @@ reserved_func
 		{ pop_msg(); }
 		{{
 			PT_NODE *node =
-			  parser_make_expression (PT_COLLATION, $4, NULL, NULL);
+			  parser_make_expression (this_parser, PT_COLLATION, $4, NULL, NULL);
 			PICE (node);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -15270,7 +15273,7 @@ of_leading_trailing_both
 case_expr
 	: NULLIF '(' expression_ ',' expression_ ')'
 		{{
-			$$ = parser_make_expression (PT_NULLIF, $3, $5, NULL);
+			$$ = parser_make_expression (this_parser, PT_NULLIF, $3, $5, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 		DBG_PRINT}}
 	| COALESCE '(' expression_list ')'
@@ -15560,7 +15563,7 @@ extract_expr
 		{{
 
 			PT_NODE *tmp;
-			tmp = parser_make_expression (PT_EXTRACT, $5, NULL, NULL);
+			tmp = parser_make_expression (this_parser, PT_EXTRACT, $5, NULL, NULL);
 			if (tmp)
 			  tmp->info.expr.qualifier = $3;
 			$$ = tmp;
@@ -15867,7 +15870,7 @@ search_condition
 		{{
 			PT_NODE *arg1 = pt_convert_to_logical_expr(this_parser, $1, 1,1);
 			PT_NODE *arg2 = pt_convert_to_logical_expr(this_parser, $3, 1,1);
-			$$ = parser_make_expression (PT_OR, arg1, arg2, NULL);
+			$$ = parser_make_expression (this_parser, PT_OR, arg1, arg2, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -15885,7 +15888,7 @@ boolean_term_xor
 		{{
 			PT_NODE *arg1 = pt_convert_to_logical_expr(this_parser, $1, 1,1);
 			PT_NODE *arg2 = pt_convert_to_logical_expr(this_parser, $3, 1,1);
-			$$ = parser_make_expression (PT_XOR, arg1, arg2, NULL);
+			$$ = parser_make_expression (this_parser, PT_XOR, arg1, arg2, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -15901,7 +15904,7 @@ boolean_term_is
 	: boolean_term_is is_op boolean
 		{{
 			PT_NODE *arg = pt_convert_to_logical_expr(this_parser, $1, 1,1);
-			$$ = parser_make_expression ($2, arg, $3, NULL);
+			$$ = parser_make_expression (this_parser, $2, arg, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -15934,7 +15937,7 @@ boolean_term
 		{{
 			PT_NODE *arg1 = pt_convert_to_logical_expr(this_parser, $1, 1,1);
 			PT_NODE *arg2 = pt_convert_to_logical_expr(this_parser, $3, 1,1);
-			$$ = parser_make_expression (PT_AND, arg1, arg2, NULL);
+			$$ = parser_make_expression (this_parser, PT_AND, arg1, arg2, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -15952,7 +15955,7 @@ boolean_factor
 		{{
 
 			PT_NODE *arg = pt_convert_to_logical_expr(this_parser, $2, 1,1);
-			$$ = parser_make_expression (PT_NOT, arg, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_NOT, arg, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -15960,7 +15963,7 @@ boolean_factor
 		{{
 
 			PT_NODE *arg = pt_convert_to_logical_expr(this_parser, $2, 1,1);
-			$$ = parser_make_expression (PT_NOT, arg, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_NOT, arg, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -15977,7 +15980,7 @@ predicate
 	: EXISTS expression_
 		{{
 
-			$$ = parser_make_expression (PT_EXISTS, $2, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_EXISTS, $2, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -16094,7 +16097,7 @@ predicate_expr_sub
 			bool found_paren_set_expr = false;
 
 			opd2 = $3;
-			e = parser_make_expression ($2, $1, NULL, NULL);
+			e = parser_make_expression (this_parser, $2, $1, NULL, NULL);
 
 			if (e && !pt_has_error (this_parser))
 			  {
@@ -16196,8 +16199,8 @@ predicate_expr_sub
 	| pred_lhs like_op normal_expression ESCAPE escape_literal
 		{{
 
-			PT_NODE *esc = parser_make_expression (PT_LIKE_ESCAPE, $3, $5, NULL);
-			PT_NODE *node = parser_make_expression ($2, $1, esc, NULL);
+			PT_NODE *esc = parser_make_expression (this_parser, PT_LIKE_ESCAPE, $3, $5, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, $2, $1, esc, NULL);
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -16213,7 +16216,7 @@ predicate_expr_sub
  			                 prm_get_name (PRM_ID_REQUIRE_LIKE_ESCAPE_CHARACTER),
  			                 prm_get_name (PRM_ID_NO_BACKSLASH_ESCAPES));
  			  }
-			$$ = parser_make_expression ($2, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, $2, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -16228,7 +16231,7 @@ predicate_expr_sub
 			    node->info.value.data_value.i = 
 			      ($2 == PT_RLIKE_BINARY || $2 == PT_NOT_RLIKE_BINARY ? 1 : 0);
 
-			    $$ = parser_make_expression ($2, $1, $3, node);
+			    $$ = parser_make_expression (this_parser, $2, $1, $3, node);
 			  }
 			else
 			  {
@@ -16240,29 +16243,29 @@ predicate_expr_sub
 	| pred_lhs null_op
 		{{
 
-			$$ = parser_make_expression ($2, $1, NULL, NULL);
+			$$ = parser_make_expression (this_parser, $2, $1, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| pred_lhs set_op normal_expression
 		{{
 
-			$$ = parser_make_expression ($2, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, $2, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| pred_lhs between_op normal_expression AND normal_expression
 		{{
 
-			PT_NODE *node = parser_make_expression (PT_BETWEEN_AND, $3, $5, NULL);
-			$$ = parser_make_expression ($2, $1, node, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, PT_BETWEEN_AND, $3, $5, NULL);
+			$$ = parser_make_expression (this_parser, $2, $1, node, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| pred_lhs in_op in_pred_operand
 		{{
 
-			PT_NODE *node = parser_make_expression ($2, $1, NULL, NULL);
+			PT_NODE *node = parser_make_expression (this_parser, $2, $1, NULL, NULL);
 			PT_NODE *t = CONTAINER_AT_1 ($3);
 			bool is_paren = (bool)TO_NUMBER (CONTAINER_AT_0 ($3));
 			int lhs_cnt, rhs_cnt = 0;
@@ -16392,7 +16395,7 @@ predicate_expr_sub
 	| pred_lhs RANGE_ '(' range_list ')'
 		{{
 
-			$$ = parser_make_expression (PT_RANGE, $1, $4, NULL);
+			$$ = parser_make_expression (this_parser, PT_RANGE, $1, $4, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -16763,63 +16766,63 @@ range_
 	: expression_ GE_LE_ expression_
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_GE_LE, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_GE_LE, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_ GE_LT_ expression_
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_GE_LT, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_GE_LT, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_ GT_LE_ expression_
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_GT_LE, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_GT_LE, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_ GT_LT_ expression_
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_GT_LT, $1, $3, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_GT_LT, $1, $3, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_ '='
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_EQ_NA, $1, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_EQ_NA, $1, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_ GE_INF_ Max
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_GE_INF, $1, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_GE_INF, $1, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| expression_ GT_INF_ Max
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_GT_INF, $1, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_GT_INF, $1, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| Min INF_LE_ expression_
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_INF_LE, $3, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_INF_LE, $3, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| Min INF_LT_ expression_
 		{{
 
-			$$ = parser_make_expression (PT_BETWEEN_INF_LT, $3, NULL, NULL);
+			$$ = parser_make_expression (this_parser, PT_BETWEEN_INF_LT, $3, NULL, NULL);
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -21253,7 +21256,7 @@ parser_make_expr_with_func (PARSER_CONTEXT * parser, FUNC_TYPE func_code,
       node_function->info.function.arg_list = args_list;
 
       node =
-	parser_make_expression (PT_FUNCTION_HOLDER, node_function, NULL,
+	parser_make_expression (parser, PT_FUNCTION_HOLDER, node_function, NULL,
 				NULL);
     }
 
@@ -21261,11 +21264,11 @@ parser_make_expr_with_func (PARSER_CONTEXT * parser, FUNC_TYPE func_code,
 }
 
 PT_NODE *
-parser_make_expression (PT_OP_TYPE OP, PT_NODE * arg1, PT_NODE * arg2,
+parser_make_expression (PARSER_CONTEXT * parser, PT_OP_TYPE OP, PT_NODE * arg1, PT_NODE * arg2,
 			PT_NODE * arg3)
 {
   PT_NODE *expr;
-  expr = parser_new_node (this_parser, PT_EXPR);
+  expr = parser_new_node (parser, PT_EXPR);
   if (expr)
     {
       expr->info.expr.op = OP;
@@ -21280,21 +21283,21 @@ parser_make_expression (PT_OP_TYPE OP, PT_NODE * arg1, PT_NODE * arg2,
 
       if (parser_instnum_check == 1 && !pt_instnum_compatibility (expr))
 	{
-	  PT_ERRORmf2 (this_parser, expr, MSGCAT_SET_PARSER_SEMANTIC,
+	  PT_ERRORmf2 (parser, expr, MSGCAT_SET_PARSER_SEMANTIC,
 		       MSGCAT_SEMANTIC_INSTNUM_COMPATIBILITY_ERR,
 		       "INST_NUM() or ROWNUM", "INST_NUM() or ROWNUM");
 	}
 
       if (parser_groupbynum_check == 1 && !pt_groupbynum_compatibility (expr))
 	{
-	  PT_ERRORmf2 (this_parser, expr, MSGCAT_SET_PARSER_SEMANTIC,
+	  PT_ERRORmf2 (parser, expr, MSGCAT_SET_PARSER_SEMANTIC,
 		       MSGCAT_SEMANTIC_INSTNUM_COMPATIBILITY_ERR,
 		       "GROUPBY_NUM()", "GROUPBY_NUM()");
 	}
 
       if (parser_orderbynum_check == 1 && !pt_orderbynum_compatibility (expr))
 	{
-	  PT_ERRORmf2 (this_parser, expr, MSGCAT_SET_PARSER_SEMANTIC,
+	  PT_ERRORmf2 (parser, expr, MSGCAT_SET_PARSER_SEMANTIC,
 		       MSGCAT_SEMANTIC_INSTNUM_COMPATIBILITY_ERR,
 		       "ORDERBY_NUM()", "ORDERBY_NUM()");
 	}
@@ -22572,7 +22575,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	{
 	  return NULL;
 	}
-      return parser_make_expression (key->op, NULL, NULL, NULL);
+      return parser_make_expression (this_parser, key->op, NULL, NULL, NULL);
 
     case PT_ROW_COUNT:
     case PT_LAST_INSERT_ID:
@@ -22583,7 +22586,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	}
       parser_cannot_cache = true;
       parser_cannot_prepare = true;
-      return parser_make_expression (key->op, NULL, NULL, NULL);
+      return parser_make_expression (this_parser, key->op, NULL, NULL, NULL);
 
       /* arg 0 or 1 */
     case PT_RAND:
@@ -22603,7 +22606,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	  {
 	    a1 = args;
 	  }
-	expr = parser_make_expression (key->op, a1, NULL, NULL);
+	expr = parser_make_expression (this_parser, key->op, a1, NULL, NULL);
 	expr->do_not_fold = 1;
 	return expr;
       }
@@ -22654,7 +22657,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	  return NULL;
 	}
       a1 = args;
-      return parser_make_expression (key->op, a1, NULL, NULL);
+      return parser_make_expression (this_parser, key->op, a1, NULL, NULL);
 
     case PT_UNIX_TIMESTAMP:
       if (c > 1)
@@ -22664,11 +22667,11 @@ parser_keyword_func (const char *name, PT_NODE * args)
       if (c == 1)
 	{
 	  a1 = args;
-	  return parser_make_expression (key->op, a1, NULL, NULL);
+	  return parser_make_expression (this_parser, key->op, a1, NULL, NULL);
 	}
       else /* no arguments */
 	{
-	  return parser_make_expression (key->op, NULL, NULL, NULL);
+	  return parser_make_expression (this_parser, key->op, NULL, NULL, NULL);
 	}
 
       /* arg 2 */
@@ -22680,7 +22683,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       a1 = args;
       a2 = a1->next;
       a1->next = NULL;
-      return parser_make_expression (key->op, a1, a2, parser_make_date_lang (2, NULL));
+      return parser_make_expression (this_parser, key->op, a1, a2, parser_make_date_lang (2, NULL));
 
     case PT_LOG:
     case PT_MONTHS_BETWEEN:
@@ -22701,7 +22704,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       a1 = args;
       a2 = a1->next;
       a1->next = NULL;
-      return parser_make_expression (key->op, a1, a2, NULL);
+      return parser_make_expression (this_parser, key->op, a1, a2, NULL);
 
     case PT_NEXT_VALUE:
       if (c == 1)
@@ -22716,7 +22719,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	      a2->info.value.data_value.i = 1;
 	    }
 
-	  return parser_make_expression (key->op, a1, a2, NULL);
+	  return parser_make_expression (this_parser, key->op, a1, a2, NULL);
 	}
       else if (c == 2)
 	{
@@ -22724,7 +22727,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	  a2 = a1->next;
 	  a1->next = NULL;
 
-	  return parser_make_expression (key->op, a1, a2, NULL);
+	  return parser_make_expression (this_parser, key->op, a1, a2, NULL);
 	}
       else
 	{
@@ -22735,14 +22738,14 @@ parser_keyword_func (const char *name, PT_NODE * args)
       if (c == 1)
 	{
 	  a1 = args;
-	  return parser_make_expression (key->op, a1, NULL, NULL);
+	  return parser_make_expression (this_parser, key->op, a1, NULL, NULL);
 	}
       else if (c == 2)
 	{
 	  a1 = args;
 	  a2 = a1->next;
 	  a1->next = NULL;
-	  return parser_make_expression (PT_ATAN2, a1, a2, NULL);
+	  return parser_make_expression (this_parser, PT_ATAN2, a1, a2, NULL);
 	}
       else
 	{
@@ -22761,7 +22764,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       a2 = a1->next;
       a3 = a2->next;
       a1->next = a2->next = NULL;
-      return parser_make_expression (key->op, a1, a2, a3);
+      return parser_make_expression (this_parser, key->op, a1, a2, a3);
       
       /* arg 4 */
     case PT_WIDTH_BUCKET:
@@ -22783,14 +22786,14 @@ parser_keyword_func (const char *name, PT_NODE * args)
       val->type_enum = PT_TYPE_NULL;
       val->is_added_by_parser = 1;
 
-      between_ge_lt = parser_make_expression (PT_BETWEEN_GE_LT, a2, a2->next, NULL);
+      between_ge_lt = parser_make_expression (this_parser, PT_BETWEEN_GE_LT, a2, a2->next, NULL);
       if (between_ge_lt == NULL)
         {
           return NULL;
         }
       a2->next = NULL;
 
-      between = parser_make_expression (PT_BETWEEN, val, between_ge_lt, NULL);
+      between = parser_make_expression (this_parser, PT_BETWEEN, val, between_ge_lt, NULL);
       if (between == NULL)
         {
           return NULL;
@@ -22798,7 +22801,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 
       between->do_not_fold = 1;
 
-      return parser_make_expression (key->op, a1, between, a3);
+      return parser_make_expression (this_parser, key->op, a1, between, a3);
 
       /* arg 1 + default */
     case PT_ROUND:
@@ -22830,7 +22833,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
             }
         }
         
-      return parser_make_expression (key->op, a1, a2, NULL);
+      return parser_make_expression (this_parser, key->op, a1, a2, NULL);
     }
       
       if (c != 2)
@@ -22848,7 +22851,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
           return NULL;
         }
       
-      return parser_make_expression (key->op, a1, a2, NULL);
+      return parser_make_expression (this_parser, key->op, a1, a2, NULL);
       
     case PT_TRUNC:
       if (c == 1)
@@ -22872,7 +22875,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	        }
 	    }
 
-	  return parser_make_expression (key->op, a1, a2, NULL);
+	  return parser_make_expression (this_parser, key->op, a1, a2, NULL);
 	}
 
       if (c != 2)
@@ -22891,7 +22894,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
           return NULL;
         }
       
-      return parser_make_expression (key->op, a1, a2, NULL);
+      return parser_make_expression (this_parser, key->op, a1, a2, NULL);
 
       /* arg 2 + default */
     case PT_INSTR:		/* instr, instrb */
@@ -22908,7 +22911,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	  a2 = a1->next;
 	  a1->next = NULL;
 
-	  return parser_make_expression (key->op, a1, a2, a3);
+	  return parser_make_expression (this_parser, key->op, a1, a2, a3);
 	}
 
       if (c != 3)
@@ -22917,7 +22920,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       a2 = a1->next;
       a3 = a2->next;
       a1->next = a2->next = NULL;
-      return parser_make_expression (key->op, a1, a2, a3);
+      return parser_make_expression (this_parser, key->op, a1, a2, a3);
 
       /* arg 1 or 2 */
     case PT_WEEKF:
@@ -22933,14 +22936,14 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	      prm_get_integer_value (PRM_ID_DEFAULT_WEEK_FORMAT);
 	     a2->type_enum = PT_TYPE_INTEGER;
 	   }
-	  return parser_make_expression (key->op, a1, a2, NULL);
+	  return parser_make_expression (this_parser, key->op, a1, a2, NULL);
 	}
       else
 	{
 	  a1 = args;
 	  a2 = a1->next;
 	  a1->next = NULL;
-	  return parser_make_expression (key->op, a1, a2, NULL);
+	  return parser_make_expression (this_parser, key->op, a1, a2, NULL);
 	}
 
     case PT_LTRIM:
@@ -22954,7 +22957,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       if (a1)
 	a2 = a1->next;
       a1->next = NULL;
-      return parser_make_expression (key->op, a1, a2, a3);
+      return parser_make_expression (this_parser, key->op, a1, a2, a3);
 
       /* arg 1 or 2 */
     case PT_TO_NUMBER:
@@ -22982,7 +22985,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       if (a1)
 	a2 = a1->next;
       a1->next = NULL;
-      return parser_make_expression (key->op, a1, a2, parser_make_number_lang (c));
+      return parser_make_expression (this_parser, key->op, a1, a2, parser_make_number_lang (c));
 
       /* arg 2 or 3 */
     case PT_LPAD:
@@ -23002,7 +23005,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 
       a1->next = NULL;
 
-      node = parser_make_expression (key->op, a1, a2, a3);
+      node = parser_make_expression (this_parser, key->op, a1, a2, a3);
       if (key->op == PT_SUBSTRING)
 	{
 	  node->info.expr.qualifier = PT_SUBSTR;
@@ -23054,7 +23057,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
     case PT_DECR:
       if (c != 1)
 	return NULL;
-      node = parser_make_expression (key->op, args, NULL, NULL);
+      node = parser_make_expression (this_parser, key->op, args, NULL, NULL);
 
       if ((args->node_type != PT_NAME && args->node_type != PT_DOT_) ||
 	  (args->node_type == PT_NAME && args->info.name.tag_click_counter) ||
@@ -23126,7 +23129,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	    }
 	}
 
-      return parser_make_expression (key->op, a1, a2,
+      return parser_make_expression (this_parser, key->op, a1, a2,
 				     parser_make_date_lang (c, a3));
 
     case PT_BIT_TO_BLOB:
@@ -23160,7 +23163,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
          }
          }
        */
-      return parser_make_expression (key->op, a1, NULL, NULL);
+      return parser_make_expression (this_parser, key->op, a1, NULL, NULL);
 
     case PT_BLOB_TO_BIT:
       if (c != 1)
@@ -23169,7 +23172,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	}
 
       a1 = args;
-      return parser_make_expression (key->op, a1, NULL, NULL);
+      return parser_make_expression (this_parser, key->op, a1, NULL, NULL);
 
     case PT_BLOB_FROM_FILE:
     case PT_CLOB_FROM_FILE:
@@ -23198,7 +23201,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	  /* Those two functions should be evaluated at the compile time */
 	  parser_cannot_cache = true;
 	  parser_cannot_prepare = true;
-	  node = parser_make_expression (key->op, a1, a2, NULL);
+	  node = parser_make_expression (this_parser, key->op, a1, a2, NULL);
 
 	  if (a1->node_type != PT_VALUE || a1->type_enum != PT_TYPE_CHAR)
 	    {
@@ -23504,7 +23507,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	}
       a1->next = NULL;
 
-      node = parser_make_expression (key->op, a1, a2, a3);
+      node = parser_make_expression (this_parser, key->op, a1, a2, a3);
       return node;
 
     case PT_MID:
@@ -23518,7 +23521,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       a2->next = NULL;
       a3->next = NULL;
 
-      node = parser_make_expression (key->op, a1, a2, a3);
+      node = parser_make_expression (this_parser, key->op, a1, a2, a3);
       return node;
 
     case PT_STRCMP:
@@ -23529,7 +23532,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
       a2 = a1->next;
       a1->next = NULL;
 
-      node = parser_make_expression (key->op, a1, a2, a3);
+      node = parser_make_expression (this_parser, key->op, a1, a2, a3);
       return node;
 
     case PT_REVERSE:
@@ -23537,7 +23540,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	return NULL;
 
       a1 = args;
-      node = parser_make_expression (key->op, a1, NULL, NULL);
+      node = parser_make_expression (this_parser, key->op, a1, NULL, NULL);
       return node;
 
     case PT_BIT_COUNT:
@@ -23545,7 +23548,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	return NULL;
 
       a1 = args;
-      node = parser_make_expression (key->op, a1, NULL, NULL);
+      node = parser_make_expression (this_parser, key->op, a1, NULL, NULL);
       return node;
 
     case PT_GROUPBY_NUM:
@@ -23570,7 +23573,7 @@ parser_keyword_func (const char *name, PT_NODE * args)
     case PT_LIST_DBS:
       if (c != 0)
 	return NULL;
-      node = parser_make_expression (key->op, NULL, NULL, NULL);
+      node = parser_make_expression (this_parser, key->op, NULL, NULL, NULL);
       return node;
 
     default:
@@ -23705,7 +23708,7 @@ pt_check_identifier (PARSER_CONTEXT *parser, PT_NODE *p, const char *str,
       char *composed = NULL;
       bool is_composed = false;
 
-      composed = parser_allocate_string_buffer (this_parser, composed_size + 1,
+      composed = parser_allocate_string_buffer (parser, composed_size + 1,
 					        sizeof (char));
       if (composed == NULL)
 	{
@@ -23738,7 +23741,7 @@ pt_create_char_string_literal (PARSER_CONTEXT *parser, const PT_TYPE_ENUM char_t
 
   if (intl_check_string (str, str_size, &invalid_pos, codeset) != 0)
     {
-      PT_ERRORmf (this_parser, NULL,
+      PT_ERRORmf (parser, NULL,
 		  MSGCAT_SET_ERROR, -(ER_INVALID_CHAR),
 		  (invalid_pos != NULL) ? invalid_pos - str : 0);
     }
@@ -23750,7 +23753,7 @@ pt_create_char_string_literal (PARSER_CONTEXT *parser, const PT_TYPE_ENUM char_t
       char *composed = NULL;
       bool is_composed = false;
 
-      composed = parser_allocate_string_buffer (this_parser, composed_size + 1,
+      composed = parser_allocate_string_buffer (parser, composed_size + 1,
 					        sizeof (char));
 
       if (composed != NULL)
@@ -23770,11 +23773,11 @@ pt_create_char_string_literal (PARSER_CONTEXT *parser, const PT_TYPE_ENUM char_t
       else
 	{
 	  str = NULL;
-	  PT_ERRORf (this_parser, NULL, "cannot alloc %d bytes", composed_size + 1);
+	  PT_ERRORf (parser, NULL, "cannot alloc %d bytes", composed_size + 1);
 	}
     }
 
-    node = parser_new_node (this_parser, PT_VALUE);
+    node = parser_new_node (parser, PT_VALUE);
 
     if (node)
       {
@@ -23787,8 +23790,8 @@ pt_create_char_string_literal (PARSER_CONTEXT *parser, const PT_TYPE_ENUM char_t
 	  {
 	    node->info.value.string_type = ' ';
 	  }
-	node->info.value.data_value.str = pt_append_bytes (this_parser, NULL, str, str_size);
-	PT_NODE_PRINT_VALUE_TO_TEXT (this_parser, node);
+	node->info.value.data_value.str = pt_append_bytes (parser, NULL, str, str_size);
+	PT_NODE_PRINT_VALUE_TO_TEXT (parser, node);
       }
 
   return node;
@@ -23800,14 +23803,14 @@ pt_create_date_value (PARSER_CONTEXT *parser, const PT_TYPE_ENUM type,
 {
   PT_NODE *node = NULL;
 
-  node = parser_new_node (this_parser, PT_VALUE);
+  node = parser_new_node (parser, PT_VALUE);
 
   if (node)
     {
       node->type_enum = type;
 
-      node->info.value.data_value.str = pt_append_bytes (this_parser, NULL, str, strlen (str));
-      PT_NODE_PRINT_VALUE_TO_TEXT (this_parser, node);
+      node->info.value.data_value.str = pt_append_bytes (parser, NULL, str, strlen (str));
+      PT_NODE_PRINT_VALUE_TO_TEXT (parser, node);
     }
 
   return node;
@@ -23832,7 +23835,7 @@ pt_value_set_charset_coll (PARSER_CONTEXT *parser, PT_NODE *node,
       return;
     }
 
-  dt = parser_new_node (this_parser, PT_DATA_TYPE);
+  dt = parser_new_node (parser, PT_DATA_TYPE);
   if (dt)
     {
       dt->type_enum = node->type_enum;
@@ -23943,7 +23946,7 @@ pt_value_set_collation_info (PARSER_CONTEXT *parser, PT_NODE *node,
   	}
       else
 	{
-  	  pt_value_set_charset_coll (this_parser, node, lang_coll->codeset,
+  	  pt_value_set_charset_coll (parser, node, lang_coll->codeset,
   				     lang_coll->coll.coll_id, false);
   	}
     }
@@ -24032,7 +24035,7 @@ pt_set_collation_modifier (PARSER_CONTEXT *parser, PT_NODE *node,
 
   if (do_wrap_with_cast)
     {
-      PT_NODE *cast_expr = parser_make_expression (PT_CAST, node, NULL, NULL);
+      PT_NODE *cast_expr = parser_make_expression (parser, PT_CAST, node, NULL, NULL);
       if (cast_expr != NULL)
 	{
 	  cast_expr->info.expr.cast_type = NULL;

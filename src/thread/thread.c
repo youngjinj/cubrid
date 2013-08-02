@@ -192,6 +192,9 @@ static void
 thread_rc_track_meter_at (THREAD_RC_METER * meter,
 			  const char *caller_file, int caller_line,
 			  int amount, void *ptr);
+static void
+thread_rc_track_meter_assert_CS (THREAD_RC_METER * meter, int amount,
+				 void *ptr);
 #endif
 
 /*
@@ -1154,16 +1157,10 @@ thread_initialize_entry (THREAD_ENTRY * entry_p)
 
   entry_p->sort_stats_active = false;
 
-  entry_p->cs_waits.tv_sec = 0;
-  entry_p->cs_waits.tv_usec = 0;
-  entry_p->lock_waits.tv_sec = 0;
-  entry_p->lock_waits.tv_usec = 0;
-  entry_p->latch_waits.tv_sec = 0;
-  entry_p->latch_waits.tv_usec = 0;
+  memset (&(entry_p->event_stats), 0, sizeof (EVENT_STAT));
 
   entry_p->on_trace = false;
   entry_p->clear_trace = false;
-  entry_p->sort_stats_active = false;
 
   return NO_ERROR;
 }
@@ -1532,11 +1529,11 @@ thread_suspend_wakeup_and_unlock_entry (THREAD_ENTRY * thread_p,
       gettimeofday (&end, NULL);
       if (suspended_reason == THREAD_LOCK_SUSPENDED)
 	{
-	  ADD_TIMEVAL (thread_p->lock_waits, start, end);
+	  ADD_TIMEVAL (thread_p->event_stats.lock_waits, start, end);
 	}
       else if (suspended_reason == THREAD_PGBUF_SUSPENDED)
 	{
-	  ADD_TIMEVAL (thread_p->latch_waits, start, end);
+	  ADD_TIMEVAL (thread_p->event_stats.latch_waits, start, end);
 	}
     }
 
@@ -2437,12 +2434,7 @@ thread_worker (void *arg_p)
       pthread_mutex_unlock (&tsd_ptr->tran_index_lock);
       tsd_ptr->check_interrupt = true;
 
-      tsd_ptr->cs_waits.tv_sec = 0;
-      tsd_ptr->cs_waits.tv_usec = 0;
-      tsd_ptr->lock_waits.tv_sec = 0;
-      tsd_ptr->lock_waits.tv_usec = 0;
-      tsd_ptr->latch_waits.tv_sec = 0;
-      tsd_ptr->latch_waits.tv_usec = 0;
+      memset (&(tsd_ptr->event_stats), 0, sizeof (EVENT_STAT));
       tsd_ptr->on_trace = false;
     }
 
@@ -2702,7 +2694,7 @@ thread_deadlock_detect_thread (void *arg_p)
   thread_Deadlock_detect_thread.is_valid = false;
   pthread_mutex_unlock (&thread_Deadlock_detect_thread.lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   return (THREAD_RET_T) 0;
@@ -2775,7 +2767,7 @@ thread_session_control_thread (void *arg_p)
   thread_Session_control_thread.is_running = false;
   pthread_mutex_unlock (&thread_Session_control_thread.lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   return (THREAD_RET_T) 0;
@@ -2850,7 +2842,7 @@ thread_checkpoint_thread (void *arg_p)
   thread_Checkpoint_thread.is_running = false;
   pthread_mutex_unlock (&thread_Checkpoint_thread.lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   return (THREAD_RET_T) 0;
@@ -2971,7 +2963,7 @@ thread_purge_archive_logs_thread (void *arg_p)
   thread_Purge_archive_logs_thread.is_running = false;
   pthread_mutex_unlock (&thread_Purge_archive_logs_thread.lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   return (THREAD_RET_T) 0;
@@ -3102,7 +3094,7 @@ thread_page_flush_thread (void *arg_p)
   thread_Page_flush_thread.is_valid = false;
   pthread_mutex_unlock (&thread_Page_flush_thread.lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   thread_Page_flush_thread.is_running = false;
@@ -3221,7 +3213,7 @@ thread_flush_control_thread (void *arg_p)
   pthread_mutex_unlock (&thread_Flush_control_thread.lock);
 
   fileio_flush_control_finalize ();
-  er_clear ();
+  er_final (false);
 
 error:
   tsd_ptr->status = TS_DEAD;
@@ -3339,7 +3331,7 @@ thread_log_flush_thread (void *arg_p)
 
       LOG_CS_ENTER (tsd_ptr);
       logpb_flush_pages_direct (tsd_ptr);
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (tsd_ptr);
 
       log_Stat.gc_flush_count++;
       total_elapsed_time = 0;
@@ -3361,7 +3353,7 @@ thread_log_flush_thread (void *arg_p)
   thread_Log_flush_thread.is_running = false;
   pthread_mutex_unlock (&thread_Log_flush_thread.lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
 #if defined(CUBRID_DEBUG)
@@ -3451,7 +3443,7 @@ thread_log_clock_thread (void *arg_p)
   thread_Log_clock_thread.is_valid = false;
   thread_Log_clock_thread.is_running = false;
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   return (THREAD_RET_T) 0;
@@ -3539,7 +3531,7 @@ thread_auto_volume_expansion_thread (void *arg_p)
 		  volid = NULL_VOLID;
 		}
 
-	      csect_exit (CSECT_BOOT_SR_DBPARM);
+	      csect_exit (tsd_ptr, CSECT_BOOT_SR_DBPARM);
 	    }
 	  else
 	    {
@@ -3558,7 +3550,7 @@ thread_auto_volume_expansion_thread (void *arg_p)
   (void) pthread_mutex_destroy (&boot_Auto_addvol_job.lock);
   (void) pthread_cond_destroy (&boot_Auto_addvol_job.cond);
 
-  er_clear ();
+  er_final (false);
   thread_Auto_volume_expansion_thread.is_valid = false;
   tsd_ptr->status = TS_DEAD;
 
@@ -3840,6 +3832,10 @@ static int
 thread_rc_track_meter_check (THREAD_ENTRY * thread_p, THREAD_RC_METER * meter,
 			     THREAD_RC_METER * prev_meter)
 {
+#if !defined(NDEBUG)
+  int i;
+#endif
+
   if (thread_p == NULL)
     {
       thread_p = thread_get_thread_entry_info ();
@@ -3874,6 +3870,20 @@ thread_rc_track_meter_check (THREAD_ENTRY * thread_p, THREAD_RC_METER * meter,
 	  return ER_FAILED;
 	}
     }
+
+#if !defined(NDEBUG)
+  /* check hold_buf */
+  if (meter->m_hold_buf_size > 0)
+    {
+      for (i = 0; i < meter->m_hold_buf_size; i++)
+	{
+	  if (meter->m_hold_buf[i] != '\0')
+	    {
+	      return ER_FAILED;
+	    }
+	}
+    }
+#endif
 
   return NO_ERROR;
 }
@@ -3917,6 +3927,14 @@ thread_rc_track_check (THREAD_ENTRY * thread_p, int id)
 	      continue;
 	    }
 
+#if 1				/* TODO - */
+	  /* skip out qlist check; is checked separately */
+	  if (i == RC_QLIST)
+	    {
+	      continue;
+	    }
+#endif
+
 	  for (j = 0; j < MGR_LAST; j++)
 	    {
 	      meter = &(track->meter[i][j]);
@@ -3930,8 +3948,8 @@ thread_rc_track_check (THREAD_ENTRY * thread_p, int id)
 		  prev_meter = NULL;
 		}
 
-	      if (thread_rc_track_meter_check (thread_p, meter, prev_meter) !=
-		  NO_ERROR)
+	      if (thread_rc_track_meter_check (thread_p,
+					       meter, prev_meter) != NO_ERROR)
 		{
 #if !defined(NDEBUG)
 		  FILE *outfp;
@@ -4063,6 +4081,12 @@ thread_rc_track_rcname (int rc_idx)
     case RC_PGBUF_TEMP:
       name = "Page Buffer (Temporary)";
       break;
+    case RC_QLIST:
+      name = "List File";
+      break;
+    case RC_CS:
+      name = "Critical Section";
+      break;
     default:
       name = "**UNKNOWN_RESOURCE**";
       break;
@@ -4117,6 +4141,9 @@ static THREAD_RC_TRACK *
 thread_rc_track_alloc (THREAD_ENTRY * thread_p)
 {
   int i, j;
+#if !defined(NDEBUG)
+  int k;
+#endif
   THREAD_RC_TRACK *new_track;
 
   if (thread_p == NULL)
@@ -4173,6 +4200,17 @@ thread_rc_track_alloc (THREAD_ENTRY * thread_p)
 		  new_track->meter[i][j].m_add_buf_size = 0;
 		  new_track->meter[i][j].m_sub_buf[0] = '\0';
 		  new_track->meter[i][j].m_sub_buf_size = 0;
+		  new_track->meter[i][j].m_hold_buf[0] = '\0';
+		  new_track->meter[i][j].m_hold_buf_size = 0;
+
+		  /* init Critical Section hold_buf */
+		  if (i == RC_CS)
+		    {
+		      for (k = 0; k < ONE_K; k++)
+			{
+			  new_track->meter[i][j].m_hold_buf[k] = '\0';
+			}
+		    }
 #endif
 		}
 	    }
@@ -4225,6 +4263,49 @@ thread_rc_track_free (THREAD_ENTRY * thread_p, int id)
 }
 
 /*
+ * thread_rc_track_is_on () - check if is enable
+ *   return:
+ *   thread_p(in):
+ */
+bool
+thread_rc_track_is_on (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  assert_release (thread_p != NULL);
+
+  if (prm_get_bool_value (PRM_ID_USE_SYSTEM_MALLOC))
+    {
+      /* disable tracking */
+      assert_release (thread_p->track == NULL);
+      assert_release (thread_p->track_depth == -1);
+
+      return false;
+    }
+
+  return true;
+}
+
+/*
+ * thread_rc_track_is_off () - check if is not enable
+ *   return:
+ *   thread_p(in):
+ */
+bool
+thread_rc_track_is_off (THREAD_ENTRY * thread_p)
+{
+  if (thread_rc_track_is_on (thread_p))
+    {
+      return false;
+    }
+
+  return true;
+}
+
+/*
  * thread_rc_track_enter () - save current track info
  *   return:
  *   thread_p(in):
@@ -4241,11 +4322,7 @@ thread_rc_track_enter (THREAD_ENTRY * thread_p)
 
   assert_release (thread_p != NULL);
 
-  if (prm_get_bool_value (PRM_ID_USE_SYSTEM_MALLOC))
-    {
-      assert_release (thread_p->track == NULL);	/* disable tracking */
-    }
-  else
+  if (thread_rc_track_is_on (thread_p))
     {
       track = thread_rc_track_alloc (thread_p);
       assert_release (track != NULL);
@@ -4273,11 +4350,7 @@ thread_rc_track_exit (THREAD_ENTRY * thread_p, int id)
   assert_release (thread_p != NULL);
   assert_release (id == thread_p->track_depth);
 
-  if (prm_get_bool_value (PRM_ID_USE_SYSTEM_MALLOC))
-    {
-      assert_release (thread_p->track == NULL);	/* disable tracking */
-    }
-  else
+  if (thread_rc_track_is_on (thread_p))
     {
       assert_release (id >= 0);
 
@@ -4358,6 +4431,87 @@ thread_rc_track_amount_pgbuf_temp (THREAD_ENTRY * thread_p)
 }
 
 /*
+ * thread_rc_track_amount_qlist () -
+ *   return:
+ *   thread_p(in):
+ */
+int
+thread_rc_track_amount_qlist (THREAD_ENTRY * thread_p)
+{
+  return thread_rc_track_amount_helper (thread_p, RC_QLIST);
+}
+
+#if !defined(NDEBUG)
+/*
+ * thread_rc_track_meter_assert_CS () -
+ *   return:
+ *   meter(in):
+ */
+static void
+thread_rc_track_meter_assert_CS (THREAD_RC_METER * meter, int amount,
+				 void *ptr)
+{
+  int cs_idx;
+  int i;
+
+  assert_release (meter != NULL);
+  assert_release (amount != 0);
+  assert_release (ptr != NULL);
+
+  cs_idx = *((int *) ptr);
+
+  /* TODO - skip out too many CS */
+  if (cs_idx >= ONE_K)
+    {
+      return;
+    }
+
+  assert (cs_idx >= 0);
+  assert (cs_idx < ONE_K);
+
+  /* check CS dependency */
+  if (amount > 0)
+    {
+      switch (cs_idx)
+	{
+	  /* CSECT_DISK_REFRESH_GOODVOL -> CSECT_BOOT_SR_DBPARM is NOK */
+	  /* CSECT_BOOT_SR_DBPARM -> CSECT_DISK_REFRESH_GOODVOL is OK */
+	case CSECT_BOOT_SR_DBPARM:
+	  assert_release (meter->m_hold_buf[CSECT_DISK_REFRESH_GOODVOL] == 0);
+	  break;
+
+	  /* CSECT_CT_OID_TABLE -> CSECT_LOCATOR_SR_CLASSNAME_TABLE is NOK */
+	  /* CSECT_LOCATOR_SR_CLASSNAME_TABLE -> CSECT_CT_OID_TABLE is OK */
+	case CSECT_LOCATOR_SR_CLASSNAME_TABLE:
+	  assert_release (meter->m_hold_buf[CSECT_CT_OID_TABLE] == 0);
+	  break;
+
+	  /* CSECT_ER_LOG_FILE -> X_CS -> [Y_CS] -> CSECT_ER_LOG_FILE is NOK */
+	  /* X_CS -> CSECT_ER_LOG_FILE -> [Y_CS] -> CSECT_ER_LOG_FILE is NOK */
+	case CSECT_ER_LOG_FILE:
+	  if (meter->m_hold_buf[CSECT_ER_LOG_FILE] > 1)
+	    {
+	      for (i = 0;
+		   i < meter->m_hold_buf_size && i < CRITICAL_SECTION_COUNT;
+		   i++)
+		{
+		  if (i == cs_idx)
+		    {
+		      continue;	/* skip myself */
+		    }
+		  assert_release (meter->m_hold_buf[i] == 0);
+		}
+	    }
+	  break;
+
+	default:
+	  break;
+	}
+    }
+}
+#endif
+
+/*
  * thread_rc_track_meter () -
  *   return:
  *   thread_p(in):
@@ -4410,8 +4564,88 @@ thread_rc_track_meter (THREAD_ENTRY * thread_p,
 
       meter->m_amount += amount;
 
+#if 1				/* TODO - */
+      /* skip out qlist check; is checked separately */
+      if (rc_idx == RC_QLIST)
+	{
+	  ;			/* nop */
+	}
+      else
+	{
+	  assert_release (0 <= meter->m_amount);
+	}
+#else
       assert_release (0 <= meter->m_amount);
+#endif
       assert_release (meter->m_amount <= meter->m_threshold);
+
+#if !defined(NDEBUG)
+      switch (rc_idx)
+	{
+	case RC_PGBUF:
+	  /* check fix/unfix protocol */
+	  {
+	    assert (ptr != NULL);
+
+	    if (amount > 0)
+	      {
+		assert_release (amount == 1);
+	      }
+	    else
+	      {
+		assert_release (amount == -1);
+	      }
+	  }
+	  break;
+
+	case RC_CS:
+	  /* check Critical Section cycle and keep current hold info */
+	  {
+	    int cs_idx;
+
+	    assert (ptr != NULL);
+
+	    cs_idx = *((int *) ptr);
+
+	    /* TODO - skip out too many CS */
+	    if (cs_idx < ONE_K)
+	      {
+		assert (cs_idx >= 0);
+		assert (cs_idx < ONE_K);
+
+		assert_release (meter->m_hold_buf[cs_idx] >= 0);
+		if (amount > 0)
+		  {
+		    assert_release (amount == 1);
+		  }
+		else
+		  {
+		    assert_release (amount == -1);
+		  }
+
+		meter->m_hold_buf[cs_idx] += amount;
+
+		assert_release (meter->m_hold_buf[cs_idx] >= 0);
+
+		/* re-set buf size */
+		meter->m_hold_buf_size =
+		  MAX (meter->m_hold_buf_size, cs_idx + 1);
+		assert (meter->m_hold_buf_size <= ONE_K);
+	      }
+	    else
+	      {
+		er_log_debug (ARG_FILE_LINE,
+			      "thread_rc_track_meter: hold_buf overflow: "
+			      "buf_size=%d, idx=%d",
+			      meter->m_hold_buf_size, cs_idx);
+	      }
+	  }
+	  break;
+
+	default:
+	  break;
+	}
+#endif
 
       if (amount > 0)
 	{
@@ -4423,9 +4657,15 @@ thread_rc_track_meter (THREAD_ENTRY * thread_p,
 	  meter->m_sub_file_name = file_name;
 	  meter->m_sub_line_no = line_no;
 	}
+
 #if !defined(NDEBUG)
       (void) thread_rc_track_meter_at (meter, file_name, line_no, amount,
 				       ptr);
+
+      if (rc_idx == RC_CS)
+	{
+	  (void) thread_rc_track_meter_assert_CS (meter, amount, ptr);
+	}
 #endif
     }
 }
@@ -4487,6 +4727,21 @@ thread_rc_track_meter_dump (THREAD_ENTRY * thread_p, FILE * outfp,
 	  fprintf (outfp, "\n");
 	  fprintf (outfp, "            +--- sub_buf_size = %d\n",
 		   meter->m_sub_buf_size);
+	}
+      /* dump hold_buf */
+      if (meter->m_hold_buf_size > 0)
+	{
+	  fprintf (outfp, "            +--- hold_at = ");
+	  for (i = 0; i < meter->m_hold_buf_size; i++)
+	    {
+	      if (meter->m_hold_buf[i] != '\0')
+		{
+		  fprintf (outfp, "[%d]:%c ", i, meter->m_hold_buf[i]);
+		}
+	    }
+	  fprintf (outfp, "\n");
+	  fprintf (outfp, "            +--- hold_buf_size = %d\n",
+		   meter->m_hold_buf_size);
 	}
 #endif
     }
@@ -4766,4 +5021,3 @@ thread_need_clear_trace (THREAD_ENTRY * thread_p)
 
   return thread_p->clear_trace;
 }
-

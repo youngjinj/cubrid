@@ -1730,6 +1730,7 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
   int err = NO_ERROR;
   SERVER_INFO server_info;
   SEMANTIC_CHK_INFO sc_info = { NULL, NULL, 0, 0, 0, false, false };
+  CLASS_STATUS cls_status = CLS_NOT_MODIFIED;
 
   if (result != NULL)
     {
@@ -1891,9 +1892,19 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
 
   pt_null_etc (statement);
   if (statement->xasl_id == NULL
-      && pt_has_modified_class (parser, statement) == true)
+      && ((cls_status = pt_has_modified_class (parser, statement))
+	  != CLS_NOT_MODIFIED))
     {
-      err = ER_QPROC_INVALID_XASLNODE;
+      if (cls_status == CLS_MODIFIED)
+	{
+	  err = ER_QPROC_INVALID_XASLNODE;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, err, 0);
+	}
+      else
+	{
+	  assert (cls_status == CLS_ERROR);
+	  err = er_errid ();
+	}
     }
   else if (prm_get_integer_value (PRM_ID_XASL_MAX_PLAN_CACHE_ENTRIES) > 0
 	   && statement->cannot_prepare == 0)
@@ -2380,7 +2391,8 @@ do_process_prepare_statement (DB_SESSION * session, PT_NODE * statement)
   prepared_session = db_open_buffer_local (statement_literal);
   if (prepared_session == NULL)
     {
-      return er_errid ();
+      err = er_errid ();
+      goto cleanup;
     }
 
   /* we need to copy all the relevant settings */
@@ -2465,12 +2477,23 @@ do_process_prepare_statement (DB_SESSION * session, PT_NODE * statement)
 					    stmt_info, info_len);
 
 cleanup:
+  if (err < 0 && name != NULL)
+    {
+      /* clear the previously cached one with the same name if exists */
+      er_stack_push ();
+      csession_delete_prepared_statement (name);
+      er_stack_pop ();
+    }
+
   if (stmt_info != NULL)
     {
       free_and_init (stmt_info);
     }
 
-  db_close_session_local (prepared_session);
+  if (prepared_session)
+    {
+      db_close_session_local (prepared_session);
+    }
 
   if (prepare_info.into_list != NULL)
     {

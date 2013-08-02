@@ -68,40 +68,37 @@
         csect_demote((thread_p), CSECT_LOG, INF_WAIT)
 #define LOG_CS_PROMOTE(thread_p) \
         csect_promote((thread_p), CSECT_LOG, INF_WAIT)
-#define LOG_CS_EXIT() \
-        csect_exit(CSECT_LOG)
+#define LOG_CS_EXIT(thread_p) \
+        csect_exit((thread_p), CSECT_LOG)
 
 #define TR_TABLE_CS_ENTER(thread_p) \
         csect_enter((thread_p), CSECT_TRAN_TABLE, INF_WAIT)
 #define TR_TABLE_CS_ENTER_READ_MODE(thread_p) \
         csect_enter_as_reader((thread_p), CSECT_TRAN_TABLE, INF_WAIT)
-#define TR_TABLE_CS_EXIT() \
-        csect_exit(CSECT_TRAN_TABLE)
+#define TR_TABLE_CS_EXIT(thread_p) \
+        csect_exit((thread_p), CSECT_TRAN_TABLE)
 
 #define LOG_ARCHIVE_CS_ENTER(thread_p)                                       \
-        csect_enter_critical_section (thread_p, &log_Gl.archive.archives_cs, \
-                                      INF_WAIT)
+        csect_enter (thread_p, CSECT_LOG_ARCHIVE, INF_WAIT)
 #define LOG_ARCHIVE_CS_ENTER_READ_MODE(thread_p)                             \
-        csect_enter_critical_section_as_reader (thread_p,                    \
-                                                &log_Gl.archive.archives_cs, \
-                                                INF_WAIT)
-#define LOG_ARCHIVE_CS_EXIT() \
-        csect_exit_critical_section (&log_Gl.archive.archives_cs)
+        csect_enter_as_reader (thread_p, CSECT_LOG_ARCHIVE, INF_WAIT)
+#define LOG_ARCHIVE_CS_EXIT(thread_p) \
+        csect_exit (thread_p, CSECT_LOG_ARCHIVE)
 
 #else /* SERVER_MODE */
 #define LOG_CS_ENTER(thread_p)
 #define LOG_CS_ENTER_READ_MODE(thread_p)
 #define LOG_CS_DEMOTE(thread_p)
 #define LOG_CS_PROMOTE(thread_p)
-#define LOG_CS_EXIT()
+#define LOG_CS_EXIT(thread_p)
 
 #define TR_TABLE_CS_ENTER(thread_p)
 #define TR_TABLE_CS_ENTER_READ_MODE(thread_p)
-#define TR_TABLE_CS_EXIT()
+#define TR_TABLE_CS_EXIT(thread_p)
 
 #define LOG_ARCHIVE_CS_ENTER(thread_p)
 #define LOG_ARCHIVE_CS_ENTER_READ_MODE(thread_p)
-#define LOG_ARCHIVE_CS_EXIT()
+#define LOG_ARCHIVE_CS_EXIT(thread_p)
 #endif /* SERVER_MODE */
 
 #if defined(SERVER_MODE)
@@ -110,14 +107,11 @@
 #define LOG_CS_OWN_READ_MODE(thread_p) (csect_check_own (thread_p, CSECT_LOG) == 2)
 
 #define LOG_ARCHIVE_CS_OWN(thread_p)                 \
-        (csect_check_own_critical_section (thread_p, \
-           &log_Gl.archive.archives_cs) >= 1)
+        (csect_check (thread_p, CSECT_LOG_ARCHIVE) >= 1)
 #define LOG_ARCHIVE_CS_OWN_WRITE_MODE(thread_p)     \
-       (csect_check_own_critical_section (thread_p, \
-           &log_Gl.archive.archives_cs) == 1)
+       (csect_check_own (thread_p, CSECT_LOG_ARCHIVE) == 1)
 #define LOG_ARCHIVE_CS_OWN_READ_MODE(thread_p)      \
-       (csect_check_own_critical_section (thread_p, \
-           &log_Gl.archive.archives_cs) == 2)
+       (csect_check_own (thread_p, CSECT_LOG_ARCHIVE) == 2)
 
 #else /* SERVER_MODE */
 #define LOG_CS_OWN(thread_p) (true)
@@ -1498,6 +1492,9 @@ struct log_donetime
 struct log_ha_server_state
 {
   int state;			/* ha_Server_state */
+  int dummy;			/* dummy for alignment */
+
+  INT64 at_time;		/* time recorded by active server */
 };
 
 typedef struct log_crumb LOG_CRUMB;
@@ -1531,16 +1528,13 @@ struct log_archives
   int max_unav;			/* Max size of unavailable array */
   int next_unav;		/* Last unavailable entry        */
   int *unav_archives;		/* Unavailable archives          */
-  CSS_CRITICAL_SECTION archives_cs;
 };
 
 #define LOG_ARCHIVES_INITIALIZER                     \
   {NULL_VOLDES,                                      \
    LOG_ARV_HEADER_INITIALIZER,                       \
    0, 0,                                             \
-   /* unav_archives */                               \
-   NULL,                                             \
-   CSS_CRITICAL_SECTION_INITIALIZER }
+   NULL /* unav_archives */ }
 
 typedef struct background_archiving_info BACKGROUND_ARCHIVING_INFO;
 struct background_archiving_info
@@ -2053,7 +2047,7 @@ extern int logtb_get_number_assigned_tran_indices (void);
 extern int logtb_get_number_of_total_tran_indices (void);
 #if defined(ENABLE_UNUSED_FUNCTION)
 extern bool logtb_am_i_sole_tran (THREAD_ENTRY * thread_p);
-extern void logtb_i_am_not_sole_tran (void);
+extern void logtb_i_am_not_sole_tran (THREAD_ENTRY * thread_p);
 #endif
 extern bool logtb_am_i_dba_client (THREAD_ENTRY * thread_p);
 extern int

@@ -84,7 +84,7 @@ namespace dbgw
         const std::string &name, const std::string &description, bool bInactivate,
         bool bIgnoreResult, bool useDefaultValueWhenFailedToCastParam,
         int nMaxPreparedStatementSize, CodePage dbCodePage,
-        CodePage clientCodePage);
+        CodePage clientCodePage, sql::DataBaseType dbType);
     virtual ~_Group();
 
     void initPool(const _ExecutorPoolContext &context);
@@ -106,7 +106,8 @@ namespace dbgw
     bool isIgnoreResult() const;
     bool isUseDefaultValueWhenFailedToCastParam() const;
     bool empty() const;
-    _StatisticsItem &getStatementStatItem();
+    sql::DataBaseType getDbType() const;
+    trait<_StatisticsItem>::sp getStatementStatItem();
 
   private:
     _Group(const _Group &);

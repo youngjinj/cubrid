@@ -371,6 +371,10 @@ qdata_calculate_aggregate_cume_dist_percent_rank (THREAD_ENTRY * thread_p,
 						  AGGREGATE_TYPE * agg_p,
 						  VAL_DESCR * val_desc_p);
 
+static int
+qdata_update_agg_interpolate_func_value_and_domain (AGGREGATE_TYPE * agg_p,
+						    DB_VALUE * val);
+
 /*
  * qdata_dummy () -
  *   return:
@@ -543,12 +547,8 @@ qdata_copy_db_value_to_tuple_value (DB_VALUE * dbval_p, char *tuple_val_p,
       *tuple_val_size = QFILE_TUPLE_VALUE_HEADER_SIZE + align;
       QFILE_PUT_TUPLE_VALUE_LENGTH (tuple_val_p, align);
 
-#if defined(CUBRID_DEBUG)
-      /*
-       * If there's any gap at the end of the record, fill it with zeroes.
-       * This will keep purify from getting confused when we start sending
-       * tuples via writev.
-       */
+#if !defined(NDEBUG)
+      /* suppress valgrind UMW error */
       memset (tuple_val_p + QFILE_TUPLE_VALUE_HEADER_SIZE + val_size, 0,
 	      align - val_size);
 #endif
@@ -2137,6 +2137,7 @@ qdata_add_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
   DB_VALUE cast_value2;
   TP_DOMAIN *cast_dom1 = NULL;
   TP_DOMAIN *cast_dom2 = NULL;
+  TP_DOMAIN_STATUS dom_status;
   bool reverse_operands = false;
 
   if (domain_p != NULL && TP_DOMAIN_TYPE (domain_p) == DB_TYPE_NULL)
@@ -2159,9 +2160,11 @@ qdata_add_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 	  cast_dom1 = tp_domain_resolve_default (DB_TYPE_SMALLINT);
 	}
 
-      error = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval1_p, cast_dom1);
 	  return error;
 	}
       error = qdata_add_dbval (&cast_value1, dbval2_p, result_p, domain_p);
@@ -2178,9 +2181,11 @@ qdata_add_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 	{
 	  cast_dom2 = tp_domain_resolve_default (DB_TYPE_SMALLINT);
 	}
-      error = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval2_p, cast_dom2);
 	  return error;
 	}
       error = qdata_add_dbval (dbval1_p, &cast_value2, result_p, domain_p);
@@ -2247,9 +2252,11 @@ qdata_add_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom2 != NULL)
     {
-      error = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval2_p, cast_dom2);
 	  return error;
 	}
       dbval2_p = &cast_value2;
@@ -2257,9 +2264,11 @@ qdata_add_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom1 != NULL)
     {
-      error = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval1_p, cast_dom1);
 	  return error;
 	}
       dbval1_p = &cast_value1;
@@ -3835,6 +3844,7 @@ qdata_subtract_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
   DB_VALUE cast_value2;
   TP_DOMAIN *cast_dom1 = NULL;
   TP_DOMAIN *cast_dom2 = NULL;
+  TP_DOMAIN_STATUS dom_status;
 
   if ((domain_p != NULL && TP_DOMAIN_TYPE (domain_p) == DB_TYPE_NULL)
       || DB_IS_NULL (dbval1_p) || DB_IS_NULL (dbval2_p))
@@ -3852,9 +3862,11 @@ qdata_subtract_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
     {
       /* The enumeration will always be casted to SMALLINT */
       cast_dom1 = tp_domain_resolve_default (DB_TYPE_SMALLINT);
-      error = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval1_p, cast_dom1);
 	  return error;
 	}
       return qdata_subtract_dbval (&cast_value1, dbval2_p, result_p,
@@ -3863,9 +3875,11 @@ qdata_subtract_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
   else if (type2 == DB_TYPE_ENUMERATION)
     {
       cast_dom2 = tp_domain_resolve_default (DB_TYPE_SMALLINT);
-      error = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval2_p, cast_dom2);
 	  return error;
 	}
       return qdata_subtract_dbval (dbval1_p, &cast_value2, result_p,
@@ -3946,9 +3960,11 @@ qdata_subtract_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom1 != NULL)
     {
-      error = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval1_p, cast_dom1);
 	  return error;
 	}
       dbval1_p = &cast_value1;
@@ -3956,9 +3972,11 @@ qdata_subtract_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom2 != NULL)
     {
-      error = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval2_p, cast_dom2);
 	  return error;
 	}
       dbval2_p = &cast_value2;
@@ -4573,6 +4591,7 @@ qdata_multiply_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
   DB_VALUE cast_value2;
   TP_DOMAIN *cast_dom1 = NULL;
   TP_DOMAIN *cast_dom2 = NULL;
+  TP_DOMAIN_STATUS dom_status;
 
   if ((domain_p != NULL && TP_DOMAIN_TYPE (domain_p) == DB_TYPE_NULL)
       || DB_IS_NULL (dbval1_p) || DB_IS_NULL (dbval2_p))
@@ -4608,9 +4627,11 @@ qdata_multiply_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom2 != NULL)
     {
-      error = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval2_p, cast_dom2);
 	  return error;
 	}
       dbval2_p = &cast_value2;
@@ -4618,9 +4639,11 @@ qdata_multiply_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom1 != NULL)
     {
-      error = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval1_p, cast_dom1);
 	  return error;
 	}
       dbval1_p = &cast_value1;
@@ -5220,6 +5243,7 @@ qdata_divide_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
   DB_VALUE cast_value2;
   TP_DOMAIN *cast_dom1 = NULL;
   TP_DOMAIN *cast_dom2 = NULL;
+  TP_DOMAIN_STATUS dom_status;
 
   if ((domain_p != NULL && TP_DOMAIN_TYPE (domain_p) == DB_TYPE_NULL)
       || DB_IS_NULL (dbval1_p) || DB_IS_NULL (dbval2_p))
@@ -5255,9 +5279,11 @@ qdata_divide_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom2 != NULL)
     {
-      error = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval2_p, cast_dom2);
 	  return error;
 	}
       dbval2_p = &cast_value2;
@@ -5265,9 +5291,11 @@ qdata_divide_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom1 != NULL)
     {
-      error = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval1_p, cast_dom1);
 	  return error;
 	}
       dbval1_p = &cast_value1;
@@ -5634,6 +5662,7 @@ qdata_strcat_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
   DB_VALUE cast_value2;
   TP_DOMAIN *cast_dom1 = NULL;
   TP_DOMAIN *cast_dom2 = NULL;
+  TP_DOMAIN_STATUS dom_status;
 
   if (domain_p != NULL && TP_DOMAIN_TYPE (domain_p) == DB_TYPE_NULL)
     {
@@ -5661,9 +5690,11 @@ qdata_strcat_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom1 != NULL)
     {
-      error = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval1_p, &cast_value1, cast_dom1);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval1_p, cast_dom1);
 	  pr_clear_value (&cast_value1);
 	  pr_clear_value (&cast_value2);
 	  return error;
@@ -5673,9 +5704,11 @@ qdata_strcat_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
 
   if (cast_dom2 != NULL)
     {
-      error = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
-      if (error != NO_ERROR)
+      dom_status = tp_value_auto_cast (dbval2_p, &cast_value2, cast_dom2);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					   dbval2_p, cast_dom2);
 	  pr_clear_value (&cast_value1);
 	  pr_clear_value (&cast_value2);
 	  return error;
@@ -6053,6 +6086,24 @@ qdata_evaluate_aggregate_list (THREAD_ENTRY * thread_p,
        */
       if (agg_p->option == Q_DISTINCT || agg_p->sort_list != NULL)
 	{
+	  /* convert domain to the median domains (number, date/time)
+	   * to make 1,2,11 '1','2','11' result the same
+	   */
+	  if (agg_p->function == PT_MEDIAN)
+	    {
+	      /* never be null type */
+	      assert (!DB_IS_NULL (&dbval));
+
+	      error =
+		qdata_update_agg_interpolate_func_value_and_domain (agg_p,
+								    &dbval);
+	      if (error != NO_ERROR)
+		{
+		  pr_clear_value (&dbval);
+		  return ER_FAILED;
+		}
+	    }
+
 	  dbval_type = DB_VALUE_DOMAIN_TYPE (&dbval);
 	  pr_type_p = PR_TYPE_FROM_ID (dbval_type);
 
@@ -6374,7 +6425,8 @@ qdata_evaluate_aggregate_list (THREAD_ENTRY * thread_p,
 		    case DB_TYPE_TIME:
 		      break;
 		    default:
-		      assert (agg_p->operand.type == TYPE_CONSTANT);
+		      assert (agg_p->operand.type == TYPE_CONSTANT
+			      || agg_p->operand.type == TYPE_DBVAL);
 
 		      /* try to cast dbval to double, datetime then time */
 		      tmp_domain_p =
@@ -7358,14 +7410,17 @@ qdata_get_valptr_type_list (THREAD_ENTRY * thread_p,
  * Note: Regulator variable should point to only constant values.
  */
 static DB_VALUE *
-qdata_get_dbval_from_constant_regu_variable (THREAD_ENTRY *
-					     thread_p,
-					     REGU_VARIABLE *
-					     regu_var_p,
+qdata_get_dbval_from_constant_regu_variable (THREAD_ENTRY * thread_p,
+					     REGU_VARIABLE * regu_var_p,
 					     VAL_DESCR * val_desc_p)
 {
   DB_VALUE *peek_value_p;
+  DB_TYPE dom_type, val_type;
+  TP_DOMAIN_STATUS dom_status;
   int result;
+
+  assert (regu_var_p != NULL);
+  assert (regu_var_p->domain != NULL);
 
   result =
     fetch_peek_dbval (thread_p, regu_var_p, val_desc_p, NULL, NULL, NULL,
@@ -7373,6 +7428,50 @@ qdata_get_dbval_from_constant_regu_variable (THREAD_ENTRY *
   if (result != NO_ERROR)
     {
       return NULL;
+    }
+
+  if (!DB_IS_NULL (peek_value_p))
+    {
+      val_type = DB_VALUE_TYPE (peek_value_p);
+      assert (val_type != DB_TYPE_NULL);
+
+      dom_type = TP_DOMAIN_TYPE (regu_var_p->domain);
+      if (dom_type != DB_TYPE_NULL)
+	{
+	  assert (dom_type != DB_TYPE_NULL);
+
+	  if (val_type == DB_TYPE_OID)
+	    {
+	      assert ((dom_type == DB_TYPE_OID)
+		      || (dom_type == DB_TYPE_VOBJ));
+	    }
+	  else if (val_type != dom_type)
+	    {
+	      if (REGU_VARIABLE_IS_FLAGED (regu_var_p,
+					   REGU_VARIABLE_ANALYTIC_WINDOW))
+		{
+		  /* do not cast at here,
+		   * is handled at analytic function evaluation later
+		   */
+		  ;
+		}
+	      else
+		{
+		  dom_status = tp_value_auto_cast (peek_value_p,
+						   peek_value_p,
+						   regu_var_p->domain);
+		  if (dom_status != DOMAIN_COMPATIBLE)
+		    {
+		      result = tp_domain_status_er_set (dom_status,
+							ARG_FILE_LINE,
+							peek_value_p,
+							regu_var_p->domain);
+		      return NULL;
+		    }
+		  assert (dom_type == DB_VALUE_TYPE (peek_value_p));
+		}
+	    }
+	}
     }
 
   return peek_value_p;
@@ -8234,7 +8333,7 @@ qdata_evaluate_sys_connect_by_path (THREAD_ENTRY * thread_p,
   sep = (char *) db_private_alloc (thread_p, sizeof (char) * (i + 1));
   if (sep == NULL)
     {
-      goto error;
+      return false;
     }
   sep[0] = 0;
   if (i > 0)
@@ -8367,7 +8466,7 @@ qdata_evaluate_sys_connect_by_path (THREAD_ENTRY * thread_p,
       len = (strlen (sep) +
 	     (DB_IS_NULL (&cast_value) ? 0 : DB_GET_STRING_SIZE (&cast_value))
 	     + strlen (result_path) + 1);
-      if (len > len_tmp)
+      if (len > len_tmp || path_tmp == NULL)
 	{
 	  /* free previously alloced */
 	  if (path_tmp)
@@ -8502,8 +8601,8 @@ error:
 	    {
 	      db_value_free (save_values[i]);
 	    }
-	  db_private_free_and_init (thread_p, save_values);
 	}
+      db_private_free_and_init (thread_p, save_values);
     }
 
 error2:
@@ -8632,7 +8731,9 @@ qdata_bit_and_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
     }
 
   if (type[0] != DB_TYPE_NULL && type[1] != DB_TYPE_NULL)
-    db_make_bigint (result_p, bi[0] & bi[1]);
+    {
+      db_make_bigint (result_p, bi[0] & bi[1]);
+    }
 
   return NO_ERROR;
 }
@@ -8695,7 +8796,9 @@ qdata_bit_or_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
     }
 
   if (type[0] != DB_TYPE_NULL && type[1] != DB_TYPE_NULL)
-    db_make_bigint (result_p, bi[0] | bi[1]);
+    {
+      db_make_bigint (result_p, bi[0] | bi[1]);
+    }
 
   return NO_ERROR;
 }
@@ -8758,7 +8861,9 @@ qdata_bit_xor_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
     }
 
   if (type[0] != DB_TYPE_NULL && type[1] != DB_TYPE_NULL)
-    db_make_bigint (result_p, bi[0] ^ bi[1]);
+    {
+      db_make_bigint (result_p, bi[0] ^ bi[1]);
+    }
 
   return NO_ERROR;
 }
@@ -9793,6 +9898,18 @@ qdata_evaluate_analytic_func (THREAD_ENTRY * thread_p,
 	  opr_dbval_p = &dbval;
 	  copy_opr = true;
 
+	  if (TP_IS_CHAR_TYPE (DB_VALUE_DOMAIN_TYPE (opr_dbval_p)))
+	    {
+	      /* char types default to double; coerce here so we don't mess up
+	       * the accumulator when we copy the operand */
+	      if (tp_value_coerce (&dbval, &dbval, func_p->domain)
+		  != DOMAIN_COMPATIBLE)
+		{
+		  pr_clear_value (&dbval);
+		  return ER_FAILED;
+		}
+	    }
+
 	  /* this type setting is necessary, it ensures that for the case
 	   * average handling, which is treated like sum until final iteration,
 	   * starts with the initial data type */
@@ -10723,35 +10840,21 @@ qdata_get_median_function_result (THREAD_ENTRY * thread_p,
 	  break;
 
 	default:
-	  if (TP_DOMAIN_TYPE (*result_dom) == DB_TYPE_VARIABLE)
+	  type = TP_DOMAIN_TYPE (*result_dom);
+	  if (!TP_IS_NUMERIC_TYPE (type) && !TP_IS_DATE_OR_TIME_TYPE (type))
 	    {
 	      /* try to coerce value to double, datetime then time
 	       * and save domain for next coerce
 	       */
-	      *result_dom = tp_domain_resolve_default (DB_TYPE_DOUBLE);
-
-	      status = tp_value_cast (f_value, result, *result_dom, false);
-	      if (status != DOMAIN_COMPATIBLE)
+	      error =
+		qdata_update_interpolate_func_value_and_domain (f_value,
+								result,
+								result_dom);
+	      if (error != NO_ERROR)
 		{
-		  /* try datetime */
-		  *result_dom = tp_domain_resolve_default (DB_TYPE_DATETIME);
+		  assert
+		    (error == ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN);
 
-		  status =
-		    tp_value_cast (f_value, result, *result_dom, false);
-		}
-
-	      /* try time */
-	      if (status != DOMAIN_COMPATIBLE)
-		{
-		  *result_dom = tp_domain_resolve_default (DB_TYPE_TIME);
-
-		  status =
-		    tp_value_cast (f_value, result, *result_dom, false);
-		}
-
-	      if (status != DOMAIN_COMPATIBLE)
-		{
-		  error = ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN;
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 2,
 			  "MEDIAN", "DOUBLE, DATETIME or TIME");
 
@@ -10800,35 +10903,21 @@ qdata_get_median_function_result (THREAD_ENTRY * thread_p,
       type = db_value_type (f_value);
       if (!TP_IS_NUMERIC_TYPE (type) && !TP_IS_DATE_OR_TIME_TYPE (type))
 	{
-	  if (TP_DOMAIN_TYPE (*result_dom) == DB_TYPE_VARIABLE)
+	  type = TP_DOMAIN_TYPE (*result_dom);
+	  if (!TP_IS_NUMERIC_TYPE (type) && !TP_IS_DATE_OR_TIME_TYPE (type))
 	    {
 	      /* try to coerce f_value to double, datetime then time
 	       * and save domain for next coerce
 	       */
-	      *result_dom = tp_domain_resolve_default (DB_TYPE_DOUBLE);
-
-	      status = tp_value_cast (f_value, f_value, *result_dom, false);
-	      if (status != DOMAIN_COMPATIBLE)
+	      error =
+		qdata_update_interpolate_func_value_and_domain (f_value,
+								f_value,
+								result_dom);
+	      if (error != NO_ERROR)
 		{
-		  /* try datetime */
-		  *result_dom = tp_domain_resolve_default (DB_TYPE_DATETIME);
+		  assert
+		    (error == ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN);
 
-		  status = tp_value_cast (f_value, f_value,
-					  *result_dom, false);
-		}
-
-	      /* try time */
-	      if (status != DOMAIN_COMPATIBLE)
-		{
-		  *result_dom = tp_domain_resolve_default (DB_TYPE_TIME);
-
-		  status = tp_value_cast (f_value, f_value,
-					  *result_dom, false);
-		}
-
-	      if (status != DOMAIN_COMPATIBLE)
-		{
-		  error = ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN;
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 2,
 			  "MEDIAN", "DOUBLE, DATETIME or TIME");
 
@@ -11254,4 +11343,129 @@ exit_on_error:
     }
 
   return ER_FAILED;
+}
+
+/*
+ * qdata_update_agg_interpolate_func_value_and_domain () -
+ *   return: NO_ERROR, or error code
+ *   agg_p(in): aggregate type
+ *   val(in):
+ *
+ */
+static int
+qdata_update_agg_interpolate_func_value_and_domain (AGGREGATE_TYPE * agg_p,
+						    DB_VALUE * dbval)
+{
+  int error = NO_ERROR;
+  DB_TYPE dbval_type;
+  TP_DOMAIN_STATUS status;
+
+  assert (dbval != NULL
+	  && agg_p != NULL
+	  && agg_p->function == PT_MEDIAN
+	  && agg_p->sort_list != NULL
+	  && agg_p->list_id != NULL
+	  && agg_p->list_id->type_list.type_cnt == 1);
+
+  if (DB_IS_NULL (dbval))
+    {
+      goto end;
+    }
+
+  dbval_type = TP_DOMAIN_TYPE (agg_p->domain);
+  if (dbval_type == DB_TYPE_VARIABLE)
+    {
+      dbval_type = DB_VALUE_DOMAIN_TYPE (dbval);
+      agg_p->domain = tp_domain_resolve_default (dbval_type);
+    }
+
+  if (dbval_type != DB_TYPE_DOUBLE && !TP_IS_DATE_OR_TIME_TYPE (dbval_type))
+    {
+      error =
+	qdata_update_interpolate_func_value_and_domain (dbval,
+							dbval,
+							&agg_p->domain);
+      if (error != NO_ERROR)
+	{
+	  assert (error == ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN);
+
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 2,
+		  "MEDIAN", "DOUBLE, DATETIME or TIME");
+	  goto end;
+	}
+    }
+  else
+    {
+      dbval_type = DB_VALUE_DOMAIN_TYPE (dbval);
+      if (dbval_type != TP_DOMAIN_TYPE (agg_p->domain))
+	{
+	  /* cast */
+	  error = db_value_coerce (dbval, dbval, agg_p->domain);
+	  if (error != NO_ERROR)
+	    {
+	      goto end;
+	    }
+	}
+    }
+
+  /* set list_id domain, if it's not set */
+  if (TP_DOMAIN_TYPE (agg_p->list_id->type_list.domp[0])
+      != TP_DOMAIN_TYPE (agg_p->domain))
+    {
+      agg_p->list_id->type_list.domp[0] = agg_p->domain;
+      agg_p->sort_list->pos_descr.dom = agg_p->domain;
+    }
+
+end:
+
+  return error;
+}
+
+/*
+ * qdata_update_interpolate_func_value_and_domain () -
+ *   return: NO_ERROR or ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN
+ *   src_val(in):
+ *   dest_val(out):
+ *   domain(in/out):
+ *
+ */
+int
+qdata_update_interpolate_func_value_and_domain (DB_VALUE * src_val,
+						DB_VALUE * dest_val,
+						TP_DOMAIN ** domain)
+{
+  int error = NO_ERROR;
+  DB_DOMAIN *tmp_domain = NULL;
+  TP_DOMAIN_STATUS status;
+
+  assert (src_val != NULL && dest_val != NULL && domain != NULL);
+
+  tmp_domain = tp_domain_resolve_default (DB_TYPE_DOUBLE);
+
+  status = tp_value_cast (src_val, dest_val, tmp_domain, false);
+  if (status != DOMAIN_COMPATIBLE)
+    {
+      /* try datetime */
+      tmp_domain = tp_domain_resolve_default (DB_TYPE_DATETIME);
+      status = tp_value_cast (src_val, dest_val, tmp_domain, false);
+    }
+
+  /* try time */
+  if (status != DOMAIN_COMPATIBLE)
+    {
+      tmp_domain = tp_domain_resolve_default (DB_TYPE_TIME);
+      status = tp_value_cast (src_val, dest_val, tmp_domain, false);
+    }
+
+  if (status != DOMAIN_COMPATIBLE)
+    {
+      error = ER_ARG_CAN_NOT_BE_CASTED_TO_DESIRED_DOMAIN;
+      goto end;
+    }
+
+  *domain = tmp_domain;
+
+end:
+
+  return error;
 }

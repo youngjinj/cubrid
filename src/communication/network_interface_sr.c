@@ -102,6 +102,8 @@ static void event_log_many_ioreads (THREAD_ENTRY * thread_p,
 				    EXECUTION_INFO * info,
 				    int time,
 				    MNT_SERVER_EXEC_STATS * diff_stats);
+static void event_log_temp_expand_pages (THREAD_ENTRY * thread_p,
+					 EXECUTION_INFO * info);
 
 /*
  * return_error_to_client -
@@ -4725,7 +4727,7 @@ sbtree_load_index (THREAD_ENTRY * thread_p, unsigned int rid,
   OID fk_refcls_oid;
   BTID fk_refcls_pk_btid;
   int cache_attr_id;
-  char *fk_name;
+  char *bt_name, *fk_name;
   int n_classes, n_attrs, *attr_ids = NULL;
   int *attr_prefix_lengths = NULL;
   TP_DOMAIN *key_type;
@@ -4740,6 +4742,7 @@ sbtree_load_index (THREAD_ENTRY * thread_p, unsigned int rid,
   int csserror;
 
   ptr = or_unpack_btid (request, &btid);
+  ptr = or_unpack_string_nocopy (ptr, &bt_name);
   ptr = or_unpack_domain (ptr, &key_type, 0);
 
   ptr = or_unpack_int (ptr, &n_classes);
@@ -4828,15 +4831,13 @@ sbtree_load_index (THREAD_ENTRY * thread_p, unsigned int rid,
       break;
     }
 
-  return_btid = xbtree_load_index (thread_p, &btid, key_type, class_oids,
-				   n_classes, n_attrs, attr_ids,
-				   attr_prefix_lengths, hfids,
-				   unique_flag, not_null_flag,
-				   &fk_refcls_oid,
-				   &fk_refcls_pk_btid, cache_attr_id,
-				   fk_name, pred_stream, pred_stream_size,
-				   expr_stream, expr_stream_size,
-				   func_col_id, func_attr_index_start);
+  return_btid =
+    xbtree_load_index (thread_p, &btid, bt_name, key_type, class_oids,
+		       n_classes, n_attrs, attr_ids, attr_prefix_lengths,
+		       hfids, unique_flag, not_null_flag, &fk_refcls_oid,
+		       &fk_refcls_pk_btid, cache_attr_id, fk_name,
+		       pred_stream, pred_stream_size, expr_stream,
+		       expr_stream_size, func_col_id, func_attr_index_start);
   if (return_btid == NULL)
     {
       return_error_to_client (thread_p, rid);
@@ -5949,6 +5950,11 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
       xmnt_server_stop_stats (thread_p);
     }
 
+  if (thread_p->event_stats.temp_expand_pages > 0)
+    {
+      event_log_temp_expand_pages (thread_p, &info);
+    }
+
   if (sql_id != NULL)
     {
       free_and_init (sql_id);
@@ -5960,6 +5966,11 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_pack_ptr (ptr, query_id);
   /* result cache created time */
   OR_PACK_CACHE_TIME (ptr, &srv_cache_time);
+
+#if !defined(NDEBUG)
+  /* suppress valgrind UMW error */
+  memset (ptr, 0, OR_ALIGNED_BUF_SIZE (a_reply) - (ptr - reply));
+#endif
 
   css_send_reply_and_3_data_to_client (thread_p->conn_entry, rid,
 				       reply, OR_ALIGNED_BUF_SIZE (a_reply),
@@ -6085,8 +6096,9 @@ event_log_slow_query (THREAD_ENTRY * thread_p, EXECUTION_INFO * info,
 	   (long long int) diff_stats->pb_num_ioreads,
 	   (long long int) diff_stats->pb_num_iowrites);
   fprintf (log_fp, "%*cwait: cs=%d, lock=%d, latch=%d\n\n", indent, ' ',
-	   TO_MSEC (thread_p->cs_waits), TO_MSEC (thread_p->lock_waits),
-	   TO_MSEC (thread_p->latch_waits));
+	   TO_MSEC (thread_p->event_stats.cs_waits),
+	   TO_MSEC (thread_p->event_stats.lock_waits),
+	   TO_MSEC (thread_p->event_stats.latch_waits));
 
   event_log_end (thread_p);
 }
@@ -6130,6 +6142,47 @@ event_log_many_ioreads (THREAD_ENTRY * thread_p, EXECUTION_INFO * info,
   fprintf (log_fp, "%*ctime: %d\n", indent, ' ', time);
   fprintf (log_fp, "%*cioreads: %lld\n\n", indent, ' ',
 	   (long long int) diff_stats->pb_num_ioreads);
+
+  event_log_end (thread_p);
+}
+
+/*
+ * event_log_temp_expand_pages - log temp volume expand pages to event log file
+ * return:
+ *   thread_p(in):
+ *   info(in):
+ *   num_bind_vals(in):
+ *   bind_vals(in):
+ */
+static void
+event_log_temp_expand_pages (THREAD_ENTRY * thread_p, EXECUTION_INFO * info)
+{
+  FILE *log_fp;
+  int indent = 2;
+  LOG_TDES *tdes;
+  int tran_index;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  tdes = LOG_FIND_TDES (tran_index);
+  log_fp = event_log_start (thread_p, "TEMP_VOLUME_EXPAND");
+
+  if (tdes == NULL || log_fp == NULL)
+    {
+      return;
+    }
+
+  event_log_print_client_info (tran_index, indent);
+  fprintf (log_fp, "%*csql: %s\n", indent, ' ', info->sql_hash_text);
+
+  if (tdes->num_exec_queries <= MAX_NUM_EXEC_QUERY_HISTORY)
+    {
+      event_log_bind_values (log_fp, tran_index, tdes->num_exec_queries - 1);
+    }
+
+  fprintf (log_fp, "%*ctime: %d\n", indent, ' ',
+	   TO_MSEC (thread_p->event_stats.temp_expand_time));
+  fprintf (log_fp, "%*cpages: %d\n\n", indent, ' ',
+	   thread_p->event_stats.temp_expand_pages);
 
   event_log_end (thread_p);
 }
@@ -6323,6 +6376,11 @@ sqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   ptr = or_pack_int (ptr, page_size);
   ptr = or_pack_int (ptr, dummy_plan_size);
   ptr = or_pack_ptr (ptr, query_id);
+
+#if !defined(NDEBUG)
+  /* suppress valgrind UMW error */
+  memset (ptr, 0, OR_ALIGNED_BUF_SIZE (a_reply) - (ptr - reply));
+#endif
 
   css_send_reply_and_3_data_to_client (thread_p->conn_entry, rid, reply,
 				       OR_ALIGNED_BUF_SIZE (a_reply),
@@ -7126,7 +7184,7 @@ xs_send_method_call_info_to_client (THREAD_ENTRY * thread_p,
   char *databuf;
   char *ptr;
   unsigned int rid;
-  OR_ALIGNED_BUF (OR_INT_SIZE * 3 + OR_PTR_ALIGNED_SIZE) a_reply;
+  OR_ALIGNED_BUF (OR_INT_SIZE * 2) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
 
   rid = thread_get_comm_request_id (thread_p);
@@ -7134,6 +7192,11 @@ xs_send_method_call_info_to_client (THREAD_ENTRY * thread_p,
   length += or_method_sig_list_length ((void *) method_sig_list);
   ptr = or_pack_int (reply, (int) METHOD_CALL);
   ptr = or_pack_int (ptr, length);
+
+#if !defined(NDEBUG)
+  /* suppress valgrind UMW error */
+  memset (ptr, 0, OR_ALIGNED_BUF_SIZE (a_reply) - (ptr - reply));
+#endif
 
   databuf = (char *) db_private_alloc (thread_p, length);
   if (databuf == NULL)
@@ -8261,6 +8324,11 @@ sqp_get_server_info (THREAD_ENTRY * thread_p, unsigned int rid,
 		  db_value_clear (&value[i]);
 		}
 	    }
+
+#if !defined(NDEBUG)
+	  /* suppress valgrind UMW error */
+	  memset (ptr, 0, buffer_length - (ptr - buffer));
+#endif
 	}
       else
 	{

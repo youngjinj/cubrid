@@ -18,6 +18,7 @@
  */
 
 #include <errno.h>
+#include <sstream>
 #include <boost/format.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/algorithm/string.hpp>
@@ -85,8 +86,9 @@ namespace dbgw
       "useDefaultValueWhenFailedToCastParam";
   static const char *XN_GROUP_PR_MAX_PREPARED_STATEMENT_SIZE =
       "maxPrepraredStatementSize";
-  static const char *XML_NODE_GROUP_PROP_CLIENT_CHARSET = "clientCharset";
-  static const char *XML_NODE_GROUP_PROP_DB_CHARSET = "dbCharset";
+  static const char *XN_GROUP_PR_CLIENT_CHARSET = "clientCharset";
+  static const char *XN_GROUP_PR_DB_CHARSET = "dbCharset";
+  static const char *XN_GROUP_PR_DBTYPE = "dbtype";
 
   static const char *XN_POOL = "pool";
   static const char *XN_POOL_PR_INIT_SIZE = "initialSize";
@@ -261,23 +263,25 @@ namespace dbgw
   {
   }
 
-  const char *_ExpatXMLProperties::get(const char *szName, bool bRequired)
+  std::string _ExpatXMLProperties::get(const char *szName, bool bRequired)
   {
     return get(szName, NULL, bRequired);
   }
 
-  const char *_ExpatXMLProperties::get(const char *szName,
+  std::string _ExpatXMLProperties::get(const char *szName,
       const char *szHiddenName, bool bRequired)
   {
+    std::string prop;
+
     for (int i = 0; m_pAttr[i] != NULL; i += 2)
       {
         if (szName != NULL && !strcmp(m_pAttr[i], szName))
           {
-            return m_pAttr[i + 1];
+            return propertyFromEnv(m_pAttr[i + 1]);
           }
         else if (szHiddenName != NULL && !strcmp(m_pAttr[i], szHiddenName))
           {
-            return m_pAttr[i + 1];
+            return propertyFromEnv(m_pAttr[i + 1]);
           }
       }
 
@@ -294,40 +298,6 @@ namespace dbgw
       }
   }
 
-  const char *_ExpatXMLProperties::getCString(const char *szName,
-      bool bRequired)
-  {
-    return getCString(szName, NULL, bRequired);
-  }
-
-  const char *_ExpatXMLProperties::getCString(const char *szName,
-      const char *szHiddenName, bool bRequired)
-  {
-    for (int i = 0; m_pAttr[i] != NULL; i += 2)
-      {
-        if (szName != NULL && !strcmp(m_pAttr[i], szName))
-          {
-            return m_pAttr[i + 1];
-          }
-        else if (szHiddenName != NULL && !strcmp(m_pAttr[i], szHiddenName))
-          {
-            return m_pAttr[i + 1];
-          }
-      }
-
-    if (bRequired)
-      {
-        NotExistPropertyException e(m_xmlParser.getFileName(),
-            m_nodeName.c_str(), szName);
-        DBGW_LOG_ERROR(e.what());
-        throw e;
-      }
-    else
-      {
-        return NULL;
-      }
-  }
-
   int _ExpatXMLProperties::getInt(const char *szName, bool bRequired,
       int nDefault)
   {
@@ -337,15 +307,19 @@ namespace dbgw
   int _ExpatXMLProperties::getInt(const char *szName,
       const char *szHiddenName, bool bRequired, int nDefault)
   {
+    std::string prop;
+
     for (int i = 0; m_pAttr[i] != NULL; i += 2)
       {
         if (szName != NULL && !strcmp(m_pAttr[i], szName))
           {
-            return propertyToInt(m_pAttr[i + 1]);
+            prop = propertyFromEnv(m_pAttr[i + 1]);
+            return propertyToInt(prop.c_str());
           }
         else if (szHiddenName != NULL && !strcmp(m_pAttr[i], szHiddenName))
           {
-            return propertyToInt(m_pAttr[i + 1]);
+            prop = propertyFromEnv(m_pAttr[i + 1]);
+            return propertyToInt(prop.c_str());
           }
       }
 
@@ -371,15 +345,19 @@ namespace dbgw
   long _ExpatXMLProperties::getLong(const char *szName,
       const char *szHiddenName, bool bRequired, unsigned long ulDefault)
   {
+    std::string prop;
+
     for (int i = 0; m_pAttr[i] != NULL; i += 2)
       {
         if (szName != NULL && !strcmp(m_pAttr[i], szName))
           {
-            return propertyToLong(m_pAttr[i + 1]);
+            prop = propertyFromEnv(m_pAttr[i + 1]);
+            return propertyToLong(prop.c_str());
           }
         else if (szHiddenName != NULL && !strcmp(m_pAttr[i], szHiddenName))
           {
-            return propertyToLong(m_pAttr[i + 1]);
+            prop = propertyFromEnv(m_pAttr[i + 1]);
+            return propertyToLong(prop.c_str());
           }
       }
 
@@ -404,15 +382,19 @@ namespace dbgw
   bool _ExpatXMLProperties::getBool(const char *szName,
       const char *szHiddenName, bool bRequired)
   {
+    std::string prop;
+
     for (int i = 0; m_pAttr[i] != NULL; i += 2)
       {
         if (szName != NULL && !strcmp(m_pAttr[i], szName))
           {
-            return propertyToBoolean(m_pAttr[i + 1]);
+            prop = propertyFromEnv(m_pAttr[i + 1]);
+            return propertyToBoolean(prop.c_str());
           }
         else if (szHiddenName != NULL && !strcmp(m_pAttr[i], szHiddenName))
           {
-            return propertyToBoolean(m_pAttr[i + 1]);
+            prop = propertyFromEnv(m_pAttr[i + 1]);
+            return propertyToBoolean(prop.c_str());
           }
       }
 
@@ -434,14 +416,14 @@ namespace dbgw
   {
     memset(bValidateResult, 0, sql::DBGW_STMT_TYPE_SIZE);
 
-    const char *szValidateResult = getCString(szName, szHiddenName, false);
-    if (szValidateResult == NULL)
+    std::string validateResult = get(szName, szHiddenName, false);
+    if (validateResult == "")
       {
         return;
       }
 
     std::vector<std::string> queryTypeList;
-    boost::split(queryTypeList, szValidateResult, boost::is_any_of(","));
+    boost::split(queryTypeList, validateResult, boost::is_any_of(","));
     for (std::vector<std::string>::iterator it = queryTypeList.begin(); it
         != queryTypeList.end(); it++)
       {
@@ -462,7 +444,7 @@ namespace dbgw
         else
           {
             InvalidPropertyValueException e(m_xmlParser.getFileName(),
-                szValidateResult, "SELECT|PROCEDURE|UPDATE");
+                validateResult.c_str(), "SELECT|PROCEDURE|UPDATE");
             DBGW_LOG_ERROR(e.what());
             throw e;
           }
@@ -471,156 +453,161 @@ namespace dbgw
 
   ValueType _ExpatXMLProperties::get30ValueType(const char *szName)
   {
-    const char *szType = get(szName, true);
+    std::string type = get(szName, true);
 
-    if (!strcasecmp(szType, "string"))
+    if (!strcasecmp(type.c_str(), "string"))
       {
         return DBGW_VAL_TYPE_STRING;
       }
-    if (!strcasecmp(szType, "char"))
+    if (!strcasecmp(type.c_str(), "char"))
       {
         return DBGW_VAL_TYPE_CHAR;
       }
-    if (!strcasecmp(szType, "int"))
+    if (!strcasecmp(type.c_str(), "int"))
       {
         return DBGW_VAL_TYPE_INT;
       }
-    if (!strcasecmp(szType, "long") || !strcasecmp(szType, "int64"))
+    if (!strcasecmp(type.c_str(), "long")
+        || !strcasecmp(type.c_str(), "int64"))
       {
         return DBGW_VAL_TYPE_LONG;
       }
-    if (!strcasecmp(szType, "float"))
+    if (!strcasecmp(type.c_str(), "float"))
       {
         return DBGW_VAL_TYPE_FLOAT;
       }
-    if (!strcasecmp(szType, "double"))
+    if (!strcasecmp(type.c_str(), "double"))
       {
         return DBGW_VAL_TYPE_DOUBLE;
       }
-    if (!strcasecmp(szType, "date"))
+    if (!strcasecmp(type.c_str(), "date"))
       {
         return DBGW_VAL_TYPE_DATE;
       }
-    if (!strcasecmp(szType, "time"))
+    if (!strcasecmp(type.c_str(), "time"))
       {
         return DBGW_VAL_TYPE_TIME;
       }
-    if (!strcasecmp(szType, "datetime"))
+    if (!strcasecmp(type.c_str(), "datetime"))
       {
         return DBGW_VAL_TYPE_DATETIME;
       }
-    if (!strcasecmp(szType, "bytes"))
+    if (!strcasecmp(type.c_str(), "bytes"))
       {
         return DBGW_VAL_TYPE_BYTES;
       }
-    if (!strcasecmp(szType, "clob"))
+    if (!strcasecmp(type.c_str(), "clob"))
       {
         return DBGW_VAL_TYPE_CLOB;
       }
-    if (!strcasecmp(szType, "blob"))
+    if (!strcasecmp(type.c_str(), "blob"))
       {
         return DBGW_VAL_TYPE_BLOB;
       }
+    if (!strcasecmp(type.c_str(), "resultset"))
+      {
+        return DBGW_VAL_TYPE_RESULTSET;
+      }
 
-    InvalidValueTypeException e(m_xmlParser.getFileName(), szType);
+    InvalidValueTypeException e(m_xmlParser.getFileName(), type.c_str());
     DBGW_LOG_ERROR(e.what());
     throw e;
   }
 
   ValueType _ExpatXMLProperties::get20ValueType(const char *szName)
   {
-    const char *szType = get(szName, true);
+    std::string type = get(szName, true);
 
-    if (!strcasecmp(szType, "string"))
+    if (!strcasecmp(type.c_str(), "string"))
       {
         return DBGW_VAL_TYPE_STRING;
       }
-    if (!strcasecmp(szType, "char"))
+    if (!strcasecmp(type.c_str(), "char"))
       {
         return DBGW_VAL_TYPE_CHAR;
       }
-    if (!strcasecmp(szType, "int"))
+    if (!strcasecmp(type.c_str(), "int"))
       {
         return DBGW_VAL_TYPE_INT;
       }
-    if (!strcasecmp(szType, "long"))
+    if (!strcasecmp(type.c_str(), "long"))
       {
         return DBGW_VAL_TYPE_LONG;
       }
-    if (!strcasecmp(szType, "double"))
+    if (!strcasecmp(type.c_str(), "double"))
       {
         return DBGW_VAL_TYPE_DOUBLE;
       }
-    if (!strcasecmp(szType, "data"))
+    if (!strcasecmp(type.c_str(), "data"))
       {
         return DBGW_VAL_TYPE_DATETIME;
       }
 
-    InvalidValueTypeException e(m_xmlParser.getFileName(), szType);
+    InvalidValueTypeException e(m_xmlParser.getFileName(), type.c_str());
     DBGW_LOG_ERROR(e.what());
     throw e;
   }
 
   ValueType _ExpatXMLProperties::get10ValueType(const char *szName)
   {
-    const char *szType = get(szName, true);
+    std::string type = get(szName, true);
 
-    if (!strcasecmp(szType, "string"))
+    if (!strcasecmp(type.c_str(), "string"))
       {
         return DBGW_VAL_TYPE_STRING;
       }
-    if (!strcasecmp(szType, "char"))
+    if (!strcasecmp(type.c_str(), "char"))
       {
         return DBGW_VAL_TYPE_CHAR;
       }
-    if (!strcasecmp(szType, "int"))
+    if (!strcasecmp(type.c_str(), "int"))
       {
         return DBGW_VAL_TYPE_INT;
       }
-    if (!strcasecmp(szType, "int64"))
+    if (!strcasecmp(type.c_str(), "int64"))
       {
         return DBGW_VAL_TYPE_LONG;
       }
-    if (!strcasecmp(szType, "float"))
+    if (!strcasecmp(type.c_str(), "float"))
       {
         return DBGW_VAL_TYPE_FLOAT;
       }
-    if (!strcasecmp(szType, "double"))
+    if (!strcasecmp(type.c_str(), "double"))
       {
         return DBGW_VAL_TYPE_DOUBLE;
       }
 
-    InvalidValueTypeException e(m_xmlParser.getFileName(), szType);
+    InvalidValueTypeException e(m_xmlParser.getFileName(), type.c_str());
     DBGW_LOG_ERROR(e.what());
     throw e;
   }
 
   CCI_LOG_LEVEL _ExpatXMLProperties::getLogLevel(const char *szName)
   {
-    const char *szLogLevel = get(szName, false);
+    std::string logLevel = get(szName, false);
 
-    if (!strcasecmp(szLogLevel, "off"))
+    if (!strcasecmp(logLevel.c_str(), "off"))
       {
         return CCI_LOG_LEVEL_OFF;
       }
-    if (!strcasecmp(szLogLevel, "error"))
+    if (!strcasecmp(logLevel.c_str(), "error"))
       {
         return CCI_LOG_LEVEL_ERROR;
       }
-    if (!strcasecmp(szLogLevel, "warning"))
+    if (!strcasecmp(logLevel.c_str(), "warning"))
       {
         return CCI_LOG_LEVEL_WARN;
       }
-    if (!strcasecmp(szLogLevel, "info") || !strcmp(szLogLevel, ""))
+    if (!strcasecmp(logLevel.c_str(), "info") || logLevel == "")
       {
         return CCI_LOG_LEVEL_INFO;
       }
-    if (!strcasecmp(szLogLevel, "debug"))
+    if (!strcasecmp(logLevel.c_str(), "debug"))
       {
         return CCI_LOG_LEVEL_DEBUG;
       }
 
-    InvalidPropertyValueException e(m_xmlParser.getFileName(), szLogLevel,
+    InvalidPropertyValueException e(m_xmlParser.getFileName(), logLevel.c_str(),
         "OFF|ERROR|WARNING|INFO|DEBUG");
     DBGW_LOG_ERROR(e.what());
     throw e;
@@ -628,18 +615,18 @@ namespace dbgw
 
   CCI_LOG_POSTFIX _ExpatXMLProperties::getLogPostfix(const char *szName)
   {
-    const char *szLogPostfix = get(szName, false);
+    std::string logPostfix = get(szName, false);
 
-    if (!strcasecmp(szLogPostfix, "none") || !strcmp(szLogPostfix, ""))
+    if (!strcasecmp(logPostfix.c_str(), "none") || logPostfix == "")
       {
         return CCI_LOG_POSTFIX_NONE;
       }
-    if (!strcasecmp(szLogPostfix, "date"))
+    if (!strcasecmp(logPostfix.c_str(), "date"))
       {
         return CCI_LOG_POSTFIX_DATE;
       }
 
-    InvalidPropertyValueException e(m_xmlParser.getFileName(), szLogPostfix,
+    InvalidPropertyValueException e(m_xmlParser.getFileName(), logPostfix.c_str(),
         "NONE|PID|DATE");
     DBGW_LOG_ERROR(e.what());
     throw e;
@@ -647,24 +634,61 @@ namespace dbgw
 
   sql::ParameterMode _ExpatXMLProperties::getBindMode(const char *szName)
   {
-    const char *szMode = getCString(szName, false);
+    std::string mode = get(szName, false);
 
-    if (szMode == NULL || !strcasecmp(szMode, "in"))
+    if (!strcasecmp(mode.c_str(), "in") || mode == "")
       {
         return sql::DBGW_PARAM_MODE_IN;
       }
-    else if (!strcasecmp(szMode, "out"))
+    else if (!strcasecmp(mode.c_str(), "out"))
       {
         return sql::DBGW_PARAM_MODE_OUT;
       }
-    else if (!strcasecmp(szMode, "inout"))
+    else if (!strcasecmp(mode.c_str(), "inout"))
       {
         return sql::DBGW_PARAM_MODE_INOUT;
       }
     else
       {
-        InvalidPropertyValueException e(m_xmlParser.getFileName(), szMode,
+        InvalidPropertyValueException e(m_xmlParser.getFileName(), mode.c_str(),
             "IN|OUT|INOUT");
+        DBGW_LOG_ERROR(e.what());
+        throw e;
+      }
+  }
+
+  sql::DataBaseType _ExpatXMLProperties::getDataBaseType(const char *szName)
+  {
+    std::string dbType = get(szName, false);
+
+    if (dbType == "")
+      {
+#if defined(DBGW_ALL)
+        return sql::DBGW_DB_TYPE_CUBRID;
+#elif defined(DBGW_ORACLE)
+        return sql::DBGW_DB_TYPE_ORACLE;
+#elif defined(DBGW_MYSQL)
+        return sql::DBGW_DB_TYPE_MYSQL;
+#else
+        return sql::DBGW_DB_TYPE_CUBRID;
+#endif
+      }
+    else if (!strcasecmp(dbType.c_str(), "cubrid"))
+      {
+        return sql::DBGW_DB_TYPE_CUBRID;
+      }
+    else if (!strcasecmp(dbType.c_str(), "mysql"))
+      {
+        return sql::DBGW_DB_TYPE_MYSQL;
+      }
+    else if (!strcasecmp(dbType.c_str(), "oracle"))
+      {
+        return sql::DBGW_DB_TYPE_ORACLE;
+      }
+    else
+      {
+        InvalidPropertyValueException e(m_xmlParser.getFileName(), dbType.c_str(),
+            "CUBRID|MYSQL|ORACLE");
         DBGW_LOG_ERROR(e.what());
         throw e;
       }
@@ -673,6 +697,62 @@ namespace dbgw
   const char *_ExpatXMLProperties::getNodeName() const
   {
     return m_nodeName.c_str();
+  }
+
+  std::string _ExpatXMLProperties::propertyFromEnv(const char *szValue)
+  {
+    if (szValue == NULL || szValue == "")
+      {
+        return "";
+      }
+
+    std::stringstream prop;
+    const char *p = szValue, *s = NULL;
+    char *szKeyBuffer = new char[strlen(szValue) + 1];
+
+    /* ex) abcd${efg}hij */
+    while (*p != '\0')
+      {
+        if (*p == '$' && *(p + 1) == '{')
+          {
+            /* ex) abcd${efg}hij */
+            /*           s       */
+            /*         p         */
+            s = p + 2;
+            p += 2;
+          }
+        else if (s != NULL && *p == '}')
+          {
+            /* ex) abcd${efg}hij */
+            /*           s       */
+            /*              p    */
+
+            if (p - s > 0)
+              {
+                memcpy(szKeyBuffer, s, p - s);
+                szKeyBuffer[p - s] = '\0';
+                prop << getenv(szKeyBuffer);
+              }
+
+            p += 1;
+            s = NULL;
+          }
+        else
+          {
+            if (s == NULL)
+              {
+                prop << *p;
+              }
+            p += 1;
+          }
+      }
+
+    if (szKeyBuffer != NULL)
+      {
+        delete[] szKeyBuffer;
+      }
+
+    return prop.str();
   }
 
   int _ExpatXMLProperties::propertyToInt(const char *szProperty)
@@ -1022,27 +1102,53 @@ namespace dbgw
       CodePage dbCodePage = DBGW_IDENTITY;
       CodePage clientCodePage = DBGW_IDENTITY;
 
-      const char *szDbCharset =
-          properties.getCString(XML_NODE_GROUP_PROP_DB_CHARSET, false);
-      if (szDbCharset != NULL)
+      std::string dbCharset =
+          properties.get(XN_GROUP_PR_DB_CHARSET, false);
+      if (dbCharset != "")
         {
-          dbCodePage = stringToCodepage(szDbCharset);
+          dbCodePage = stringToCodepage(dbCharset);
         }
 
-      const char *szClientCharset =
-          properties.getCString(XML_NODE_GROUP_PROP_CLIENT_CHARSET, false);
-      if (szClientCharset != NULL)
+      std::string clientCharset =
+          properties.get(XN_GROUP_PR_CLIENT_CHARSET, false);
+      if (clientCharset != "")
         {
-          clientCodePage = stringToCodepage(szClientCharset);
+          clientCodePage = stringToCodepage(clientCharset);
         }
 
-      if ((szClientCharset != NULL && szDbCharset == NULL)
-          || (szClientCharset == NULL && szDbCharset != NULL))
+      if ((clientCharset != "" && dbCharset == "")
+          || (clientCharset == "" && dbCharset != ""))
         {
           dbgw::NotExistCharsetException e;
           DBGW_LOG_ERROR(e.what());
           throw e;
         }
+
+      sql::DataBaseType dbType = properties.getDataBaseType(XN_GROUP_PR_DBTYPE);
+#if !defined(DBGW_ALL)
+#if defined(DBGW_MYSQL)
+      if (dbType != sql::DBGW_DB_TYPE_MYSQL)
+        {
+          InvalidDbTypeException e(getDbTypeString(dbType));
+          DBGW_LOG_ERROR(e.what());
+          throw e;
+        }
+#elif defined(DBGW_ORACLE)
+      if (dbType != sql::DBGW_DB_TYPE_ORACLE)
+        {
+          InvalidDbTypeException e(getDbTypeString(dbType));
+          DBGW_LOG_ERROR(e.what());
+          throw e;
+        }
+#else
+      if (dbType != sql::DBGW_DB_TYPE_CUBRID)
+        {
+          InvalidDbTypeException e(getDbTypeString(dbType));
+          DBGW_LOG_ERROR(e.what());
+          throw e;
+        }
+#endif /* DBGW_ORACLE */
+#endif /* DBGW_ALL */
 
       m_pGroup = trait<_Group>::sp(
           new _Group(m_pService.get(), m_pSelf->getFileName(),
@@ -1056,7 +1162,7 @@ namespace dbgw
                   false),
               properties.getInt(XN_GROUP_PR_MAX_PREPARED_STATEMENT_SIZE, false,
                   _Executor::DEFAULT_MAX_PREPARED_STATEMENT_SIZE()), dbCodePage,
-              clientCodePage));
+              clientCodePage, dbType));
       m_pService->addGroup(m_pGroup);
     }
 
@@ -1129,8 +1235,8 @@ namespace dbgw
           m_url = m_url + m_dbinfo;
         }
 
-      const char *szUser = properties.get(XN_HOST_PR_USER, false);
-      const char *szPasword = properties.get(XN_HOST_PR_PASSWORD, false);
+      std::string user = properties.get(XN_HOST_PR_USER, false);
+      std::string pasword = properties.get(XN_HOST_PR_PASSWORD, false);
 
       int nWeight = properties.getInt(XN_HOST_PR_WEIGHT, true, 1);
       if (nWeight <= 0)
@@ -1141,7 +1247,7 @@ namespace dbgw
         }
 
       m_pHost = trait<_Host>::sp(
-          new _Host(m_url.c_str(), szUser, szPasword, nWeight));
+          new _Host(m_url, user, pasword, nWeight));
       m_pGroup->addHost(m_pHost);
     }
 
@@ -1272,14 +1378,14 @@ namespace dbgw
       m_fileName = fileName;
     }
 
-    void setGlobalGroupName(const char *szGlobalGroupName)
+    void setGlobalGroupName(const std::string &globalGroupName)
     {
-      m_globalGroupName = szGlobalGroupName;
+      m_globalGroupName = globalGroupName;
     }
 
-    void setLocalGroupName(const char *szLocalGroupName)
+    void setLocalGroupName(const std::string &localGroupName)
     {
-      m_localGroupName = szLocalGroupName;
+      m_localGroupName = localGroupName;
     }
 
     void setStatementType(sql::StatementType statementType)
@@ -1287,9 +1393,9 @@ namespace dbgw
       m_statementType = statementType;
     }
 
-    void setSqlName(const char *szSqlName)
+    void setSqlName(const std::string &sqlName)
     {
-      m_sqlName = szSqlName;
+      m_sqlName = sqlName;
     }
 
     void setParameter(const std::string &name, int nIndex,
@@ -1329,16 +1435,16 @@ namespace dbgw
       m_queryParamList.push_back(stParam);
     }
 
-    void setParameter(const char *szMode, const char *szName,
-        ValueType valueType, sql::ParameterMode mode, int nSize)
+    void setParameter(const std::string &name, ValueType valueType,
+        sql::ParameterMode mode, int nSize)
     {
-      if (isImplicitParamName(szName))
+      if (isImplicitParamName(name.c_str()))
         {
           throw getLastException();
         }
 
       _QueryParameter stParam;
-      stParam.name = szName;
+      stParam.name = name;
       stParam.type = valueType;
       stParam.mode = mode;
       stParam.index = m_queryParamList.size();
@@ -1493,14 +1599,14 @@ namespace dbgw
     m_pImpl->setFileName(fileName);
   }
 
-  void _QueryMapContext::setGlobalGroupName(const char *szGlobalGroupName)
+  void _QueryMapContext::setGlobalGroupName(const std::string &globalGroupName)
   {
-    m_pImpl->setGlobalGroupName(szGlobalGroupName);
+    m_pImpl->setGlobalGroupName(globalGroupName);
   }
 
-  void _QueryMapContext::setLocalGroupName(const char *szLocalGroupName)
+  void _QueryMapContext::setLocalGroupName(const std::string &localGroupName)
   {
-    m_pImpl->setLocalGroupName(szLocalGroupName);
+    m_pImpl->setLocalGroupName(localGroupName);
   }
 
   void _QueryMapContext::setStatementType(sql::StatementType statementType)
@@ -1508,9 +1614,9 @@ namespace dbgw
     m_pImpl->setStatementType(statementType);
   }
 
-  void _QueryMapContext::setSqlName(const char *szSqlName)
+  void _QueryMapContext::setSqlName(const std::string &sqlName)
   {
-    m_pImpl->setSqlName(szSqlName);
+    m_pImpl->setSqlName(sqlName);
   }
 
   void _QueryMapContext::setParameter(const std::string &name, int nIndex,
@@ -1519,10 +1625,10 @@ namespace dbgw
     m_pImpl->setParameter(name, nIndex, valueType, mode, nSize);
   }
 
-  void _QueryMapContext::setParameter(const char *szMode, const char *szName,
+  void _QueryMapContext::setParameter(const std::string &name,
       ValueType valueType, sql::ParameterMode mode, int nSize)
   {
-    m_pImpl->setParameter(szMode, szName, valueType, mode, nSize);
+    m_pImpl->setParameter(name, valueType, mode, nSize);
   }
 
   void _QueryMapContext::setResult(const std::string &name, size_t nIndex,
@@ -1621,19 +1727,20 @@ namespace dbgw
     m_parserContext.setLocalGroupName("__FIRST__");
     m_parserContext.setSqlName(properties.get(XN_10_SQL_PR_NAME, true));
 
-    const char *pType = properties.getCString(XN_10_SQL_PR_TYPE, false);
-    if (pType != NULL)
+    std::string type = properties.get(XN_10_SQL_PR_TYPE, false);
+    if (type != "")
       {
-        if (!strcasecmp(pType, "selcet"))
+        if (!strcasecmp(type.c_str(), "selcet"))
           {
             m_parserContext.setStatementType(sql::DBGW_STMT_TYPE_SELECT);
           }
-        else if (!strcasecmp(pType, "update") && !strcasecmp(pType, "delete")
-            && !strcasecmp(pType, "insert"))
+        else if (!strcasecmp(type.c_str(), "update")
+            || !strcasecmp(type.c_str(), "delete")
+            || !strcasecmp(type.c_str(), "insert"))
           {
             m_parserContext.setStatementType(sql::DBGW_STMT_TYPE_UPDATE);
           }
-        else if (!strcasecmp(pType, "procedure"))
+        else if (!strcasecmp(type.c_str(), "procedure"))
           {
             m_parserContext.setStatementType(sql::DBGW_STMT_TYPE_PROCEDURE);
           }
@@ -1783,10 +1890,10 @@ namespace dbgw
       }
 
     m_parserContext.setSqlName(properties.get(XN_20_SQL_PR_NAME, true));
-    const char *szModuleID = properties.getCString(XN_20_SQL_PR_DB, false);
-    if (szModuleID != NULL)
+    std::string moduleID = properties.get(XN_20_SQL_PR_DB, false);
+    if (moduleID != "")
       {
-        m_parserContext.setLocalGroupName(szModuleID);
+        m_parserContext.setLocalGroupName(moduleID);
       }
   }
 
@@ -1802,7 +1909,6 @@ namespace dbgw
       }
 
     m_parserContext.setParameter(
-        properties.getCString(XN_20_PARAM_PR_MODE, false),
         properties.get(XN_20_PARAM_PR_NAME, true),
         properties.get20ValueType(XN_20_PARAM_PR_TYPE),
         properties.getBindMode(XN_20_PARAM_PR_MODE),
@@ -1940,7 +2046,7 @@ namespace dbgw
         return;
       }
 
-    m_parserContext.setParameter(properties.get(XN_30_PARAM_PR_MODE, true),
+    m_parserContext.setParameter(
         properties.get(XN_30_PARAM_PR_NAME, true),
         properties.get30ValueType(XN_30_PARAM_PR_TYPE),
         properties.getBindMode(XN_30_PARAM_PR_MODE),
@@ -2069,7 +2175,7 @@ namespace dbgw
         return;
       }
 
-    _Logger::setLogPath(properties.getCString(XN_LOG_PR_PATH, false));
+    _Logger::setLogPath(properties.get(XN_LOG_PR_PATH, false));
     _Logger::setLogLevel(properties.getLogLevel(XN_LOG_PR_LEVEL));
     _Logger::setForceFlush(
         properties.getBool(XN_LOG_PR_FORCE_FLUSH,
@@ -2107,32 +2213,32 @@ namespace dbgw
         return;
       }
 
-    const char *szFile = properties.getCString(XN_INCLUDE_PR_FILE, false);
-    const char *szPath = properties.getCString(XN_INCLUDE_PR_PATH, false);
+    std::string file = properties.get(XN_INCLUDE_PR_FILE, false);
+    std::string path = properties.get(XN_INCLUDE_PR_PATH, false);
     std::string fileName;
-    if (szFile != NULL)
+    if (file != "")
       {
-        system::_Directory director(szFile);
+        system::_Directory director(file);
         if (director.isDirectory())
           {
-            InvalidPropertyValueException e(getRealFileName().c_str(), szFile,
-                "file name");
+            InvalidPropertyValueException e(getRealFileName().c_str(),
+                file.c_str(), "file name");
             DBGW_LOG_ERROR(e.what());
             throw e;
           }
-        fileName = szFile;
+        fileName = file;
       }
-    else if (szPath != NULL)
+    else if (path != "")
       {
-        system::_Directory director(szPath);
+        system::_Directory director(path);
         if (!director.isDirectory())
           {
-            InvalidPropertyValueException e(getRealFileName().c_str(), szPath,
-                "file path");
+            InvalidPropertyValueException e(getRealFileName().c_str(),
+                path.c_str(), "file path");
             DBGW_LOG_ERROR(e.what());
             throw e;
           }
-        fileName = szPath;
+        fileName = path;
       }
     else
       {
@@ -2211,11 +2317,11 @@ namespace dbgw
         XN_STATISTICS_TIME_BETWEEN_STATISTICS_RUNS_MILLIS, false,
         _StatisticsMonitor::DEFAULT_LOG_INTERVAL_MILSEC());
 
-    unsigned long nMaxFileSizeKBytes = properties.getInt(
+    int nMaxFileSizeKBytes = properties.getInt(
         XN_STATISTICS_MAX_FILE_SIZE_KBYTES, false,
         _StatisticsMonitor::DEFAULT_MAX_FILE_SIZE_KBYTES());
 
-    unsigned long nMaxBackupCount = properties.getInt(
+    int nMaxBackupCount = properties.getInt(
         XN_STATISTICS_MAX_BACKUP_COUNT, false,
         _StatisticsMonitor::DEFAULT_MAX_BACKUP_COUNT());
 
@@ -2226,16 +2332,16 @@ namespace dbgw
 
   void parseXml(_XmlParser *pParser)
   {
-    const char *szPath = pParser->getFileName().c_str();
+    std::string path = pParser->getFileName().c_str();
     std::vector<std::string> fileNameList;
-    system::_Directory directory(szPath);
+    system::_Directory directory(path);
     if (directory.isDirectory())
       {
         directory.getFullPathList(fileNameList);
       }
     else
       {
-        fileNameList.push_back(szPath);
+        fileNameList.push_back(path);
       }
 
     for (std::vector<std::string>::iterator it = fileNameList.begin();

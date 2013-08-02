@@ -155,17 +155,17 @@ struct btree_stats_env
 
 /* for notification log messages */
 #define BTREE_SET_CREATED_OVERFLOW_KEY_NOTIFICATION(THREAD,KEY,OID,C_OID,BTID) \
-		btree_set_error(THREAD, KEY, OID, C_OID, BTID, \
+		btree_set_error(THREAD, KEY, OID, C_OID, BTID, NULL, \
 		ER_NOTIFICATION_SEVERITY, ER_BTREE_CREATED_OVERFLOW_KEY, \
 		__FILE__, __LINE__)
 
 #define BTREE_SET_CREATED_OVERFLOW_PAGE_NOTIFICATION(THREAD,KEY,OID,C_OID,BTID) \
-		btree_set_error(THREAD, KEY, OID, C_OID, BTID, \
+		btree_set_error(THREAD, KEY, OID, C_OID, BTID, NULL, \
 		ER_NOTIFICATION_SEVERITY, ER_BTREE_CREATED_OVERFLOW_PAGE, \
 		__FILE__, __LINE__)
 
 #define BTREE_SET_DELETED_OVERFLOW_PAGE_NOTIFICATION(THREAD,KEY,OID,C_OID,BTID) \
-		btree_set_error(THREAD, KEY, OID, C_OID, BTID, \
+		btree_set_error(THREAD, KEY, OID, C_OID, BTID, NULL, \
 		ER_NOTIFICATION_SEVERITY, ER_BTREE_DELETED_OVERFLOW_PAGE, \
 		__FILE__, __LINE__)
 
@@ -709,7 +709,7 @@ random_exit (THREAD_ENTRY * thread_p)
     {
       LOG_CS_ENTER (thread_p);
       logpb_flush_all_append_pages (thread_p);
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
     }
 
   if ((r % MOD_FACTOR) == 0)
@@ -797,7 +797,7 @@ btree_store_overflow_key (THREAD_ENTRY * thread_p, BTID_INT * btid,
   overflow_file_vfid = btid->ovfid;	/* structure copy */
 
   rec.area_size = size;
-  rec.data = (char *) malloc (size);
+  rec.data = (char *) db_private_alloc (thread_p, size);
   if (rec.data == NULL)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
@@ -824,7 +824,7 @@ btree_store_overflow_key (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
   if (rec.data)
     {
-      free_and_init (rec.data);
+      db_private_free_and_init (thread_p, rec.data);
     }
 
   return ret;
@@ -833,7 +833,7 @@ exit_on_error:
 
   if (rec.data)
     {
-      free_and_init (rec.data);
+      db_private_free_and_init (thread_p, rec.data);
     }
 
   return (ret == NO_ERROR
@@ -864,7 +864,7 @@ btree_load_overflow_key (THREAD_ENTRY * thread_p, BTID_INT * btid,
       return ER_FAILED;
     }
 
-  rec.data = (char *) malloc (rec.area_size);
+  rec.data = (char *) db_private_alloc (thread_p, rec.area_size);
   if (rec.data == NULL)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
@@ -889,7 +889,7 @@ btree_load_overflow_key (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
   if (rec.data)
     {
-      free_and_init (rec.data);
+      db_private_free_and_init (thread_p, rec.data);
     }
 
   return NO_ERROR;
@@ -898,7 +898,7 @@ exit_on_error:
 
   if (rec.data)
     {
-      free_and_init (rec.data);
+      db_private_free_and_init (thread_p, rec.data);
     }
 
   return (ret == NO_ERROR
@@ -3499,7 +3499,7 @@ xbtree_find_multi_uniques (THREAD_ENTRY * thread_p, OID * class_oid,
   else
     {
       result = BTREE_KEY_NOTFOUND;
-      db_private_free (thread_p, found_oids);
+      db_private_free_and_init (thread_p, found_oids);
       *oids = NULL;
       *oids_count = 0;
     }
@@ -3509,7 +3509,7 @@ xbtree_find_multi_uniques (THREAD_ENTRY * thread_p, OID * class_oid,
 error_return:
   if (found_oids != NULL)
     {
-      db_private_free (thread_p, found_oids);
+      db_private_free_and_init (thread_p, found_oids);
     }
   *oids_count = 0;
   *oids = NULL;
@@ -3618,7 +3618,7 @@ xbtree_class_test_unique (THREAD_ENTRY * thread_p, char *buf, int buf_size)
       if ((status == NO_ERROR) && (xbtree_test_unique (thread_p, &btid) != 1))
 	{
 	  BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, NULL, NULL,
-					    NULL, &btid);
+					    NULL, &btid, NULL);
 	  status = ER_BTREE_UNIQUE_FAILED;
 	}
     }
@@ -4921,7 +4921,7 @@ btree_check_by_btid (THREAD_ENTRY * thread_p, BTID * btid)
   if (size < 0)
     {
       fd_size = -size;
-      fd = (char *) malloc (fd_size);
+      fd = (char *) db_private_alloc (thread_p, fd_size);
       if (fd == NULL)
 	{
 	  fd = area;
@@ -4953,7 +4953,7 @@ btree_check_by_btid (THREAD_ENTRY * thread_p, BTID * btid)
 exit_on_end:
   if (fd != area)
     {
-      free_and_init (fd);
+      db_private_free_and_init (thread_p, fd);
     }
   if (btname)
     {
@@ -5075,7 +5075,8 @@ btree_check_all (THREAD_ENTRY * thread_p)
  * Note: Start a <key-oid> check scan on the index.
  */
 int
-btree_keyoid_checkscan_start (BTID * btid, BTREE_CHECKSCAN * btscan)
+btree_keyoid_checkscan_start (THREAD_ENTRY * thread_p, BTID * btid,
+			      BTREE_CHECKSCAN * btscan)
 {
   /* initialize scan structure */
   btscan->btid.vfid.volid = btid->vfid.volid;
@@ -5084,7 +5085,8 @@ btree_keyoid_checkscan_start (BTID * btid, BTREE_CHECKSCAN * btscan)
   BTREE_INIT_SCAN (&btscan->btree_scan);
   btscan->oid_area_size = ISCAN_OID_BUFFER_SIZE;
   btscan->oid_cnt = 0;
-  btscan->oid_ptr = (OID *) malloc (btscan->oid_area_size);
+  btscan->oid_ptr =
+    (OID *) db_private_alloc (thread_p, btscan->oid_area_size);
   if (btscan->oid_ptr == NULL)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
@@ -5178,12 +5180,12 @@ end:
  * Note: End the <key-oid> check scan on the index.
  */
 void
-btree_keyoid_checkscan_end (BTREE_CHECKSCAN * btscan)
+btree_keyoid_checkscan_end (THREAD_ENTRY * thread_p, BTREE_CHECKSCAN * btscan)
 {
   /* Deallocate allocated areas */
   if (btscan->oid_ptr)
     {
-      free_and_init (btscan->oid_ptr);
+      db_private_free_and_init (thread_p, btscan->oid_ptr);
       btscan->oid_area_size = 0;
     }
 }
@@ -9820,7 +9822,7 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added,
 	  else
 	    {
 	      BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, key, oid, cls_oid,
-						btid->sys_btid);
+						btid->sys_btid, NULL);
 	      ret = ER_BTREE_UNIQUE_FAILED;
 	    }
 
@@ -18788,34 +18790,25 @@ btree_get_next_overflow_vpid (char *header_ptr, VPID * overflow_vpid_ptr)
 int
 btree_set_error (THREAD_ENTRY * thread_p, DB_VALUE * key,
 		 OID * obj_oid, OID * class_oid, BTID * btid,
+		 const char *bt_name,
 		 int severity, int err_id, const char *filename, int lineno)
 {
-  char key_str[LINE_MAX];
-  char *keyval = NULL;
-  char *class_name = NULL;
-  char *index_name = NULL;
   char btid_msg_buf[OID_MSG_BUF_SIZE];
   char class_oid_msg_buf[OID_MSG_BUF_SIZE];
   char oid_msg_buf[OID_MSG_BUF_SIZE];
+  char *index_name;
+  char *class_name;
+  char *keyval;
 
-  if (key != NULL)
-    {
-      keyval = pr_valstring (key);
-    }
+  assert (btid != NULL);
 
-  if (keyval != NULL)
-    {
-      strncpy (key_str, keyval, LINE_MAX - 1);
-      key_str[LINE_MAX - 1] = '\0';
-    }
-  else
-    {
-      strcpy (key_str, "*UNKNOWN-KEY*");
-    }
+  /* init as empty string */
+  btid_msg_buf[0] = class_oid_msg_buf[0] = oid_msg_buf[0] = 0;
+  index_name = class_name = keyval = NULL;
 
+  /* fetch index name from the class representation */
   if (class_oid)
     {
-      class_name = heap_get_class_name (thread_p, class_oid);
       if (heap_get_indexinfo_of_btid (thread_p,
 				      class_oid, btid,
 				      NULL, NULL, NULL, NULL,
@@ -18827,40 +18820,49 @@ btree_set_error (THREAD_ENTRY * thread_p, DB_VALUE * key,
 
   if (index_name && btid)
     {
+      /* print valid btid */
       snprintf (btid_msg_buf, OID_MSG_BUF_SIZE, "(B+tree: %d|%d|%d)",
 		btid->vfid.volid, btid->vfid.fileid, btid->root_pageid);
     }
 
-  if (class_name && class_oid)
+  if (class_oid)
     {
-      snprintf (class_oid_msg_buf, OID_MSG_BUF_SIZE, "(CLASS_OID: %d|%d|%d)",
-		class_oid->volid, class_oid->pageid, class_oid->slotid);
+      class_name = heap_get_class_name (thread_p, class_oid);
+      if (class_name)
+	{
+	  snprintf (class_oid_msg_buf, OID_MSG_BUF_SIZE,
+		    "(CLASS_OID: %d|%d|%d)", class_oid->volid,
+		    class_oid->pageid, class_oid->slotid);
+	}
     }
 
-  if (keyval && obj_oid)
+  if (key && obj_oid)
     {
-      snprintf (oid_msg_buf, OID_MSG_BUF_SIZE, "(OID: %d|%d|%d)",
-		obj_oid->volid, obj_oid->pageid, obj_oid->slotid);
+      keyval = pr_valstring (key);
+      if (keyval)
+	{
+	  snprintf (oid_msg_buf, OID_MSG_BUF_SIZE, "(OID: %d|%d|%d)",
+		    obj_oid->volid, obj_oid->pageid, obj_oid->slotid);
+	}
     }
 
   er_set (severity, ARG_FILE_LINE, err_id, 6,
-	  (index_name) ? index_name : "*UNKNOWN-INDEX*",
-	  (index_name && btid) ? btid_msg_buf : "",
-	  (class_name) ? class_name : "*UNKNOWN-CLASS*",
-	  (class_name && class_oid) ? class_oid_msg_buf : "", key_str,
-	  (keyval && obj_oid) ? oid_msg_buf : "");
+	  (index_name) ? index_name : ((bt_name) ? bt_name :
+				       "*UNKNOWN-INDEX*"), btid_msg_buf,
+	  (class_name) ? class_name : "*UNKNOWN-CLASS*", class_oid_msg_buf,
+	  (keyval) ? keyval : "*UNKNOWN-KEY*", oid_msg_buf);
 
   if (keyval)
     {
       free_and_init (keyval);
     }
-  if (index_name)
-    {
-      free_and_init (index_name);
-    }
   if (class_name)
     {
       free_and_init (class_name);
+    }
+  if (index_name)
+    {
+      free_and_init (index_name);
     }
 
   return NO_ERROR;
@@ -19800,7 +19802,7 @@ btree_fix_ovfl_oid_pages_by_btid (THREAD_ENTRY * thread_p, BTID * btid)
   if (size < 0)
     {
       fd_size = -size;
-      fd = (char *) malloc (fd_size);
+      fd = (char *) db_private_alloc (thread_p, fd_size);
       if (fd == NULL)
 	{
 	  fd = area;
@@ -19836,7 +19838,7 @@ exit_on_end:
 
   if (fd != area)
     {
-      free_and_init (fd);
+      db_private_free_and_init (thread_p, fd);
     }
 
   if (btname)
@@ -20425,7 +20427,7 @@ btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
 #if defined(SERVER_MODE)
   bool dummy_clear;
   int lock_ret;
-  int tran_index, s;
+  int tran_index;
   int new_size;
   char *new_ptr = NULL;
 #endif /* SERVER_MODE */

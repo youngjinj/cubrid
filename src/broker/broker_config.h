@@ -31,19 +31,23 @@
 #include "environment_variable.h"
 #endif /* !CAS_FOR_ORACLE && !CAS_FOR_MYSQL */
 
-#define	APPL_SERVER_CAS		0
-#define	APPL_SERVER_CAS_ORACLE	1
-#define	APPL_SERVER_CAS_MYSQL	2
+#define	APPL_SERVER_CAS           0
+#define	APPL_SERVER_CAS_ORACLE    1
+#define APPL_SERVER_CAS_MYSQL51   2
+#define APPL_SERVER_CAS_MYSQL     3
 
 #define IS_APPL_SERVER_TYPE_CAS(x)	\
-	((x == APPL_SERVER_CAS) || (x == APPL_SERVER_CAS_ORACLE) || (x == APPL_SERVER_CAS_MYSQL))
+        ((x == APPL_SERVER_CAS) || (x == APPL_SERVER_CAS_ORACLE) || \
+            (x == APPL_SERVER_CAS_MYSQL51) || (x == APPL_SERVER_CAS_MYSQL))
 #define IS_NOT_APPL_SERVER_TYPE_CAS(x)	!IS_APPL_SERVER_TYPE_CAS(x)
 
-#define APPL_SERVER_CAS_TYPE_NAME			"CAS"
-#define APPL_SERVER_CAS_ORACLE_TYPE_NAME	"CAS_ORACLE"
-#define APPL_SERVER_CAS_MYSQL_TYPE_NAME		"CAS_MYSQL"
+#define APPL_SERVER_CAS_TYPE_NAME               "CAS"
+#define APPL_SERVER_CAS_ORACLE_TYPE_NAME        "CAS_ORACLE"
+#define APPL_SERVER_CAS_MYSQL_TYPE_NAME         "CAS_MYSQL"
+#define APPL_SERVER_CAS_MYSQL51_TYPE_NAME       "CAS_MYSQL51"
+#define APPL_SERVER_CAS_MYSQL61_TYPE_NAME       "CAS_MYSQL61"
 
-#define MAX_BROKER_NUM          100
+#define MAX_BROKER_NUM          50
 
 #define	CONF_LOG_FILE_LEN	128
 
@@ -86,7 +90,7 @@
 
 #define SHARD_NAME_LEN 		      64
 #define DEFAULT_SHARD_NUM_PROXY	 1
-#define DEFAULT_SHARD_MAX_CLIENTS 	 10
+#define DEFAULT_SHARD_MAX_CLIENTS 	 256
 
 #define DEFAULT_SHARD_PROXY_LOG_MAX_SIZE	"100M"
 #define MAX_PROXY_LOG_MAX_SIZE		        1048576	/* about 1G */
@@ -132,7 +136,15 @@ enum t_access_mode_value
   READ_WRITE_ACCESS_MODE = 0,
   READ_ONLY_ACCESS_MODE = 1,
   SLAVE_ONLY_ACCESS_MODE = 2,
-  PH_READ_ONLY_ACCESS_MODE = 3
+};
+
+/* dbi.h must be updated when a new order is added */
+typedef enum t_connect_order_value T_CONNECT_ORDER_VALUE;
+enum t_connect_order_value
+{
+  CONNECT_ORDER_SEQ = 0,
+  CONNECT_ORDER_RANDOM = 1,
+  CONNECT_ORDER_DEFAULT = CONNECT_ORDER_SEQ
 };
 
 typedef enum t_proxy_log_value T_PROXY_LOG_MODE_VALUE;
@@ -218,6 +230,9 @@ struct t_broker_info
 
   char monitor_hang_flag;
   char reject_client_flag;	/* reject clients due to hanging cas/proxy */
+
+  int connect_order;
+
   char shard_flag;
   /*from here, these are used only in shard */
   int proxy_shm_id;
@@ -260,6 +275,7 @@ extern int conf_get_value_table_on_off (const char *value);
 extern int conf_get_value_sql_log_mode (const char *value);
 extern int conf_get_value_keep_con (const char *value);
 extern int conf_get_value_access_mode (const char *value);
+extern int conf_get_value_connect_order (const char *value);
 
 extern int conf_get_value_proxy_log_mode (const char *value);
 

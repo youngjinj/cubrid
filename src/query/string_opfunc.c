@@ -2101,7 +2101,12 @@ db_string_substring (const MISC_OPERAND substr_operand,
 
 		  if (start_offset < 0)
 		    {
-		      string += string_len + start_offset;
+		      int byte_pos;
+		      (void) intl_char_size (string,
+					     string_len + start_offset,
+					     DB_GET_STRING_CODESET
+					     (src_string), &byte_pos);
+		      string += byte_pos;
 		      string_len = -start_offset;
 		    }
 		}
@@ -6855,6 +6860,12 @@ qstr_pad_string (unsigned char *s, int length, INTL_CODESET codeset)
   unsigned char pad[2];
   int i, j, pad_size = 0;
 
+  if (length == 0)
+    {
+      return s;
+    }
+
+  assert (length > 0);
 
   intl_pad_char (codeset, pad, &pad_size);
 
@@ -9329,6 +9340,17 @@ qstr_coerce (const unsigned char *src,
 						(*dest_length - copy_length),
 						dest_codeset);
       *dest_size = CAST_STRLEN (end_of_string - (char *) (*dest));
+
+      if (conv_status != 0)
+	{
+	  /* conversion error occured, re-count characters so that we comply
+	   * to computed precision */
+	  (void) intl_char_size (*dest, *dest_length, dest_codeset,
+				 dest_size);
+	  end_of_string = *dest + *dest_size;
+	  *end_of_string = '\0';
+	}
+
       assert (*dest_size <= alloc_size);
 
       if (conv_status != 0 && er_errid () != ER_CHAR_CONV_NO_MATCH)
@@ -25110,8 +25132,20 @@ db_conv (const DB_VALUE * num, const DB_VALUE * from_base,
     }
   else if (TP_IS_CHAR_TYPE (num_type))
     {
-      /* get string */
-      num_p_str = DB_PULL_STRING (num);
+      /* copy into a null-terminated string */
+      int str_size = DB_GET_STRING_SIZE (num);
+
+      if (str_size >= 0)
+	{
+	  str_size = MIN (str_size, sizeof (num_str) - 1);
+	}
+      else
+	{
+	  str_size = sizeof (num_str) - 1;
+	}
+      strncpy (num_str, DB_PULL_STRING (num), str_size);
+      num_str[str_size] = '\0';
+      num_p_str = num_str;
     }
   else if (TP_IS_BIT_TYPE (num_type))
     {

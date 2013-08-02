@@ -142,19 +142,17 @@ namespace dbgw
 
   void _ExecutorStatement::bindParameter(const _Parameter &parameter)
   {
-    if (parameter.size() == 0)
-      {
-        return;
-      }
-
     if (_Logger::isWritable(CCI_LOG_LEVEL_DEBUG))
       {
         m_paramLogDecorator.clear();
       }
 
+    std::string inout = "";
     const Value *pValue = NULL;
     for (size_t i = 0, size = m_pQuery->getBindNum(); i < size; i++)
       {
+        inout = "";
+
         const _QueryParameter &stParam =
             m_pQuery->getQueryParamByPlaceHolderIndex(i);
 
@@ -213,6 +211,7 @@ namespace dbgw
         if (stParam.mode == sql::DBGW_PARAM_MODE_OUT
             || stParam.mode == sql::DBGW_PARAM_MODE_INOUT)
           {
+            inout = "|OUT";
             m_pCallableStatement->registerOutParameter(i, stParam.type,
                 stParam.size);
           }
@@ -224,13 +223,13 @@ namespace dbgw
               {
                 m_paramLogDecorator.addLog("NULL");
                 m_paramLogDecorator.addLogDesc(
-                    getValueTypeString(stParam.type));
+                    getValueTypeString(stParam.type) + inout);
               }
             else
               {
                 m_paramLogDecorator.addLog(pValue->toString());
                 m_paramLogDecorator.addLogDesc(
-                    getValueTypeString(pValue->getType()));
+                    getValueTypeString(pValue->getType()) + inout);
               }
           }
       }
@@ -521,9 +520,9 @@ namespace dbgw
       }
   }
 
-  _ExecutorStatementPool::_ExecutorStatementPool(_StatisticsItem &statItem,
-      size_t nMaxLRUSize) :
-    m_nMaxLRUSize(nMaxLRUSize), m_statItem(statItem)
+  _ExecutorStatementPool::_ExecutorStatementPool(
+      trait<_StatisticsItem>::sp pStatItem, size_t nMaxLRUSize) :
+    m_nMaxLRUSize(nMaxLRUSize), m_pStatItem(pStatItem)
   {
   }
 
@@ -550,7 +549,7 @@ namespace dbgw
         m_statementMap[fullSqlText] = _ExecutorStatementPoolValue(pProxy,
             keyListIt);
 
-        m_statItem[DBGW_STMT_POOL_STAT_COL_TOTAL_CNT]++;
+        m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_TOTAL_CNT)++;
       }
     else
       {
@@ -566,25 +565,25 @@ namespace dbgw
   _ExecutorStatement *_ExecutorStatementPool::get(
       const std::string &fullSqlText)
   {
-    m_statItem[DBGW_STMT_POOL_STAT_COL_GET_CNT]++;
+    m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_GET_CNT)++;
 
     _ExecutorStatement *pProxy = NULL;
     _ExecutorStatementPoolHashMap::iterator it = m_statementMap.find(fullSqlText);
     if (it != m_statementMap.end())
       {
-        m_statItem[DBGW_STMT_POOL_STAT_COL_HIT_CNT]++;
+        m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_HIT_CNT)++;
         pProxy = it->second.first;
       }
 
-    m_statItem[DBGW_STMT_POOL_STAT_COL_HIT_RATIO] =
-        (double) m_statItem[DBGW_STMT_POOL_STAT_COL_HIT_CNT].getLong()
-        / m_statItem[DBGW_STMT_POOL_STAT_COL_GET_CNT].getLong();
+    m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_HIT_RATIO) =
+        (double) m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_HIT_CNT).getLong()
+        / m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_GET_CNT).getLong();
     return pProxy;
   }
 
   void _ExecutorStatementPool::clear()
   {
-    m_statItem[DBGW_STMT_POOL_STAT_COL_TOTAL_CNT] -=
+    m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_TOTAL_CNT) -=
         (int64) m_statementKeyList.size();
     m_statementKeyList.clear();
 
@@ -619,8 +618,8 @@ namespace dbgw
             m_statementMap.erase(it);
           }
 
-        m_statItem[DBGW_STMT_POOL_STAT_COL_TOTAL_CNT]--;
-        m_statItem[DBGW_STMT_POOL_STAT_COL_EVICT_CNT]++;
+        m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_TOTAL_CNT)--;
+        m_pStatItem->getColumn(DBGW_STMT_POOL_STAT_COL_EVICT_CNT)++;
       }
   }
 

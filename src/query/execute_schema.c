@@ -3557,7 +3557,7 @@ end:
 
   if (attnames_allocated)
     {
-      for (i = 0; attnames[i]; i++)
+      for (i = 0; attnames && attnames[i]; i++)
 	{
 	  free_and_init (attnames[i]);
 	}
@@ -9921,7 +9921,7 @@ do_alter_clause_change_attribute (PARSER_CONTEXT * const parser,
   /* save class MOP */
   class_mop = ctemplate->op;
 
-  /* check foreign key contraints */
+  /* check foreign key constraints */
   error = do_check_fk_constraints (ctemplate,
 				   alter->info.alter.constraint_list);
   if (error != NO_ERROR)
@@ -13099,7 +13099,7 @@ do_run_upgrade_instances_domain (PARSER_CONTEXT * parser,
 }
 
 /*
- * do_drop_att_constraints() - drops contraints in list associated with a
+ * do_drop_att_constraints() - drops constraints in list associated with a
  *			       class
  *  class_mop(in): class object
  *  constr_info_list(in): constraint list
@@ -13142,7 +13142,7 @@ error_exit:
 }
 
 /*
- * do_recreate_att_constraints() - (re-)creates contraints in list associated
+ * do_recreate_att_constraints() - (re-)creates constraints in list associated
  *				    with a class
  *  class_mop(in): class object
  *  constr_info_list(in): constraint list
@@ -13325,8 +13325,8 @@ check_change_attribute (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
       goto exit;
     }
 
-  /* check if domain type is indexable : for contraints that may be
-   * acquired with ALTER.. CHANGE, check both if the contraint is present
+  /* check if domain type is indexable : for constraints that may be
+   * acquired with ALTER.. CHANGE, check both if the constraint is present
    * in either old or new schema;
    * if constraint cannot be acquired with CHANGE, check only if it is present
    * with old schema*/
@@ -13662,7 +13662,7 @@ do_check_rows_for_null (MOP class_mop, const char *att_name, bool * has_nulls)
     }
 
   n = snprintf (query, sizeof (query) / sizeof (char),
-		"SELECT count(*) FROM [%s] WHERE [%s] IS NULL LIMIT 1",
+		"SELECT count(*) FROM [%s] WHERE [%s] IS NULL",
 		class_name, att_name);
   if (n < 0 || (n == sizeof (query) / sizeof (char)))
     {

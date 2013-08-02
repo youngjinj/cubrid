@@ -137,6 +137,8 @@ extern void libcas_srv_handle_free (int h_id);
 
 void set_cas_info_size (void);
 
+static int query_sequence_num = 0;
+
 int cas_shard_flag = OFF;
 int shm_shard_id = SHARD_ID_UNSUPPORTED;
 
@@ -215,7 +217,7 @@ static T_SERVER_FUNC server_fn_table[] = {
   fn_not_supported,		/* CAS_FC_XA_END_TRAN */
   fn_con_close,			/* CAS_FC_CON_CLOSE */
   fn_check_cas,			/* CAS_FC_CHECK_CAS */
-  fn_not_supported,		/* CAS_FC_MAKE_OUT_RS */
+  fn_make_out_rs,		/* CAS_FC_MAKE_OUT_RS */
   fn_not_supported,		/* CAS_FC_GET_GENERATED_KEYS */
   fn_not_supported,		/* CAS_FC_LOB_NEW */
   fn_not_supported,		/* CAS_FC_LOB_WRITE */
@@ -481,13 +483,6 @@ main (int argc, char *argv[])
 
   set_cubrid_home ();
 
-  cas_log_open (broker_name);
-  cas_slow_log_open (broker_name);
-  cas_log_write_and_end (0, true, "CAS STARTED pid %d", getpid ());
-#if defined(CAS_FOR_ORACLE) || defined(CAS_FOR_MYSQL)
-  cas_error_log_open (broker_name);
-#endif
-
   if (cas_shard_flag == ON)
     {
       res = shard_cas_main ();
@@ -537,6 +532,7 @@ shard_cas_main (void)
     }
   net_buf.alloc_size = SHARD_NET_BUF_ALLOC_SIZE;
 
+  as_info->service_ready_flag = TRUE;
   as_info->con_status = CON_STATUS_IN_TRAN;
   as_info->cur_keep_con = KEEP_CON_DEFAULT;
   errors_in_transaction = 0;
@@ -559,6 +555,13 @@ conn_retry:
   is_first = false;
 
   net_timeout_set (-1);
+
+  cas_log_open (broker_name);
+  cas_slow_log_open (broker_name);
+  cas_log_write_and_end (0, true, "CAS STARTED pid %d", getpid ());
+#if defined(CAS_FOR_ORACLE) || defined(CAS_FOR_MYSQL)
+  cas_error_log_open (broker_name);
+#endif
 
   /* This is a only use in proxy-cas internal message */
   req_info.client_version = CAS_PROTO_CURRENT_VER;
@@ -637,8 +640,6 @@ conn_retry:
 	SLEEP_SEC (1);
 	goto conn_proxy_retry;
       }
-
-    as_info->service_ready_flag = TRUE;
 
 #if defined(WINDOWS)
     as_info->uts_status = UTS_STATUS_BUSY;
@@ -861,6 +862,10 @@ cas_main (void)
     }
   net_buf.alloc_size = NET_BUF_ALLOC_SIZE;
 
+  cas_log_open (broker_name);
+  cas_slow_log_open (broker_name);
+  cas_log_write_and_end (0, true, "CAS STARTED pid %d", getpid ());
+
 #if defined(WINDOWS)
   as_info->as_port = new_port;
 #endif /* WINDOWS */
@@ -1031,7 +1036,7 @@ cas_main (void)
 	  {
 	    char len;
 	    unsigned char *ip_addr;
-	    char *db_err_msg = NULL, *url;
+	    char *db_err_msg = NULL, *url = NULL;
 	    struct timeval cas_start_time;
 
 	    gettimeofday (&cas_start_time, NULL);
@@ -1070,6 +1075,8 @@ cas_main (void)
 
 	    if (req_info.client_version >= CAS_MAKE_VER (8, 4, 0))
 	      {
+		assert (url != NULL);
+
 		db_sessionid = url + SRV_CON_URL_SIZE;
 		db_sessionid[SRV_CON_DBSESS_ID_SIZE - 1] = '\0';
 	      }
@@ -1084,12 +1091,14 @@ cas_main (void)
 	    if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (req_info.client_version,
 						     PROTOCOL_V5))
 	      {
+		assert (url != NULL);
+
 		len = *(url + strlen (url) + 1);
 		if (len > 0 && len < SRV_CON_VER_STR_MAX_SIZE)
 		  {
 		    memcpy (as_info->driver_version, url + strlen (url) + 2,
 			    (int) len);
-		    as_info->driver_version[len + 1] = '\0';
+		    as_info->driver_version[len] = '\0';
 		  }
 		else
 		  {
@@ -1215,6 +1224,8 @@ cas_main (void)
 
 		goto finish_cas;
 	      }
+
+	    FREE_MEM (db_err_msg);
 
 	    set_hang_check_time ();
 
@@ -1691,6 +1702,12 @@ process_request (SOCKET sock_fd, T_NET_BUF * net_buf, T_REQ_INFO * req_info)
 	  fn_ret = FN_CLOSE_CONN;
 
 #ifndef LIBCAS_FOR_JSP
+	  if (as_info->reset_flag)
+	    {
+	      cas_log_msg = "RESET";
+	      cas_log_write_and_end (0, true, cas_log_msg);
+	      fn_ret = FN_KEEP_SESS;
+	    }
 	  if (as_info->con_status == CON_STATUS_CLOSE_AND_CONNECT)
 	    {
 	      cas_log_msg = "CHANGE CLIENT";
@@ -2336,6 +2353,12 @@ net_read_int_keep_con_auto (SOCKET clt_sock_fd,
 	  cas_slow_log_reset (broker_name);
 	}
 
+      if (as_info->con_status != CON_STATUS_IN_TRAN
+	  && as_info->reset_flag == TRUE)
+	{
+	  return -1;
+	}
+
       if (as_info->con_status == CON_STATUS_CLOSE
 	  || as_info->con_status == CON_STATUS_CLOSE_AND_CONNECT)
 	{
@@ -2780,3 +2803,15 @@ set_db_parameter (void)
 }
 #endif /* !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL) */
 #endif /* !LIBCAS_FOR_JSP */
+
+int
+query_seq_num_next_value (void)
+{
+  return ++query_sequence_num;
+}
+
+int
+query_seq_num_current_value (void)
+{
+  return query_sequence_num;
+}

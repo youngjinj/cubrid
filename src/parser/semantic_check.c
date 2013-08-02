@@ -166,9 +166,6 @@ static SEMAN_COMPATIBLE_INFO *pt_get_compatible_info (PARSER_CONTEXT * parser,
 						      PT_NODE * select_list1,
 						      PT_NODE * select_list2,
 						      bool * need_cast);
-static int pt_cast_select_list_to_arg_list (PARSER_CONTEXT * parser,
-					    PT_NODE * query,
-					    PT_NODE * arg_list);
 static bool pt_combine_compatible_info (PARSER_CONTEXT * parser,
 					SEMAN_COMPATIBLE_INFO * cinfo1,
 					SEMAN_COMPATIBLE_INFO * cinfo2,
@@ -340,6 +337,8 @@ static DB_OBJECT *pt_check_user_exists (PARSER_CONTEXT * parser,
 static int pt_collection_assignable (PARSER_CONTEXT * parser,
 				     const PT_NODE * d_col,
 				     const PT_NODE * s_col);
+static int pt_assignment_class_compatible (PARSER_CONTEXT * parser,
+					   PT_NODE * lhs, PT_NODE * rhs);
 static PT_NODE *pt_assignment_compatible (PARSER_CONTEXT * parser,
 					  PT_NODE * lhs, PT_NODE * rhs);
 static int pt_check_defaultf (PARSER_CONTEXT * parser, PT_NODE * node);
@@ -5859,6 +5858,9 @@ pt_check_partition_values (PARSER_CONTEXT * parser, PT_TYPE_ENUM desired_type,
 
   for (val = parts->info.parts.values; val != NULL; val = val->next)
     {
+      bool has_different_collation = false;
+      bool has_different_codeset = false;
+
       if (val->node_type != PT_VALUE)
 	{
 	  /* Only values are allowed in partition LIST or RANGE
@@ -5870,22 +5872,48 @@ pt_check_partition_values (PARSER_CONTEXT * parser, PT_TYPE_ENUM desired_type,
 	  break;
 	}
 
-      if (PT_HAS_COLLATION (val->type_enum) && val->data_type != NULL
-	  && data_type != NULL && PT_HAS_COLLATION (data_type->type_enum)
-	  && data_type->info.data_type.units
-	  != val->data_type->info.data_type.units)
+      if (PT_HAS_COLLATION (val->type_enum) && data_type != NULL
+	  && PT_HAS_COLLATION (data_type->type_enum))
 	{
+	  if ((val->data_type != NULL
+	       && data_type->info.data_type.units
+	       != val->data_type->info.data_type.units)
+	      || (val->data_type == NULL
+		  && data_type->info.data_type.units != LANG_SYS_CODESET))
+	    {
+	      has_different_codeset = true;
+	    }
+
+	  if ((val->data_type != NULL
+	       && data_type->info.data_type.collation_id
+	       != val->data_type->info.data_type.collation_id)
+	      || (val->data_type == NULL
+		  && data_type->info.data_type.collation_id
+		  != LANG_SYS_COLLATION))
+	    {
+	      has_different_collation = true;
+	    }
+	}
+
+      if (has_different_codeset == true)
+	{
+	  int val_codeset;
+
+	  val_codeset = (val->data_type != NULL)
+	    ? val->data_type->info.data_type.units : LANG_SYS_CODESET;
+
 	  error = ER_FAILED;
 	  PT_ERRORmf2 (parser, val, MSGCAT_SET_PARSER_SEMANTIC,
 		       MSGCAT_SEMANTIC_PARTITION_VAL_CODESET,
-		       lang_charset_introducer (val->data_type->
-						info.data_type.units),
+		       lang_charset_introducer (val_codeset),
 		       lang_charset_introducer (data_type->
 						info.data_type.units));
 	  break;
 	}
 
-      if (val->type_enum != PT_TYPE_NULL && val->type_enum != desired_type)
+      if (val->type_enum != PT_TYPE_NULL
+	  && (val->type_enum != desired_type
+	      || has_different_collation == true))
 	{
 	  /* Coerce this value to the desired type. We have to preserve the
 	   * original text of the value for replication reasons. The coercion
@@ -11723,6 +11751,43 @@ pt_check_unique_attr (PARSER_CONTEXT * parser, const char *entity_name,
 }
 
 /*
+ * pt_assignment_class_compatible () - Make sure that the rhs is a valid
+ *                                     candidate for assignment into the lhs
+ *   return: error_code
+ *   parser(in): handle to context used to parse the insert statement
+ *   lhs(in): the AST form of an attribute from the namelist part of an insert
+ *   rhs(in): the AST form of an expression from the values part of an insert
+ */
+static int
+pt_assignment_class_compatible (PARSER_CONTEXT * parser, PT_NODE * lhs,
+				PT_NODE * rhs)
+{
+  assert (parser != NULL);
+  assert (lhs != NULL);
+  assert (lhs->node_type == PT_NAME);
+  assert (lhs->type_enum != PT_TYPE_NONE);
+  assert (rhs != NULL);
+
+  if (lhs->node_type == PT_NAME)
+    {
+      if (lhs->type_enum == PT_TYPE_OBJECT)
+	{
+	  if (!pt_class_assignable (parser, lhs->data_type, rhs))
+	    {
+	      /* incompatible object domains */
+	      PT_ERRORmf (parser, rhs,
+			  MSGCAT_SET_PARSER_SEMANTIC,
+			  MSGCAT_SEMANTIC_INCOMP_TYPE_ON_ATTR,
+			  lhs->info.name.original);
+	      return ER_FAILED;
+	    }
+	}
+    }
+
+  return NO_ERROR;
+}
+
+/*
  * pt_assignment_compatible () - Make sure that the rhs is a valid candidate
  *	                         for assignment into the lhs
  *   return: the rhs node if compatible, NULL for errors
@@ -11734,8 +11799,10 @@ static PT_NODE *
 pt_assignment_compatible (PARSER_CONTEXT * parser, PT_NODE * lhs,
 			  PT_NODE * rhs)
 {
-  assert (parser != NULL && lhs != NULL &&
-	  rhs != NULL && lhs->node_type == PT_NAME);
+  assert (parser != NULL);
+  assert (lhs != NULL);
+  assert (lhs->node_type == PT_NAME);
+  assert (rhs != NULL);
 
   if (lhs->type_enum == PT_TYPE_OBJECT)
     {
@@ -11748,13 +11815,8 @@ pt_assignment_compatible (PARSER_CONTEXT * parser, PT_NODE * lhs,
 	  return rhs;
 	}
 
-      if (!pt_class_assignable (parser, lhs->data_type, rhs))
+      if (pt_assignment_class_compatible (parser, lhs, rhs) != NO_ERROR)
 	{
-	  /* incompatible object domains */
-	  PT_ERRORmf (parser, rhs,
-		      MSGCAT_SET_PARSER_SEMANTIC,
-		      MSGCAT_SEMANTIC_INCOMP_TYPE_ON_ATTR,
-		      lhs->info.name.original);
 	  return NULL;
 	}
     }
@@ -11907,7 +11969,7 @@ pt_assignment_compatible (PARSER_CONTEXT * parser, PT_NODE * lhs,
 static void
 pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 {
-  PT_NODE *a, *next, *lhs, *rhs, *list;
+  PT_NODE *a, *next, *lhs, *rhs, *list, *rhs_list;
   PT_NODE *assignment_list;
 
   assert (parser != NULL);
@@ -11931,10 +11993,10 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 	      if (pt_is_query (rhs))
 		{
 		  /* check select list length */
-		  if ((list = pt_get_select_list (parser, rhs))
-		      && pt_length_of_select_list (list,
-						   EXCLUDE_HIDDEN_COLUMNS) !=
-		      1)
+		  rhs_list = pt_get_select_list (parser, rhs);
+		  assert (rhs_list != NULL);
+		  if (pt_length_of_select_list (rhs_list,
+						EXCLUDE_HIDDEN_COLUMNS) != 1)
 		    {
 		      /* e.g., a = (select 1, 2 from ...) */
 		      PT_ERRORm (parser, lhs,
@@ -11943,15 +12005,8 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 		    }
 		  else
 		    {
-		      /* rewrite the update query from:
-		       * update col_of_type1 = (select col_of_type2 from ...)
-		       * to
-		       * update col_of_type1 =
-		       *    (select cast(col_of_type2 as type1) from ...)
-		       */
-		      pt_cast_select_list_to_arg_list (parser,
-						       a->info.expr.arg2,
-						       lhs);
+		      (void) pt_assignment_class_compatible (parser, lhs,
+							     rhs_list);
 		    }
 		}
 	      else
@@ -11959,8 +12014,7 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 		  /* Not a query, just check if assignment is possible.
 		     The call below will wrap the rhs node with a cast to the
 		     type of the lhs_node */
-		  a->info.expr.arg2 =
-		    pt_assignment_compatible (parser, lhs, rhs);
+		  (void) pt_assignment_class_compatible (parser, lhs, rhs);
 		}
 	    }
 	  else
@@ -12019,7 +12073,8 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 			}
 		      e2->type_enum = PT_TYPE_NULL;
 
-		      if ((tmp = parser_new_node (parser, PT_EXPR)) == NULL)
+		      tmp = parser_new_node (parser, PT_EXPR);
+		      if (tmp == NULL)
 			{
 			  PT_ERRORm (parser, a,
 				     MSGCAT_SET_PARSER_SEMANTIC,
@@ -12042,20 +12097,36 @@ pt_check_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 		      tmp->next = next;	/* (a, b) = NULL */
 		    }
 		}
-	      else if (pt_is_query (rhs)
-		       && (pt_length_of_list (list) ==
-			   pt_length_of_select_list (pt_get_select_list
-						     (parser, rhs),
-						     EXCLUDE_HIDDEN_COLUMNS)))
+	      else if (pt_is_query (rhs))
 		{
-		  /* CASE 2: check compatibility */
-		  pt_cast_select_list_to_arg_list (parser, rhs, list);
-		}
-	      else
-		{
-		  PT_ERRORm (parser, lhs,
-			     MSGCAT_SET_PARSER_SEMANTIC,
-			     MSGCAT_SEMANTIC_ILLEGAL_LHS);
+		  /* check select list length */
+		  rhs_list = pt_get_select_list (parser, rhs);
+		  assert (rhs_list != NULL);
+		  if (pt_length_of_list (list) !=
+		      pt_length_of_select_list (rhs_list,
+						EXCLUDE_HIDDEN_COLUMNS))
+		    {
+		      PT_ERRORm (parser, lhs,
+				 MSGCAT_SET_PARSER_SEMANTIC,
+				 MSGCAT_SEMANTIC_ILLEGAL_LHS);
+		    }
+		  else
+		    {
+		      for (; list && rhs_list; rhs_list = rhs_list->next)
+			{
+			  if (rhs_list->is_hidden_column)
+			    {
+			      /* skip hidden column */
+			      continue;
+			    }
+
+			  (void) pt_assignment_class_compatible (parser, list,
+								 rhs_list);
+			  list = list->next;
+			}
+		      assert (list == NULL);
+		      assert (rhs_list == NULL);
+		    }
 		}
 	    }
 	  else
@@ -13117,7 +13188,7 @@ pt_check_order_by (PARSER_CONTEXT * parser, PT_NODE * query)
 	}
 
       /*
-       * This case means "select count(*) from athlete limit 1"
+       * This case means "select count(*) from athlete limit ?"
        * This limit clause should be evaluated after "select count(*) from athlete"
        * So we will change it as subquery.
        */
@@ -13428,8 +13499,9 @@ pt_check_order_by (PARSER_CONTEXT * parser, PT_NODE * query)
 						   order->info.sort_spec.expr,
 						   order->next)))
 	{
-	  if (order->info.sort_spec.asc_or_desc !=
-	      match->info.sort_spec.asc_or_desc)
+	  if ((order->info.sort_spec.asc_or_desc !=
+	       match->info.sort_spec.asc_or_desc)
+	      || (pt_to_null_ordering (order) != pt_to_null_ordering (match)))
 	    {
 	      error = MSGCAT_SEMANTIC_SORT_DIR_CONFLICT;
 	      PT_ERRORmf (parser, match,
@@ -13644,127 +13716,6 @@ pt_check_class_eq (PARSER_CONTEXT * parser, PT_NODE * p, PT_NODE * q)
     }
 
   return 0;
-}
-
-/*
- * pt_cast_select_list_to_arg_list () - cast the nodes of a select list to
- *					the types required by the nodes in
- *					the arg_list
- *   return	 : NO_ERROR on success, error code on failure
- *   parser(in)	 : parser context
- *   query(in)	 : the AST of a select query
- *   arg_list(in): the argument list from an insert or update statement
- */
-static int
-pt_cast_select_list_to_arg_list (PARSER_CONTEXT * parser, PT_NODE * query,
-				 PT_NODE * arg_list)
-{
-  int i = 0;
-  PT_NODE *new_node = NULL;
-  PT_NODE *node_list;
-
-  switch (query->node_type)
-    {
-    case PT_SELECT:
-      {
-	PT_NODE *arg = NULL;
-	PT_NODE *val = NULL;
-	PT_NODE *prev = NULL;
-
-	if (PT_IS_VALUE_QUERY (query))	/* values sub-query */
-	  {
-	    for (node_list = query->info.query.q.select.list; node_list;
-		 node_list = node_list->next)
-	      {
-		for (arg = arg_list, val = node_list->info.node_list.list;
-		     val != NULL && arg != NULL;
-		     prev = val, val = val->next, arg = arg->next)
-		  {
-		    new_node = pt_assignment_compatible (parser, arg, val);
-		    if (new_node == NULL)
-		      {
-			return ER_FAILED;
-		      }
-
-		    if (new_node != val)
-		      {
-			val = new_node;
-			/* first node in the list */
-			if (prev == NULL)
-			  {
-			    node_list->info.node_list.list = val;
-			  }
-			else
-			  {
-			    prev->next = val;
-			  }
-		      }
-		  }
-	      }
-	  }
-	else			/* select sub-query */
-	  {
-	    for (arg = arg_list, val = query->info.query.q.select.list;
-		 val != NULL && arg != NULL;
-		 prev = val, val = val->next, arg = arg->next)
-	      {
-		PT_NODE *new_node;
-
-		new_node = pt_assignment_compatible (parser, arg, val);
-		if (new_node == NULL)
-		  {
-		    return ER_FAILED;
-		  }
-
-		if (new_node != val)
-		  {
-		    val = new_node;
-		    /* first node in the list */
-		    if (prev == NULL)
-		      {
-			query->info.query.q.select.list = val;
-		      }
-		    else
-		      {
-			prev->next = val;
-		      }
-		  }
-
-	      }
-	  }
-
-	break;
-      }
-    case PT_DIFFERENCE:
-    case PT_INTERSECTION:
-    case PT_UNION:
-      {
-	int err = NO_ERROR;
-	/* wrap with cast union select values for queries arg1 and arg2 */
-	err =
-	  pt_cast_select_list_to_arg_list (parser,
-					   query->info.query.q.union_.arg1,
-					   arg_list);
-	if (err != NO_ERROR)
-	  {
-	    return err;
-	  }
-
-	err =
-	  pt_cast_select_list_to_arg_list (parser,
-					   query->info.query.q.union_.arg2,
-					   arg_list);
-	if (err != NO_ERROR)
-	  {
-	    return err;
-	  }
-	break;
-      }
-    default:
-      return 0;
-      break;
-    }
-  return NO_ERROR;
 }
 
 /*
@@ -14930,14 +14881,15 @@ pt_check_cume_dist_percent_rank_order_by (PARSER_CONTEXT * parser,
 		}
 	    }
 
-	  if (dom == NULL)
-	    {
-	      error = er_errid ();
-	      goto error_exit;
-	    }
+	  /* Note: it is possible that class is not found.
+	   * i.e. 'select PERCENT_RANK(null,3) within group 
+	   *        (order by score,score1) from 
+	   *        (select NULL score,'00001' score1 from db_root) S;'
+	   *     We just let it go if an attribute could not be found.
+	   */
 
 	  /* for common values */
-	  if (arg->node_type != PT_EXPR)
+	  if (arg->node_type == PT_VALUE && dom != NULL)
 	    {
 	      value = &arg->info.value.db_value;
 	      error = db_value_coerce (value, value, dom);
@@ -15354,6 +15306,8 @@ pt_check_analytic_function (PARSER_CONTEXT * parser, PT_NODE * func,
 	    {
 	      part->info.sort_spec.asc_or_desc =
 		match->info.sort_spec.asc_or_desc;
+	      part->info.sort_spec.nulls_first_or_last =
+		match->info.sort_spec.nulls_first_or_last;
 	    }
 	}
     }
@@ -15472,8 +15426,9 @@ pt_check_analytic_function (PARSER_CONTEXT * parser, PT_NODE * func,
 	      pt_find_matching_sort_spec (parser, order, order->next,
 					  select_list)))
 	{
-	  if (order->info.sort_spec.asc_or_desc !=
-	      match->info.sort_spec.asc_or_desc)
+	  if ((order->info.sort_spec.asc_or_desc !=
+	       match->info.sort_spec.asc_or_desc)
+	      || (pt_to_null_ordering (order) != pt_to_null_ordering (match)))
 	    {
 	      PT_ERRORmf (parser, match,
 			  MSGCAT_SET_PARSER_SEMANTIC,

@@ -935,7 +935,8 @@ proxy_io_make_client_dbinfo_ok (char *driver_info, char **buffer)
 	{
 	  dbms_type = CAS_PROXY_DBMS_ORACLE;
 	}
-      else if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL)
+      else if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL
+	       || proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL51)
 	{
 	  dbms_type = CAS_PROXY_DBMS_MYSQL;
 	}
@@ -1669,7 +1670,7 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
   if (client_version >= CAS_MAKE_VER (8, 2, 0))
     {
       url = db_passwd + SRV_CON_DBPASSWD_SIZE;
-      url[SRV_CON_URL_SIZE + 1] = '\0';
+      url[SRV_CON_URL_SIZE - 1] = '\0';
       driver_version[0] = '\0';
       if (DOES_CLIENT_UNDERSTAND_THE_PROTOCOL (client_version, PROTOCOL_V5))
 	{
@@ -1677,7 +1678,7 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
 	  if (len > 0 && len < SRV_CON_VER_STR_MAX_SIZE)
 	    {
 	      memcpy (driver_version, url + strlen (url) + 2, (int) len);
-	      driver_version[len + 1] = '\0';
+	      driver_version[len] = '\0';
 	    }
 	  else
 	    {
@@ -1722,7 +1723,8 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
   user_p = shard_metadata_get_shard_user (shm_user_p);
   assert (user_p);
 
-  if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL)
+  if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL
+      || proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL51)
     {
       if (strcmp (db_name, user_p->db_name)
 	  || strcmp (db_user, user_p->db_user)
@@ -4553,6 +4555,10 @@ proxy_io_destroy (void)
   proxy_client_io_destroy ();
   proxy_shard_io_destroy ();
 
+#if defined (LINUX)
+  FREE_MEM (ep_Event);
+#endif /* LINUX */
+
   return;
 }
 
@@ -4917,6 +4923,8 @@ proxy_add_epoll_event (int fd, unsigned int events)
   int error;
   struct epoll_event ep_ev;
 
+  memset (&ep_ev, 0, sizeof (ep_ev));
+
   assert (ep_Fd != INVALID_SOCKET);
 
   ep_ev.data.fd = fd;
@@ -4940,6 +4948,8 @@ proxy_mod_epoll_event (int fd, unsigned int events)
   int error;
   struct epoll_event ep_ev;
 
+  memset (&ep_ev, 0, sizeof (ep_ev));
+
   assert (ep_Fd != INVALID_SOCKET);
 
   ep_ev.data.fd = fd;
@@ -4962,6 +4972,8 @@ proxy_del_epoll_event (int fd)
 {
   int error;
   struct epoll_event ep_ev;
+
+  memset (&ep_ev, 0, sizeof (ep_ev));
 
   assert (ep_Fd != INVALID_SOCKET);
 

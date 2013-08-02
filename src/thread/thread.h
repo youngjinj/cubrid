@@ -55,10 +55,13 @@
 
 typedef void THREAD_ENTRY;
 
+#define thread_rc_track_is_on(thread_p) (false)
+#define thread_rc_track_is_off(thread_p) (true)
 #define thread_rc_track_enter(thread_p) (-1)
 #define thread_rc_track_exit(thread_p, idx) (NO_ERROR)
 #define thread_rc_track_amount_pgbuf(thread_p) (0)
 #define thread_rc_track_amount_pgbuf_temp(thread_p) (0)
+#define thread_rc_track_amount_qlist(thread_p) (0)
 #define thread_rc_track_dump_all(thread_p, outfp)
 #define thread_rc_track_meter(thread_p, file, line, amount, ptr, rc_idx, mgr_idx)
 #define thread_get_sort_stats_active(thread_p) (false)
@@ -116,13 +119,17 @@ enum
  * +------------+-----+-------+------+
  * | PGBUF_TEMP |     |   X   |   X  |
  * +------------+-----+-------+------+
+ * | QLIST      |     |   X   |   X  |
+ * +------------+-----+-------+------+
+ * | CS         |     |   X   |   X  |
+ * +------------+-----+-------+------+
  * | LAST       |  X  |   X   |   X  |
  * +------------+-----+-------+------+
  */
 
 /* resource track meters */
 enum
-{ RC_VMEM = 0, RC_PGBUF, RC_PGBUF_TEMP, RC_LAST };
+{ RC_VMEM = 0, RC_PGBUF, RC_PGBUF_TEMP, RC_QLIST, RC_CS, RC_LAST };
 
 /* resource track managers */
 enum
@@ -133,15 +140,17 @@ struct thread_resource_meter
 {
   INT32 m_amount;		/* resource hold counter */
   INT32 m_threshold;		/* for future work, get PRM */
-  char *m_add_file_name;	/* last add file name, line number */
+  const char *m_add_file_name;	/* last add file name, line number */
   INT32 m_add_line_no;
-  char *m_sub_file_name;	/* last sub file name, line number */
+  const char *m_sub_file_name;	/* last sub file name, line number */
   INT32 m_sub_line_no;
 #if !defined(NDEBUG)
   char m_add_buf[ONE_K];	/* total add file name, line number */
   INT32 m_add_buf_size;
   char m_sub_buf[ONE_K];	/* total sub file name, line number */
   INT32 m_sub_buf_size;
+  char m_hold_buf[ONE_K];	/* used specially for each meter */
+  INT32 m_hold_buf_size;
 #endif
 };
 
@@ -154,6 +163,21 @@ struct thread_resource_track
 };
 
 typedef struct thread_entry THREAD_ENTRY;
+
+/* stats for event logging */
+typedef struct event_stat EVENT_STAT;
+struct event_stat
+{
+  /* slow query stats */
+  struct timeval cs_waits;
+  struct timeval lock_waits;
+  struct timeval latch_waits;
+
+  /* temp volume expand stats */
+  int temp_expand_pages;
+  struct timeval temp_expand_time;
+};
+
 struct thread_entry
 {
 #if defined(WINDOWS)
@@ -225,10 +249,7 @@ struct thread_entry
 
   bool sort_stats_active;
 
-  /* slow query stats for event logging */
-  struct timeval cs_waits;
-  struct timeval lock_waits;
-  struct timeval latch_waits;
+  EVENT_STAT event_stats;
 
   /* for query profile */
   int trace_format;
@@ -373,10 +394,13 @@ extern HL_HEAPID css_set_private_heap (THREAD_ENTRY * thread_p,
 extern void thread_set_info (THREAD_ENTRY * thread_p, int client_id, int rid,
 			     int tran_index);
 
+extern bool thread_rc_track_is_on (THREAD_ENTRY * thread_p);
+extern bool thread_rc_track_is_off (THREAD_ENTRY * thread_p);
 extern int thread_rc_track_enter (THREAD_ENTRY * thread_p);
 extern int thread_rc_track_exit (THREAD_ENTRY * thread_p, int id);
 extern int thread_rc_track_amount_pgbuf (THREAD_ENTRY * thread_p);
 extern int thread_rc_track_amount_pgbuf_temp (THREAD_ENTRY * thread_p);
+extern int thread_rc_track_amount_qlist (THREAD_ENTRY * thread_p);
 extern void thread_rc_track_dump_all (THREAD_ENTRY * thread_p, FILE * outfp);
 extern void thread_rc_track_meter (THREAD_ENTRY * thread_p,
 				   const char *file_name,

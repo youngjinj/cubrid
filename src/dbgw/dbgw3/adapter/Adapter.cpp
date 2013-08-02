@@ -827,7 +827,7 @@ namespace DBGW3
     }
 
     DECLSPECIFIER bool __stdcall SetParameter(Handle hParam,
-        const char *szParamName, ValueType type, struct tm &value)
+        const char *szParamName, ValueType type, const struct tm &value)
     {
       dbgw::clearException();
 
@@ -856,7 +856,7 @@ namespace DBGW3
     }
 
     DECLSPECIFIER bool __stdcall SetParameter(Handle hParam, int nIndex,
-        ValueType type, struct tm &value)
+        ValueType type, const struct tm &value)
     {
       dbgw::clearException();
 
@@ -1154,7 +1154,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1185,7 +1186,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1215,7 +1217,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1245,7 +1248,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1276,7 +1280,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1302,7 +1307,8 @@ namespace DBGW3
       dbgw::ClientResultSetMetaDataSharedPtr *pMeta = NULL;
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1340,7 +1346,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1371,7 +1378,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1474,7 +1482,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1505,7 +1514,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1536,7 +1546,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1567,7 +1578,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1598,7 +1610,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1629,7 +1642,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1660,7 +1674,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1691,7 +1706,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1722,7 +1738,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1776,7 +1793,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1830,7 +1848,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1861,7 +1880,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1892,7 +1912,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1923,7 +1944,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1947,6 +1969,80 @@ namespace DBGW3
         }
     }
 
+    DECLSPECIFIER bool __stdcall GetResultSet(Handle hResult, int nIndex,
+        Handle hOutResult)
+    {
+      dbgw::clearException();
+
+      try
+        {
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL
+              || hOutResult == NULL)
+            {
+              dbgw::InvalidHandleException e;
+              DBGW_LOG_ERROR(e.what());
+              throw e;
+            }
+
+          dbgw::ClientResultSetSharedPtr *pResult =
+              (dbgw::ClientResultSetSharedPtr *) hResult;
+
+          dbgw::ClientResultSetSharedPtr *pOutResult =
+              (dbgw::ClientResultSetSharedPtr *) hOutResult;
+
+          *pOutResult = (*pResult)->getClientResultSet(nIndex);
+          if (*pOutResult == NULL)
+            {
+              throw dbgw::getLastException();
+            }
+
+          return true;
+        }
+      catch (dbgw::Exception &e)
+        {
+          dbgw::setLastException(e);
+          return false;
+        }
+    }
+
+    DECLSPECIFIER bool __stdcall GetResultSet(Handle hResult,
+        const char *szName, Handle hOutResult)
+    {
+      dbgw::clearException();
+
+      try
+        {
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL
+              || hOutResult == NULL)
+            {
+              dbgw::InvalidHandleException e;
+              DBGW_LOG_ERROR(e.what());
+              throw e;
+            }
+
+          dbgw::ClientResultSetSharedPtr *pResult =
+              (dbgw::ClientResultSetSharedPtr *) hResult;
+
+          dbgw::ClientResultSetSharedPtr *pOutResult =
+              (dbgw::ClientResultSetSharedPtr *) hOutResult;
+
+          *pOutResult = (*pResult)->getClientResultSet(szName);
+          if (*pOutResult == NULL)
+            {
+              throw dbgw::getLastException();
+            }
+
+          return true;
+        }
+      catch (dbgw::Exception &e)
+        {
+          dbgw::setLastException(e);
+          return false;
+        }
+    }
+
     DECLSPECIFIER bool __stdcall GetType(Handle hResult, int nIndex,
         ValueType *pType)
     {
@@ -1954,7 +2050,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -1988,7 +2085,8 @@ namespace DBGW3
 
       try
         {
-          if (hResult == NULL)
+          if (hResult == NULL
+              || *(dbgw::ClientResultSetSharedPtr *) hResult == NULL)
             {
               dbgw::InvalidHandleException e;
               DBGW_LOG_ERROR(e.what());
@@ -2168,7 +2266,7 @@ namespace DBGW3
 
     void defaultAsyncCallback(int nHandleId,
         dbgw::trait<dbgw::ClientResultSet>::sp pResult,
-        const dbgw::Exception &e)
+        const dbgw::Exception &e, void *pData)
     {
       g_asyncCallbackMutex.lock();
       AsyncCallbackHashMap::iterator it = g_asyncCallbackMap.find(nHandleId);
@@ -2182,18 +2280,18 @@ namespace DBGW3
       if (pResult == NULL)
         {
           (*it->second)(nHandleId, (ResultSet::Handle) NULL,
-              (const Exception::Handle) &e);
+              (const Exception::Handle) &e, pData);
         }
       else
         {
           (*it->second)(nHandleId, (ResultSet::Handle) &pResult,
-              (const Exception::Handle) &e);
+              (const Exception::Handle) &e, pData);
         }
     }
 
     void defaultBatchAsyncCallback(int nHandleId,
         dbgw::trait<dbgw::ClientResultSet>::spvector resultSetList,
-        const dbgw::Exception &e)
+        const dbgw::Exception &e, void *pData)
     {
       g_batchAsyncCallbackMutex.lock();
       BatchAsyncCallbackHashMap::iterator it =
@@ -2205,7 +2303,8 @@ namespace DBGW3
           return;
         }
 
-      (*it->second)(nHandleId, &resultSetList, (const Exception::Handle) &e);
+      (*it->second)(nHandleId, &resultSetList, (const Exception::Handle) &e,
+          pData);
     }
 
     DECLSPECIFIER Handle __stdcall CreateHandle(
@@ -2338,7 +2437,7 @@ namespace DBGW3
 
     DECLSPECIFIER int __stdcall ExecuteAsync(Handle hExecutor,
         const char *szMethod, DBGW3::ParamSet::Handle hParam,
-        AsyncCallBack pCallBack)
+        AsyncCallBack pCallBack, void *pData)
     {
       dbgw::clearException();
 
@@ -2355,7 +2454,7 @@ namespace DBGW3
           dbgw::_Parameter *pParam = (dbgw::_Parameter *) hParam;
 
           int nHandleId = pClient->execAsync(szMethod, pParam,
-              defaultAsyncCallback);
+              defaultAsyncCallback, pData);
           if (nHandleId < 0)
             {
               throw dbgw::getLastException();
@@ -2376,7 +2475,8 @@ namespace DBGW3
 
     DECLSPECIFIER int __stdcall ExecuteAsync(Handle hExecutor,
         const char *szMethod, unsigned long ulMilliseconds,
-        DBGW3::ParamSet::Handle hParam, AsyncCallBack pCallBack)
+        DBGW3::ParamSet::Handle hParam, AsyncCallBack pCallBack,
+        void *pData)
     {
       dbgw::clearException();
 
@@ -2393,7 +2493,7 @@ namespace DBGW3
           dbgw::_Parameter *pParam = (dbgw::_Parameter *) hParam;
 
           int nHandleId = pClient->execAsync(szMethod, pParam,
-              defaultAsyncCallback, ulMilliseconds);
+              defaultAsyncCallback, ulMilliseconds, pData);
           if (nHandleId < 0)
             {
               throw dbgw::getLastException();
@@ -2486,7 +2586,7 @@ namespace DBGW3
 
     DECLSPECIFIER int __stdcall ExecuteBatchAsync(Handle hExecutor,
         const char *szMethod, DBGW3::ParamList::Handle hParamList,
-        BatchAsyncCallBack pCallBack)
+        BatchAsyncCallBack pCallBack, void *pData)
     {
       dbgw::clearException();
 
@@ -2503,7 +2603,7 @@ namespace DBGW3
           dbgw::_ParameterList *pParamList = (dbgw::_ParameterList *) hParamList;
 
           int nHandleId = pClient->execBatchAsync(szMethod, *pParamList,
-              defaultBatchAsyncCallback);
+              defaultBatchAsyncCallback, pData);
           if (nHandleId < 0)
             {
               throw dbgw::getLastException();
@@ -2524,7 +2624,8 @@ namespace DBGW3
 
     DECLSPECIFIER int __stdcall ExecuteBatchAsync(Handle hExecutor,
         const char *szMethod, unsigned long ulMilliseconds,
-        DBGW3::ParamList::Handle hParamList, BatchAsyncCallBack pCallBack)
+        DBGW3::ParamList::Handle hParamList, BatchAsyncCallBack pCallBack,
+        void *pData)
     {
       dbgw::clearException();
 
@@ -2541,7 +2642,7 @@ namespace DBGW3
           dbgw::_ParameterList *pParamList = (dbgw::_ParameterList *) hParamList;
 
           int nHandleId = pClient->execBatchAsync(szMethod, *pParamList,
-              defaultBatchAsyncCallback, ulMilliseconds);
+              defaultBatchAsyncCallback, ulMilliseconds, pData);
           if (nHandleId < 0)
             {
               throw dbgw::getLastException();

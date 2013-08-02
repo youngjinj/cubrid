@@ -55,6 +55,7 @@ namespace dbgw
       virtual const Value *getValue(int nIndex) const;
       virtual trait<Lob>::sp getClob(int nIndex) const;
       virtual trait<Lob>::sp getBlob(int nIndex) const;
+      virtual trait<ResultSet>::sp getResultSet(int nIndex) const;
       virtual trait<ResultSetMetaData>::sp getMetaData() const;
       virtual _ValueSet &getInternalValuSet();
 
@@ -65,6 +66,7 @@ namespace dbgw
       void makeResultSet();
 
     private:
+      MYSQL *m_pMySQL;
       MYSQL_STMT *m_pMySQLStmt;
       int m_nRowCount;
       int m_nCursor;

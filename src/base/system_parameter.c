@@ -383,7 +383,7 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_HA_COPY_LOG_TIMEOUT "ha_copy_log_timeout"
 
-#define PRM_NAME_HA_REPLICA_DELAY_IN_SECS "ha_replica_delay_in_secs"
+#define PRM_NAME_HA_REPLICA_DELAY "ha_replica_delay"
 
 #define PRM_NAME_HA_REPLICA_TIME_BOUND "ha_replica_time_bound"
 
@@ -513,6 +513,7 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
 #define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
+
 
 /*
  * Note about ERROR_LIST and INTEGER_LIST type
@@ -804,7 +805,7 @@ static unsigned int prm_bt_unfill_factor_flag = 0;
 
 float PRM_BT_OID_NBUFFERS = 4.0f;
 static float prm_bt_oid_nbuffers_default = 4.0f;
-static float prm_bt_oid_nbuffers_lower = 0.05f;
+static float prm_bt_oid_nbuffers_lower = 0.049999f;
 static float prm_bt_oid_nbuffers_upper = 16.0f;
 static unsigned int prm_bt_oid_nbuffers_flag = 0;
 
@@ -3142,7 +3143,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_HA_COPY_LOG_TIMEOUT,
-   (PRM_FOR_SERVER | PRM_FOR_HA),
+   (PRM_FOR_SERVER | PRM_FOR_HA | PRM_HIDDEN),
    PRM_INTEGER,
    (void *) &prm_ha_copy_log_timeout_flag,
    (void *) &prm_ha_copy_log_timeout_default,
@@ -3152,8 +3153,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
-  {PRM_NAME_HA_REPLICA_DELAY_IN_SECS,
-   (PRM_FOR_CLIENT | PRM_FOR_HA),
+  {PRM_NAME_HA_REPLICA_DELAY,
+   (PRM_FOR_CLIENT | PRM_FOR_HA | PRM_TIME_UNIT | PRM_DIFFER_UNIT),
    PRM_INTEGER,
    (void *) &prm_ha_replica_delay_in_secs_flag,
    (void *) &prm_ha_replica_delay_in_secs_default,
@@ -3161,8 +3162,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &prm_ha_replica_delay_in_secs_upper,
    (void *) &prm_ha_replica_delay_in_secs_lower,
    (char *) NULL,
-   (DUP_PRM_FUNC) NULL,
-   (DUP_PRM_FUNC) NULL},
+   (DUP_PRM_FUNC) prm_msec_to_sec,
+   (DUP_PRM_FUNC) prm_sec_to_msec},
   {PRM_NAME_HA_REPLICA_TIME_BOUND,
    (PRM_FOR_CLIENT | PRM_FOR_HA),
    PRM_STRING,
@@ -5146,17 +5147,17 @@ prm_sec_to_min (void *out_val, unsigned int out_type,
 
   if (out_type == PRM_INTEGER && in_type == PRM_INTEGER)
     {
-      int *sec_value = (int *) in_val;
       int *min_value = (int *) out_val;
+      int sec_value = *((int *) in_val);
 
-      if (*sec_value < 0)
+      if (sec_value < 0)
 	{
-	  *min_value = *sec_value;
+	  *min_value = sec_value;
 	}
       else
 	{
-	  *min_value = *sec_value / 60;
-	  if (*sec_value % 60 > 0)
+	  *min_value = sec_value / 60;
+	  if (sec_value % 60 > 0)
 	    {
 	      *min_value = *min_value + 1;
 	    }
@@ -5970,7 +5971,7 @@ sysprm_print_sysprm_value (PARAM_ID prm_id, SYSPRM_VALUE value, char *buf,
       else if (PRM_HAS_TIME_UNIT (prm->static_flag))
 	{
 	  INT64 dup_val;
-	  val = PRM_GET_INT (prm->value);
+	  val = value.i;
 
 	  if (PRM_DIFFERENT_UNIT (prm->static_flag) && val >= 0)
 	    {

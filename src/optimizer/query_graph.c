@@ -35,6 +35,7 @@
 #include <values.h>
 #endif /* !WINDOWS */
 
+#include "parser.h"
 #include "error_code.h"
 #include "error_manager.h"
 #include "object_representation.h"
@@ -44,19 +45,15 @@
 #include "schema_manager.h"
 #include "statistics.h"
 #include "system_parameter.h"
-#include "parser.h"
 #include "environment_variable.h"
 #include "xasl_generation.h"
-#include "parser.h"
 #include "query_list.h"
 #include "db.h"
 #include "system_parameter.h"
 #include "memory_alloc.h"
 #include "environment_variable.h"
 #include "util_func.h"
-#include "parser.h"
 
-#include "parser.h"
 #include "locator_cl.h"
 #include "object_domain.h"
 #include "network_interface_cl.h"
@@ -8669,7 +8666,8 @@ qo_discover_sort_limit_nodes (QO_ENV * env)
    */
   for (i = 0; i < env->nterms; i++)
     {
-      if (QO_TERM_CLASS (&env->terms[i]) == QO_TC_AFTER_JOIN)
+      if (QO_TERM_CLASS (&env->terms[i]) == QO_TC_AFTER_JOIN
+	  || QO_TERM_CLASS (&env->terms[i]) == QO_TC_OTHER)
 	{
 	  goto abandon_stop_limit;
 	}

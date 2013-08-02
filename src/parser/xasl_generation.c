@@ -290,9 +290,6 @@ static PT_NODE *pt_append_assignment_references (PARSER_CONTEXT * parser,
 static ODKU_INFO *pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert,
 				   XASL_NODE * xasl,
 				   PT_NODE ** non_null_attrs);
-
-static SORT_NULLS pt_to_null_ordering (PT_NODE * sort_spec);
-
 static REGU_VARIABLE
   * pt_to_cume_dist_percent_rank_regu_variable (PARSER_CONTEXT * parser,
 						PT_NODE * tree, UNBOX unbox);
@@ -3534,7 +3531,7 @@ pt_flush_classes (PARSER_CONTEXT * parser, PT_NODE * node,
 	    {
 	      PT_ERRORc (parser, class_, er_msg ());
 	    }
-	  if (smcls->partition_of)
+	  if (smcls != NULL && smcls->partition_of)
 	    {
 	      /* flush all partitions */
 	      DB_OBJLIST *user = NULL;
@@ -3564,15 +3561,15 @@ pt_flush_classes (PARSER_CONTEXT * parser, PT_NODE * node,
  *   parser(in):
  *   statement(in/out):
  */
-bool
+CLASS_STATUS
 pt_has_modified_class (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
-  bool found = false;
+  CLASS_STATUS status = CLS_NOT_MODIFIED;
 
   parser_walk_tree (parser, statement, pt_has_modified_class_helper,
-		    &found, NULL, NULL);
+		    &status, NULL, NULL);
 
-  return found;
+  return status;
 }
 
 /*
@@ -3588,12 +3585,13 @@ static PT_NODE *
 pt_has_modified_class_helper (PARSER_CONTEXT * parser, PT_NODE * node,
 			      void *arg, int *continue_walk)
 {
-  bool *found_modified_class = (bool *) arg;
+  CLASS_STATUS *status = (CLASS_STATUS *) arg;
   PT_NODE *class_;
   MOP clsmop = NULL;
   SM_CLASS *sm_class = NULL;
+  int error = NO_ERROR;
 
-  if (*found_modified_class)
+  if (*status != CLS_NOT_MODIFIED)
     {
       *continue_walk = PT_STOP_WALK;
       return node;
@@ -3612,15 +3610,29 @@ pt_has_modified_class_helper (PARSER_CONTEXT * parser, PT_NODE * node,
 	      continue;
 	    }
 
-	  if (au_fetch_class_force (clsmop, &sm_class,
-				    AU_FETCH_READ) != NO_ERROR)
+	  if (clsmop->decached)
 	    {
-	      /*
-	       * the class might be dropped. treat error cases
-	       * as the class was modified.
-	       */
-	      *found_modified_class = true;
-
+	      /* the class might be aborted. */
+	      *status = CLS_MODIFIED;
+	    }
+	  else
+	    {
+	      error = au_fetch_class_force (clsmop, &sm_class, AU_FETCH_READ);
+	      if (error != NO_ERROR)
+		{
+		  if (error == ER_HEAP_UNKNOWN_OBJECT)
+		    {
+		      /* the class might be dropped. */
+		      *status = CLS_MODIFIED;
+		    }
+		  else
+		    {
+		      *status = CLS_ERROR;
+		    }
+		}
+	    }
+	  if (*status != CLS_NOT_MODIFIED)
+	    {
 	      /* don't revisit leaves */
 	      *continue_walk = PT_STOP_WALK;
 	      break;
@@ -3639,7 +3651,7 @@ pt_has_modified_class_helper (PARSER_CONTEXT * parser, PT_NODE * node,
 	  else if (class_->info.name.db_object_chn
 		   != locator_get_cache_coherency_number (clsmop))
 	    {
-	      *found_modified_class = true;
+	      *status = CLS_MODIFIED;
 
 	      /* don't revisit leaves */
 	      *continue_walk = PT_STOP_WALK;
@@ -3779,7 +3791,9 @@ int
 pt_is_single_tuple (PARSER_CONTEXT * parser, PT_NODE * select_node)
 {
   if (select_node->info.query.q.select.group_by != NULL)
-    return false;
+    {
+      return false;
+    }
 
   return pt_has_aggregate (parser, select_node);
 }
@@ -6195,7 +6209,7 @@ pt_make_regu_hostvar (PARSER_CONTEXT * parser, const PT_NODE * node)
       if (regu->domain == NULL
 	  && (parser->set_host_var == 1 || typ != DB_TYPE_NULL))
 	{
-	  /* if the host var was given before by the user,
+	  /* if the host var DB_VALUE was initialized before,
 	     use its domain for regu varaible */
 	  regu->domain =
 	    pt_xasl_type_enum_to_domain ((PT_TYPE_ENUM)
@@ -13488,6 +13502,9 @@ pt_to_outlist (PARSER_CONTEXT * parser, PT_NODE * node_list,
       node = node_list->info.node_list.list;
       while (node)
 	{
+#if 0				/* TODO - */
+	  assert (node->type_enum != PT_TYPE_NULL);
+#endif
 	  ++list_len;
 	  node = node->next;
 	}
@@ -13553,6 +13570,9 @@ pt_to_outlist (PARSER_CONTEXT * parser, PT_NODE * node_list,
       CAST_POINTER_TO_NODE (node);
       if (node)
 	{
+#if 0				/* TODO - */
+	  assert (node->type_enum != PT_TYPE_NULL);
+#endif
 
 	  /* reset flag for new node */
 	  skip_hidden = false;
@@ -13597,6 +13617,10 @@ pt_to_outlist (PARSER_CONTEXT * parser, PT_NODE * node_list,
 	  /* make outlist */
 	  for (i = 0; col; col = col->next, i++)
 	    {
+#if 0				/* TODO - */
+	      assert (col->type_enum != PT_TYPE_NULL);
+#endif
+
 	      if (skip_hidden && col->is_hidden_column && i > 0)
 		{
 		  /* we don't need this node; also, we assume the first column
@@ -13668,6 +13692,10 @@ pt_to_outlist (PARSER_CONTEXT * parser, PT_NODE * node_list,
 		{
 		  goto exit_on_error;
 		}
+
+#if 0				/* TODO - */
+	      assert (TP_DOMAIN_TYPE (regu->domain) != DB_TYPE_NULL);
+#endif
 
 	      /* append to outlist */
 	      (*regulist)->value = *regu;
@@ -14872,9 +14900,15 @@ pt_optimize_analytic_list (ANALYTIC_INFO * info)
 	  /* check for same sort spec list */
 	  while (curr_s != NULL && list_s != NULL)
 	    {
+	      /* median sort string in different order */
 	      if (curr_s->pos_descr.pos_no != list_s->pos_descr.pos_no
 		  || curr_s->s_order != list_s->s_order
-		  || curr_s->s_nulls != list_s->s_nulls)
+		  || curr_s->s_nulls != list_s->s_nulls
+		  || ((curr->function == PT_MEDIAN
+		       || list->function == PT_MEDIAN)
+		      && curr->function != list->function
+		      && TP_IS_STRING_TYPE
+		      (TP_DOMAIN_TYPE (curr_s->pos_descr.dom))))
 		{
 		  break;
 		}
@@ -14975,6 +15009,8 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
   bool orderby_skip = false, orderby_ok = true;
   bool groupby_skip = false;
   BUILDLIST_PROC_NODE *buildlist;
+  int i;
+  REGU_VARIABLE_LIST regu_var_p;
 
   assert (parser != NULL);
 
@@ -15405,6 +15441,17 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	    {
 	      goto analytic_exit_on_error;
 	    }
+
+	  /* set to intermediate analytic window regu_vars */
+	  for (i = 0, regu_var_p = buildlist->a_outptr_list_interm->valptrp;
+	       i < buildlist->a_outptr_list_interm->valptr_cnt && regu_var_p;
+	       i++, regu_var_p = regu_var_p->next)
+	    {
+	      REGU_VARIABLE_SET_FLAG (&regu_var_p->value,
+				      REGU_VARIABLE_ANALYTIC_WINDOW);
+	    }
+	  assert (i == buildlist->a_outptr_list_interm->valptr_cnt);
+	  assert (regu_var_p == NULL);
 
 	  /* generate initial outlist (for data fetching) */
 	  buildlist->a_outptr_list_ex =
@@ -18405,8 +18452,13 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 	      for (; name && val; name = name->next, val = val->next)
 		{
 		  PT_NODE *if_expr = NULL, *isnull_expr = NULL;
+		  PT_NODE *bool_expr = NULL;
 		  PT_NODE *nv = NULL, *class_oid = NULL;
-		  SEMANTIC_CHK_INFO info;
+		  DB_TYPE dom_type;
+		  DB_VALUE nv_value, *nv_valp;
+		  TP_DOMAIN *dom;
+
+		  assert (name->type_enum != PT_TYPE_NULL);
 
 		  if (name->info.name.spec_id != spec->info.spec.id)
 		    {
@@ -18427,26 +18479,8 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 
 		  /* allocate new parser nodes */
 		  isnull_expr = parser_new_node (parser, PT_EXPR);
-		  if_expr = parser_new_node (parser, PT_EXPR);
-		  nv = parser_new_node (parser, PT_VALUE);
-		  if (isnull_expr == NULL || nv == NULL || if_expr == NULL)
+		  if (isnull_expr == NULL)
 		    {
-		      /* free allocated nodes */
-		      if (isnull_expr != NULL)
-			{
-			  parser_free_node (parser, isnull_expr);
-			}
-
-		      if (if_expr != NULL)
-			{
-			  parser_free_node (parser, if_expr);
-			}
-
-		      if (nv != NULL)
-			{
-			  parser_free_node (parser, nv);
-			}
-
 		      assert (false);
 		      PT_INTERNAL_ERROR (parser, "out of memory");
 		      parser_free_tree (parser, statement);
@@ -18457,15 +18491,88 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 		  isnull_expr->info.expr.op = PT_ISNULL;
 		  isnull_expr->info.expr.arg1 = class_oid;
 
+		  bool_expr =
+		    pt_convert_to_logical_expr (parser, isnull_expr, 1, 1);
 		  /* NULL value node */
-		  DB_MAKE_NULL (&nv->info.value.db_value);
-		  nv->info.value.db_value_is_initialized = true;
+		  dom_type = pt_type_enum_to_db (name->type_enum);
+		  dom = tp_domain_resolve_default (dom_type);
+		  if (dom == NULL)
+		    {
+		      assert (false);
+		      PT_INTERNAL_ERROR (parser, "error building domain");
+		      parser_free_tree (parser, statement);
+		      return NULL;
+		    }
 
-		  /* IF (class_oid IS NULL, NULL, val) expression */
+		  if (db_value_domain_default (&nv_value,
+					       dom_type,
+					       dom->precision,
+					       dom->scale,
+					       dom->codeset,
+					       dom->collation_id,
+					       &dom->enumeration) != NO_ERROR)
+		    {
+		      assert (false);
+		      PT_INTERNAL_ERROR (parser,
+					 "error building default val");
+		      parser_free_tree (parser, statement);
+		      return NULL;
+		    }
+		  nv = pt_dbval_to_value (parser, &nv_value);
+
+		  assert (nv->type_enum != PT_TYPE_NULL);
+		  assert (nv->type_enum != PT_TYPE_NONE);
+
+		  nv_valp = pt_value_to_db (parser, nv);
+		  if (nv_valp == NULL)
+		    {
+		      assert (false);
+		      PT_INTERNAL_ERROR (parser,
+					 "error building default val");
+		      parser_free_tree (parser, statement);
+		      return NULL;
+		    }
+
+		  /* set as NULL value */
+		  (void) pr_clear_value (nv_valp);
+
+		  assert (nv->type_enum != PT_TYPE_NULL);
+		  assert (nv->type_enum != PT_TYPE_NONE);
+
+		  /* IF expr node */
+		  if_expr = parser_new_node (parser, PT_EXPR);
+		  if (bool_expr == NULL || nv == NULL || if_expr == NULL)
+		    {
+		      /* free allocated nodes */
+		      if (bool_expr)
+			{
+			  parser_free_tree (parser, bool_expr);
+			}
+
+		      if (nv)
+			{
+			  parser_free_node (parser, nv);
+			}
+
+		      if (if_expr)
+			{
+			  parser_free_node (parser, if_expr);
+			}
+
+		      assert (false);
+		      PT_INTERNAL_ERROR (parser, "out of memory");
+		      parser_free_tree (parser, statement);
+		      return NULL;
+		    }
+
+		  /* IF (ISNULL(class_oid)<>0, NULL, val) expression */
 		  if_expr->info.expr.op = PT_IF;
-		  if_expr->info.expr.arg1 = isnull_expr;
+		  if_expr->info.expr.arg1 = bool_expr;
 		  if_expr->info.expr.arg2 = nv;
 		  if_expr->info.expr.arg3 = val;
+		  if_expr->type_enum = name->type_enum;
+		  if_expr->data_type =
+		    parser_copy_tree_list (parser, name->data_type);
 
 		  /* rebuild links */
 		  PT_NODE_MOVE_NUMBER_OUTERLINK (if_expr, val);
@@ -18480,18 +18587,6 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 		      statement->info.query.q.select.list = val;
 		    }
 
-		  /* set types of expression */
-		  info.top_node = statement;
-		  info.donot_fold = true;
-
-		  val = pt_semantic_type (parser, val, &info);
-		  if (val == NULL)
-		    {
-		      assert (false);
-		      PT_INTERNAL_ERROR (parser, "error setting expr types");
-		      parser_free_tree (parser, statement);
-		      return NULL;
-		    }
 
 		  /* remember this node as previous assignment node */
 		  last_val = val;
@@ -19018,6 +19113,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   DB_VALUE *val = NULL;
   DB_ATTRIBUTE *attr = NULL;
   DB_DOMAIN *dom = NULL;
+  TP_DOMAIN_STATUS dom_status;
   OID *class_oid = NULL;
   DB_OBJECT *class_obj = NULL;
   HFID *hfid = NULL;
@@ -19404,23 +19500,31 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  update->assigns[a].constant = regu_dbval_alloc ();
 	  if (update->assigns[a].constant == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      goto cleanup;
 	    }
-	  attr =
-	    db_get_attribute (class_obj, att_name_node->info.name.original);
+	  attr = db_get_attribute (class_obj,
+				   att_name_node->info.name.original);
 	  if (attr == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      goto cleanup;
 	    }
 	  dom = db_attribute_domain (attr);
-	  error = tp_value_coerce (val, update->assigns[a].constant, dom);
-	  if (error != DOMAIN_COMPATIBLE)
+	  if (dom == NULL)
 	    {
-	      error = ER_OBJ_DOMAIN_CONFLICT;
-	      er_set (ER_ERROR_SEVERITY, __FILE__, __LINE__,
-		      error, 1, att_name_node->info.name.original);
+	      assert (er_errid () != NO_ERROR);
+	      error = er_errid ();
+	      goto cleanup;
+	    }
+	  dom_status =
+	    tp_value_auto_cast (val, update->assigns[a].constant, dom);
+	  if (dom_status != DOMAIN_COMPATIBLE)
+	    {
+	      error = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					       val, dom);
 	      goto cleanup;
 	    }
 
@@ -21040,7 +21144,7 @@ pt_init_precision_and_scale (DB_VALUE * value, PT_NODE * node)
 
   CAST_POINTER_TO_NODE (node);
 
-  if (!node->data_type)
+  if (node->data_type == NULL)
     {
       return;
     }
@@ -21696,9 +21800,9 @@ pt_to_analytic_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	}
 
       /* resolve operand dbval_ptr */
-      if (pt_resolve_analytic_references
-	  (parser, func_info->arg_list, analytic_info->select_list,
-	   analytic_info->val_list) == NULL)
+      if (pt_resolve_analytic_references (parser, func_info->arg_list,
+					  analytic_info->select_list,
+					  analytic_info->val_list) == NULL)
 	{
 	  goto exit_on_error;
 	}
@@ -24333,7 +24437,7 @@ pt_reserved_id_to_valuelist_index (PARSER_CONTEXT * parser,
  * return : null ordering
  * sort_spec (in) : sort spec
  */
-static SORT_NULLS
+SORT_NULLS
 pt_to_null_ordering (PT_NODE * sort_spec)
 {
   assert_release (sort_spec != NULL && sort_spec->node_type == PT_SORT_SPEC);

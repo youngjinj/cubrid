@@ -96,6 +96,7 @@ static BOOT_CLIENT_CREDENTIAL log_Client_credential = {
   NULL,				/* login_name */
   NULL,				/* host_name */
   NULL,				/* preferred_hosts */
+  0,				/* connect_order */
   -1				/* process_id */
 };
 
@@ -365,8 +366,8 @@ logtb_define_trantable (THREAD_ENTRY * thread_p,
 
   LOG_SET_CURRENT_TRAN_INDEX (thread_p, LOG_SYSTEM_TRAN_INDEX);
 
-  TR_TABLE_CS_EXIT ();
-  LOG_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
+  LOG_CS_EXIT (thread_p);
 }
 
 /*
@@ -588,6 +589,14 @@ logtb_undefine_trantable (THREAD_ENTRY * thread_p)
 	  tdes = log_Gl.trantable.all_tdes[i];
 	  if (tdes != NULL)
 	    {
+#if defined(SERVER_MODE)
+	      assert (tdes->tran_index == i);
+	      assert (tdes->cs_topop.cs_index == CRITICAL_SECTION_COUNT
+		      + css_get_max_conn () + NUM_MASTER_CHANNEL
+		      + tdes->tran_index);
+	      assert (tdes->cs_topop.name == css_Csect_name_tdes);
+#endif
+
 	      logtb_clear_tdes (thread_p, tdes);
 	      logtb_finalize_mvcc_snapshot_data (tdes);
 	      csect_finalize_critical_section (&tdes->cs_topop);
@@ -740,9 +749,9 @@ logtb_am_i_sole_tran (THREAD_ENTRY * thread_p)
  * NOTE:
  */
 void
-logtb_i_am_not_sole_tran (void)
+logtb_i_am_not_sole_tran (THREAD_ENTRY * thread_p)
 {
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 }
 #endif /* ENABLE_UNUSED_FUNCTION */
 
@@ -813,7 +822,7 @@ logtb_assign_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 					  client_credential,
 					  current_state, wait_msecs,
 					  isolation);
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   if (tran_index != NULL_TRAN_INDEX)
     {
@@ -1294,7 +1303,7 @@ logtb_release_tran_index (THREAD_ENTRY * thread_p, int tran_index)
 	    }
 	}
 
-      TR_TABLE_CS_EXIT ();
+      TR_TABLE_CS_EXIT (thread_p);
     }
 }
 
@@ -1362,7 +1371,7 @@ logtb_free_tran_index (THREAD_ENTRY * thread_p, int tran_index)
 	{
 	  log_Gl.trantable.hint_free_index = tran_index;
 	}
-      TR_TABLE_CS_EXIT ();
+      TR_TABLE_CS_EXIT (thread_p);
 
       if (log_tran_index == tran_index)
 	{
@@ -1420,7 +1429,7 @@ logtb_free_tran_index_with_undo_lsa (THREAD_ENTRY * thread_p,
 	}
     }
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 }
 
 /*
@@ -1602,7 +1611,7 @@ xlogtb_dump_trantable (THREAD_ENTRY * thread_p, FILE * out_fp)
 	}
     }
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   fprintf (out_fp, "\n");
 }
@@ -1654,7 +1663,7 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
       tdes->interrupt = false;
       TR_TABLE_CS_ENTER (thread_p);
       log_Gl.trantable.num_interrupts--;
-      TR_TABLE_CS_EXIT ();
+      TR_TABLE_CS_EXIT (thread_p);
     }
   tdes->modified_class_list = NULL;
 
@@ -1667,12 +1676,13 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
     }
 
   save_heap_id = db_change_private_heap (thread_p, 0);
-  for (i = 0; i < tdes->num_exec_queries && i < MAX_NUM_EXEC_QUERY_HISTORY; i++)
+  for (i = 0; i < tdes->num_exec_queries && i < MAX_NUM_EXEC_QUERY_HISTORY;
+       i++)
     {
       if (tdes->bind_history[i].vals == NULL)
-        {
-          continue;
-        }
+	{
+	  continue;
+	}
 
       dbval = tdes->bind_history[i].vals;
       for (j = 0; j < tdes->bind_history[i].size; j++)
@@ -1747,6 +1757,15 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
 
   csect_initialize_critical_section (&tdes->cs_topop);
 
+#if defined(SERVER_MODE)
+  assert (tdes->cs_topop.cs_index == -1);
+  assert (tdes->cs_topop.name == NULL);
+
+  tdes->cs_topop.cs_index = CRITICAL_SECTION_COUNT
+    + css_get_max_conn () + NUM_MASTER_CHANNEL + tdes->tran_index;
+  tdes->cs_topop.name = css_Csect_name_tdes;
+#endif
+
   tdes->topops.stack = NULL;
   tdes->topops.last = -1;
   tdes->topops.max = 0;
@@ -1815,7 +1834,7 @@ logtb_get_new_tran_id (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
       log_Gl.hdr.mvcc_next_id = MVCCID_NULL;
     }
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   return tdes->trid;
 }
@@ -1863,7 +1882,7 @@ logtb_find_tran_index (THREAD_ENTRY * thread_p, TRANID trid)
 	      break;
 	    }
 	}
-      TR_TABLE_CS_EXIT ();
+      TR_TABLE_CS_EXIT (thread_p);
     }
 
   return tran_index;
@@ -1910,7 +1929,7 @@ logtb_find_tran_index_host_pid (THREAD_ENTRY * thread_p,
 	  break;
 	}
     }
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   return tran_index;
 }
@@ -2021,7 +2040,7 @@ logtb_count_clients_with_type (THREAD_ENTRY * thread_p, int client_type)
 	    }
 	}
     }
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
   return count;
 }
 #endif /* ENABLE_UNUSED_FUNCTION */
@@ -2050,7 +2069,7 @@ logtb_count_clients (THREAD_ENTRY * thread_p)
 	    }
 	}
     }
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
   return count;
 }
 
@@ -2082,7 +2101,7 @@ logtb_count_not_allowed_clients_in_maintenance_mode (THREAD_ENTRY * thread_p)
 	    }
 	}
     }
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
   return count;
 }
 
@@ -2424,7 +2443,7 @@ error:
     }
 #endif
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
   return error_code;
 }
 
@@ -2733,7 +2752,7 @@ logtb_set_tran_index_interrupt (THREAD_ENTRY * thread_p, int tran_index,
 		  log_Gl.trantable.num_interrupts--;
 		}
 
-	      TR_TABLE_CS_EXIT ();
+	      TR_TABLE_CS_EXIT (thread_p);
 	    }
 
 	  if (set == true)
@@ -2800,7 +2819,7 @@ logtb_is_interrupted_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 	{
 	  *continue_checking = false;
 	}
-      TR_TABLE_CS_EXIT ();
+      TR_TABLE_CS_EXIT (thread_p);
     }
   else if (interrupt == false && tdes->query_timeout > 0)
     {
@@ -2947,7 +2966,7 @@ logtb_set_suppress_repl_on_transaction (THREAD_ENTRY * thread_p,
 
 	      tdes->suppress_replication = set;
 
-	      TR_TABLE_CS_EXIT ();
+	      TR_TABLE_CS_EXIT (thread_p);
 	    }
 	  return true;
 	}
@@ -3006,7 +3025,7 @@ logtb_is_active (THREAD_ENTRY * thread_p, TRANID trid)
 	      break;
 	    }
 	}
-      TR_TABLE_CS_EXIT ();
+      TR_TABLE_CS_EXIT (thread_p);
     }
 
   return active;
@@ -3087,7 +3106,7 @@ logtb_istran_finished (THREAD_ENTRY * thread_p, TRANID trid)
 	      break;
 	    }
 	}
-      TR_TABLE_CS_EXIT ();
+      TR_TABLE_CS_EXIT (thread_p);
     }
 
   return active;
@@ -3157,249 +3176,6 @@ void
 logtb_set_to_system_tran_index (THREAD_ENTRY * thread_p)
 {
   LOG_SET_CURRENT_TRAN_INDEX (thread_p, LOG_SYSTEM_TRAN_INDEX);
-}
-
-#if defined (ENABLE_UNUSED_FUNCTION)
-/*
- * logtb_set_current_tran_index - set index of current transaction
- *
- * return: tran_index or NULL_TRAN_INDEX
- *
- *   tran_index(in): Transaction index to acquire by current execution
- *
- * Note: The current execution acquire the given index. If the given
- *              index is not register, it is not set, an NULL_TRAN_INDEX is
- *              set instead.
- */
-int
-logtb_set_current_tran_index (THREAD_ENTRY * thread_p, int tran_index)
-{
-  LOG_TDES *tdes;		/* Transaction descriptor   */
-  int index;			/* The returned index value */
-
-  tdes = LOG_FIND_TDES (tran_index);
-  if (tdes != NULL && tdes->trid != NULL_TRANID)
-    {
-      index = tran_index;
-    }
-  else
-    {
-      index = NULL_TRAN_INDEX;
-    }
-
-  if (index == tran_index)
-    {
-      LOG_SET_CURRENT_TRAN_INDEX (thread_p, index);
-    }
-
-  return index;
-}
-#endif /* ENABLE_UNUSED_FUNCTION */
-
-/*
- * logtb_set_loose_end_tdes -
- *
- * return:
- *
- *   tdes(in/out):
- *
- * Note:
- */
-static void
-logtb_set_loose_end_tdes (LOG_TDES * tdes)
-{
-  if (LOG_ISTRAN_CLIENT_LOOSE_ENDS (tdes))
-    {
-      tdes->isloose_end = true;
-      log_Gl.trantable.num_client_loose_end_indices++;
-#if !defined(NDEBUG)
-      if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG))
-	{
-	  const char *str_tmp;
-	  switch (tdes->state)
-	    {
-	    case TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS:
-	      str_tmp = "COMMIT";
-	      break;
-	    case TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS:
-	      str_tmp = "ABORT";
-	      break;
-	    case TRAN_UNACTIVE_XTOPOPE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS:
-	      str_tmp = "TOPSYS COMMIT";
-	      break;
-	    default:
-	      str_tmp = "TOPSYS ABORT";
-	      break;
-	    }
-	  fprintf (stdout,
-		   "\n*** Transaction = %d (index = %d) has loose"
-		   " ends %s recovery actions.\n They will be fully recovered"
-		   " when client user = %s restarts a client ***\n",
-		   tdes->trid, tdes->tran_index, str_tmp,
-		   tdes->client.db_user);
-	  fflush (stdout);
-	}
-#endif
-    }
-  else if (LOG_ISTRAN_2PC_PREPARE (tdes))
-    {
-      tdes->isloose_end = true;
-      log_Gl.trantable.num_prepared_loose_end_indices++;
-#if !defined(NDEBUG)
-      if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG))
-	{
-	  fprintf (stdout,
-		   "\n*** Transaction = %d (index = %d) is"
-		   " prepared to commit as gobal tran = %d\n"
-		   "    The coordinator site (maybe the client user = %s)"
-		   " needs to attach\n"
-		   "    to this transaction and either commit or abort it."
-		   " ***\n", tdes->trid, tdes->tran_index,
-		   tdes->gtrid, tdes->client.db_user);
-	  fflush (stdout);
-	}
-#endif
-    }
-  else if (LOG_ISTRAN_2PC_IN_SECOND_PHASE (tdes)
-	   || tdes->state == TRAN_UNACTIVE_2PC_COLLECTING_PARTICIPANT_VOTES)
-    {
-      tdes->isloose_end = true;
-      log_Gl.trantable.num_coord_loose_end_indices++;
-#if !defined(NDEBUG)
-      if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG))
-	{
-	  fprintf (stdout,
-		   "\n*** Transaction = %d (index = %d) needs to"
-		   " complete informing participants\n"
-		   "    about its fate = %s and collect participant"
-		   " acknowledgements.\n"
-		   "    This transaction has been disassociated from"
-		   " the client user = %s.\n"
-		   "    The transaction will be completely finished by"
-		   " the system ***\n", tdes->trid,
-		   tdes->tran_index,
-		   ((LOG_ISTRAN_COMMITTED (tdes)) ? "COMMIT" :
-		    "ABORT"), tdes->client.db_user);
-	  fflush (stdout);
-	}
-#endif
-    }
-}
-
-/*
- * logtb_set_num_loose_end_trans - set the number of loose end transactions
- *
- * return: num loose ends
- *
- * Note: The number of loose ends transactions is set by searching the
- *              transaction table.
- */
-int
-logtb_set_num_loose_end_trans (THREAD_ENTRY * thread_p)
-{
-  int i;
-  LOG_TDES *tdes;		/* Transaction descriptor */
-  int r;
-
-  TR_TABLE_CS_ENTER (thread_p);
-
-  log_Gl.trantable.num_client_loose_end_indices = 0;
-  log_Gl.trantable.num_coord_loose_end_indices = 0;
-  log_Gl.trantable.num_prepared_loose_end_indices = 0;
-
-  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
-    {
-      if (i != LOG_SYSTEM_TRAN_INDEX)
-	{
-	  tdes = log_Gl.trantable.all_tdes[i];
-	  if (tdes != NULL && tdes->trid != NULL_TRANID)
-	    {
-	      logtb_set_loose_end_tdes (tdes);
-	    }
-	}
-    }
-  r = (log_Gl.trantable.num_client_loose_end_indices
-       + log_Gl.trantable.num_coord_loose_end_indices
-       + log_Gl.trantable.num_prepared_loose_end_indices);
-
-  TR_TABLE_CS_EXIT ();
-
-  return r;
-}
-
-/*
- * log_find_unilaterally_largest_undo_lsa - find maximum lsa address to undo
- *
- * return:
- *
- * Note: Find the maximum log sequence address to undo during the undo
- *              crash recovery phase.
- */
-LOG_LSA *
-log_find_unilaterally_largest_undo_lsa (THREAD_ENTRY * thread_p)
-{
-  int i;
-  LOG_TDES *tdes;		/* Transaction descriptor */
-  LOG_LSA *max = NULL;		/* The maximum LSA value  */
-
-  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
-  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
-    {
-      if (i != LOG_SYSTEM_TRAN_INDEX)
-	{
-	  tdes = log_Gl.trantable.all_tdes[i];
-	  if (tdes != NULL
-	      && tdes->trid != NULL_TRANID
-	      && (tdes->state == TRAN_UNACTIVE_UNILATERALLY_ABORTED
-		  || tdes->state == TRAN_UNACTIVE_ABORTED)
-	      && !LSA_ISNULL (&tdes->undo_nxlsa)
-	      && (max == NULL || LSA_LT (max, &tdes->undo_nxlsa)))
-	    {
-	      max = &tdes->undo_nxlsa;
-	    }
-	}
-    }
-  TR_TABLE_CS_EXIT ();
-
-  return max;
-}
-
-/*
- * logtb_find_smallest_lsa - smallest lsa address of all active transactions
- *
- * return:
- *
- *   lsa(in):
- *
- */
-void
-logtb_find_smallest_lsa (THREAD_ENTRY * thread_p, LOG_LSA * lsa)
-{
-  int i;
-  LOG_TDES *tdes;		/* Transaction descriptor */
-  LOG_LSA *min_lsa = NULL;	/* The smallest lsa value */
-
-  LSA_SET_NULL (lsa);
-  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
-  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
-    {
-      if (i != LOG_SYSTEM_TRAN_INDEX)
-	{
-	  tdes = log_Gl.trantable.all_tdes[i];
-	  if (tdes != NULL
-	      && tdes->trid != NULL_TRANID
-	      && !LSA_ISNULL (&tdes->head_lsa)
-	      && (min_lsa == NULL || LSA_LT (&tdes->head_lsa, min_lsa)))
-	    {
-	      min_lsa = &tdes->head_lsa;
-	    }
-	}
-    }
-  if (min_lsa != NULL)
-    {
-      LSA_COPY (lsa, min_lsa);
-    }
-  TR_TABLE_CS_EXIT ();
 }
 
 /*
@@ -3516,7 +3292,7 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 	}
     }
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   /* update global variable */
   tdes->recent_snapshot_lowest_active_mvccid = lowest_active_mvccid;
@@ -3564,7 +3340,7 @@ logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
 	}
     }
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   return lowest_active_mvccid;
 }
@@ -3595,7 +3371,7 @@ logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   /* TO DO subtransactions */
   tdes->mvcc_id = mvcc_id;
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   return mvcc_id;
 }
@@ -3793,7 +3569,7 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 
   /*if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, mvccid))
      {
-     TR_TABLE_CS_EXIT ();
+     TR_TABLE_CS_EXIT (thread_p);
      return true;
      } */
 
@@ -3819,7 +3595,7 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 
 	  if (MVCCID_IS_EQUAL (mvccid, tran_mvccid))
 	    {
-	      TR_TABLE_CS_EXIT ();
+	      TR_TABLE_CS_EXIT (thread_p);
 	      return true;
 	    }
 
@@ -3833,7 +3609,7 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 	}
     }
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   (void) file_mvcc_get_id_status (thread_p, mvccid, &mvcc_status);
   if (mvcc_status == MVCC_STATUS_ABORTED)
@@ -3926,7 +3702,250 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, int status)
       log_Gl.highest_completed_mvccid = tdes->mvcc_id;
     }
 
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
+}
+
+#if defined(ENABLE_UNUSED_FUNCTION)
+/*
+ * logtb_set_current_tran_index - set index of current transaction
+ *
+ * return: tran_index or NULL_TRAN_INDEX
+ *
+ *   tran_index(in): Transaction index to acquire by current execution
+ *
+ * Note: The current execution acquire the given index. If the given
+ *              index is not register, it is not set, an NULL_TRAN_INDEX is
+ *              set instead.
+ */
+int
+logtb_set_current_tran_index (THREAD_ENTRY * thread_p, int tran_index)
+{
+  LOG_TDES *tdes;		/* Transaction descriptor   */
+  int index;			/* The returned index value */
+
+  tdes = LOG_FIND_TDES (tran_index);
+  if (tdes != NULL && tdes->trid != NULL_TRANID)
+    {
+      index = tran_index;
+    }
+  else
+    {
+      index = NULL_TRAN_INDEX;
+    }
+
+  if (index == tran_index)
+    {
+      LOG_SET_CURRENT_TRAN_INDEX (thread_p, index);
+    }
+
+  return index;
+}
+#endif /* ENABLE_UNUSED_FUNCTION */
+
+/*
+ * logtb_set_loose_end_tdes -
+ *
+ * return:
+ *
+ *   tdes(in/out):
+ *
+ * Note:
+ */
+static void
+logtb_set_loose_end_tdes (LOG_TDES * tdes)
+{
+  if (LOG_ISTRAN_CLIENT_LOOSE_ENDS (tdes))
+    {
+      tdes->isloose_end = true;
+      log_Gl.trantable.num_client_loose_end_indices++;
+#if !defined(NDEBUG)
+      if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG))
+	{
+	  const char *str_tmp;
+	  switch (tdes->state)
+	    {
+	    case TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS:
+	      str_tmp = "COMMIT";
+	      break;
+	    case TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS:
+	      str_tmp = "ABORT";
+	      break;
+	    case TRAN_UNACTIVE_XTOPOPE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS:
+	      str_tmp = "TOPSYS COMMIT";
+	      break;
+	    default:
+	      str_tmp = "TOPSYS ABORT";
+	      break;
+	    }
+	  fprintf (stdout,
+		   "\n*** Transaction = %d (index = %d) has loose"
+		   " ends %s recovery actions.\n They will be fully recovered"
+		   " when client user = %s restarts a client ***\n",
+		   tdes->trid, tdes->tran_index, str_tmp,
+		   tdes->client.db_user);
+	  fflush (stdout);
+	}
+#endif
+    }
+  else if (LOG_ISTRAN_2PC_PREPARE (tdes))
+    {
+      tdes->isloose_end = true;
+      log_Gl.trantable.num_prepared_loose_end_indices++;
+#if !defined(NDEBUG)
+      if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG))
+	{
+	  fprintf (stdout,
+		   "\n*** Transaction = %d (index = %d) is"
+		   " prepared to commit as gobal tran = %d\n"
+		   "    The coordinator site (maybe the client user = %s)"
+		   " needs to attach\n"
+		   "    to this transaction and either commit or abort it."
+		   " ***\n", tdes->trid, tdes->tran_index,
+		   tdes->gtrid, tdes->client.db_user);
+	  fflush (stdout);
+	}
+#endif
+    }
+  else if (LOG_ISTRAN_2PC_IN_SECOND_PHASE (tdes)
+	   || tdes->state == TRAN_UNACTIVE_2PC_COLLECTING_PARTICIPANT_VOTES)
+    {
+      tdes->isloose_end = true;
+      log_Gl.trantable.num_coord_loose_end_indices++;
+#if !defined(NDEBUG)
+      if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG))
+	{
+	  fprintf (stdout,
+		   "\n*** Transaction = %d (index = %d) needs to"
+		   " complete informing participants\n"
+		   "    about its fate = %s and collect participant"
+		   " acknowledgements.\n"
+		   "    This transaction has been disassociated from"
+		   " the client user = %s.\n"
+		   "    The transaction will be completely finished by"
+		   " the system ***\n", tdes->trid,
+		   tdes->tran_index,
+		   ((LOG_ISTRAN_COMMITTED (tdes)) ? "COMMIT" :
+		    "ABORT"), tdes->client.db_user);
+	  fflush (stdout);
+	}
+#endif
+    }
+}
+
+/*
+ * logtb_set_num_loose_end_trans - set the number of loose end transactions
+ *
+ * return: num loose ends
+ *
+ * Note: The number of loose ends transactions is set by searching the
+ *              transaction table.
+ */
+int
+logtb_set_num_loose_end_trans (THREAD_ENTRY * thread_p)
+{
+  int i;
+  LOG_TDES *tdes;		/* Transaction descriptor */
+  int r;
+
+  TR_TABLE_CS_ENTER (thread_p);
+
+  log_Gl.trantable.num_client_loose_end_indices = 0;
+  log_Gl.trantable.num_coord_loose_end_indices = 0;
+  log_Gl.trantable.num_prepared_loose_end_indices = 0;
+
+  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
+    {
+      if (i != LOG_SYSTEM_TRAN_INDEX)
+	{
+	  tdes = log_Gl.trantable.all_tdes[i];
+	  if (tdes != NULL && tdes->trid != NULL_TRANID)
+	    {
+	      logtb_set_loose_end_tdes (tdes);
+	    }
+	}
+    }
+  r = (log_Gl.trantable.num_client_loose_end_indices
+       + log_Gl.trantable.num_coord_loose_end_indices
+       + log_Gl.trantable.num_prepared_loose_end_indices);
+
+  TR_TABLE_CS_EXIT (thread_p);
+
+  return r;
+}
+
+/*
+ * log_find_unilaterally_largest_undo_lsa - find maximum lsa address to undo
+ *
+ * return:
+ *
+ * Note: Find the maximum log sequence address to undo during the undo
+ *              crash recovery phase.
+ */
+LOG_LSA *
+log_find_unilaterally_largest_undo_lsa (THREAD_ENTRY * thread_p)
+{
+  int i;
+  LOG_TDES *tdes;		/* Transaction descriptor */
+  LOG_LSA *max = NULL;		/* The maximum LSA value  */
+
+  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
+    {
+      if (i != LOG_SYSTEM_TRAN_INDEX)
+	{
+	  tdes = log_Gl.trantable.all_tdes[i];
+	  if (tdes != NULL
+	      && tdes->trid != NULL_TRANID
+	      && (tdes->state == TRAN_UNACTIVE_UNILATERALLY_ABORTED
+		  || tdes->state == TRAN_UNACTIVE_ABORTED)
+	      && !LSA_ISNULL (&tdes->undo_nxlsa)
+	      && (max == NULL || LSA_LT (max, &tdes->undo_nxlsa)))
+	    {
+	      max = &tdes->undo_nxlsa;
+	    }
+	}
+    }
+  TR_TABLE_CS_EXIT (thread_p);
+
+  return max;
+}
+
+/*
+ * logtb_find_smallest_lsa - smallest lsa address of all active transactions
+ *
+ * return:
+ *
+ *   lsa(in):
+ *
+ */
+void
+logtb_find_smallest_lsa (THREAD_ENTRY * thread_p, LOG_LSA * lsa)
+{
+  int i;
+  LOG_TDES *tdes;		/* Transaction descriptor */
+  LOG_LSA *min_lsa = NULL;	/* The smallest lsa value */
+
+  LSA_SET_NULL (lsa);
+  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
+    {
+      if (i != LOG_SYSTEM_TRAN_INDEX)
+	{
+	  tdes = log_Gl.trantable.all_tdes[i];
+	  if (tdes != NULL
+	      && tdes->trid != NULL_TRANID
+	      && !LSA_ISNULL (&tdes->head_lsa)
+	      && (min_lsa == NULL || LSA_LT (&tdes->head_lsa, min_lsa)))
+	    {
+	      min_lsa = &tdes->head_lsa;
+	    }
+	}
+    }
+  if (min_lsa != NULL)
+    {
+      LSA_COPY (lsa, min_lsa);
+    }
+  TR_TABLE_CS_EXIT (thread_p);
 }
 
 #if defined(ENABLE_UNUSED_FUNCTION)
@@ -3959,7 +3978,7 @@ logtb_find_largest_lsa (THREAD_ENTRY * thread_p)
 	    }
 	}
     }
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 
   return max_lsa;
 }
@@ -4010,5 +4029,5 @@ logtb_find_smallest_and_largest_active_pages (THREAD_ENTRY * thread_p,
 	    }
 	}
     }
-  TR_TABLE_CS_EXIT ();
+  TR_TABLE_CS_EXIT (thread_p);
 }

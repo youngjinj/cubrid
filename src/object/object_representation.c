@@ -1712,7 +1712,50 @@ or_get_datetime (OR_BUF * buf, DB_DATETIME * datetime)
 int
 or_put_monetary (OR_BUF * buf, DB_MONETARY * monetary)
 {
+  int error;
+
   ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+
+  /* check for valid currency type
+     don't put default case in the switch!!! */
+  error = ER_INVALID_CURRENCY_TYPE;
+  switch (monetary->type)
+    {
+    case DB_CURRENCY_DOLLAR:
+    case DB_CURRENCY_YEN:
+    case DB_CURRENCY_WON:
+    case DB_CURRENCY_TL:
+    case DB_CURRENCY_BRITISH_POUND:
+    case DB_CURRENCY_CAMBODIAN_RIEL:
+    case DB_CURRENCY_CHINESE_RENMINBI:
+    case DB_CURRENCY_INDIAN_RUPEE:
+    case DB_CURRENCY_RUSSIAN_RUBLE:
+    case DB_CURRENCY_AUSTRALIAN_DOLLAR:
+    case DB_CURRENCY_CANADIAN_DOLLAR:
+    case DB_CURRENCY_BRASILIAN_REAL:
+    case DB_CURRENCY_ROMANIAN_LEU:
+    case DB_CURRENCY_EURO:
+    case DB_CURRENCY_SWISS_FRANC:
+    case DB_CURRENCY_DANISH_KRONE:
+    case DB_CURRENCY_NORWEGIAN_KRONE:
+    case DB_CURRENCY_BULGARIAN_LEV:
+    case DB_CURRENCY_VIETNAMESE_DONG:
+    case DB_CURRENCY_CZECH_KORUNA:
+    case DB_CURRENCY_POLISH_ZLOTY:
+    case DB_CURRENCY_SWEDISH_KRONA:
+    case DB_CURRENCY_CROATIAN_KUNA:
+    case DB_CURRENCY_SERBIAN_DINAR:
+      error = NO_ERROR;		/* it's a type we expect */
+      break;
+    default:
+      break;
+    }
+
+  if (error != NO_ERROR)
+    {
+      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, error, 1, monetary->type);
+      return error;
+    }
 
   if ((buf->ptr + OR_MONETARY_SIZE) > buf->endptr)
     {
@@ -1723,7 +1766,8 @@ or_put_monetary (OR_BUF * buf, DB_MONETARY * monetary)
       OR_PUT_MONETARY (buf->ptr, monetary);
       buf->ptr += OR_MONETARY_SIZE;
     }
-  return NO_ERROR;
+
+  return error;
 }
 
 /*
@@ -6075,13 +6119,7 @@ or_pack_value (char *buf, DB_VALUE * value)
   char *aligned_buf;
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
-#if !defined(NDEBUG)
-  /* to make valgrind quiet */
-  if (aligned_buf - buf > 0)
-    {
-      memset (buf, 0, aligned_buf - buf);
-    }
-#endif
+
   or_init (&orbuf, aligned_buf, 0);
   /* don't collapse nulls, include the domain, and include domain class oids */
   or_put_value (&orbuf, value, 0, 1, 1);
@@ -6458,7 +6496,18 @@ or_listid_length (void *listid_ptr)
       return length;
     }
 
-  length = OR_INT_SIZE * 12;
+  /* QFILE_LIST_ID 9 fixed item 
+   *  tuple_cnt
+   *  page_cnt
+   *  first_vpid.pageid
+   *  first_vpid.volid
+   *  last_vpid.pageid
+   *  last_vpid.volid
+   *  last_offset
+   *  lasttpl_len
+   *  type_list_type_cnt
+   */
+  length = OR_INT_SIZE * 9;
 
   for (i = 0; i < listid->type_list.type_cnt; i++)
     {

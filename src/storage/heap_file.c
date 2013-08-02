@@ -1947,7 +1947,7 @@ heap_classrepr_decache (THREAD_ENTRY * thread_p, const OID * class_oid)
     {
       ret = heap_chnguess_decache (class_oid);
     }
-  csect_exit (CSECT_HEAP_CHNGUESS);
+  csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
 
   return ret;
 }
@@ -7122,7 +7122,7 @@ heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid, OID * class_oid,
 				LOG_FIND_THREAD_TRAN_INDEX (thread_p),
 				or_chn (recdes));
 
-      csect_exit (CSECT_HEAP_CHNGUESS);
+      csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
     }
 
   return oid;
@@ -8796,7 +8796,7 @@ try_again:
       (void) heap_chnguess_put (thread_p, (OID *) oid,
 				LOG_FIND_THREAD_TRAN_INDEX (thread_p),
 				or_chn (recdes));
-      csect_exit (CSECT_HEAP_CHNGUESS);
+      csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
     }
 
   return oid;
@@ -8886,7 +8886,7 @@ heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid, const OID * oid,
       heap_Guesschn->schema_change = true;
       ret = heap_chnguess_decache (oid);
 
-      csect_exit (CSECT_HEAP_CHNGUESS);
+      csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
     }
 
   return heap_delete_internal (thread_p, hfid, oid, scan_cache, true,
@@ -16297,10 +16297,13 @@ heap_attrinfo_set (const OID * inst_oid, ATTR_ID attrid, DB_VALUE * attr_val,
   else
     {
       /* the domains don't match, must attempt coercion */
-      ret = tp_value_auto_cast (attr_val, &value->dbvalue,
-				value->last_attrepr->domain);
-      if (ret != NO_ERROR)
+      dom_status = tp_value_auto_cast (attr_val, &value->dbvalue,
+				       value->last_attrepr->domain);
+      if (dom_status != DOMAIN_COMPATIBLE)
 	{
+	  ret = tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
+					 attr_val,
+					 value->last_attrepr->domain);
 	  assert (er_errid () != NO_ERROR);
 
 	  DB_MAKE_NULL (&value->dbvalue);
@@ -18490,6 +18493,7 @@ heap_prefetch (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid,
 	    {
 	      prefetch->mobjs->num_objs++;
 	      COPY_OID (&((*prefetch->obj)->class_oid), class_oid);
+	      (*prefetch->obj)->error_code = NO_ERROR;
 	      (*prefetch->obj)->oid.volid = oid->volid;
 	      (*prefetch->obj)->oid.pageid = oid->pageid;
 	      (*prefetch->obj)->oid.slotid = right_slotid;
@@ -18524,6 +18528,7 @@ heap_prefetch (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid,
 	    {
 	      prefetch->mobjs->num_objs++;
 	      COPY_OID (&((*prefetch->obj)->class_oid), class_oid);
+	      (*prefetch->obj)->error_code = NO_ERROR;
 	      (*prefetch->obj)->oid.volid = oid->volid;
 	      (*prefetch->obj)->oid.pageid = oid->pageid;
 	      (*prefetch->obj)->oid.slotid = left_slotid;
@@ -20180,7 +20185,7 @@ heap_chnguess_get (THREAD_ENTRY * thread_p, const OID * oid, int tran_index)
 	{
 	  if (heap_chnguess_realloc () != NO_ERROR)
 	    {
-	      csect_exit (CSECT_HEAP_CHNGUESS);
+	      csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
 	      return NULL_CHN;
 	    }
 	}
@@ -20197,7 +20202,7 @@ heap_chnguess_get (THREAD_ENTRY * thread_p, const OID * oid, int tran_index)
 	}
     }
 
-  csect_exit (CSECT_HEAP_CHNGUESS);
+  csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
 
   return chn;
 }
@@ -20236,7 +20241,7 @@ heap_chnguess_put (THREAD_ENTRY * thread_p, const OID * oid, int tran_index,
     {
       if (heap_chnguess_realloc () != NO_ERROR)
 	{
-	  csect_exit (CSECT_HEAP_CHNGUESS);
+	  csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
 	  return NULL_CHN;
 	}
     }
@@ -20313,7 +20318,7 @@ heap_chnguess_put (THREAD_ENTRY * thread_p, const OID * oid, int tran_index,
       chn = NULL_CHN;
     }
 
-  csect_exit (CSECT_HEAP_CHNGUESS);
+  csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
 
   return chn;
 }
@@ -20349,7 +20354,7 @@ heap_chnguess_clear (THREAD_ENTRY * thread_p, int tran_index)
 	}
     }
 
-  csect_exit (CSECT_HEAP_CHNGUESS);
+  csect_exit (thread_p, CSECT_HEAP_CHNGUESS);
 
 }
 

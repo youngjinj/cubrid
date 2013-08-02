@@ -27,6 +27,7 @@
 
 #include <assert.h>
 
+#include "porting.h"
 #include "error_manager.h"
 #include "parser.h"
 #include "parser_message.h"
@@ -382,7 +383,8 @@ pt_eval_value_path (PARSER_CONTEXT * parser, PT_NODE * path)
   if (pt_eval_path_expr (parser, path, &val))
     {
       /* make val into a PT_VALUE node */
-      if ((tmp = pt_dbval_to_value (parser, &val)))
+      tmp = pt_dbval_to_value (parser, &val);
+      if (tmp)
 	{
 	  tmp->line_number = path->line_number;
 	  tmp->column_number = path->column_number;
@@ -4808,7 +4810,7 @@ pt_get_resolution (PARSER_CONTEXT * parser,
 	{
 	  return reserved_name;
 	}
-      /* Couldn't bind for record info, attempt to bind to table attributes */
+      /* Couldn't bind to record info, attempt to bind to table attributes */
       /* Fall through */
     }
 

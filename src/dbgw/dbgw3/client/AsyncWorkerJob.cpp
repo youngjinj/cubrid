@@ -188,7 +188,7 @@ namespace dbgw
       return m_ulTimeOutMilSec;
     }
 
-    uint64_t getAbsTimeOutMilSec() const
+    unsigned long long int getAbsTimeOutMilSec() const
     {
       return m_ulAbsTimeOutMilSec;
     }
@@ -286,7 +286,7 @@ namespace dbgw
     Exception m_exception;
     _AsyncWorkerJobStatus m_status;
     unsigned long m_ulTimeOutMilSec;
-    unsigned long m_ulAbsTimeOutMilSec;
+    unsigned long long int m_ulAbsTimeOutMilSec;
     bool needReleaseExecutor;
   };
 
@@ -355,7 +355,7 @@ namespace dbgw
     return m_pImpl->getTimeOutMilSec();
   }
 
-  uint64_t _AsyncWorkerJob::getAbsTimeOutMilSec() const
+  unsigned long long int _AsyncWorkerJob::getAbsTimeOutMilSec() const
   {
     return m_pImpl->getAbsTimeOutMilSec();
   }
@@ -651,7 +651,7 @@ namespace dbgw
     }
 
     int delegateJobAsync(trait<_AsyncWorkerJob>::sp pJob,
-        ExecAsyncCallBack pCallBack)
+        ExecAsyncCallBack pCallBack, void *pData)
     {
       system::_MutexAutoLock lock(&m_mutex);
 
@@ -670,7 +670,7 @@ namespace dbgw
 
           trait<_AsyncWaiter>::sp pWaiter(
               new _AsyncWaiter(pJob->getTimeOutMilSec(), m_nCallBackHandleID,
-                  pCallBack));
+                  pCallBack, pData));
           pJob->bindWaiter(pWaiter);
 
           m_jobList.push_back(pJob);
@@ -683,7 +683,7 @@ namespace dbgw
     }
 
     int delegateJobAsync(trait<_AsyncWorkerJob>::sp pJob,
-        ExecBatchAsyncCallBack pCallBack)
+        ExecBatchAsyncCallBack pCallBack, void *pData)
     {
       system::_MutexAutoLock lock(&m_mutex);
 
@@ -702,7 +702,7 @@ namespace dbgw
 
           trait<_AsyncWaiter>::sp pWaiter(
               new _AsyncWaiter(pJob->getTimeOutMilSec(), m_nCallBackHandleID,
-                  pCallBack));
+                  pCallBack, pData));
           pJob->bindWaiter(pWaiter);
 
           m_jobList.push_back(pJob);
@@ -812,15 +812,15 @@ namespace dbgw
   }
 
   int _WorkerJobManager::delegateJobAsync(trait<_AsyncWorkerJob>::sp pJob,
-      ExecAsyncCallBack pCallBack)
+      ExecAsyncCallBack pCallBack, void *pData)
   {
-    return m_pImpl->delegateJobAsync(pJob, pCallBack);
+    return m_pImpl->delegateJobAsync(pJob, pCallBack, pData);
   }
 
   int _WorkerJobManager::delegateJobAsync(trait<_AsyncWorkerJob>::sp pJob,
-      ExecBatchAsyncCallBack pCallBack)
+      ExecBatchAsyncCallBack pCallBack, void *pData)
   {
-    return m_pImpl->delegateJobAsync(pJob, pCallBack);
+    return m_pImpl->delegateJobAsync(pJob, pCallBack, pData);
   }
 
   void _WorkerJobManager::setMaxSize(size_t nMaxSize)

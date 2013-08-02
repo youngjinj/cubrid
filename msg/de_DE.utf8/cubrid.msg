@@ -1178,26 +1178,26 @@ $ LOADDB
 1109 Ungültiger Wert für die Definierung der Partition.
 1110 Ungenügend Speicher in Btree-Seite. (Schlüssellänge: %d)\n%s
 1111 Ergebnis abgeschnitten, da die Genauigkeit (%1$d) kleiner als seine Länge (%2$d) ist.
-1112 A character could not be converted from '%1$s' to '%2$s'.
-1113 Element index out of range.
-1114 Argument '%s' is out of range.
-1115 Started to update statistics (class "%1$s", oid : %2$d|%3$d|%4$d).
-1116 Finished to update statistics (class "%1$s", oid : %2$d|%3$d|%4$d, error code : %5$d).
-1117 Cannot change attribute "%1$s". CUBRID cannot change an attribute as a SHARED and vice versa.
-1118 The argument of "%1$s" can not be coerced to desired domain "%2$s".
-1119 Internal error: Page id %1$d is allocated according to the allocation map of volume "%2$s", but it does not belong to any file. 
-1120 Internal error: Page id %1$d of volume "%2$s" is currently being used, but it is not allocated according to the allocation map of volume.
-1121 NOT NULL constraints do not allow NULL value.
-1122 Time out in receiving data.
-1123 pthread_cond_timedwait() timed out. 
-1124 Query execution error. ERROR_CODE = %1$d, /* SQL_ID: %2$s */ %3$s
-1125 Create the overflow key file. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
-1126 Create a new overflow page. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
-1127 Delete an empty overflow page. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
-1128 Log recovery is started. The number of log records to be applied: %1$lld. Log page: %2$lld ~ %3$lld.
-1129 Log recovery is finished.
-1130 Transaction is aborted because transaction lock counts exceeds %1$d.
-1131 Internal error: The page %1 of volume %2 may be corrupted.\n%3
+1112 Ein Zeichen konnte nicht von '%1$s' auf '%2$s' umgerechnet werden.
+1113 Elementindex außerhalb des Bereichs.
+1114 Argument '%s' ist außerhalb des Bereichs.
+1115 Angefangen, Statistiken zu aktualisieren (Klasse "%1$s", oid : %2$d|%3$d|%4$d).
+1116 Aktualisierung der Statistiken beendet (class "%1$s", oid : %2$d|%3$d|%4$d, Fehlerkode : %5$d).
+1117 Attribut "%1$s" kann nicht geändert werden. CUBRID kann ein Attribut nicht in SHARED ändern, und umgekehrt.
+1118 Das Argument von "%1$s" kann nicht auf die gewünschte Domain "%2$s" gezwungen werden.
+1119 Interner Fehler: Seiten-id %1$d wird nach der Zuteilung Karte von Volume "%2$s" zugeordnet, aber es gehört zu keiner Datei. 
+1120 Interner Fehler: Seiten-id %1$d des Volumen "%2$s" wird gerade verwendet, aber es ist nicht nach der Zuteilung des Volumens Karte zugeordnet.
+1121 NULL-Wert von NOT NULL-Einschränkungen nicht zugelassen.
+1122 Zeitüberschreitung beim Empfangen von Daten.
+1123 pthread_cond_timedwait() Zeitüberschreitung. 
+1124 Fehler bei Ausführung der Abfrage. ERROR_CODE = %1$d, /* SQL_ID: %2$s */ %3$s
+1125 Erstellung der Überlauf Schlüsseldatei. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
+1126 Erstellung einer neuen Überlaufseite. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
+1127 Eine leere Überlaufseite wird gelöscht. INDEX %1$s%2$s ON CLASS %3$s%4$s. key: %5$s%6$s.
+1128 Log-Wiederherstellung gestartet. Anzahl der anzuwendenden Log-Einträge: %1$lld. Log Seite: %2$lld ~ %3$lld.
+1129 Log-Wiederherstellung beendet.
+1130 Transaktion wird abgebrochen, weil die Anzahl der Transaktionssperre %1$d überschreitet.
+1131 Interner Fehler: Die Seite %1$d des Volumen "%2$s" könnte beschädigt sein.\n%3$s
 1132 Encryption library failure: %s
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 Letzter Fehler
@@ -1343,7 +1343,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 112 In line %d, column %d before %s\n
 113 before ' %s'\n
 114 before END OF STATEMENT\n
-115 ungültiges set names\n  set_names: SET NAMES charset [{COLLATE | COLLATION} collation]\n
+115 ungültiges set names\n  set_names: SET NAMES charset [COLLATE collation]\n
 116 Ungültige Verwendung von chr\n  CHR ( number [using charset] )\n
 117 Ungültige Nutzung des Charsets\n CHARSET ( expression )\n
 118 Ungültige Nutzung der Kollation\n COLLATION ( expression )\n
@@ -1622,14 +1622,14 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 270 Ungültige Funktion Indexausdruck.
 271 Die Abfrage von %s hat einen zyklischen Verweis auf sich selbst.
 272 %s Ausdruck ist in Join-Bedingung nicht erlaubt.
-273 Only one table within a view can be updated.
-274 Multiple insert targets not allowed.
-275 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
-276 ORDER BY is not allowed in function MEDIAN.
-277 The arguments of the function '%s' must be constant.
-278 Function '%s' must have ORDER BY clause.
-279 For function '%s', the number of arguments does not match the number of ORDER BY columns.
-280 For function '%s', the ORDER BY clause is invalid.
+273 ORDER BY ist in Funktion MEDIAN nicht zugelassen.
+274 Das Argument der Funktion '%s' muss eine Konstante sein.
+275 Funktion '%s' muss eine ORDER BY Klausel haben.
+276 Für die Funktion '%s', die Anzahl der Argumenten ist nicht gleich der Anzahl der ORDER BY Spalten.
+277 Für Funktion '%s', die ORDER BY Klausel ist ungültig.
+278 Only one table within a view can be updated.
+279 Multiple insert targets not allowed.
+280 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Außer virtuellem Speicher: %d Bytes können nicht zugewiesen werden.
@@ -1788,7 +1788,7 @@ $set 14 MSGCAT_SET_LOCK
 29 %4sTran_Index = %3d, Blocked_mode =%8s \n\t%13s Start_waiting_at = %-30s \n\t%13s Wait_for_secs = %.2f\n
 30 %4sTran_Index = %3d, Non_2_phase_lock =%8s\n
 31 VPID (volid|pageid) = %3d|%6d.\n
-32 *** Locktabelle Dump ***\n Lock Eskalation bei = %d, Ausführung Deadlock Interval = %d\n
+32 *** Locktabelle Dump ***\n Lock Eskalation bei = %d, Ausführung Deadlock Interval = %5.2f\n
 33 Transaktion (Index %2d, %s, %s@%s|%d)\n
 34 Isolation %s\n
 35 Zustand %s\n

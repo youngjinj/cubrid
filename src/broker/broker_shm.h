@@ -135,7 +135,7 @@
 
 #define IP_BYTE_COUNT           5
 #define ACL_MAX_ITEM_COUNT      50
-#define ACL_MAX_IP_COUNT        100
+#define ACL_MAX_IP_COUNT        256
 #define ACL_MAX_DBNAME_LENGTH	32
 #define ACL_MAX_DBUSER_LENGTH	32
 
@@ -167,6 +167,9 @@
 #if !defined(MAX_HA_DBNAME_LENGTH)
 #define MAX_HA_DBNAME_LENGTH 		128
 #endif /* !MAX_HA_DBNAME_LENGTH */
+
+#define         SEQ_NUMBER              1
+#define         MAGIC_NUMBER            (MAJOR_VERSION * 1000000 + MINOR_VERSION * 10000 + SEQ_NUMBER)
 
 typedef enum
 {
@@ -539,6 +542,7 @@ struct t_shm_appl_server
   char shard_flag;
   bool access_control;
   int jdbc_cache_life_time;
+  int connect_order;
 
 #if defined(WINDOWS)
   int as_port;

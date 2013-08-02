@@ -710,7 +710,11 @@ cci_disconnect (int mapped_conn_id, T_CCI_ERROR * err_buf)
 			  "[%04d][API][E][cci_datasource_release]",
 			  con_handle->id);
 	}
-      cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK);
+      if (cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK) != NO_ERROR)
+        {
+          qe_con_close (con_handle);
+          con_handle->con_status = CCI_CON_STATUS_OUT_TRAN;
+        }
 
       get_last_error (con_handle, err_buf);
       con_handle->used = false;
@@ -1186,6 +1190,12 @@ cci_bind_param (int mapped_stmt_id, int index, T_CCI_A_TYPE a_type,
 int
 cci_register_out_param (int mapped_stmt_id, int index)
 {
+  return cci_register_out_param_ex (mapped_stmt_id, index, CCI_U_TYPE_NULL);
+}
+
+int
+cci_register_out_param_ex (int mapped_stmt_id, int index, T_CCI_U_TYPE u_type)
+{
   T_CON_HANDLE *con_handle = NULL;
   T_REQ_HANDLE *req_handle = NULL;
   int error;
@@ -1202,6 +1212,11 @@ cci_register_out_param (int mapped_stmt_id, int index)
     }
   else
     {
+      if (is_connected_to_oracle (con_handle))
+	{
+	  req_handle->bind_value[index - 1].u_type = u_type;
+	}
+
       req_handle->bind_mode[index - 1] |= CCI_PARAM_MODE_OUT;
     }
 
@@ -2262,7 +2277,8 @@ cci_get_data (int mapped_stmt_id, int col_no, int a_type, void *value,
     }
   reset_error_buffer (&(con_handle->err_buf));
 
-  error = qe_get_data (req_handle, col_no, a_type, value, indicator);
+  error =
+    qe_get_data (con_handle, req_handle, col_no, a_type, value, indicator);
 
   con_handle->used = false;
 
@@ -4418,6 +4434,9 @@ cci_get_err_msg_internal (int error)
     case CAS_ER_MAX_CLIENT_EXCEEDED:
       return "Proxy refused client connection. max clients exceeded";
 
+    case CAS_ER_INVALID_CURSOR_POS:
+      return "Invalid cursor position";
+
     case CAS_ER_IS:
       return "Not used";
 
@@ -5456,7 +5475,6 @@ cci_disconnect_force (int resolved_id, bool try_close)
     }
 
   API_ELOG (con_handle, 0);
-  hm_req_handle_free_all (con_handle);
   hm_con_handle_free (con_handle);
 }
 
@@ -5999,7 +6017,11 @@ cci_datasource_release (T_CCI_DATASOURCE * ds, T_CCI_CONN mapped_conn_id,
   reset_error_buffer (&(con_handle->err_buf));
 
   ret = cci_datasource_release_internal (ds, con_handle);
-  cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK);
+  if (cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK) != NO_ERROR)
+    {
+      qe_con_close (con_handle);
+      con_handle->con_status = CCI_CON_STATUS_OUT_TRAN;
+    }
 
   get_last_error (con_handle, err_buf);
   con_handle->used = false;

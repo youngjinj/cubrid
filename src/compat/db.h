@@ -51,7 +51,6 @@
 #define DB_CONNECTION_STATUS_CONNECTED          1
 #define DB_CONNECTION_STATUS_RESET              -1
 extern int db_Connect_status;
-extern char *db_Preferred_hosts;
 
 extern SESSION_ID db_Session_id;
 
@@ -73,8 +72,7 @@ extern int db_Disable_modifications;
 #define DB_CLIENT_TYPE_ADMIN_CSQL       8
 #define DB_CLIENT_TYPE_LOG_COPIER       9
 #define DB_CLIENT_TYPE_LOG_APPLIER      10
-#define DB_CLIENT_TYPE_PH_READ_ONLY_BROKER 11
-#define DB_CLIENT_TYPE_MAX		DB_CLIENT_TYPE_PH_READ_ONLY_BROKER
+#define DB_CLIENT_TYPE_MAX              DB_CLIENT_TYPE_LOG_APPLIER
 extern int db_Client_type;
 
 extern char db_Database_name[];

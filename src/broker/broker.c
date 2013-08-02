@@ -732,7 +732,10 @@ shard_broker_process (void)
 			  as_info_p->cur_slow_log_mode =
 			    shm_appl->slow_log_mode;
 
-			  pid = run_appl_server (as_info_p, br_index, i);
+			  pid = run_appl_server (as_info_p, br_index,
+						 i +
+						 shard_info_p->
+						 as_info_index_base);
 			  if (pid > 0)
 			    {
 			      as_info_p->pid = pid;
@@ -1718,13 +1721,6 @@ stop_appl_server (T_APPL_SERVER_INFO * as_info_p, int br_index, int as_index)
   as_info_p->last_access_time = time (NULL);
   as_info_p->transaction_start_time = (time_t) 0;
 
-  as_info_p->service_flag = SERVICE_OFF;
-  as_info_p->service_ready_flag = FALSE;
-
-  as_info_p->uts_status = UTS_STATUS_IDLE;
-  as_info_p->con_status = CON_STATUS_CLOSE;
-
-
   return 0;
 }
 
@@ -2006,6 +2002,7 @@ cas_monitor_worker (T_APPL_SERVER_INFO * as_info_p, int br_index,
 	shard_shm_find_proxy_info (shm_proxy_p, as_info_p->proxy_id);
       shard_info_p =
 	shard_shm_find_shard_info (proxy_info_p, as_info_p->shard_id);
+      assert (shard_info_p != NULL);
 
       (shm_br->br_info[br_index].appl_server_num)--;
       (shard_info_p->num_appl_server)--;
@@ -2054,7 +2051,7 @@ cas_monitor_thr_f (void *ar)
 static THREAD_FUNC
 hang_check_thr_f (void *ar)
 {
-  int cur_index;
+  unsigned int cur_index;
   int cur_hang_count;
   T_BROKER_INFO *br_info_p;
   time_t cur_time;
@@ -2173,7 +2170,7 @@ psize_check_worker (T_APPL_SERVER_INFO * as_info_p, int br_index,
   float pct_cpu;
 #endif
 
-  if (as_info_p->service_flag != SERVICE_ON || as_info_p->pid <= 0)
+  if (as_info_p->service_flag != SERVICE_ON)
     {
       return;
     }
@@ -2813,7 +2810,8 @@ init_proxy_env ()
 
   memset (&shard_sock_addr, 0, sizeof (shard_sock_addr));
   shard_sock_addr.sun_family = AF_UNIX;
-  strcpy (shard_sock_addr.sun_path, shm_appl->port_name);
+  strncpy (shard_sock_addr.sun_path, shm_appl->port_name,
+	   sizeof (shard_sock_addr.sun_path) - 1);
 
 #ifdef  _SOCKADDR_LEN		/* 4.3BSD Reno and later */
   len = sizeof (shard_sock_addr.sun_len) +

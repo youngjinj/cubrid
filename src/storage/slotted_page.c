@@ -317,7 +317,7 @@ spage_free_saved_spaces (THREAD_ENTRY * thread_p, void *first_save_entry)
 	}
       free_and_init (current);
     }
-  csect_exit (CSECT_SPAGE_SAVESPACE);
+  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 }
 
 /*
@@ -411,7 +411,7 @@ spage_save_space (THREAD_ENTRY * thread_p, SPAGE_HEADER * page_header_p,
       head_p = (SPAGE_SAVE_HEAD *) malloc (sizeof (*head_p));
       if (head_p == NULL)
 	{
-	  csect_exit (CSECT_SPAGE_SAVESPACE);
+	  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 	  return ER_FAILED;
 	}
 
@@ -419,7 +419,7 @@ spage_save_space (THREAD_ENTRY * thread_p, SPAGE_HEADER * page_header_p,
       if (entry_p == NULL)
 	{
 	  free_and_init (head_p);
-	  csect_exit (CSECT_SPAGE_SAVESPACE);
+	  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 	  return ER_FAILED;
 	}
 
@@ -459,7 +459,7 @@ spage_save_space (THREAD_ENTRY * thread_p, SPAGE_HEADER * page_header_p,
 
       (void) mht_put (spage_Mht_saving, &(head_p->vpid), head_p);
 
-      csect_exit (CSECT_SPAGE_SAVESPACE);
+      csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
       return NO_ERROR;
     }
 
@@ -490,7 +490,7 @@ spage_save_space (THREAD_ENTRY * thread_p, SPAGE_HEADER * page_header_p,
       entry_p = malloc (sizeof (*entry_p));
       if (entry_p == NULL)
 	{
-	  csect_exit (CSECT_SPAGE_SAVESPACE);
+	  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 	  return ER_FAILED;
 	}
 
@@ -531,7 +531,7 @@ spage_save_space (THREAD_ENTRY * thread_p, SPAGE_HEADER * page_header_p,
   assert (head_p->total_saved >= 0);
   assert (entry_p->saved >= 0);
 
-  csect_exit (CSECT_SPAGE_SAVESPACE);
+  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 
   return NO_ERROR;
 }
@@ -654,7 +654,7 @@ spage_get_saved_spaces (THREAD_ENTRY * thread_p, SPAGE_HEADER * page_header_p,
   assert (total_saved >= 0);
   assert (total_saved >= my_saved_space);
 
-  csect_exit (CSECT_SPAGE_SAVESPACE);
+  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 
   if (saved_by_other_trans != NULL)
     {
@@ -707,7 +707,7 @@ spage_dump_saved_spaces_by_other_trans (THREAD_ENTRY * thread_p, FILE * fp,
 	}
     }
 
-  csect_exit (CSECT_SPAGE_SAVESPACE);
+  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 }
 
 /*
@@ -742,7 +742,7 @@ spage_boot (THREAD_ENTRY * thread_p)
 
   r = ((spage_Mht_saving != NULL) ? NO_ERROR : ER_FAILED);
 
-  csect_exit (CSECT_SPAGE_SAVESPACE);
+  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 
   return r;
 }
@@ -772,7 +772,7 @@ spage_finalize (THREAD_ENTRY * thread_p)
       spage_Mht_saving = NULL;
     }
 
-  csect_exit (CSECT_SPAGE_SAVESPACE);
+  csect_exit (thread_p, CSECT_SPAGE_SAVESPACE);
 }
 
 /*

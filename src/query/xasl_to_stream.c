@@ -39,6 +39,7 @@
 #include "memory_alloc.h"
 #include "heap_file.h"
 
+
 /* memory alignment unit - to align stored XASL tree nodes */
 #define	ALIGN_UNIT	sizeof(double)
 #define	ALIGN_MASK	(ALIGN_UNIT - 1)
@@ -320,7 +321,7 @@ static char *xts_process_regu_variable_list (char *ptr,
 int
 xts_map_xasl_to_stream (const XASL_NODE * xasl_tree, XASL_STREAM * stream)
 {
-  int offset;
+  int offset, org_offset;
   int header_size, body_size;
   char *p;
   int i;
@@ -342,9 +343,19 @@ xts_map_xasl_to_stream (const XASL_NODE * xasl_tree, XASL_STREAM * stream)
   offset = sizeof (int)		/* [size of header data] */
     + header_size		/* [header data] */
     + sizeof (int);		/* [size of body data] */
+
+  org_offset = offset;
   offset = MAKE_ALIGN (offset);
 
   xts_reserve_location_in_stream (offset);
+
+#if !defined(NDEBUG)
+  /* suppress valgrind UMW error */
+  if (offset > org_offset)
+    {
+      memset (xts_Stream_buffer + org_offset, 0, offset - org_offset);
+    }
+#endif
 
   /* save XASL tree into body data of the stream buffer */
   if (xts_save_xasl_node (xasl_tree) == ER_FAILED)
@@ -593,11 +604,13 @@ xts_save_aggregate_type (const AGGREGATE_TYPE * aggregate)
       is_buf_alloced = true;
     }
 
-  if (xts_process_aggregate_type (buf_p, aggregate) == NULL)
+  buf = xts_process_aggregate_type (buf_p, aggregate);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -660,11 +673,13 @@ xts_save_function_type (const FUNCTION_TYPE * function)
       is_buf_alloced = true;
     }
 
-  if (xts_process_function_type (buf_p, function) == NULL)
+  buf = xts_process_function_type (buf_p, function);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -794,11 +809,13 @@ xts_save_srlist_id (const QFILE_SORTED_LIST_ID * sort_list_id)
       is_buf_alloced = true;
     }
 
-  if (xts_process_srlist_id (buf_p, sort_list_id) == NULL)
+  buf = xts_process_srlist_id (buf_p, sort_list_id);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -930,11 +947,13 @@ xts_save_arith_type (const ARITH_TYPE * arithmetic)
       is_buf_alloced = true;
     }
 
-  if (xts_process_arith_type (buf_p, arithmetic) == NULL)
+  buf = xts_process_arith_type (buf_p, arithmetic);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -997,11 +1016,13 @@ xts_save_indx_info (const INDX_INFO * indx_info)
       is_buf_alloced = true;
     }
 
-  if (xts_process_indx_info (buf_p, indx_info) == NULL)
+  buf = xts_process_indx_info (buf_p, indx_info);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -1271,11 +1292,29 @@ xts_save_regu_variable (const REGU_VARIABLE * regu_var)
       is_buf_alloced = true;
     }
 
-  if (xts_process_regu_variable (buf_p, regu_var) == NULL)
+  buf = xts_process_regu_variable (buf_p, regu_var);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
+
+  /*
+   * OR_VALUE_ALIGNED_SIZE may reserve more bytes
+   * suppress valgrind UMW (uninitialized memory write)
+   */
+#if !defined(NDEBUG)
+  do
+    {
+      int margin = size - (buf - buf_p);
+      if (margin > 0)
+	{
+	  memset (buf, 0, margin);
+	}
+    }
+  while (0);
+#endif
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -1550,7 +1589,24 @@ xts_save_xasl_node (const XASL_NODE * xasl)
       offset = ER_FAILED;
       goto end;
     }
+
   assert (buf <= buf_p + size);
+
+  /*
+   * OR_DOUBLE_ALIGNED_SIZE may reserve more bytes
+   * suppress valgrind UMW (uninitialized memory write)
+   */
+#if !defined(NDEBUG)
+  do
+    {
+      int margin = size - (buf - buf_p);
+      if (margin > 0)
+	{
+	  memset (buf, 0, margin);
+	}
+    }
+  while (0);
+#endif
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -1750,11 +1806,13 @@ xts_save_cache_attrinfo (const HEAP_CACHE_ATTRINFO * attrinfo)
       is_buf_alloced = true;
     }
 
-  if (xts_process_cache_attrinfo (buf_p) == NULL)
+  buf = xts_process_cache_attrinfo (buf_p);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -2159,11 +2217,13 @@ xts_save_method_sig_list (const METHOD_SIG_LIST * method_sig_list)
       is_buf_alloced = true;
     }
 
-  if (xts_process_method_sig_list (buf_p, method_sig_list) == NULL)
+  buf = xts_process_method_sig_list (buf_p, method_sig_list);
+  if (buf == NULL)
     {
       offset = ER_FAILED;
       goto end;
     }
+  assert (buf <= buf_p + size);
 
   memcpy (&xts_Stream_buffer[offset], buf_p, size);
 
@@ -4411,6 +4471,14 @@ xts_process_indx_info (char *ptr, const INDX_INFO * indx_info)
       /* Key 2 is ALWAYS NULL (see pt_create_iss_range(), so we do not
        * stream it */
     }
+  else
+    {
+#if !defined(NDEBUG)
+      /* suppress valgrind UMW error */
+      ptr = or_pack_int (ptr, 0);	/* dummy indx_info->iss_range.range */
+      ptr = or_pack_int (ptr, 0);	/* dummp offset of iss_range.key1 */
+#endif
+    }
 
   return ptr;
 }
@@ -6034,25 +6102,7 @@ xts_sizeof_pred (const PRED * pred)
       size += OR_INT_SIZE;	/* rhs-type */
     }
 
-  switch (rhs->type)
-    {
-    case T_EVAL_TERM:
-      tmp_size = xts_sizeof_eval_term (&rhs->pe.eval_term);
-      if (tmp_size == ER_FAILED)
-	{
-	  return ER_FAILED;
-	}
-      size += tmp_size;		/* rhs */
-      break;
-
-    case T_NOT_TERM:
-      size += PTR_SIZE;		/* pe.not_term */
-      break;
-
-    default:
-      xts_Xasl_errcode = ER_QPROC_INVALID_XASLNODE;
-      return ER_FAILED;
-    }
+  size += PTR_SIZE;
 
   return size;
 }
@@ -7023,6 +7073,7 @@ xts_reserve_location_in_stream (int size)
 {
   int needed;
   int grow;
+  int org_size = size;
 
   size = MAKE_ALIGN (size);
   needed = size - (xts_Stream_size - xts_Free_offset_in_stream);
@@ -7059,6 +7110,15 @@ xts_reserve_location_in_stream (int size)
 	  return ER_FAILED;
 	}
     }
+
+#if !defined(NDEBUG)
+  /* suppress valgrind UMW error */
+  if (size > org_size)
+    {
+      memset (xts_Stream_buffer + xts_Free_offset_in_stream + org_size,
+	      0, size - org_size);
+    }
+#endif
 
   xts_Free_offset_in_stream += size;
   assert ((xts_Free_offset_in_stream - size) % MAX_ALIGNMENT == 0);

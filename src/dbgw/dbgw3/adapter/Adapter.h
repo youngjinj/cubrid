@@ -173,9 +173,9 @@ namespace DBGW3
     DECLSPECIFIER bool __stdcall SetParameter(Handle hParam, int nIndex,
         size_t nSize, const void *pValue);
     DECLSPECIFIER bool __stdcall SetParameter(Handle hParam,
-        const char *szParamName, ValueType type, struct tm &value);
+        const char *szParamName, ValueType type, const struct tm &value);
     DECLSPECIFIER bool __stdcall SetParameter(Handle hParam, int nIndex,
-        ValueType type, struct tm &value);
+        ValueType type, const struct tm &value);
 
   }
 
@@ -277,6 +277,10 @@ namespace DBGW3
         struct tm *pValue);
     DECLSPECIFIER bool __stdcall GetColumn(Handle hResult, const char *szName,
         struct tm *pValue);
+    DECLSPECIFIER bool __stdcall GetResultSet(Handle hResult, int nIndex,
+        Handle hOutResult);
+    DECLSPECIFIER bool __stdcall GetResultSet(Handle hResult,
+        const char *szName, Handle hOutResult);
     DECLSPECIFIER bool __stdcall GetType(Handle hResult, int nIndex,
         ValueType *pType);
     DECLSPECIFIER bool __stdcall GetType(Handle hResult, const char *szName,
@@ -316,10 +320,10 @@ namespace DBGW3
     typedef void *Handle, *THandle;
 
     typedef void (*AsyncCallBack)(int nHandleId, ResultSet::Handle,
-        const Exception::Handle);
+        const Exception::Handle, void *);
 
     typedef void (*BatchAsyncCallBack)(int nHandleId,
-        ResultSetList::Handle, const Exception::Handle);
+        ResultSetList::Handle, const Exception::Handle, void *);
 
     DECLSPECIFIER Handle __stdcall CreateHandle(DBGW3::Connector::Handle henv,
         const char *szNamespace = NULL);
@@ -332,10 +336,11 @@ namespace DBGW3
         DBGW3::ResultSet::Handle hResult);
     DECLSPECIFIER int __stdcall ExecuteAsync(Handle hExecutor,
         const char *szMethod, DBGW3::ParamSet::Handle hParam,
-        AsyncCallBack pCallBack);
+        AsyncCallBack pCallBack, void *pData = NULL);
     DECLSPECIFIER int __stdcall ExecuteAsync(Handle hExecutor,
         const char *szMethod, unsigned long ulMilliseconds,
-        DBGW3::ParamSet::Handle hParam, AsyncCallBack pCallBack);
+        DBGW3::ParamSet::Handle hParam, AsyncCallBack pCallBack,
+        void *pData = NULL);
     DECLSPECIFIER bool __stdcall ExecuteBatch(Handle hExecutor,
         const char *szMethod, DBGW3::ParamList::Handle hParamList,
         DBGW3::ResultSetList::Handle hResultSetList);
@@ -345,10 +350,11 @@ namespace DBGW3
         DBGW3::ResultSetList::Handle hResultSetList);
     DECLSPECIFIER int __stdcall ExecuteBatchAsync(Handle hExecutor,
         const char *szMethod, DBGW3::ParamList::Handle hParamList,
-        BatchAsyncCallBack pCallBack);
+        BatchAsyncCallBack pCallBack, void *pData = NULL);
     DECLSPECIFIER int __stdcall ExecuteBatchAsync(Handle hExecutor,
         const char *szMethod, unsigned long ulMilliseconds,
-        DBGW3::ParamList::Handle hParamList, BatchAsyncCallBack pCallBack);
+        DBGW3::ParamList::Handle hParamList, BatchAsyncCallBack pCallBack,
+        void *pData = NULL);
     DECLSPECIFIER bool __stdcall BeginTransaction(Handle hExecutor);
     DECLSPECIFIER bool __stdcall BeginTransaction(Handle hExecutor,
         unsigned long ulWaitTimeMilSec);

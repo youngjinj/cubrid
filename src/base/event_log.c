@@ -68,6 +68,7 @@ event_log_init (const char *db_name)
   assert (db_name != NULL);
 
   strncpy (local_db_name, db_name, DB_MAX_IDENTIFIER_LENGTH);
+  local_db_name[DB_MAX_IDENTIFIER_LENGTH - 1] = '\0';
   s = strchr (local_db_name, '@');
   if (s)
     {
@@ -194,7 +195,7 @@ event_log_start (THREAD_ENTRY * thread_p, const char *event_name)
       if (event_Fp == NULL)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  csect_exit (CSECT_EVENT_LOG_FILE);
+	  csect_exit (thread_p, CSECT_EVENT_LOG_FILE);
 	  return NULL;
 	}
     }
@@ -206,7 +207,7 @@ event_log_start (THREAD_ENTRY * thread_p, const char *event_name)
       if (event_Fp == NULL)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  csect_exit (CSECT_EVENT_LOG_FILE);
+	  csect_exit (thread_p, CSECT_EVENT_LOG_FILE);
 	  return NULL;
 	}
     }
@@ -250,7 +251,7 @@ event_log_end (THREAD_ENTRY * thread_p)
     }
 
   fflush (event_Fp);
-  csect_exit (CSECT_EVENT_LOG_FILE);
+  csect_exit (thread_p, CSECT_EVENT_LOG_FILE);
 }
 
 /*
@@ -335,7 +336,7 @@ event_log_bind_values (FILE * log_fp, int tran_index, int bind_index)
 
   tdes = LOG_FIND_TDES (tran_index);
 
-  if (tdes->bind_history[bind_index].vals == NULL)
+  if (tdes == NULL || tdes->bind_history[bind_index].vals == NULL)
     {
       return;
     }

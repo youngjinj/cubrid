@@ -254,7 +254,8 @@ static void boot_shutdown_server_at_exit (void);
 void
 boot_server_status (BOOT_SERVER_STATUS status)
 {
-  static const char *status_str[] = { "UP", "DOWN", "MAINTENANCE" };
+  static const char *status_str[] =
+    { "UNKNOWN", "UP", "DOWN", "MAINTENANCE" };
   if (status >= BOOT_SERVER_UP && status <= BOOT_SERVER_MAINTENANCE)
     {
       boot_Server_status = status;
@@ -365,7 +366,7 @@ xboot_find_number_permanent_volumes (THREAD_ENTRY * thread_p)
       return NULL_VOLID;
     }
   nvols = boot_Db_parm->nvols;
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return nvols;
 }
@@ -386,7 +387,7 @@ xboot_find_number_temp_volumes (THREAD_ENTRY * thread_p)
       return NULL_VOLID;
     }
   nvols = boot_Db_parm->temp_nvols;
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return nvols;
 }
@@ -407,7 +408,7 @@ xboot_find_last_temp (THREAD_ENTRY * thread_p)
       return NULL_VOLID;
     }
   volid = boot_Db_parm->temp_last_volid;
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return volid;
 }
@@ -427,7 +428,7 @@ boot_find_next_permanent_volid (THREAD_ENTRY * thread_p)
       return NULL_VOLID;
     }
   volid = boot_Db_parm->last_volid + 1;
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return volid;
 }
@@ -654,7 +655,7 @@ boot_add_volume (THREAD_ENTRY * thread_p, DBDEF_VOL_EXT_INFO * ext_info)
   log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
 
   pgbuf_refresh_max_permanent_volume_id (boot_Db_parm->last_volid);
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
 #if !defined(WINDOWS)
   if (prm_get_bool_value (PRM_ID_DBFILES_PROTECT))
@@ -672,7 +673,7 @@ error:
     }
 
   pgbuf_refresh_max_permanent_volume_id (boot_Db_parm->last_volid);
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return NULL_VOLID;
 }
@@ -819,7 +820,7 @@ end:
     {
       free (vlabel);
     }
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return error_code;
 }
@@ -1043,7 +1044,7 @@ boot_xadd_volume_extension (THREAD_ENTRY * thread_p,
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BO_CANNOT_CREATE_LINK,
 		  2, vol_fullname, link_fullname);
 
-	  csect_exit (CSECT_BOOT_SR_DBPARM);
+	  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
 	  return NULL_VOLID;
 	}
@@ -1093,7 +1094,7 @@ boot_xadd_volume_extension (THREAD_ENTRY * thread_p,
 	}
     }
 
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return volid;
 }
@@ -1542,11 +1543,8 @@ boot_add_temp_volume (THREAD_ENTRY * thread_p, DKNPAGES min_npages)
   DKNPAGES ext_npages, part_npages;
   DBDEF_VOL_EXT_INFO ext_info;
 #if defined (SERVER_MODE)
-  FILE *log_fp;
   struct timeval start, end;
-  int elapsed, tran_index, indent = 2;
-  LOG_TDES *tdes;
-#endif
+#endif /* SERVER_MODE */
 
   if (boot_Temp_volumes_max_pages == -2)
     {
@@ -1706,7 +1704,7 @@ boot_add_temp_volume (THREAD_ENTRY * thread_p, DKNPAGES min_npages)
 
 #if defined(SERVER_MODE)
 	  gettimeofday (&start, NULL);
-#endif
+#endif /* SERVER_MODE */
 
 	  temp_volid = boot_add_volume (thread_p, &ext_info);
 	  if (temp_volid != NULL_VOLID)
@@ -1716,39 +1714,14 @@ boot_add_temp_volume (THREAD_ENTRY * thread_p, DKNPAGES min_npages)
 	    }
 
 #if defined(SERVER_MODE)
-	  log_fp = event_log_start (thread_p, "TEMP_VOLUME_CREATE");
-	  if (log_fp != NULL)
-	    {
-	      gettimeofday (&end, NULL);
-	      elapsed = TO_MSEC (end) - TO_MSEC (start);
-
-	      tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-	      event_log_print_client_info (tran_index, indent);
-
-	      tdes = LOG_FIND_TDES (tran_index);
-	      if (tdes != NULL)
-		{
-		  event_log_sql_string (thread_p, log_fp, &tdes->xasl_id,
-					indent);
-		  if (!XASL_ID_IS_NULL (&tdes->xasl_id)
-		      && tdes->num_exec_queries <= MAX_NUM_EXEC_QUERY_HISTORY)
-		    {
-		      event_log_bind_values (log_fp, tran_index,
-					     tdes->num_exec_queries - 1);
-		    }
-		}
-
-	      fprintf (log_fp, "%*ctime: %d\n", indent, ' ', elapsed);
-	      fprintf (log_fp, "%*cpages: %d\n\n", indent, ' ',
-		       possible_max_npages);
-
-	      event_log_end (thread_p);
-	    }
+	  gettimeofday (&end, NULL);
+	  ADD_TIMEVAL (thread_p->event_stats.temp_expand_time, start, end);
+	  thread_p->event_stats.temp_expand_pages += possible_max_npages;
 #endif /* SERVER_MODE */
 	}
     }
 
-  csect_exit (CSECT_BOOT_SR_DBPARM);
+  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
 
   return temp_volid;
 }
@@ -3944,8 +3917,8 @@ xboot_register_client (THREAD_ENTRY * thread_p,
   if (adm_prg_file_name != NULL
       && (strncasecmp (adm_prg_file_name, "synccolldb",
 		       strlen ("synccolldb")) == 0
-	  || strncasecmp (adm_prg_file_name, "migrate_90beta_to_91",
-			  strlen ("migrate_90beta_to_91")) == 0))
+	  || strncasecmp (adm_prg_file_name, "migrate_",
+			  strlen ("migrate_")) == 0))
     {
       check_db_coll = false;
     }
@@ -4157,6 +4130,12 @@ xboot_notify_unregister_client (THREAD_ENTRY * thread_p, int tran_index)
     }
 
   conn = thread_p->conn_entry;
+
+#if defined(SERVER_MODE)
+  assert (conn->csect.cs_index == CRITICAL_SECTION_COUNT + conn->idx);
+  assert (conn->csect.name == css_Csect_name_conn);
+#endif
+
   csect_enter_critical_section (thread_p, &conn->csect, INF_WAIT);
 
   client_id = conn->client_id;
@@ -4169,7 +4148,12 @@ xboot_notify_unregister_client (THREAD_ENTRY * thread_p, int tran_index)
 	}
     }
 
-  csect_exit_critical_section (&conn->csect);
+#if defined(SERVER_MODE)
+  assert (conn->csect.cs_index == CRITICAL_SECTION_COUNT + conn->idx);
+  assert (conn->csect.name == css_Csect_name_conn);
+#endif
+
+  csect_exit_critical_section (thread_p, &conn->csect);
 }
 #endif /* SERVER_MODE */
 
@@ -5365,6 +5349,10 @@ xboot_delete (THREAD_ENTRY * thread_p, const char *db_name, bool force_delete)
 	}
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BO_UNKNOWN_DATABASE, 1,
 	      db_name);
+      if (dir)
+	{
+	  cfg_free_directory (dir);
+	}
       goto error_dirty_delete;
     }
 
@@ -5457,18 +5445,12 @@ xboot_delete (THREAD_ENTRY * thread_p, const char *db_name, bool force_delete)
   if (error_code == NO_ERROR)
     {
       boot_server_all_finalize (thread_p, true);
-#if defined(SA_MODE)
-      boot_client_all_finalize (true);
-#endif /* SA_MODE */
     }
   else
     {
       er_stack_push ();
       boot_server_all_finalize (thread_p, false);
       er_stack_pop ();
-#if defined(SA_MODE)
-      boot_client_all_finalize (false);
-#endif /* SA_MODE */
     }
   return error_code;
 
@@ -5480,9 +5462,6 @@ error_dirty_delete:
   er_stack_push ();
   boot_server_all_finalize (thread_p, false);
   er_stack_pop ();
-#if defined(SA_MODE)
-  boot_client_all_finalize (false);
-#endif /* SA_MODE */
 
   return error_code;
 }
@@ -5865,6 +5844,7 @@ boot_remove_all_volumes (THREAD_ENTRY * thread_p, const char *db_fullname,
       log_restart_emergency (thread_p, db_fullname, log_path, log_prefix);
       (void) boot_remove_all_temp_volumes (thread_p);
       boot_server_status (BOOT_SERVER_UP);
+      log_final (thread_p);
 
     }
 

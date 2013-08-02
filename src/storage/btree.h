@@ -91,8 +91,8 @@ typedef enum
 #define BTREE_NORMAL_KEY 0
 #define BTREE_OVERFLOW_KEY 1
 
-#define BTREE_SET_UNIQUE_VIOLATION_ERROR(THREAD,KEY,OID,C_OID,BTID) \
-		btree_set_error(THREAD, KEY, OID, C_OID, BTID, \
+#define BTREE_SET_UNIQUE_VIOLATION_ERROR(THREAD,KEY,OID,C_OID,BTID,BTNM) \
+		btree_set_error(THREAD, KEY, OID, C_OID, BTID, BTNM, \
 		ER_ERROR_SEVERITY, ER_BTREE_UNIQUE_FAILED, __FILE__, __LINE__)
 
 /* BTID_INT structure from btree_load.h */
@@ -360,13 +360,15 @@ extern DISK_ISVALID btree_check_by_btid (THREAD_ENTRY * thread_p,
 extern DISK_ISVALID btree_check_by_class_oid (THREAD_ENTRY * thread_p,
 					      OID * cls_oid);
 extern DISK_ISVALID btree_check_all (THREAD_ENTRY * thread_p);
-extern int btree_keyoid_checkscan_start (BTID * btid,
+extern int btree_keyoid_checkscan_start (THREAD_ENTRY * thread_p,
+					 BTID * btid,
 					 BTREE_CHECKSCAN * btscan);
 extern DISK_ISVALID btree_keyoid_checkscan_check (THREAD_ENTRY * thread_p,
 						  BTREE_CHECKSCAN * btscan,
 						  OID * cls_oid,
 						  DB_VALUE * key, OID * oid);
-extern void btree_keyoid_checkscan_end (BTREE_CHECKSCAN * btscan);
+extern void btree_keyoid_checkscan_end (THREAD_ENTRY * thread_p,
+					BTREE_CHECKSCAN * btscan);
 extern int btree_estimate_total_numpages (THREAD_ENTRY * thread_p,
 					  int dis_key_cnt, int avg_key_len,
 					  int tot_val_cnt, int *blt_pgcnt_est,
@@ -374,14 +376,12 @@ extern int btree_estimate_total_numpages (THREAD_ENTRY * thread_p,
 extern int btree_index_capacity (THREAD_ENTRY * thread_p, BTID * btid,
 				 BTREE_CAPACITY * cpc);
 extern DB_VALUE *btree_delete (THREAD_ENTRY * thread_p, BTID * btid,
-			       DB_VALUE * key,
-			       OID * cls_oid, OID * oid,
-			       BTREE_LOCKED_KEYS locked_keys,
-			       int *unique, int op_type,
+			       DB_VALUE * key, OID * cls_oid, OID * oid,
+			       BTREE_LOCKED_KEYS locked_keys, int *unique,
+			       int op_type,
 			       BTREE_UNIQUE_STATS * unique_stat_info);
 extern DB_VALUE *btree_insert (THREAD_ENTRY * thread_p, BTID * btid,
-			       DB_VALUE * key,
-			       OID * cls_oid, OID * oid,
+			       DB_VALUE * key, OID * cls_oid, OID * oid,
 			       int op_type,
 			       BTREE_UNIQUE_STATS * unique_stat_info,
 			       int *pkyn);
@@ -528,6 +528,7 @@ extern int btree_coerce_key (DB_VALUE * src_keyp, int keysize,
 			     TP_DOMAIN * btree_domainp, int key_minmax);
 extern int btree_set_error (THREAD_ENTRY * thread_p, DB_VALUE * key,
 			    OID * obj_oid, OID * class_oid, BTID * btid,
+			    const char *bt_name,
 			    int severity, int err_id,
 			    const char *filename, int lineno);
 extern BTREE_LOCKED_KEYS btree_get_locked_keys (BTID * delete_btid,

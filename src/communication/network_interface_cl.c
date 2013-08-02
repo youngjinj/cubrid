@@ -59,6 +59,7 @@
 #include "es.h"
 #include "vacuum.h"
 
+
 /*
  * Use db_clear_private_heap instead of db_destroy_private_heap
  */
@@ -1215,7 +1216,7 @@ locator_assign_oid_batch (LC_OIDSET * oidset)
 #if defined(CS_MODE)
   int success = ER_FAILED;
   int packed_size;
-  char *buffer;
+  char *buffer, *ptr;
   int req_error;
 
   /*
@@ -1232,7 +1233,10 @@ locator_assign_oid_batch (LC_OIDSET * oidset)
       return ER_FAILED;
     }
 
-  if (locator_pack_oid_set (buffer + OR_INT_SIZE, oidset) == NULL)
+  ptr = buffer;
+  ptr = or_pack_int (ptr, 0);
+
+  if (locator_pack_oid_set (ptr, oidset) == NULL)
     {
       free_and_init (buffer);
       return ER_FAILED;
@@ -1244,11 +1248,11 @@ locator_assign_oid_batch (LC_OIDSET * oidset)
 
   if (!req_error)
     {
-      (void) or_unpack_int (buffer, &success);
+      ptr = buffer;
+      ptr = or_unpack_int (ptr, &success);
       if (success == NO_ERROR)
 	{
-	  if (locator_unpack_oid_set_to_exist (buffer + OR_INT_SIZE, oidset)
-	      == false)
+	  if (locator_unpack_oid_set_to_exist (ptr, oidset) == false)
 	    {
 	      success = ER_FAILED;
 	    }
@@ -6661,6 +6665,7 @@ btree_add_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oid,
  * return:
  *
  *   btid(in):
+ *   bt_name(in):
  *   key_type(in):
  *   class_oids(in):
  *   n_classes(in):
@@ -6676,14 +6681,14 @@ btree_add_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oid,
  * NOTE:
  */
 int
-btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
-		  int n_classes, int n_attrs, int *attr_ids,
-		  int *attrs_prefix_length, HFID * hfids,
-		  int unique_flag, int not_null_flag,
-		  OID * fk_refcls_oid, BTID * fk_refcls_pk_btid,
-		  int cache_attr_id, const char *fk_name,
-		  char *pred_stream, int pred_stream_size,
-		  char *expr_stream, int expr_stream_size, int func_col_id,
+btree_load_index (BTID * btid, const char *bt_name, TP_DOMAIN * key_type,
+		  OID * class_oids, int n_classes, int n_attrs, int *attr_ids,
+		  int *attrs_prefix_length, HFID * hfids, int unique_flag,
+		  int not_null_flag, OID * fk_refcls_oid,
+		  BTID * fk_refcls_pk_btid, int cache_attr_id,
+		  const char *fk_name, char *pred_stream,
+		  int pred_stream_size, char *expr_stream,
+		  int expr_stream_size, int func_col_id,
 		  int func_attr_index_start)
 {
 #if defined(CS_MODE)
@@ -6692,7 +6697,7 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
   char *request;
   OR_ALIGNED_BUF (OR_INT_SIZE + OR_BTID_ALIGNED_SIZE) a_reply;
   char *reply;
-  int i, total_attrs, strlen;
+  int i, total_attrs, bt_strlen, fk_strlen;
   int index_info_size = 0;
   char *stream = NULL;
   int stream_size = 0;
@@ -6709,6 +6714,7 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
 
   domain_size = or_packed_domain_size (key_type, 0);
   request_size = OR_BTID_ALIGNED_SIZE	/* BTID */
+    + or_packed_string_length (bt_name, &bt_strlen)	/* index name */
     + domain_size		/* key_type */
     + (n_classes * OR_OID_SIZE)	/* class_oids */
     + OR_INT_SIZE		/* n_classes */
@@ -6721,7 +6727,7 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
     + OR_OID_SIZE		/* fk_refcls_oid */
     + OR_BTID_ALIGNED_SIZE	/* fk_refcls_pk_btid */
     + OR_INT_SIZE		/* cache_attr_id */
-    + or_packed_string_length (fk_name, &strlen)	/* fk_name */
+    + or_packed_string_length (fk_name, &fk_strlen)	/* fk_name */
     + index_info_size;		/* filter predicate or function
 				   index stream size */
 
@@ -6730,6 +6736,7 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
     {
 
       ptr = or_pack_btid (request, btid);
+      ptr = or_pack_string_with_length (ptr, bt_name, bt_strlen);
       ptr = or_pack_domain (ptr, key_type, 0, 0);
       ptr = or_pack_int (ptr, n_classes);
       ptr = or_pack_int (ptr, n_attrs);
@@ -6771,7 +6778,7 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
       ptr = or_pack_oid (ptr, fk_refcls_oid);
       ptr = or_pack_btid (ptr, fk_refcls_pk_btid);
       ptr = or_pack_int (ptr, cache_attr_id);
-      ptr = or_pack_string_with_length (ptr, fk_name, strlen);
+      ptr = or_pack_string_with_length (ptr, fk_name, fk_strlen);
 
       if (pred_stream)
 	{
@@ -6828,9 +6835,9 @@ btree_load_index (BTID * btid, TP_DOMAIN * key_type, OID * class_oids,
   ENTER_SERVER ();
 
   btid =
-    xbtree_load_index (NULL, btid, key_type, class_oids, n_classes, n_attrs,
-		       attr_ids, attrs_prefix_length, hfids, unique_flag,
-		       not_null_flag, fk_refcls_oid,
+    xbtree_load_index (NULL, btid, bt_name, key_type, class_oids, n_classes,
+		       n_attrs, attr_ids, attrs_prefix_length, hfids,
+		       unique_flag, not_null_flag, fk_refcls_oid,
 		       fk_refcls_pk_btid, cache_attr_id, fk_name, pred_stream,
 		       pred_stream_size, expr_stream, expr_stream_size,
 		       func_col_id, func_attr_index_start);
@@ -7051,6 +7058,9 @@ btree_find_unique_internal (BTID * btid, DB_VALUE * key, OID * class_oid,
 
       ptr = or_pack_oid (ptr, class_oid);
       ptr = or_pack_btid (ptr, btid);
+
+      /* reset request_size as real packed size */
+      request_size = ptr - request;
 
       req_error = net_client_request (request_id,
 				      request, request_size, reply,
@@ -7727,7 +7737,7 @@ qmgr_execute_query (const XASL_ID * xasl_id, QUERY_ID * query_idp,
     {
       senddata_size += OR_VALUE_ALIGNED_SIZE ((DB_VALUE *) dbval);
     }
-  if (senddata_size)
+  if (senddata_size != 0)
     {
       senddata = (char *) malloc (senddata_size);
       if (senddata == NULL)
@@ -7742,6 +7752,9 @@ qmgr_execute_query (const XASL_ID * xasl_id, QUERY_ID * query_idp,
 	{
 	  ptr = or_pack_db_value (ptr, (DB_VALUE *) dbval);
 	}
+
+      /* change senddata_size as real packing size */
+      senddata_size = ptr - senddata;
     }
 
   /* pack XASL file id (XASL_ID), number of parameter values,
@@ -7868,7 +7881,7 @@ qmgr_prepare_and_execute_query (char *xasl_stream, int xasl_stream_size,
       senddata_size += OR_VALUE_ALIGNED_SIZE (dbval);
     }
 
-  if (senddata_size)
+  if (senddata_size != 0)
     {
       senddata = (char *) malloc (senddata_size);
       if (senddata == NULL)
@@ -7889,6 +7902,9 @@ qmgr_prepare_and_execute_query (char *xasl_stream, int xasl_stream_size,
     {
       ptr = or_pack_db_value (ptr, dbval);
     }
+
+  /* change senddata_size as real packing size */
+  senddata_size = ptr - senddata;
 
   if (IS_SYNC_EXEC_MODE (flag))
     {

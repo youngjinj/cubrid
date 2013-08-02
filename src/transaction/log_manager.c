@@ -109,7 +109,7 @@ static int rv;
 	log_Gl.hdr.has_logging_been_skipped = true; \
 	logpb_flush_header((thread_p));	\
       } \
-      LOG_CS_EXIT(); \
+      LOG_CS_EXIT(thread_p); \
     } \
   } while (0)
 #else /* SERVER_MODE */
@@ -896,7 +896,7 @@ log_create_internal (THREAD_ENTRY * thread_p, const char *db_fullname,
     {
       logpb_finalize_pool ();
       logpb_fatal_error (thread_p, true, ARG_FILE_LINE, "log_create");
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return;
     }
 
@@ -916,7 +916,7 @@ log_create_internal (THREAD_ENTRY * thread_p, const char *db_fullname,
     {
       logpb_finalize_pool ();
       logpb_fatal_error (thread_p, true, ARG_FILE_LINE, "log_create");
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return;
     }
   LSA_SET_NULL (&log_Gl.append.prev_lsa);
@@ -1021,7 +1021,7 @@ log_create_internal (THREAD_ENTRY * thread_p, const char *db_fullname,
 
   logpb_finalize_pool ();
 
-  LOG_CS_EXIT ();
+  LOG_CS_EXIT (thread_p);
 }
 
 /*
@@ -1269,7 +1269,7 @@ log_initialize_internal (THREAD_ENTRY * thread_p, const char *db_fullname,
       log_Gl.append.vdes = NULL_VOLDES;
 
       LOG_SET_CURRENT_TRAN_INDEX (thread_p, LOG_SYSTEM_TRAN_INDEX);
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
 
       error_code =
 	logtb_define_trantable_log_latch (thread_p,
@@ -1533,7 +1533,7 @@ log_initialize_internal (THREAD_ENTRY * thread_p, const char *db_fullname,
 	}
     }
 
-  LOG_CS_EXIT ();
+  LOG_CS_EXIT (thread_p);
 
   return error_code;
 
@@ -1552,7 +1552,7 @@ error:
       free_and_init (log_Gl.loghdr_pgptr);
     }
 
-  LOG_CS_EXIT ();
+  LOG_CS_EXIT (thread_p);
 
   logpb_fatal_error (thread_p, !init_emergency, ARG_FILE_LINE, "log_init");
 
@@ -1582,7 +1582,7 @@ log_update_compatibility_and_release (THREAD_ENTRY * thread_p,
 
   logpb_flush_header (thread_p);
 
-  LOG_CS_EXIT ();
+  LOG_CS_EXIT (thread_p);
 
   return NO_ERROR;
 }
@@ -1776,7 +1776,7 @@ log_final (THREAD_ENTRY * thread_p)
 
   if (log_Gl.trantable.area == NULL)
     {
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return;
     }
 
@@ -1785,7 +1785,7 @@ log_final (THREAD_ENTRY * thread_p)
   if (!logpb_is_initialize_pool ())
     {
       logtb_undefine_trantable (thread_p);
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return;
     }
 
@@ -1793,7 +1793,7 @@ log_final (THREAD_ENTRY * thread_p)
     {
       logpb_finalize_pool ();
       logtb_undefine_trantable (thread_p);
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return;
     }
 
@@ -1878,7 +1878,7 @@ log_final (THREAD_ENTRY * thread_p)
 
   free_and_init (log_Gl.loghdr_pgptr);
 
-  LOG_CS_EXIT ();
+  LOG_CS_EXIT (thread_p);
 }
 
 /*
@@ -3430,6 +3430,8 @@ log_append_ha_server_state (THREAD_ENTRY * thread_p, int state)
     }
 
   ha_server_state = (struct log_ha_server_state *) node->data_header;
+  memset (ha_server_state, 0, sizeof (struct log_ha_server_state));
+
   ha_server_state->state = state;
 
   start_lsa = prior_lsa_next_record (thread_p, node, tdes);
@@ -4079,6 +4081,12 @@ log_start_system_op (THREAD_ENTRY * thread_p)
 
   if (LOG_ISRESTARTED ())
     {
+#if defined(SERVER_MODE)
+      assert (tdes->cs_topop.cs_index == CRITICAL_SECTION_COUNT
+	      + css_get_max_conn () + NUM_MASTER_CHANNEL + tdes->tran_index);
+      assert (tdes->cs_topop.name == css_Csect_name_tdes);
+#endif
+
       csect_enter_critical_section (thread_p, &tdes->cs_topop, INF_WAIT);
     }
   if (tdes->topops.max == 0 || (tdes->topops.last + 1) >= tdes->topops.max)
@@ -4088,7 +4096,14 @@ log_start_system_op (THREAD_ENTRY * thread_p)
 	  /* Out of memory */
 	  if (LOG_ISRESTARTED ())
 	    {
-	      csect_exit_critical_section (&tdes->cs_topop);
+#if defined(SERVER_MODE)
+	      assert (tdes->cs_topop.cs_index == CRITICAL_SECTION_COUNT
+		      + css_get_max_conn () + NUM_MASTER_CHANNEL
+		      + tdes->tran_index);
+	      assert (tdes->cs_topop.name == css_Csect_name_tdes);
+#endif
+
+	      csect_exit_critical_section (thread_p, &tdes->cs_topop);
 	    }
 	  error_code = ER_OUT_OF_VIRTUAL_MEMORY;
 	  return NULL;
@@ -4300,7 +4315,13 @@ log_end_system_op (THREAD_ENTRY * thread_p, LOG_RESULT_TOPOP result)
 
   if (LOG_ISRESTARTED ())
     {
-      csect_exit_critical_section (&tdes->cs_topop);
+#if defined(SERVER_MODE)
+      assert (tdes->cs_topop.cs_index == CRITICAL_SECTION_COUNT
+	      + css_get_max_conn () + NUM_MASTER_CHANNEL + tdes->tran_index);
+      assert (tdes->cs_topop.name == css_Csect_name_tdes);
+#endif
+
+      csect_exit_critical_section (thread_p, &tdes->cs_topop);
     }
 
   mnt_tran_end_topops (thread_p);
@@ -6262,7 +6283,7 @@ log_commit (THREAD_ENTRY * thread_p, int tran_index, bool retain_lock)
 	  log_Gl.hdr.has_logging_been_skipped = false;
 	  logpb_flush_header (thread_p);
 	}
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
     }
 
   mnt_tran_commits (thread_p);
@@ -6682,7 +6703,7 @@ log_complete (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 
 		TR_TABLE_CS_ENTER (thread_p);
 		log_Gl.trantable.num_coord_loose_end_indices++;
-		TR_TABLE_CS_EXIT ();
+		TR_TABLE_CS_EXIT (thread_p);
 		/*
 		 * Start a new transaction for our original transaction index.
 		 * Set the coordinator stuff to NULL, in our original index since
@@ -6696,7 +6717,9 @@ log_complete (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 
 		LOG_SET_CURRENT_TRAN_INDEX (thread_p, tdes->tran_index);
 
+		TR_TABLE_CS_ENTER (thread_p);
 		(void) logtb_get_new_tran_id (thread_p, tdes);
+		TR_TABLE_CS_EXIT (thread_p);
 	      }
 
 	    if (LOG_ISCHECKPOINT_TIME ())
@@ -6784,7 +6807,9 @@ log_complete (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 	{
 	  if (get_newtrid == LOG_NEED_NEWTRID)
 	    {
+	      TR_TABLE_CS_ENTER (thread_p);
 	      (void) logtb_get_new_tran_id (thread_p, tdes);
+	      TR_TABLE_CS_EXIT (thread_p);
 	    }
 	}
       else
@@ -6792,13 +6817,9 @@ log_complete (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 	  /* Free the index */
 	  if (tdes->isloose_end == true)
 	    {
-#if defined(SERVER_MODE)
 	      TR_TABLE_CS_ENTER (thread_p);
-#endif /* SERVER_MODE */
 	      log_Gl.trantable.num_coord_loose_end_indices--;
-#if defined(SERVER_MODE)
-	      TR_TABLE_CS_EXIT ();
-#endif /* SERVER_MODE */
+	      TR_TABLE_CS_EXIT (thread_p);
 	    }
 	  logtb_free_tran_index (thread_p, tdes->tran_index);
 	}
@@ -9177,7 +9198,7 @@ xlog_dump (THREAD_ENTRY * thread_p, FILE * out_fp, int isforward,
 	   (isforward ? "Forward" : "Backaward"),
 	   (long long int) start_logpageid, dump_npages, desired_tranid);
 
-  LOG_CS_EXIT ();
+  LOG_CS_EXIT (thread_p);
 
   log_pgptr = (LOG_PAGE *) aligned_log_pgbuf;
 
@@ -10777,7 +10798,7 @@ log_recreate (THREAD_ENTRY * thread_p, VOLID num_perm_vols,
 
       LOG_CS_ENTER (thread_p);
       logpb_flush_pages_direct (thread_p);
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
 
       (void) pgbuf_flush_all (thread_p, volid);
       (void) pgbuf_invalidate_all (thread_p, volid);	/* it flush and invalidate */
@@ -10796,7 +10817,7 @@ log_recreate (THREAD_ENTRY * thread_p, VOLID num_perm_vols,
 				DISK_DONT_FLUSH);
       LOG_CS_ENTER (thread_p);
       logpb_flush_pages_direct (thread_p);
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
 
       (void) pgbuf_flush_all_unfixed_and_set_lsa_as_null (thread_p, volid);
 
@@ -10871,12 +10892,12 @@ log_get_io_page_size (THREAD_ENTRY * thread_p, const char *db_fullname,
 		  log_Name_active);
 	}
 
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return -1;
     }
   else
     {
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return db_iopagesize;
     }
 }
@@ -10919,12 +10940,12 @@ log_get_charset_from_header_page (THREAD_ENTRY * thread_p,
 		  log_Name_active);
 	}
 
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return INTL_CODESET_ERROR;
     }
   else
     {
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return db_charset;
     }
 }
@@ -11018,7 +11039,7 @@ log_simulate_crash (THREAD_ENTRY * thread_p, int flush_log,
 
   if (log_Gl.trantable.area == NULL || !logpb_is_initialize_pool ())
     {
-      LOG_CS_EXIT ();
+      LOG_CS_EXIT (thread_p);
       return;
     }
 
@@ -11038,7 +11059,7 @@ log_simulate_crash (THREAD_ENTRY * thread_p, int flush_log,
   logpb_finalize_pool ();
   logtb_undefine_trantable (thread_p);
 
-  LOG_CS_EXIT ();
+  LOG_CS_EXIT (thread_p);
 
   LOG_SET_CURRENT_TRAN_INDEX (thread_p, NULL_TRAN_INDEX);
 }

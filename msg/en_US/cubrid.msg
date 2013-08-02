@@ -1343,7 +1343,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 112 In line %d, column %d before %s\n
 113 before ' %s'\n
 114 before END OF STATEMENT\n
-115 invalid set names\n  set_names: SET NAMES charset [{COLLATE | COLLATION} collation]\n
+115 invalid set names\n  set_names: SET NAMES charset [COLLATE collation]\n
 116 invalid use of chr\n  CHR ( number [using charset] )\n
 117 invalid use of charset\n  CHARSET ( expression )\n
 118 invalid use of collation\n  COLLATION ( expression )\n
@@ -1622,14 +1622,14 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 270 Invalid function index expression.
 271 The query specification of %s has a cyclic reference to itself.
 272 %s expression not allowed in join condition.
-273 Only one table within a view can be updated.
-274 Multiple insert targets not allowed.
-275 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
-276 ORDER BY is not allowed in function MEDIAN.
-277 The arguments of the function '%s' must be constant.
-278 Function '%s' must have ORDER BY clause.
-279 For function '%s', the number of arguments does not match the number of ORDER BY columns.
-280 For function '%s', the ORDER BY clause is invalid.
+273 ORDER BY is not allowed in function MEDIAN.
+274 The arguments of the function '%s' must be constant.
+275 Function '%s' must have ORDER BY clause.
+276 For function '%s', the number of arguments does not match the number of ORDER BY columns.
+277 For function '%s', the ORDER BY clause is invalid.
+278 Only one table within a view can be updated.
+279 Multiple insert targets not allowed.
+280 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Out of virtual memory: unable to allocate %d bytes.
@@ -1788,7 +1788,7 @@ $set 14 MSGCAT_SET_LOCK
 29 %4sTran_index = %3d, Blocked_mode =%8s \n\t%13s Start_waiting_at = %-30s \n\t%13s Wait_for_secs = %.2f\n
 30 %4sTran_index = %3d, Non_2_phase_lock =%8s\n
 31 VPID (volid|pageid) = %3d|%6d.\n
-32 *** Lock Table Dump ***\n Lock Escalation at = %d, Run Deadlock interval = %d\n
+32 *** Lock Table Dump ***\n Lock Escalation at = %d, Run Deadlock interval = %5.2f\n
 33 Transaction (index %2d, %s, %s@%s|%d)\n
 34 Isolation %s\n
 35 State %s\n

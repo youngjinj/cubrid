@@ -558,7 +558,7 @@ namespace dbgw
       unsigned long ulWaitTimeMilSec) throw() :
     Exception(
         ExceptionFactory::create(DBGW_ER_CLIENT_EXEC_TIMEOUT,
-            (boost::format("Timeout occurred. (%d msec)")
+            (boost::format("Timeout occurred. (%lu msec)")
                 % ulWaitTimeMilSec).str()))
   {
   }
@@ -766,6 +766,14 @@ namespace dbgw
         ExceptionFactory::create(
             DBGW_ER_CONF_NOT_EXIST_CHARSET, "Either client or DB "
             "character set does not exist."))
+  {
+  }
+
+  InvalidDbTypeException::InvalidDbTypeException(const char *szDbType) throw() :
+    Exception(
+        ExceptionFactory::create(DBGW_ER_CONF_INVALID_DB_TYPE,
+            (boost::format("This library is not supported %s database type.") %
+                szDbType).str()))
   {
   }
 

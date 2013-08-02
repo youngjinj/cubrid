@@ -32,6 +32,7 @@
 
 #include <assert.h>
 
+#include "porting.h"
 #include "boot_sr.h"
 #include "memory_alloc.h"
 #include "locator_sr.h"
@@ -702,14 +703,14 @@ boot_compact_start (THREAD_ENTRY * thread_p)
   current_tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   if (current_tran_index != last_tran_index && compact_started == true)
     {
-      csect_exit (CSECT_COMPACTDB_ONE_INSTANCE);
+      csect_exit (thread_p, CSECT_COMPACTDB_ONE_INSTANCE);
       return ER_COMPACTDB_ALREADY_STARTED;
     }
 
   last_tran_index = current_tran_index;
   compact_started = true;
 
-  csect_exit (CSECT_COMPACTDB_ONE_INSTANCE);
+  csect_exit (thread_p, CSECT_COMPACTDB_ONE_INSTANCE);
 
   return NO_ERROR;
 }
@@ -733,14 +734,14 @@ boot_compact_stop (THREAD_ENTRY * thread_p)
   current_tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   if (current_tran_index != last_tran_index && compact_started == true)
     {
-      csect_exit (CSECT_COMPACTDB_ONE_INSTANCE);
+      csect_exit (thread_p, CSECT_COMPACTDB_ONE_INSTANCE);
       return ER_FAILED;
     }
 
   last_tran_index = -1;
   compact_started = false;
 
-  csect_exit (CSECT_COMPACTDB_ONE_INSTANCE);
+  csect_exit (thread_p, CSECT_COMPACTDB_ONE_INSTANCE);
 
   return NO_ERROR;
 }
@@ -762,11 +763,11 @@ boot_can_compact (THREAD_ENTRY * thread_p)
   current_tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   if (current_tran_index != last_tran_index && compact_started == true)
     {
-      csect_exit (CSECT_COMPACTDB_ONE_INSTANCE);
+      csect_exit (thread_p, CSECT_COMPACTDB_ONE_INSTANCE);
       return false;
     }
 
-  csect_exit (CSECT_COMPACTDB_ONE_INSTANCE);
+  csect_exit (thread_p, CSECT_COMPACTDB_ONE_INSTANCE);
 
   return true;
 }

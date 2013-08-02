@@ -689,5 +689,3 @@ mvcc_id_follow_or_equal (MVCCID id1, MVCCID id2)
   difference = (int) (id1 - id2);
   return (difference >= 0);
 }
-
-
