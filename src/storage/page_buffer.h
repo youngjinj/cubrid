@@ -46,6 +46,12 @@
     (vpid_ptr)->pageid = (pageid_value);		      \
   } while(0)
 
+#define VPID_COPY(dest_ptr, src_ptr)			      \
+  do {							      \
+    (dest_ptr)->volid = (src_ptr)->volid;		      \
+    (dest_ptr)->pageid = (src_ptr)->pageid;		      \
+  } while (0)
+
 /* Set the vpid to an invalid one */
 #define VPID_SET_NULL(vpid_ptr) VPID_SET(vpid_ptr, NULL_VOLID, NULL_PAGEID)
 

@@ -380,19 +380,6 @@ extern DB_VALUE *btree_delete (THREAD_ENTRY * thread_p, BTID * btid,
 			       BTREE_LOCKED_KEYS locked_keys, int *unique,
 			       int op_type,
 			       BTREE_UNIQUE_STATS * unique_stat_info);
-extern DB_VALUE *btree_insert (THREAD_ENTRY * thread_p, BTID * btid,
-			       DB_VALUE * key, OID * cls_oid, OID * oid,
-			       int op_type,
-			       BTREE_UNIQUE_STATS * unique_stat_info,
-			       int *pkyn);
-			      /* ejin: for replication,
-			       *    Replication log is created only when
-			       *    the target index is a primary key..
-			       *    btree_insert knows that the index is pk
-			       *    or not, but it doesn't return the result.
-			       *    So, we add the return value pkyn in order
-			       *    to decide to make a repl. log or not.
-			       */
 extern int btree_update (THREAD_ENTRY * thread_p, BTID * btid,
 			 DB_VALUE * old_key, DB_VALUE * new_key,
 			 BTREE_LOCKED_KEYS locked_keys,
@@ -547,4 +534,9 @@ extern SCAN_CODE btree_get_next_node_info (THREAD_ENTRY * thread_p,
 
 extern int xbtree_get_key_type (THREAD_ENTRY * thread_p, BTID btid,
 				TP_DOMAIN ** key_type);
+extern DB_VALUE *btree_perform_insert (THREAD_ENTRY * thread_p, BTID * btid,
+				       DB_VALUE * key,
+				       OID * cls_oid, OID * oid, int op_type,
+				       BTREE_UNIQUE_STATS * unique_stat_info,
+				       int *unique, bool use_mvcc);
 #endif /* _BTREE_H_ */

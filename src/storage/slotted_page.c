@@ -194,6 +194,10 @@ static void spage_add_contiguous_free_space (PAGE_PTR pgptr, int space);
 static void spage_reduce_contiguous_free_space (PAGE_PTR pgptr, int space);
 static void spage_verify_header (PAGE_PTR page_p);
 
+static int spage_init_vacuum_data (THREAD_ENTRY * thread_p,
+				   VACUUM_PAGE_DATA * vacuum_data_p,
+				   int n_slots);
+
 /*
  * spage_verify_header () -
  *   return:
@@ -1077,7 +1081,7 @@ spage_initialize (THREAD_ENTRY * thread_p, PAGE_PTR page_p, INT16 slot_type,
   page_header_p->num_records = 0;
   page_header_p->is_saving = is_saving;
   page_header_p->last_mvcc_id = MVCCID_NULL;
-  page_header_p->reserved4 = 0;
+  page_header_p->flags = SPAGE_HEADER_FLAG_NONE;
   page_header_p->need_update_best_hint = 0;
   page_header_p->reserved_bits = 0;
   page_header_p->reserved1 = 0;
@@ -4954,102 +4958,152 @@ spage_get_slot (PAGE_PTR page_p, PGSLOTID slot_id)
 }
 
 /*
- * spage_clean_page () - Collects clean page information: dead records and
- *			 overflow pages belonging to dead records.
+ * spage_init_vacuum_data () - Prepare a SPAGE_CLEAN_PAGE structure to handle
+ *			      n_slots in a page.
  *
- * return	      : Error code.
+ * return	      : NO_ERROR or ER_OUT_OF_VIRTUAL_MEMORY
  * thread_p (in)      : Thread entry.
- * page_p (in)	      : Heap page pointer.
- * page_clean_p (in)  : Clean data.
- * mvcc_snapshot (in) : MVCC snapshot data.
+ * vacuum_data_p (in) : Pointer to VACUUM_PAGE_DATA.
+ * int n_slots (in)   : Number of slots in page.
+ */
+static int
+spage_init_vacuum_data (THREAD_ENTRY * thread_p,
+			VACUUM_PAGE_DATA * vacuum_data_p, int n_slots)
+{
+  vacuum_data_p->n_dead = 0;
+  vacuum_data_p->n_ovfl_pages = 0;
+  vacuum_data_p->n_relocations = 0;
+  vacuum_data_p->vacuum_needed = false;
+  vacuum_data_p->all_visible = true;
+
+  vacuum_data_p->dead_slots =
+    (PGSLOTID *) db_private_alloc (thread_p, n_slots * sizeof (PGSLOTID));
+  vacuum_data_p->ovfl_pages =
+    (VPID *) db_private_alloc (thread_p, n_slots * sizeof (VPID));
+  vacuum_data_p->relocated_slots =
+    (PGSLOTID *) db_private_alloc (thread_p, n_slots * sizeof (PGSLOTID));
+  vacuum_data_p->relocations =
+    (OID *) db_private_alloc (thread_p, n_slots * sizeof (OID));
+  vacuum_data_p->visited =
+    (bool *) db_private_alloc (thread_p, n_slots * sizeof (bool));
+
+  if (vacuum_data_p->dead_slots == NULL
+      || vacuum_data_p->ovfl_pages == NULL
+      || vacuum_data_p->relocated_slots == NULL
+      || vacuum_data_p->relocations == NULL || vacuum_data_p->visited == NULL)
+    {
+      spage_finalize_vacuum_data (thread_p, vacuum_data_p);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      n_slots * (sizeof (PGSLOTID) * 2 + sizeof (VPID) +
+			 sizeof (OID)));
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+  memset (vacuum_data_p->visited, 0, n_slots * sizeof (bool));
+  return NO_ERROR;
+}
+
+/*
+ * spage_finalize_vacuum_data () - Frees the content of a VACUUM_PAGE_DATA.
+ *
+ * return	      : Void.
+ * thread_p (in)      : Thread entry.
+ * vacuum_data_p (in) : Pointer to VACUUM_PAGE_DATA.
+ */
+void
+spage_finalize_vacuum_data (THREAD_ENTRY * thread_p,
+			    VACUUM_PAGE_DATA * vacuum_data_p)
+{
+  if (vacuum_data_p->dead_slots != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->dead_slots);
+    }
+  if (vacuum_data_p->ovfl_pages != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->ovfl_pages);
+    }
+  if (vacuum_data_p->relocated_slots != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->relocated_slots);
+    }
+  if (vacuum_data_p->relocations != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->relocations);
+    }
+  if (vacuum_data_p->visited != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->visited);
+    }
+}
+
+/*
+ * spage_vacuum_page () - Collects clean page information: dead records,
+ *                        relocated records and overflow pages.
+ *
+ * return		      : Error code.
+ * thread_p (in)	      : Thread entry.
+ * page_p (in)		      : Heap page pointer.
+ * page_vpid (in)	      : VPID for page 
+ * vacuum_data_p (out)	      : Collector of vacuum page data.
+ * lowest_active_mvccid (in)  : MVCC snapshot data.
+ * vacuum_page_only (in)      : True if the vacuum page call is for this
+ *				page only and not the entire class. Has two
+ *				consequences: page will not be left (a chain
+ *				that leads to another page will be stopped)
+ *				and all_visible flag is not set, because
+ *				dead records are not removed from indexes.
  */
 int
-spage_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
-		  SPAGE_CLEAN_STRUCT * page_clean_p,
-		  MVCCID lowest_active_mvccid)
+spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p, VPID page_vpid,
+		   VACUUM_PAGE_DATA * vacuum_data_p,
+		   MVCCID lowest_active_mvccid, bool vacuum_page_only)
 {
   SPAGE_HEADER *page_header_p = NULL;
-  SPAGE_SLOT *slot_p = NULL;
   int nslots, i;
-  OID ovf_oid;
-  RECDES ovf_recdes, recdes;
-  MVCC_REC_HEADER *mvcc_header = NULL;
-  MVCC_SATISFIES_VACUUM_RESULT record_status;
+  bool reuse_oid;
+  int error;
 
-  assert (page_p != NULL);
-  page_header_p = (SPAGE_HEADER *) page_p;
+  assert (page_p != NULL && *page_p != NULL);
+  page_header_p = (SPAGE_HEADER *) * page_p;
 
   SPAGE_VERIFY_HEADER (page_header_p);
 
+  if ((page_header_p->flags & SPAGE_HEADER_FLAG_ALL_VISIBLE) != 0)
+    {
+      /* TODO: Some cleaning may be still required. A simplified vacuum
+       * algorithm. If all visible flag is set it means that no record in this
+       * page has been deleted since last vacuum. However, there may be
+       * REC_RELOCATION records which point to records in other pages.
+       * These records may be dead or the relocation may change.
+       */
+      return NO_ERROR;
+    }
+
   nslots = page_header_p->num_slots;
+  reuse_oid = (page_header_p->anchor_type != ANCHORED_DONT_REUSE_SLOTS);
 
-  page_clean_p->num_dead = 0;
-  page_clean_p->num_ovfl_pages = 0;
-
-  /* Alloc enough space for clean data */
-  page_clean_p->dead_slots = (int *) malloc (nslots * sizeof (int));
-  if (page_clean_p->dead_slots == NULL)
+  /* Initialize clean data */
+  error = spage_init_vacuum_data (thread_p, vacuum_data_p, nslots);
+  if (error != NO_ERROR)
     {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
-	      nslots * sizeof (int));
+      return error;
     }
-  page_clean_p->ovfl_pages = (VPID *) malloc (nslots * sizeof (VPID));
-  if (page_clean_p->ovfl_pages == NULL)
+  if (vacuum_page_only)
     {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
-	      nslots * sizeof (VPID));
+      /* Dead records are not removed from indexes */
+      vacuum_data_p->all_visible = false;
     }
 
-  slot_p = (SPAGE_SLOT *) (page_p + DB_PAGESIZE - sizeof (SPAGE_SLOT));
-  for (i = 0; i < nslots; i++, slot_p--)
+  for (i = 1; i < nslots; i++)
     {
-      if (i == 0)
+      error =
+	mvcc_chain_satisfies_vacuum (thread_p, page_p, page_vpid, i,
+				     reuse_oid, vacuum_page_only,
+				     vacuum_data_p, lowest_active_mvccid);
+      if (error != NO_ERROR)
 	{
-	  /* this is header record, skip it */
-	  continue;
-	}
-      if (slot_p->record_type != REC_BIGONE
-	  && slot_p->record_type != REC_HOME)
-	{
-	  /* Only home and big records are handled here */
-	  continue;
-	}
-      if (spage_get_record_data (page_p, slot_p, &recdes, PEEK) != S_SUCCESS)
-	{
-	  return ER_FAILED;
-	}
-      /* Get MVCC header */
-      mvcc_header = (MVCC_REC_HEADER *) recdes.data;
-
-      /* Get record status */
-      record_status =
-	mvcc_satisfies_vacuum (thread_p, mvcc_header, lowest_active_mvccid,
-			       page_p);
-      if (record_status == VACUUM_RECORD_DEAD)
-	{
-	  /* Records is dead and is safe to remove it */
-	  page_clean_p->dead_slots[page_clean_p->num_dead++] = i;
-	  if (slot_p->record_type == REC_BIGONE)
-	    {
-	      /* Big records, must also delete overflow pages */
-	      ovf_recdes.data = (char *) &ovf_oid;
-	      ovf_recdes.length = -1;
-	      ovf_recdes.area_size = sizeof (OID);
-	      if (spage_get_record_data (page_p, slot_p, &ovf_recdes, COPY) !=
-		  S_SUCCESS)
-		{
-		  return ER_FAILED;
-		}
-	      /* save the overflow page id to release it later */
-	      /* maybe we should reconsider this: do we really need to save
-	       * overflow pages? couldn't we just delete them here?
-	       */
-	      page_clean_p->ovfl_pages[page_clean_p->num_ovfl_pages].pageid =
-		ovf_oid.pageid;
-	      page_clean_p->ovfl_pages[page_clean_p->num_ovfl_pages].volid =
-		ovf_oid.volid;
-	      page_clean_p->num_ovfl_pages++;
-	    }
+	  spage_finalize_vacuum_data (thread_p, vacuum_data_p);
+	  return error;
 	}
     }
 
@@ -5057,36 +5111,74 @@ spage_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 }
 
 /*
- * spage_execute_clean_page () - Executes page cleaning.
+ * spage_execute_vacuum_page () - Executes page cleaning.
  *
  * return	   : Error code.
  * thread_p (in)   : Thread entry.
  * page_p (in)	   : Heap page pointer.
- * page_clean (in) : Clean data.
+ * vacuum_data (in) : Clean data.
  */
 int
-spage_execute_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
-			  SPAGE_CLEAN_STRUCT page_clean)
+spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+			   VACUUM_PAGE_DATA vacuum_data)
 {
   SPAGE_HEADER *page_header_p = NULL;
   SPAGE_SLOT *slot_p = NULL;
   int i, error = NO_ERROR;
+  RECDES recdes;
 
   page_header_p = (SPAGE_HEADER *) page_p;
   SPAGE_VERIFY_HEADER (page_header_p);
 
+  if (!vacuum_data.vacuum_needed)
+    {
+      /* Don't do anything */
+      return NO_ERROR;
+    }
+
   /* Mark dead records */
-  for (i = 0; i < page_clean.num_dead; i++)
+  for (i = 0; i < vacuum_data.n_dead; i++)
     {
       slot_p =
-	spage_find_slot (page_p, page_header_p, page_clean.dead_slots[i],
+	spage_find_slot (page_p, page_header_p, vacuum_data.dead_slots[i],
 			 false);
       if (slot_p == NULL)
 	{
 	  return ER_FAILED;
 	}
+      if (slot_p->record_type == REC_DEAD)
+	{
+	  /* Already vacuumed */
+	  continue;
+	}
       spage_set_slot (slot_p, SPAGE_EMPTY_OFFSET, 0, REC_DEAD);
       page_header_p->num_records--;
+    }
+
+  /* Relocated records */
+  for (i = 0; i < vacuum_data.n_relocations; i++)
+    {
+      slot_p =
+	spage_find_slot (page_p, page_header_p,
+			 vacuum_data.relocated_slots[i], false);
+      if (slot_p == NULL)
+	{
+	  return ER_FAILED;
+	}
+      if (spage_get_record_data (page_p, slot_p, &recdes, PEEK) != S_SUCCESS)
+	{
+	  return ER_FAILED;
+	}
+      COPY_OID ((OID *) recdes.data, &vacuum_data.relocations[i]);
+      spage_set_slot (slot_p, slot_p->offset_to_record, OR_OID_SIZE,
+		      REC_RELOCATION);
+    }
+
+  /* Set all visible flag */
+  assert ((page_header_p->flags & SPAGE_HEADER_FLAG_ALL_VISIBLE) == 0);
+  if (vacuum_data.all_visible)
+    {
+      page_header_p->flags |= SPAGE_HEADER_FLAG_ALL_VISIBLE;
     }
 
   /* Compact page */
@@ -5096,14 +5188,15 @@ spage_execute_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
       return error;
     }
 
-  /* Mark page as clean */
-  spage_mark_page_as_cleaned (thread_p, page_p);
+  /* Mark page as vacuumed */
+  spage_mark_page_as_vacuumed (thread_p, page_p);
+
   pgbuf_set_dirty (thread_p, page_p, DONT_FREE);
   return NO_ERROR;
 }
 
 /*
- * spage_should_clean_page () - Check if page has records that may be cleaned
+ * spage_should_vacuum_page () - Check if page has records that may be cleaned
  *				and if the last change was done before oldest
  *				active transaction.
  *
@@ -5112,7 +5205,7 @@ spage_execute_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
  * oldest_active (in) : MVCCID for oldest active transaction.
  */
 bool
-spage_should_clean_page (PAGE_PTR page_ptr, MVCCID oldest_active)
+spage_should_vacuum_page (PAGE_PTR page_ptr, MVCCID oldest_active)
 {
   SPAGE_HEADER *page_header_p = NULL;
 
@@ -5130,7 +5223,7 @@ spage_should_clean_page (PAGE_PTR page_ptr, MVCCID oldest_active)
 }
 
 /*
- * spage_mark_page_as_cleaned () - Marks the page as cleaned to avoid future
+ * spage_mark_page_as_vacuumed () - Marks the page as cleaned to avoid future
  *				   useless cleanings.
  *
  * return	 : void.
@@ -5138,7 +5231,7 @@ spage_should_clean_page (PAGE_PTR page_ptr, MVCCID oldest_active)
  * page_ptr (in) : Heap page pointer.
  */
 void
-spage_mark_page_as_cleaned (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr)
+spage_mark_page_as_vacuumed (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr)
 {
   SPAGE_HEADER *page_header_p = NULL;
 
@@ -5156,7 +5249,7 @@ spage_mark_page_as_cleaned (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr)
 }
 
 /*
- * spage_mark_page_for_clean () - Mark the page as it may need to clean
+ * spage_mark_page_for_vacuum () - Mark the page as it may need to clean
  *				  deleted records.
  *
  * return	 : void.
@@ -5168,8 +5261,8 @@ spage_mark_page_as_cleaned (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr)
  *		   while this transaction is still active.
  */
 void
-spage_mark_page_for_clean (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr,
-			   MVCCID mvcc_id)
+spage_mark_page_for_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr,
+			    MVCCID mvcc_id)
 {
   SPAGE_HEADER *page_header_p = NULL;
 

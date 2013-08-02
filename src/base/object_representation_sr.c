@@ -161,6 +161,57 @@ orc_class_hfid_from_record (RECDES * record, HFID * hfid)
 }
 
 /*
+ * orc_class_is_system_class () - Get from record the class flag and check
+ *				  if SM_CLASSFLAG_SYSTEM is set.
+ *
+ * return      : True if SM_CLASSFLAG_SYSTEM is set.
+ * record (in) : Record descriptor containing class data.
+ */
+bool
+orc_class_is_system_class (RECDES * record)
+{
+  char *ptr = NULL;
+  int flags;
+  assert (record != NULL && record->data != NULL);
+
+  ptr = record->data + ORC_CLASS_FLAGS;
+  flags = OR_GET_INT (ptr);
+
+  return ((flags & SM_CLASSFLAG_SYSTEM) != 0);
+}
+
+/*
+ * class_is_system_class () - Check if class identified with class_oid is
+ *			      system class.
+ *
+ * return		   : Error code.
+ * thread_p (in)	   : Thread entry.
+ * class_oid (in)	   : Class object identifier.
+ * is_system_class_p (out) : True is class is a system class.
+ */
+int
+class_is_system_class (THREAD_ENTRY * thread_p, const OID * class_oid,
+		       bool * is_system_class_p)
+{
+  RECDES recdes;
+  HEAP_SCANCACHE scan_cache;
+
+  assert (is_system_class_p != NULL && class_oid != NULL
+	  && !OID_ISNULL (class_oid));
+
+  (void) heap_scancache_quick_start (&scan_cache);
+  if (heap_get (thread_p, class_oid, &recdes, &scan_cache, PEEK, NULL_CHN)
+      != S_SUCCESS)
+    {
+      assert (0);
+      return ER_FAILED;
+    }
+  *is_system_class_p = orc_class_is_system_class (&recdes);
+  heap_scancache_end (thread_p, &scan_cache);
+  return NO_ERROR;
+}
+
+/*
  * orc_diskrep_from_record () - Calculate the corresponding DISK_REPR structure
  *                              for the catalog
  *   return: disk representation structure

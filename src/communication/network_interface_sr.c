@@ -10236,25 +10236,18 @@ svacuum (THREAD_ENTRY * thread_p, unsigned int rid, char *request, int reqlen)
 {
   int err = NO_ERROR;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
-  char *reply = NULL, *ptr = NULL, *data_request = NULL;
-  int num_classes, data_size;
+  char *reply = NULL, *ptr = NULL;
+  int num_classes;
   OID *class_oids = NULL;
 
   reply = OR_ALIGNED_BUF_START (a_reply);
 
-  /* Obtain data from client */
-  err =
-    css_receive_data_from_client (thread_p->conn_entry, rid, &data_request,
-				  &data_size);
-  if (err != NO_ERROR)
-    {
-      goto cleanup;
-    }
+  assert (request != NULL && reqlen > 0);
 
   /* Unpack request data */
 
   /* Unpack num_classes */
-  ptr = or_unpack_int (data_request, &num_classes);
+  ptr = or_unpack_int (request, &num_classes);
   /* Unpack class_oids */
   if (num_classes > 0)
     {
@@ -10276,11 +10269,6 @@ cleanup:
   if (class_oids != NULL)
     {
       db_private_free_and_init (NULL, class_oids);
-    }
-
-  if (data_request != NULL)
-    {
-      free_and_init (data_request);
     }
 
   if (err != NO_ERROR)

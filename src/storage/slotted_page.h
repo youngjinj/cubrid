@@ -32,6 +32,7 @@
 #include "error_manager.h"
 #include "storage_common.h"
 #include "log_manager.h"
+#include "vacuum.h"
 
 #define PEEK          true	/* Peek for a slotted record */
 #define COPY          false	/* Don't peek, but copy a slotted record */
@@ -105,6 +106,10 @@ enum
 #define SAFEGUARD_RVSPACE      true
 #define DONT_SAFEGUARD_RVSPACE false
 
+/* Slotted page header flags */
+#define SPAGE_HEADER_FLAG_NONE		0x0	/* No flags */
+#define SPAGE_HEADER_FLAG_ALL_VISIBLE	0x1	/* All records are visible */
+
 typedef struct spage_header SPAGE_HEADER;
 struct spage_header
 {
@@ -125,7 +130,7 @@ struct spage_header
 				 * - a deleted record
 				 * - an updated record
 				 */
-  int reserved4;
+  int flags;			/* Page flags */
   unsigned int is_saving:1;	/* True if saving is need for recovery (undo) */
   unsigned int need_update_best_hint:1;	/* True if we should update best pages hint
 					 * for this page. See heap_stats_update. */
@@ -149,15 +154,6 @@ struct spage_slot
   unsigned int record_length:14;	/* Length of record */
   unsigned int record_type:4;	/* Record type (REC_HOME, REC_NEWHOME, ...)
 				 * described by slot. */
-};
-
-typedef struct spage_clean_struct SPAGE_CLEAN_STRUCT;
-struct spage_clean_struct
-{
-  int num_dead;			/* number of dead slots */
-  int *dead_slots;		/* array of ids for dead slots */
-  int num_ovfl_pages;		/* number of overflow pages */
-  VPID *ovfl_pages;		/* array of ids for overflow pages */
 };
 
 extern int spage_boot (THREAD_ENTRY * thread_p);
@@ -259,15 +255,21 @@ extern int spage_mark_deleted_slot_as_reusable (THREAD_ENTRY * thread_p,
 extern PGSLOTID spage_find_free_slot (PAGE_PTR page_p,
 				      SPAGE_SLOT ** out_slot_p,
 				      PGSLOTID start_id);
-extern int spage_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
-			     SPAGE_CLEAN_STRUCT * page_clean_p,
-			     MVCCID lowest_active_mvccid);
-extern int spage_execute_clean_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
-				     SPAGE_CLEAN_STRUCT page_clean);
-extern bool spage_should_clean_page (PAGE_PTR page_ptr, MVCCID oldest_active);
-extern void spage_mark_page_for_clean (THREAD_ENTRY * thread_p,
-				       PAGE_PTR page_ptr, MVCCID mvcc_id);
-extern void spage_mark_page_as_cleaned (THREAD_ENTRY * thread_p,
-					PAGE_PTR page_ptr);
+extern int spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
+			      VPID page_vpid,
+			      VACUUM_PAGE_DATA * page_clean_p,
+			      MVCCID lowest_active_mvccid,
+			      bool vacuum_page_only);
+extern int spage_execute_vacuum_page (THREAD_ENTRY * thread_p,
+				      PAGE_PTR page_p,
+				      VACUUM_PAGE_DATA vacuum_data);
+extern bool spage_should_vacuum_page (PAGE_PTR page_ptr,
+				      MVCCID oldest_active);
+extern void spage_finalize_vacuum_data (THREAD_ENTRY * thread_p,
+					VACUUM_PAGE_DATA * vacuum_data_p);
+extern void spage_mark_page_for_vacuum (THREAD_ENTRY * thread_p,
+					PAGE_PTR page_ptr, MVCCID mvcc_id);
+extern void spage_mark_page_as_vacuumed (THREAD_ENTRY * thread_p,
+					 PAGE_PTR page_ptr);
 
 #endif /* _SLOTTED_PAGE_H_ */

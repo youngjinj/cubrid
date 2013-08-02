@@ -3993,7 +3993,8 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
       goto error;
     }
 
-  if (heap_perform_delete (thread_p, hfid_p, oid_p, scan_p, NULL) == NULL)
+  if (heap_perform_delete (thread_p, hfid_p, class_oid_p, oid_p, scan_p, NULL)
+      == NULL)
     {
       error = er_errid ();
       goto error;

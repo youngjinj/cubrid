@@ -7673,7 +7673,8 @@ qexec_intprt_fnc (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	    }
 
 	  agg_ptr = buildvalue->agg_list;
-	  if (!xasl->scan_ptr	/* no scan procedure */
+	  if (mvcc_Enabled == false	/* non-mvcc */
+	      && !xasl->scan_ptr	/* no scan procedure */
 	      && !xasl->fptr_list	/* no path expressions */
 	      && !xasl->if_pred	/* no if predicates */
 	      && !xasl->instnum_pred	/* no instnum predicate */

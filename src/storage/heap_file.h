@@ -320,7 +320,9 @@ extern const OID *heap_perform_update (THREAD_ENTRY * thread_p,
 				       HEAP_SCANCACHE * scan_cache,
 				       void *mvcc_data_filter);
 extern const OID *heap_perform_delete (THREAD_ENTRY * thread_p,
-				       const HFID * hfid, const OID * oid,
+				       const HFID * hfid,
+				       const OID * class_oid,
+				       const OID * oid,
 				       HEAP_SCANCACHE * scan_cache,
 				       void *mvcc_data_filter);
 extern void heap_flush (THREAD_ENTRY * thread_p, const OID * oid);
@@ -634,12 +636,14 @@ extern int heap_rv_redo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_mvcc_redo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+extern int heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_mvcc_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_redo_delete_newhome (THREAD_ENTRY * thread_p,
 					LOG_RCV * rcv);
 extern int heap_rv_redo_mark_reusable_slot (THREAD_ENTRY * thread_p,
 					    LOG_RCV * rcv);
 extern int heap_rv_undoredo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+extern int heap_rv_mvcc_undo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_mvcc_redo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int heap_rv_undoredo_update_type (THREAD_ENTRY * thread_p,
 					 LOG_RCV * rcv);
@@ -650,7 +654,7 @@ extern void heap_rv_dump_reuse_page (FILE * fp, int ignore_length,
 				     void *data);
 
 extern int heap_get_hfid_from_class_oid (THREAD_ENTRY * thread_p,
-					 OID * class_oid, HFID * hfid);
+					 const OID * class_oid, HFID * hfid);
 extern int heap_compact_pages (THREAD_ENTRY * thread_p, OID * class_oid);
 
 extern void heap_classrepr_dump_all (THREAD_ENTRY * thread_p, FILE * fp,
@@ -681,9 +685,11 @@ extern int heap_vpid_next (const HFID * hfid, PAGE_PTR pgptr,
 extern int heap_vpid_prev (const HFID * hfid, PAGE_PTR pgptr,
 			   VPID * prev_vpid);
 
-extern int heap_clean_page (THREAD_ENTRY * thread_p, const HFID * hfid,
-			    PAGE_PTR * page_p, MVCCID lowest_active_mvccid);
-extern int heap_rv_redo_clean_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+extern int heap_vacuum_page (THREAD_ENTRY * thread_p, const HFID * hfid,
+			     PAGE_PTR * page_p, MVCCID lowest_active_mvccid,
+			     bool vacuum_page_only,
+			     VACUUM_PAGE_DATA * vacuum_data_p);
+extern int heap_rv_redo_vacuum_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 
 extern bool heap_set_record_header_flag (THREAD_ENTRY * thread_p,
 					 MVCC_REC_HEADER * rec_header,
@@ -693,4 +699,22 @@ extern bool heap_update_record_header_del_flag (THREAD_ENTRY * thread_p,
 						MVCC_REC_HEADER * rec_header,
 						PAGE_PTR pgptr,
 						MVCCID del_mvccid);
+extern int heap_get_pages_for_mvcc_chain_read (THREAD_ENTRY * thread_p,
+					       OID * oid, const HFID * hfid,
+					       PAGE_PTR * pgptr,
+					       PAGE_PTR * forward_pgptr);
+extern SCAN_CODE heap_peek_mvcc_data (THREAD_ENTRY * thread_p,
+				      const OID * oid, RECDES * recdes,
+				      PAGE_PTR page_ptr,
+				      PAGE_PTR ovf_first_page,
+				      MVCC_SNAPSHOT * mvcc_snapshot);
+
+extern int heap_stats_set_records_count (THREAD_ENTRY * thread_p,
+					 const HFID * hfid,
+					 int total_records_count,
+					 int dead_records_count, bool flush);
+extern int heap_stats_get_records_count (THREAD_ENTRY * thread_p,
+					 const HFID * hfid,
+					 int *total_records_count,
+					 int *dead_records_count);
 #endif /* _HEAP_FILE_H_ */

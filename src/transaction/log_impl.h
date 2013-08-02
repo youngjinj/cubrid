@@ -719,6 +719,56 @@ enum tran_abort_reason
   TRAN_ABORT_DUE_ROLLBACK_ON_ESCALATION = 2
 };
 
+/* LOG_INS_DEL_ENTRY
+ * Structure used to collect statistics on inserted and deleted records
+ * during a transaction. For now, these statistics are used in the auto
+ * vacuuming algorithm. Each command collects inserted/deleted record counts
+ * on heap_update, heap_delete and heap_insert. When the command is finished,
+ * the statistics are then passed to current transaction. At the end of
+ * the transaction, these statistics are finally passed to vacuum_Stats_table.
+ */
+typedef struct log_ins_del_entry LOG_INS_DEL_ENTRY;
+struct log_ins_del_entry
+{
+  OID class_oid;		/* Class object identifier. */
+  int n_deleted;		/* The number of deleted records during
+				 * transaction. Counts as dead on commit and
+				 * is ignored on rollback.
+				 */
+  int n_inserted;		/* The number of inserted records during
+				 * transaction. Counts as dead on rollback
+				 * and is added to the total count of records on
+				 * both commit/rollback.
+				 */
+  int n_last_command_deleted;	/* The number of deleted records during last
+				 * command
+				 */
+  int n_last_command_inserted;	/* The number of inserted records during last
+				 * command
+				 */
+  bool is_system_class;		/* TODO: this may be only temporary. System
+				 * classes do not use MVCC, therefore they do
+				 * not benefit for vacuuming. In the current
+				 * context, these statistics make sense only for
+				 * non-system classes.
+				 */
+
+  LOG_INS_DEL_ENTRY *next;	/* Pointer to the next entry */
+};
+
+/* LOG_INSERTED_DELETED
+ * Structure used to collect inserted/deleted record counts on multiple
+ * classes during a transaction. Also used to reuse memory allocated by
+ * previous transactions.
+ */
+typedef struct log_inserted_deleted LOG_INSERTED_DELETED;
+struct log_inserted_deleted
+{
+  LOG_INS_DEL_ENTRY *crt_tran_entries;
+  LOG_INS_DEL_ENTRY *free_entries;
+};
+
+
 typedef struct log_tdes LOG_TDES;
 struct log_tdes
 {				/* Transaction descriptor */
@@ -851,6 +901,11 @@ struct log_tdes
 				 */
   bool mvcc_comm_id_used;	/* true, if mvcc_comm_id is used */
 #endif				/* MVCC_USE_COMMAND_ID */
+
+  LOG_INSERTED_DELETED log_ins_del;	/* Collects data about inserted/
+					 * deleted records during last
+					 * command/transaction
+					 */
 };
 
 typedef struct log_addr_tdesarea LOG_ADDR_TDESAREA;
@@ -2163,4 +2218,11 @@ extern bool logtb_is_mvccid_committed (THREAD_ENTRY * thread_p,
 extern MVCC_SNAPSHOT *logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p);
 extern void logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 				 int status);
+
+extern int logtb_update_command_inserted_deleted (THREAD_ENTRY * thread_p,
+						  const OID * class_oid,
+						  int n_inserted,
+						  int n_deleted);
+extern int logtb_update_transaction_inserted_deleted (THREAD_ENTRY * thread_p,
+						      bool cancel_command);
 #endif /* _LOG_IMPL_H_ */

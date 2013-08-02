@@ -64,6 +64,7 @@
 #include "transaction_sr.h"
 #include "boot_sr.h"
 #include "partition.h"
+#include "vacuum.h"
 
 #include "db.h"
 
@@ -1372,6 +1373,7 @@ locator_drop_class_name_entry (const void *name, void *ent, void *rm)
 	  (void) mht_rem (locator_Mht_classnames, name, NULL, NULL);
 
 	  (void) catcls_remove_entry (&class_oid);
+	  (void) vacuum_stats_table_remove_entry (&class_oid);
 
 	  free_and_init (ent);
 	  free_and_init (classname);
@@ -1393,6 +1395,7 @@ locator_drop_class_name_entry (const void *name, void *ent, void *rm)
 		  (void) mht_rem (locator_Mht_classnames, name, NULL, NULL);
 
 		  (void) catcls_remove_entry (&class_oid);
+		  (void) vacuum_stats_table_remove_entry (&class_oid);
 
 		  free_and_init (ent);
 		  free_and_init (classname);
@@ -1438,6 +1441,7 @@ locator_force_drop_class_name_entry (const void *name, void *ent, void *rm)
   (void) mht_rem (locator_Mht_classnames, name, NULL, NULL);
 
   (void) catcls_remove_entry (&class_oid);
+  (void) vacuum_stats_table_remove_entry (&class_oid);
 
   free_and_init (ent);
   free_and_init (classname);
@@ -6127,7 +6131,7 @@ locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * oid,
 	}
     }
 
-  if (heap_perform_delete (thread_p, hfid, oid, scan_cache,
+  if (heap_perform_delete (thread_p, hfid, &class_oid, oid, scan_cache,
 			   mvcc_data_filter) == NULL)
     {
       /*
@@ -6724,6 +6728,11 @@ done:
   logtb_inc_command_id (thread_p);
 #endif /* MVCC_USE_COMMAND_ID */
 
+  if (mvcc_Enabled)
+    {
+      logtb_update_transaction_inserted_deleted (thread_p, false);
+    }
+
   if (force_scancache != NULL)
     {
       locator_end_force_scan_cache (thread_p, force_scancache);
@@ -6747,6 +6756,12 @@ error:
   /* Make command id is deactivated */
   logtb_deactivate_command_id (thread_p);
 #endif /* MVCC_USE_COMMAND_ID */
+
+  if (mvcc_Enabled)
+    {
+      /* Should we cancel all successful object flushes? */
+      logtb_update_transaction_inserted_deleted (thread_p, true);
+    }
 
   if (force_scancache != NULL)
     {
@@ -7135,6 +7150,7 @@ locator_add_or_remove_index (THREAD_ENTRY * thread_p, RECDES * recdes,
   PRED_EXPR_WITH_CONTEXT *pred_filter = NULL;
   DB_LOGICAL ev_res;
   BTREE_LOCKED_KEYS locked_keys;
+  bool use_mvcc = false;
 
   assert_release (class_oid != NULL);
   assert_release (!OID_ISNULL (class_oid));
@@ -7238,9 +7254,21 @@ locator_add_or_remove_index (THREAD_ENTRY * thread_p, RECDES * recdes,
 
 	  if (is_insert)
 	    {
-	      key_ins_del = btree_insert (thread_p, &btid, key_dbvalue,
-					  class_oid, inst_oid, op_type,
-					  unique_stat_info, &unique);
+	      if ((mvcc_Enabled == true)
+		  && (scan_cache == NULL
+		      || scan_cache->delete_old_row == false))
+		{
+		  use_mvcc = true;
+		}
+	      else
+		{
+		  use_mvcc = false;
+		}
+
+	      key_ins_del =
+		btree_perform_insert (thread_p, &btid, key_dbvalue, class_oid,
+				      inst_oid, op_type, unique_stat_info,
+				      &unique, use_mvcc);
 	    }
 	  else
 	    {
@@ -7713,6 +7741,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   bool same_key = true;
   int c = DB_UNK;
   BTREE_LOCKED_KEYS locked_keys;
+  bool use_mvcc = false;
 
   assert_release (class_oid != NULL);
   assert_release (!OID_ISNULL (class_oid));
@@ -8003,34 +8032,50 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 			}
 		    }
 		}
-	      else if ((do_insert_only == true) ||
-		       (mvcc_Enabled && scan_cache != NULL
-			&& scan_cache->delete_old_row == false))
-		{
-		  /* in mvcc - update index key means insert index key */
-		  if (btree_insert (thread_p, &old_btid, new_key,
-				    class_oid, inst_oid, op_type,
-				    unique_stat_info, &unique) == NULL)
-		    {
-		      error_code = er_errid ();
-		      goto error;
-		    }
-		}
 	      else
 		{
-		  locked_keys =
-		    btree_get_locked_keys (&old_btid, search_btid,
-					   search_btid_duplicate_key_locked);
-		  error_code =
-		    btree_update (thread_p, &old_btid, old_key, new_key,
-				  locked_keys, class_oid, inst_oid, op_type,
-				  unique_stat_info, &unique);
-
-		  if (error_code != NO_ERROR)
+		  if ((mvcc_Enabled == true)
+		      && (scan_cache == NULL
+			  || scan_cache->delete_old_row == false))
 		    {
-		      goto error;
+		      use_mvcc = true;
 		    }
+		  else
+		    {
+		      use_mvcc = false;
+		    }
+
+		  /* in mvcc - update index key means insert index key */
+		  if ((do_insert_only == true) || (use_mvcc == true))
+		    {
+		      if (btree_perform_insert (thread_p, &old_btid, new_key,
+						class_oid, inst_oid, op_type,
+						unique_stat_info, &unique,
+						use_mvcc) == NULL)
+			{
+			  error_code = er_errid ();
+			  goto error;
+			}
+		    }
+		  else
+		    {
+		      locked_keys =
+			btree_get_locked_keys (&old_btid, search_btid,
+					       search_btid_duplicate_key_locked);
+		      error_code =
+			btree_update (thread_p, &old_btid, old_key, new_key,
+				      locked_keys, class_oid, inst_oid,
+				      op_type, unique_stat_info, &unique);
+
+		      if (error_code != NO_ERROR)
+			{
+			  goto error;
+			}
+		    }
+
 		}
+
+
 	    }
 
 	  if (!locator_Dont_check_foreign_key
@@ -8557,9 +8602,9 @@ locator_repair_btree_by_insert (THREAD_ENTRY * thread_p, OID * class_oid,
 
   if (xtran_server_start_topop (thread_p, &lsa) == NO_ERROR)
     {
-      if (btree_insert (thread_p, btid, key,
-			class_oid, inst_oid, SINGLE_ROW_INSERT, NULL,
-			NULL) != NULL)
+      if (btree_perform_insert (thread_p, btid, key,
+				class_oid, inst_oid, SINGLE_ROW_INSERT, NULL,
+				NULL, mvcc_Enabled) != NULL)
 	{
 	  isvalid = DISK_VALID;
 	  xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_COMMIT, &lsa);

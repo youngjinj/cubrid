@@ -1428,7 +1428,8 @@ pt_bind_names_post (PARSER_CONTEXT * parser,
       break;
 
     case PT_SELECT:
-      if (PT_SPEC_SPECIAL_INDEX_SCAN (node->info.query.q.select.from))
+      if (node->info.query.q.select.from != NULL
+	  && PT_SPEC_SPECIAL_INDEX_SCAN (node->info.query.q.select.from))
 	{
 	  /* This is a hack to determine type for index key attributes which
 	   * may be different index. Obtain index info and update type_enum

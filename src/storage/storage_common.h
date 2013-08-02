@@ -451,9 +451,10 @@ typedef enum
 
 typedef enum
 {
-  BTREE_KEY_FOUND,
+  BTREE_KEY_FOUND,		/* in mvcc inserted and committed or deleted and aborted */
   BTREE_KEY_NOTFOUND,
-  BTREE_ERROR_OCCURRED
+  BTREE_ERROR_OCCURRED,
+  BTREE_ACTIVE_KEY_FOUND	/* used only in mvcc - inserted/deleted but not committed/aborted */
 } BTREE_SEARCH;
 
 /* TYPEDEFS FOR BACKUP/RESTORE */

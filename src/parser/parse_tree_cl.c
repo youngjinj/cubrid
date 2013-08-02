@@ -14319,14 +14319,14 @@ pt_print_select (PARSER_CONTEXT * parser, PT_NODE * p)
 
 	  if (p->info.query.q.select.hint & PT_HINT_SELECT_KEY_INFO)
 	    {
-	      q = pt_append_nulstring (parser, q, "SELECT_KEY_INFO ");
+	      q = pt_append_nulstring (parser, q, "SELECT_KEY_INFO");
 	      if (p->info.query.q.select.using_index)
 		{
 		  q = pt_append_nulstring (parser, q, "(");
 		  q =
 		    pt_append_nulstring (parser, q, p->info.query.q.select.
 					 using_index->info.name.original);
-		  q = pt_append_nulstring (parser, q, ")");
+		  q = pt_append_nulstring (parser, q, ") ");
 		}
 	      else
 		{
@@ -14336,14 +14336,14 @@ pt_print_select (PARSER_CONTEXT * parser, PT_NODE * p)
 
 	  if (p->info.query.q.select.hint & PT_HINT_SELECT_BTREE_NODE_INFO)
 	    {
-	      q = pt_append_nulstring (parser, q, "SELECT_BTREE_NODE_INFO ");
+	      q = pt_append_nulstring (parser, q, "SELECT_BTREE_NODE_INFO");
 	      if (p->info.query.q.select.using_index)
 		{
 		  q = pt_append_nulstring (parser, q, "(");
 		  q =
 		    pt_append_nulstring (parser, q, p->info.query.q.select.
 					 using_index->info.name.original);
-		  q = pt_append_nulstring (parser, q, ")");
+		  q = pt_append_nulstring (parser, q, ") ");
 		}
 	      else
 		{

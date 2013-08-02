@@ -3599,8 +3599,7 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   /* attribute information of the index key */
   if (heap_get_indexinfo_of_btid (thread_p, cls_oid,
 				  &indx_info->indx_id.i.btid, &isidp->bt_type,
-				  &isidp->bt_num_attrs, &isidp->bt_attr_ids,
-				  &isidp->bt_attrs_prefix_length, NULL,
+				  &isidp->bt_num_attrs, NULL, NULL, NULL,
 				  &func_index_col_id) != NO_ERROR)
     {
       goto exit_on_error;
@@ -3645,64 +3644,8 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   isidp->scancache_inited = false;
 
   /* convert key values in the form of REGU_VARIABLE to the form of DB_VALUE */
-  isidp->key_cnt = indx_info->key_info.key_cnt;
-  if (isidp->key_cnt > 0)
-    {
-      bool need_copy_buf;
-
-      isidp->key_vals =
-	(KEY_VAL_RANGE *) db_private_alloc (thread_p, isidp->key_cnt *
-					    sizeof (KEY_VAL_RANGE));
-      if (isidp->key_vals == NULL)
-	{
-	  goto exit_on_error;
-	}
-
-      need_copy_buf = false;	/* init */
-
-      if (bts->btid_int.key_type == NULL ||
-	  bts->btid_int.key_type->type == NULL)
-	{
-	  goto exit_on_error;
-	}
-
-      /* check for the need of index key copy_buf */
-      if (TP_DOMAIN_TYPE (bts->btid_int.key_type) == DB_TYPE_MIDXKEY)
-	{
-	  /* found multi-column key-val */
-	  need_copy_buf = true;
-	}
-      else
-	{			/* single-column index */
-	  if (indx_info->key_info.key_ranges[0].range != EQ_NA)
-	    {
-	      /* found single-column key-range, not key-val */
-	      if (QSTR_IS_ANY_CHAR_OR_BIT
-		  (TP_DOMAIN_TYPE (bts->btid_int.key_type)))
-		{
-		  /* this type needs index key copy_buf */
-		  need_copy_buf = true;
-		}
-	    }
-	}
-
-      if (need_copy_buf)
-	{
-	  /* alloc index key copy_buf */
-	  isidp->copy_buf = (char *) db_private_alloc (thread_p,
-						       DBVAL_BUFSIZE);
-	  if (isidp->copy_buf == NULL)
-	    {
-	      goto exit_on_error;
-	    }
-	  isidp->copy_buf_len = DBVAL_BUFSIZE;
-	}
-    }
-  else
-    {
-      isidp->key_cnt = 0;
-      isidp->key_vals = NULL;
-    }
+  isidp->key_cnt = 0;
+  isidp->key_vals = NULL;
 
   /* scan predicate */
   scan_init_scan_pred (&isidp->scan_pred, NULL, pr,
@@ -4252,7 +4195,7 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      DB_MAKE_NULL (isidp->key_info_values[i]);
 	    }
 	}
-      isidp->scancache_inited = true;
+      isidp->caches_inited = true;
       isidp->oid_list.oid_cnt = 0;
       isidp->curr_keyno = -1;
       isidp->curr_oidno = -1;
@@ -4625,6 +4568,7 @@ scan_end_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   switch (scan_id->type)
     {
     case S_HEAP_SCAN:
+    case S_HEAP_SCAN_RECORD_INFO:
       hsidp = &scan_id->s.hsid;
 
       /* do not free attr_cache here.

@@ -27,6 +27,7 @@
 #ident "$Id$"
 #include "thread.h"
 #include "storage_common.h"
+#include "vacuum.h"
 
 #define MVCC_SNAPSHOT_GET_LOWEST_ACTIVE_ID(snapshot) \
   ((snapshot)->lowest_active_mvccid)
@@ -84,12 +85,14 @@ enum mvcc_satisfies_vacuum_result
 {
   VACUUM_RECORD_DEAD,		/* record is dead and can be removed */
   VACUUM_RECORD_ALIVE,		/* record is alive */
-  VACUUM_RECORD_RECENTLY_DEAD,	/* records was deleted and the deleter
-				 * committed but it may be visible to some
-				 * active transactions
-				 */
-  VACUUM_RECORD_INSERT_IN_PROGRESS,	/* the inserter is still active */
-  VACUUM_RECORD_DELETE_IN_PROGRESS	/* the deleter is still active */
+  VACUUM_RECORD_RECENTLY_DELETED,	/* delete is in progress or it has
+					 * recently been committed and the
+					 * record is still visible to active
+					 * transactions
+					 */
+  VACUUM_RECORD_RECENTLY_INSERTED,	/* the inserter is still active or
+					 * has recently committed
+					 */
 };				/* Heap record satisfies vacuum result */
 
 extern bool mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
@@ -102,6 +105,12 @@ extern MVCC_SATISFIES_VACUUM_RESULT mvcc_satisfies_vacuum (THREAD_ENTRY *
 							   MVCCID
 							   oldest_mvccid,
 							   PAGE_PTR page_p);
+extern int mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p,
+					PAGE_PTR * page_p, VPID page_vpid,
+					PGSLOTID slotid, bool reuse_oid,
+					bool vacuum_page_only,
+					VACUUM_PAGE_DATA * vacuum_data_p,
+					MVCCID oldest_active);
 extern MVCC_SATISFIES_DELETE_RESULT mvcc_satisfies_delete (THREAD_ENTRY *
 							   thread_p,
 							   MVCC_REC_HEADER *

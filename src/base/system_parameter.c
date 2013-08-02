@@ -514,6 +514,10 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
 #define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
 
+#define PRM_NAME_AUTO_VACUUM_ENABLED "auto_vacuum_enabled"
+#define PRM_NAME_AUTO_VACUUM_INTERVAL "auto_vacuum_interval_in_secs"
+#define PRM_NAME_AUTO_VACUUM_THRESHOLD "auto_vacuum_default_threshold"
+#define PRM_NAME_AUTO_VACUUM_RATIO "auto_vacuum_default_ratio"
 
 /*
  * Note about ERROR_LIST and INTEGER_LIST type
@@ -1622,6 +1626,36 @@ bool PRM_UPDATE_USE_ATTRIBUTE_REFERENCES = false;
 static bool prm_update_use_attribute_references_default = false;
 static unsigned int prm_update_use_attribute_references_flag = 0;
 
+bool PRM_MVCC_ENABLED = false;
+static bool prm_mvcc_enabled_default = false;
+static unsigned int prm_mvcc_enabled_flag = 0;
+
+float PRM_MVCC_CLEAN_PAGE_RATIO = 0.8f;
+static float prm_mvcc_clean_page_ratio_default = 0.8f;
+static float prm_mvcc_clean_page_ratio_lower = 0.1f;
+static float prm_mvcc_clean_page_ratio_upper = 0.95f;
+static unsigned int prm_mvcc_clean_page_ratio_flag = 0;
+
+bool PRM_AUTO_VACUUM_ENABLED = true;
+static bool prm_auto_vacuum_enabled_default = true;
+static unsigned int prm_auto_vacuum_enabled_flag = 0;
+
+int PRM_AUTO_VACUUM_INTERVAL = 300;
+static int prm_auto_vacuum_interval_default = 300;
+static int prm_auto_vacuum_interval_lower = 30;
+static unsigned int prm_auto_vacuum_interval_flag = 0;
+
+int PRM_AUTO_VACUUM_THRESHOLD = 100;
+static int prm_auto_vacuum_threshold_default = 100;
+static int prm_auto_vacuum_threshold_lower = 10;
+static unsigned int prm_auto_vacuum_threshold_flag = 0;
+
+float PRM_AUTO_VACUUM_RATIO = 0.1f;
+static float prm_auto_vacuum_ratio_default = 0.1f;
+static float prm_auto_vacuum_ratio_lower = 0.05f;
+static float prm_auto_vacuum_ratio_upper = 0.8f;
+static unsigned int prm_auto_vacuum_ratio_flag = 0;
+
 typedef int (*DUP_PRM_FUNC) (void *, SYSPRM_DATATYPE, void *,
 			     SYSPRM_DATATYPE);
 
@@ -1647,14 +1681,6 @@ static int prm_min_to_sec (void *out_val, SYSPRM_DATATYPE out_type,
 
 static int prm_equal_to_ori (void *out_val, SYSPRM_DATATYPE out_type,
 			     void *in_val, SYSPRM_DATATYPE in_type);
-
-bool PRM_MVCC_ENABLED = false;
-static bool prm_mvcc_enabled_default = false;
-
-float PRM_MVCC_CLEAN_PAGE_RATIO = 0.8f;
-static float prm_mvcc_clean_page_ratio_default = 0.8f;
-static float prm_mvcc_clean_page_ratio_lower = 0.1f;
-static float prm_mvcc_clean_page_ratio_upper = 0.95f;
 
 typedef struct sysprm_param SYSPRM_PARAM;
 struct sysprm_param
@@ -3811,19 +3837,69 @@ static SYSPRM_PARAM prm_Def[] = {
   {PRM_NAME_MVCC_ENABLED,
    (PRM_FOR_SERVER | PRM_FOR_CLIENT | PRM_FORCE_SERVER),
    PRM_BOOLEAN,
+   (void *) &prm_mvcc_enabled_flag,
    (void *) &prm_mvcc_enabled_default,
    (void *) &PRM_MVCC_ENABLED,
    (void *) NULL,
    (void *) NULL,
-   (char *) NULL},
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
   {PRM_NAME_MVCC_CLEAN_PAGE_RATIO,
    (PRM_FOR_SERVER),
    PRM_FLOAT,
+   (void *) &prm_mvcc_clean_page_ratio_flag,
    (void *) &prm_mvcc_clean_page_ratio_default,
    (void *) &PRM_MVCC_CLEAN_PAGE_RATIO,
    (void *) &prm_mvcc_clean_page_ratio_upper,
    (void *) &prm_mvcc_clean_page_ratio_lower,
-   (char *) NULL}
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_AUTO_VACUUM_ENABLED,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_BOOLEAN,
+   (void *) &prm_auto_vacuum_enabled_flag,
+   (void *) &prm_auto_vacuum_enabled_default,
+   (void *) &PRM_AUTO_VACUUM_ENABLED,
+   (void *) NULL,
+   (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_AUTO_VACUUM_INTERVAL,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_INTEGER,
+   (void *) &prm_auto_vacuum_interval_flag,
+   (void *) &prm_auto_vacuum_interval_default,
+   (void *) &PRM_AUTO_VACUUM_INTERVAL,
+   (void *) NULL,
+   (void *) &prm_auto_vacuum_interval_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_AUTO_VACUUM_THRESHOLD,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_INTEGER,
+   (void *) &prm_auto_vacuum_threshold_flag,
+   (void *) &prm_auto_vacuum_threshold_default,
+   (void *) &PRM_AUTO_VACUUM_THRESHOLD,
+   (void *) NULL,
+   (void *) &prm_auto_vacuum_threshold_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_AUTO_VACUUM_RATIO,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_FLOAT,
+   (void *) &prm_auto_vacuum_ratio_flag,
+   (void *) &prm_auto_vacuum_ratio_default,
+   (void *) &PRM_AUTO_VACUUM_RATIO,
+   (void *) &prm_auto_vacuum_ratio_upper,
+   (void *) &prm_auto_vacuum_ratio_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL}
 };
 
 #define NUM_PRM ((int)(sizeof(prm_Def)/sizeof(prm_Def[0])))

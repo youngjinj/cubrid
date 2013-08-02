@@ -2449,6 +2449,12 @@ end:
     }
 #endif
 
+  if (mvcc_Enabled)
+    {
+      /* If error_flag is true, the command is canceled */
+      logtb_update_transaction_inserted_deleted (thread_p, error_flag);
+    }
+
 #if defined (SERVER_MODE)
   qmgr_reset_query_exec_info (tran_index);
 #endif
@@ -2836,6 +2842,12 @@ end:
       logtb_deactivate_command_id (thread_p);
     }
 #endif /* MVCC_USE_COMMAND_ID */
+
+  if (mvcc_Enabled)
+    {
+      /* If error_flag is true, the command is canceled */
+      logtb_update_transaction_inserted_deleted (thread_p, error_flag);
+    }
 
 #if defined (SERVER_MODE)
   qmgr_reset_query_exec_info (tran_index);

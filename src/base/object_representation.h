@@ -754,6 +754,8 @@
 #define ORC_ATT_COUNT_OFFSET            40
 #define ORC_SHARED_COUNT_OFFSET		48
 #define ORC_CLASS_ATTR_COUNT_OFFSET	60
+#define ORC_CLASS_FLAGS			64
+#define ORC_CLASS_TYPE			68
 
 #define ORC_CLASS_VAR_ATT_COUNT         15
 #define ORC_NAME_INDEX 			0

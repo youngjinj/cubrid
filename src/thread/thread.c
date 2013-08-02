@@ -63,6 +63,7 @@
 #include "log_compress.h"
 #include "perf_monitor.h"
 #include "session.h"
+#include "vacuum.h"
 #if defined(WINDOWS)
 #include "wintcp.h"
 #else /* WINDOWS */
@@ -91,12 +92,14 @@ struct thread_manager
 };
 
 /* deadlock + checkpoint + oob + page flush + log flush + flush control
- * + session control + purge archive logs + log clock + auto_volume_expansion */
+ * + session control + purge archive logs + log clock + auto_volume_expansion
+ * + auto-vacuum
+ */
 #if defined(HAVE_ATOMIC_BUILTINS)
-static const int PREDEFINED_DAEMON_THREAD_NUM = 10;
+static const int PREDEFINED_DAEMON_THREAD_NUM = 11;
 #define USE_LOG_CLOCK_THREAD
 #else /* HAVE_ATOMIC_BUILTINS */
-static const int PREDEFINED_DAEMON_THREAD_NUM = 9;
+static const int PREDEFINED_DAEMON_THREAD_NUM = 10;
 #endif /* HAVE_ATOMIC_BUILTINS */
 
 static const int THREAD_RETRY_MAX_SLAM_TIMES = 10;
@@ -129,6 +132,9 @@ static DAEMON_THREAD_MONITOR
   thread_Session_control_thread = DAEMON_THREAD_MONITOR_INITIALIZER;
 DAEMON_THREAD_MONITOR
   thread_Log_flush_thread = DAEMON_THREAD_MONITOR_INITIALIZER;
+
+static DAEMON_THREAD_MONITOR
+  thread_Auto_vacuum_thread = DAEMON_THREAD_MONITOR_INITIALIZER;
 
 #if defined(USE_LOG_CLOCK_THREAD)
 static DAEMON_THREAD_MONITOR
@@ -164,6 +170,12 @@ DAEMON_THREAD_MONITOR thread_Auto_volume_expansion_thread =
 };
 static THREAD_RET_T THREAD_CALLING_CONVENTION
 thread_auto_volume_expansion_thread (void *);
+static THREAD_RET_T THREAD_CALLING_CONVENTION
+thread_auto_vacuum_thread (void *);
+
+/* Careful when adding new daemons here, PREDEFINED_DAEMON_THREAD_NUM must
+ * be updated too
+ */
 
 static int css_initialize_sync_object (void);
 static int thread_wakeup_internal (THREAD_ENTRY * thread_p, int resume_reason,
@@ -811,6 +823,36 @@ thread_start_workers (void)
       return ER_CSS_PTHREAD_MUTEX_UNLOCK;
     }
 
+  /* start auto-vacuum thread */
+  thread_Auto_vacuum_thread.thread_index = thread_index++;
+  thread_p =
+    &thread_Manager.thread_array[thread_Auto_vacuum_thread.thread_index];
+  r = pthread_mutex_lock (&thread_p->th_entry_lock);
+  if (r != 0)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ER_CSS_PTHREAD_MUTEX_LOCK, 0);
+      return ER_CSS_PTHREAD_MUTEX_LOCK;
+    }
+
+  r = pthread_create (&thread_p->tid, &thread_attr,
+		      thread_auto_vacuum_thread, thread_p);
+  if (r != 0)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ER_CSS_PTHREAD_CREATE, 0);
+      pthread_mutex_unlock (&thread_p->th_entry_lock);
+      return ER_CSS_PTHREAD_CREATE;
+    }
+
+  r = pthread_mutex_unlock (&thread_p->th_entry_lock);
+  if (r != 0)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ER_CSS_PTHREAD_MUTEX_UNLOCK, 0);
+      return ER_CSS_PTHREAD_MUTEX_UNLOCK;
+    }
+
   /* destroy thread_attribute */
   r = pthread_attr_destroy (&thread_attr);
   if (r != 0)
@@ -971,6 +1013,7 @@ thread_stop_active_daemons (void)
   thread_wakeup_log_flush_thread ();
   thread_wakeup_session_control_thread ();
   thread_wakeup_auto_volume_expansion_thread ();
+  thread_wakeup_auto_vacuum_thread ();
 
 loop:
   repeat_loop = false;
@@ -2599,6 +2642,21 @@ css_initialize_sync_object (void)
       return ER_CSS_PTHREAD_MUTEX_INIT;
     }
 
+  r = pthread_cond_init (&thread_Auto_vacuum_thread.cond, NULL);
+  if (r != 0)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ER_CSS_PTHREAD_COND_INIT, 0);
+      return ER_CSS_PTHREAD_COND_INIT;
+    }
+  r = pthread_mutex_init (&thread_Auto_vacuum_thread.lock, NULL);
+  if (r != 0)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ER_CSS_PTHREAD_MUTEX_INIT, 0);
+      return ER_CSS_PTHREAD_MUTEX_INIT;
+    }
+
   return r;
 }
 #endif /* WINDOWS */
@@ -2715,6 +2773,86 @@ thread_wakeup_deadlock_detect_thread (void)
       pthread_cond_signal (&thread_Deadlock_detect_thread.cond);
     }
   pthread_mutex_unlock (&thread_Deadlock_detect_thread.lock);
+}
+
+/*
+ * thread_auto_vacuum_thread () - Starts an auto vacuum thread.
+ *
+ * return     : (THREAD_RET_T) 0.
+ * arg_p (in) : Unused.
+ */
+static THREAD_RET_T THREAD_CALLING_CONVENTION
+thread_auto_vacuum_thread (void *arg_p)
+{
+#if !defined(HPUX)
+  THREAD_ENTRY *tsd_ptr = NULL;
+#endif /* !HPUX */
+  struct timeval timeout;
+  struct timespec to = {
+    0, 0
+  };
+  int rv = 0;
+
+  tsd_ptr = (THREAD_ENTRY *) arg_p;
+
+  /* wait until THREAD_CREATE() finishes */
+  rv = pthread_mutex_lock (&tsd_ptr->th_entry_lock);
+  pthread_mutex_unlock (&tsd_ptr->th_entry_lock);
+
+  thread_set_thread_entry_info (tsd_ptr);	/* save TSD */
+  tsd_ptr->type = TT_DAEMON;
+  tsd_ptr->status = TS_RUN;	/* set thread stat as RUN */
+  thread_Auto_vacuum_thread.is_valid = true;
+  thread_Auto_vacuum_thread.is_running = true;
+
+  thread_set_current_tran_index (tsd_ptr, LOG_SYSTEM_TRAN_INDEX);
+
+  while (!tsd_ptr->shutdown)
+    {
+      er_clear ();
+
+      gettimeofday (&timeout, NULL);
+      to.tv_sec = timeout.tv_sec + 60;
+
+      rv = pthread_mutex_lock (&thread_Auto_vacuum_thread.lock);
+      pthread_cond_timedwait (&thread_Auto_vacuum_thread.cond,
+			      &thread_Auto_vacuum_thread.lock, &to);
+      pthread_mutex_unlock (&thread_Auto_vacuum_thread.lock);
+
+      if (tsd_ptr->shutdown)
+	{
+	  break;
+	}
+
+      auto_vacuum_start ();
+    }
+  rv = pthread_mutex_lock (&thread_Session_control_thread.lock);
+  thread_Session_control_thread.is_valid = false;
+  thread_Session_control_thread.is_running = false;
+  pthread_mutex_unlock (&thread_Session_control_thread.lock);
+
+  er_clear ();
+  tsd_ptr->status = TS_DEAD;
+
+  return (THREAD_RET_T) 0;
+}
+
+/*
+ * thread_wakeup_auto_vacuum_thread () - Wakes the auto-vacuum thread.
+ *
+ * return    : Void.
+ */
+void
+thread_wakeup_auto_vacuum_thread (void)
+{
+  int rv;
+
+  rv = pthread_mutex_lock (&thread_Auto_vacuum_thread.lock);
+  if (thread_Auto_vacuum_thread.is_running == false)
+    {
+      pthread_cond_signal (&thread_Auto_vacuum_thread.cond);
+    }
+  pthread_mutex_unlock (&thread_Auto_vacuum_thread.lock);
 }
 
 static THREAD_RET_T THREAD_CALLING_CONVENTION

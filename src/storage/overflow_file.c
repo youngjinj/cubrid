@@ -364,8 +364,7 @@ overflow_insert_internal (THREAD_ENTRY * thread_p, const VFID * ovf_vfid,
       length -= copy_length;
 
       pgbuf_get_vpid (addr.pgptr, &undo_recv.new_vpid);
-      if (mvcc_Enabled == false
-	  && file_is_new_file (thread_p, ovf_vfid) == FILE_OLD_FILE
+      if (file_is_new_file (thread_p, ovf_vfid) == FILE_OLD_FILE
 	  && logging_type == OVERFLOW_NORMAL_LOGGING)
 	{
 	  /* we don't do undo logging for new files */

@@ -4226,26 +4226,30 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	      need_unique_index = false;
 	    }
 
-	  if (aggregate_list->function == PT_COUNT_STAR)
+	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false)
 	    {
-	      (void) sm_find_index (classop, NULL, 0,
-				    need_unique_index, false,
-				    &aggregate_list->btid);
-	      /* If btree does not exist, optimize with heap */
-	      aggregate_list->flag_agg_optimize = true;
-	    }
-	  else
-	    {
-	      if (tree->info.function.arg_list->node_type == PT_NAME)
+	      /* enable count optimization in non-mvcc */
+	      if (aggregate_list->function == PT_COUNT_STAR)
 		{
-		  (void) sm_find_index (classop,
-					(char **) &tree->info.
-					function.arg_list->info.name.original,
-					1, need_unique_index, true,
+		  (void) sm_find_index (classop, NULL, 0,
+					need_unique_index, false,
 					&aggregate_list->btid);
-		  if (!BTID_IS_NULL (&aggregate_list->btid))
+		  /* If btree does not exist, optimize with heap */
+		  aggregate_list->flag_agg_optimize = true;
+		}
+	      else
+		{
+		  if (tree->info.function.arg_list->node_type == PT_NAME)
 		    {
-		      aggregate_list->flag_agg_optimize = true;
+		      (void) sm_find_index (classop,
+					    (char **) &tree->info.
+					    function.arg_list->info.name.
+					    original, 1, need_unique_index,
+					    true, &aggregate_list->btid);
+		      if (!BTID_IS_NULL (&aggregate_list->btid))
+			{
+			  aggregate_list->flag_agg_optimize = true;
+			}
 		    }
 		}
 	    }
@@ -4744,20 +4748,25 @@ pt_to_aggregate (PARSER_CONTEXT * parser, PT_NODE * select_node,
   info.class_name = NULL;
   info.flag_agg_optimize = false;
 
-  if (pt_is_single_tuple (parser, select_node))
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false)
     {
-      if (where == NULL
-	  && pt_length_of_list (from) == 1
-	  && pt_length_of_list (from->info.spec.flat_entity_list) == 1
-	  && from->info.spec.only_all != PT_ALL)
+      /* enable count optimization in non-mvcc */
+      if (pt_is_single_tuple (parser, select_node))
 	{
-	  if (from->info.spec.entity_name)
+	  if (where == NULL
+	      && pt_length_of_list (from) == 1
+	      && pt_length_of_list (from->info.spec.flat_entity_list) == 1
+	      && from->info.spec.only_all != PT_ALL)
 	    {
-	      if (from->info.spec.entity_name->info.name.partition_of == NULL)
+	      if (from->info.spec.entity_name)
 		{
-		  info.class_name =
-		    from->info.spec.entity_name->info.name.original;
-		  info.flag_agg_optimize = true;
+		  if (from->info.spec.entity_name->info.name.partition_of ==
+		      NULL)
+		    {
+		      info.class_name =
+			from->info.spec.entity_name->info.name.original;
+		      info.flag_agg_optimize = true;
+		    }
 		}
 	    }
 	}

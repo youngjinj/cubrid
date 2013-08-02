@@ -10781,39 +10781,39 @@ cvacuum (int num_classes, OID * class_oids)
 {
 #if defined(CS_MODE)
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
-  char *request_data = NULL, *ptr = NULL, *reply = NULL;
-  int err = NO_ERROR, request_data_size = 0;
+  char *request = NULL, *ptr = NULL, *reply = NULL;
+  int err = NO_ERROR, request_size = 0;
 
   /* Reply should include error code */
   reply = OR_ALIGNED_BUF_START (a_reply);
 
   /* Request data size */
-  request_data_size += OR_INT_SIZE +	/* num_classes */
+  request_size += OR_INT_SIZE +	/* num_classes */
     num_classes * OR_OID_SIZE;	/* class_oids */
 
-  request_data = (char *) malloc (request_data_size);
-  if (request_data == NULL)
+  request = (char *) malloc (request_size);
+  if (request == NULL)
     {
       err = ER_OUT_OF_VIRTUAL_MEMORY;
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, err, 1, request_data_size);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, err, 1, request_size);
       return err;
     }
 
   /* Pack num_classes */
-  ptr = or_pack_int (request_data, num_classes);
+  ptr = or_pack_int (request, num_classes);
   /* Pack class_oids */
   ptr = or_pack_oid_array (ptr, num_classes, class_oids);
 
   /* Send request to server */
   err =
-    net_client_request (NET_SERVER_VACUUM, NULL, 0,
+    net_client_request (NET_SERVER_VACUUM, request, request_size,
 			reply, OR_ALIGNED_BUF_SIZE (a_reply),
-			request_data, request_data_size, NULL, 0);
+			NULL, 0, NULL, 0);
 
   /* Clean up */
-  if (request_data != NULL)
+  if (request != NULL)
     {
-      free_and_init (request_data);
+      free_and_init (request);
     }
 
   if (err == NO_ERROR)

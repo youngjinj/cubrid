@@ -3341,6 +3341,14 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       return error_code;
     }
 
+  /* Initialize the vacuum statistics table */
+  error_code = vacuum_stats_table_initialize (thread_p);
+  if (error_code != NO_ERROR)
+    {
+      cfg_free_directory (dir);
+      return error_code;
+    }
+
   /*
    * How to restart the system ?
    */
@@ -3832,6 +3840,8 @@ xboot_shutdown_server (THREAD_ENTRY * thread_p, bool is_er_final)
       (void) qexec_finalize_xasl_cache (thread_p);
       (void) qexec_finalize_filter_pred_cache (thread_p);
       session_states_finalize (thread_p);
+
+      vacuum_stats_table_finalize (thread_p);
 
       (void) boot_remove_all_temp_volumes (thread_p);
       log_final (thread_p);

@@ -71,6 +71,7 @@
 #include "rb_tree.h"
 #include "mvcc.h"
 #include "file_mvcc_status.h"
+#include "vacuum.h"
 
 
 #if defined(SERVER_MODE) || defined(SA_MODE)
@@ -134,6 +135,13 @@ static void logtb_set_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 static void logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes);
 static void logtb_init_mvcc_snapshot_data (LOG_TDES * tdes);
 static void logtb_finalize_mvcc_snapshot_data (LOG_TDES * tdes);
+
+static void logtb_free_log_ins_del (LOG_INSERTED_DELETED * log_ins_del);
+static void logtb_clear_log_ins_del (LOG_INSERTED_DELETED * log_ins_del);
+static LOG_INS_DEL_ENTRY *logtb_alloc_log_ins_del_entry (LOG_INSERTED_DELETED
+							 * log_ins_del);
+static void logtb_free_log_ins_del_entry (LOG_INSERTED_DELETED * log_ins_del,
+					  LOG_INS_DEL_ENTRY * entry);
 
 /*
  * logtb_realloc_topops_stack - realloc stack of top system operations
@@ -599,6 +607,7 @@ logtb_undefine_trantable (THREAD_ENTRY * thread_p)
 
 	      logtb_clear_tdes (thread_p, tdes);
 	      logtb_finalize_mvcc_snapshot_data (tdes);
+	      logtb_free_log_ins_del (&tdes->log_ins_del);
 	      csect_finalize_critical_section (&tdes->cs_topop);
 	      if (tdes->topops.max != 0)
 		{
@@ -1719,6 +1728,8 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   tdes->mvcc_comm_id_used = false;
 #endif /* MVCC_USE_COMMAND_ID */
   logtb_clear_mvcc_snapshot_data (tdes);
+
+  logtb_clear_log_ins_del (&tdes->log_ins_del);
 }
 
 /*
@@ -1802,6 +1813,9 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
     }
 
   logtb_init_mvcc_snapshot_data (tdes);
+
+  tdes->log_ins_del.crt_tran_entries = NULL;
+  tdes->log_ins_del.free_entries = NULL;
 }
 
 /*
@@ -3179,6 +3193,257 @@ logtb_set_to_system_tran_index (THREAD_ENTRY * thread_p)
 }
 
 /*
+ * logtb_free_log_ins_del () - Free logged list of inserted/deleted records.
+ *
+ * return	    : Void.
+ * log_ins_del (in) : List of logged inserted/deleted records.
+ */
+static void
+logtb_free_log_ins_del (LOG_INSERTED_DELETED * log_ins_del)
+{
+  LOG_INS_DEL_ENTRY *entry = NULL, *save_next = NULL;
+
+  for (entry = log_ins_del->crt_tran_entries; entry != NULL;
+       entry = save_next)
+    {
+      save_next = entry->next;
+      free (entry);
+    }
+  for (entry = log_ins_del->free_entries; entry != NULL; entry = save_next)
+    {
+      save_next = entry->next;
+      free (entry);
+    }
+  log_ins_del->crt_tran_entries = NULL;
+  log_ins_del->free_entries = NULL;
+}
+
+/*
+ * logtb_clear_log_ins_del () - Clear logged inserted/deleted records. Entries
+ *				are not actually freed, they are appended to
+ *				a list of free entries ready to be reused.
+ *
+ * return	    : Void.
+ * log_ins_del (in) : Pointer to inserted/deleted log.
+ */
+static void
+logtb_clear_log_ins_del (LOG_INSERTED_DELETED * log_ins_del)
+{
+  LOG_INS_DEL_ENTRY *entry = NULL, *save_next = NULL;
+
+  for (entry = log_ins_del->crt_tran_entries; entry != NULL;
+       entry = save_next)
+    {
+      save_next = entry->next;
+      logtb_free_log_ins_del_entry (log_ins_del, entry);
+    }
+  log_ins_del->crt_tran_entries = NULL;
+}
+
+/*
+ * logtb_alloc_log_ins_del_entry () - Allocate a new entry to log inserted/
+ *				      deleted records during transaction.
+ *				      First check if there are any entries
+ *				      in the list of free entries, and
+ *				      allocate memory for a new one only
+ *				      if this list is empty.
+ *
+ * return	    : Pointer to allocated entry.
+ * thread_p (in)    : Thread entry.
+ * log_ins_del (in) : 
+ */
+static LOG_INS_DEL_ENTRY *
+logtb_alloc_log_ins_del_entry (LOG_INSERTED_DELETED * log_ins_del)
+{
+  LOG_INS_DEL_ENTRY *new_entry = NULL;
+  assert (log_ins_del != NULL);
+
+  if (log_ins_del->free_entries != NULL)
+    {
+      new_entry = log_ins_del->free_entries;
+      log_ins_del->free_entries = log_ins_del->free_entries->next;
+    }
+  else
+    {
+      new_entry = (LOG_INS_DEL_ENTRY *) malloc (sizeof (LOG_INS_DEL_ENTRY));
+      if (new_entry == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, sizeof (LOG_INS_DEL_ENTRY));
+	  return NULL;
+	}
+    }
+
+  /* clear all data */
+  memset (new_entry, 0, sizeof (LOG_INS_DEL_ENTRY));
+
+  return new_entry;
+}
+
+/*
+ * logtb_free_log_ins_del_entry () - Append entry to a list of free entries.
+ *
+ * return	    : Void.
+ * log_ins_del (in) : Inserted/deleted log.
+ * entry (in)	    : Entry to free.
+ */
+static void
+logtb_free_log_ins_del_entry (LOG_INSERTED_DELETED * log_ins_del,
+			      LOG_INS_DEL_ENTRY * entry)
+{
+  assert (log_ins_del != NULL);
+
+  entry->next = log_ins_del->free_entries;
+  log_ins_del->free_entries = entry;
+}
+
+/*
+ * logtb_update_inserted_deleted_records () - Collect data about inserted
+ *					      and deleted records during
+ *					      last command.
+ *
+ * return	   : Error code.
+ * thread_p (in)   : Thread entry.
+ * class_oid (in)  : Identifier for the class to which the inserted/deleted
+ *		     records belong.
+ * n_inserted (in) : Number of inserted records.
+ * n_deleted (in)  : Number of deleted records.
+ *
+ * NOTE: This is supposed to be called inside a command on each heap_update,
+ *	 heap_insert and heap_delete operations
+ */
+int
+logtb_update_command_inserted_deleted (THREAD_ENTRY * thread_p,
+				       const OID * class_oid,
+				       int n_inserted, int n_deleted)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  LOG_INS_DEL_ENTRY *entry = NULL;
+  int error = NO_ERROR;
+
+  if (tdes == NULL)
+    {
+      assert (0);
+      return ER_FAILED;
+    }
+
+  assert (class_oid != NULL);
+
+  for (entry = tdes->log_ins_del.crt_tran_entries;
+       entry != NULL; entry = entry->next)
+    {
+      if (OID_EQ (class_oid, &entry->class_oid))
+	{
+	  /* Found, stop looking */
+	  break;
+	}
+    }
+
+  if (entry != NULL)
+    {
+      /* An entry for class_oid was found, update it */
+      if (entry->is_system_class)
+	{
+	  /* Ignore system classes */
+	  return NO_ERROR;
+	}
+      entry->n_last_command_deleted += n_deleted;
+      entry->n_last_command_inserted += n_inserted;
+      return NO_ERROR;
+    }
+
+  /* An entry for class_oid was not found, create a new one */
+  entry = logtb_alloc_log_ins_del_entry (&tdes->log_ins_del);
+  if (entry == NULL)
+    {
+      /* ER_OUT_OF_VIRTUAL_MEMORY */
+      return er_errid ();
+    }
+  COPY_OID (&entry->class_oid, class_oid);
+  error =
+    class_is_system_class (thread_p, class_oid, &entry->is_system_class);
+  if (error != NO_ERROR)
+    {
+      logtb_free_log_ins_del_entry (&tdes->log_ins_del, entry);
+      return error;
+    }
+  entry->n_inserted = 0;
+  entry->n_deleted = 0;
+  entry->n_last_command_inserted = n_inserted;
+  entry->n_last_command_deleted = n_deleted;
+
+  /* Append entry to current list of inserted/deleted records */
+  entry->next = tdes->log_ins_del.crt_tran_entries;
+  tdes->log_ins_del.crt_tran_entries = entry;
+
+  return NO_ERROR;
+}
+
+/*
+ * logtb_update_transaction_inserted_deleted () - Called at the end of a
+ *						  command, should update
+ *						  the inserted/deleted counts
+ *						  for the current running
+ *						  transaction.
+ *
+ * return	       : Error code.
+ * thread_p (in)       : Thread entry.
+ * cancel_command (in) : True if command was canceled due to error. All
+ *			 inserted records will not be physically removed,
+ *			 but are also counted as deleted. All deleted records
+ *			 are "revived" (n_deleted is ignored).
+ *
+ * NOTE: The complete path for collected inserted/deleted records data is:
+ *	 1. heap_update/heap_insert/heap_delete => update last command
+ *	    inserted/deleted counts.
+ *	 2. Command is finished => update transaction n_inserted/n_deleted
+ *	    counts.
+ *	 3. Transaction is finished => update vacuum statistics in
+ *	    vacuum_Stats_table.
+ *	 4. Statistics are sometime flushed into root page of heap file (to
+ *	    store them after the database is stopped).
+ */
+int
+logtb_update_transaction_inserted_deleted (THREAD_ENTRY * thread_p,
+					   bool cancel_command)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  LOG_INS_DEL_ENTRY *entry = NULL;
+  int error = NO_ERROR;
+  if (tdes == NULL)
+    {
+      assert (0);
+      return ER_FAILED;
+    }
+
+  for (entry = tdes->log_ins_del.crt_tran_entries; entry != NULL;
+       entry = entry->next)
+    {
+      if (entry->is_system_class)
+	{
+	  /* Ignore system classes */
+	  continue;
+	}
+      if (cancel_command)
+	{
+	  /* Ignore deleted records, add inserted records to both n_inserted
+	   * and n_deleted.
+	   */
+	  entry->n_inserted += entry->n_last_command_inserted;
+	  entry->n_deleted += entry->n_last_command_inserted;
+	}
+      else
+	{
+	  entry->n_inserted += entry->n_last_command_inserted;
+	  entry->n_deleted += entry->n_last_command_deleted;
+	}
+      entry->n_last_command_inserted = 0;
+      entry->n_last_command_deleted = 0;
+    }
+  return NO_ERROR;
+}
+
+/*
  * logtb_get_mvcc_snapshot_data - get mvcc snapshot
  *
  * return: error code
@@ -3682,6 +3947,11 @@ logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p)
 void
 logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, int status)
 {
+  LOG_INS_DEL_ENTRY *entry = NULL;
+  HFID hfid;
+  bool aborted;
+  int n_inserted, n_deleted;
+
   assert (tdes != NULL);
   assert (status == MVCC_STATUS_COMMITTED || status == MVCC_STATUS_ABORTED);
 
@@ -3701,6 +3971,35 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, int status)
     {
       log_Gl.highest_completed_mvccid = tdes->mvcc_id;
     }
+
+  aborted = (status == MVCC_STATUS_ABORTED);
+
+  for (entry = tdes->log_ins_del.crt_tran_entries; entry != NULL;
+       entry = entry->next)
+    {
+      if (entry->is_system_class)
+	{
+	  continue;
+	}
+
+      if (heap_get_hfid_from_class_oid (thread_p, &entry->class_oid, &hfid)
+	  != NO_ERROR)
+	{
+	  /* An error occurred, just stop */
+	  break;
+	}
+
+      n_inserted = entry->n_inserted;
+
+      /* If aborted, all deleted records are revived, all inserted records are
+       * deleted.
+       * Also all records inserted in canceled commands are dead.
+       */
+      n_deleted = (aborted ? entry->n_inserted : entry->n_deleted);
+      (void) vacuum_stats_table_update_entry (thread_p, &entry->class_oid,
+					      &hfid, n_inserted, n_deleted);
+    }
+  logtb_clear_log_ins_del (&tdes->log_ins_del);
 
   TR_TABLE_CS_EXIT (thread_p);
 }

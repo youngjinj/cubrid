@@ -1432,6 +1432,7 @@ file_get_disk_page_type (FILE_TYPE ftype)
     case FILE_EXTENDIBLE_HASH:
     case FILE_EXTENDIBLE_HASH_DIRECTORY:
     case FILE_LONGDATA:
+    case FILE_MVCC_STATUS:
       page_type = DISK_PAGE_DATA_TYPE;
       break;
 
