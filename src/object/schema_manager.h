@@ -137,8 +137,9 @@ extern int sm_exist_index (MOP classop, const char *idxname, BTID * btid);
 /* Misc schema operations */
 extern int sm_rename_class (MOP op, const char *new_name);
 extern void sm_mark_system_classes (void);
-extern int sm_update_all_catalog_statistics (void);
-extern int sm_update_catalog_statistics (const char *class_name);
+extern int sm_update_all_catalog_statistics (bool with_fullscan);
+extern int sm_update_catalog_statistics (const char *class_name,
+					 bool with_fullscan);
 extern int sm_force_write_all_classes (void);
 #ifdef SA_MODE
 extern void sm_mark_system_class_for_catalog (void);
@@ -207,9 +208,9 @@ extern int sm_touch_class (MOP classmop);
 /* Statistics functions */
 extern SM_CLASS *sm_get_class_with_statistics (MOP classop);
 extern CLASS_STATS *sm_get_statistics_force (MOP classop);
-extern int sm_update_class_statistics (MOP classop, bool do_now);
-extern int sm_update_index_statistics (MOP classop, BTID * btid, bool do_now);
-extern int sm_update_all_statistics (void);
+extern int sm_update_statistics (MOP classop, BTID * btid, bool do_now,
+				 bool with_fullscan);
+extern int sm_update_all_statistics (bool with_fullscan);
 
 /* Misc information functions */
 extern const char *sm_class_name (MOP op);

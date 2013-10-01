@@ -153,7 +153,7 @@ static T_PROXY_CAS_FUNC proxy_cas_fn_table[] = {
   fn_proxy_cas_relay_only,	/* fn_xa_recover */
   fn_proxy_cas_relay_only,	/* fn_xa_end_tran */
   fn_proxy_cas_relay_only,	/* fn_con_close */
-  fn_proxy_cas_relay_only,	/* fn_check_cas */
+  fn_proxy_cas_check_cas,	/* fn_check_cas */
   fn_proxy_cas_relay_only,	/* fn_make_out_rs */
   fn_proxy_cas_relay_only,	/* fn_get_generated_keys */
   fn_proxy_cas_relay_only,	/* fn_lob_new */
@@ -344,12 +344,6 @@ proxy_context_send_error (T_PROXY_CONTEXT * ctx_p)
       goto error_return;
     }
 
-  PROXY_DEBUG_LOG ("send error(msg) to the client. "
-		   "(error_ind:%d, error_code:%d, errro_msg:%s)",
-		   ctx_p->error_ind, ctx_p->error_code,
-		   (ctx_p->error_msg
-		    && ctx_p->error_msg[0]) ? ctx_p->error_msg : "-");
-
   error = proxy_send_response_to_client (ctx_p, event_p);
   if (error)
     {
@@ -437,6 +431,9 @@ proxy_handler_process_cas_response (T_PROXY_EVENT * event_p)
       goto end;
     }
 
+  PROXY_DEBUG_LOG ("process cas response. (func_code:%d, context:%s)",
+		   func_code, proxy_str_context (ctx_p));
+
   proxy_cas_fn = proxy_cas_fn_table[func_code - 1];
   error = proxy_cas_fn (ctx_p, event_p);
   if (error)
@@ -468,6 +465,9 @@ proxy_handler_process_cas_response (T_PROXY_EVENT * event_p)
 	  proxy_context_free_stmt (ctx_p);
 	}
     }
+
+  PROXY_DEBUG_LOG ("process cas response end. (func_code:%d, context:%s)",
+		   func_code, proxy_str_context (ctx_p));
 
 end:
   ctx_p->func_code = PROXY_INVALID_FUNC_CODE;
@@ -561,7 +561,8 @@ proxy_handler_process_cas_conn_error (T_PROXY_EVENT * event_p)
 	  && ctx_p->is_cas_in_tran == false
 	  && (ctx_p->func_code == CAS_FC_PREPARE
 	      || ctx_p->func_code == CAS_FC_EXECUTE
-	      || ctx_p->func_code == CAS_FC_PREPARE_AND_EXECUTE))
+	      || ctx_p->func_code == CAS_FC_PREPARE_AND_EXECUTE
+	      || ctx_p->func_code == CAS_FC_CHECK_CAS))
 	{
 	  PROXY_DEBUG_LOG ("Context is in_tran status "
 			   "and waiting prepare/execute response. "
@@ -730,6 +731,10 @@ proxy_handler_process_client_request (T_PROXY_EVENT * event_p)
     }
 
   shard_shm_set_client_info_request (client_info_p, func_code);
+
+  PROXY_LOG (PROXY_LOG_MODE_DEBUG,
+	     "process client request. (func_code:%d, context:%s)",
+	     func_code, proxy_str_context (ctx_p));
 
   proxy_client_fn = proxy_client_fn_table[func_code - 1];
   error = proxy_client_fn (ctx_p, event_p, argc, argv);
@@ -1224,6 +1229,10 @@ proxy_context_clear (T_PROXY_CONTEXT * ctx_p)
     }
   ctx_p->prepared_stmt = NULL;
 
+  ctx_p->is_connected = false;
+  ctx_p->database_user[0] = '\0';
+  ctx_p->database_passwd[0] = '\0';
+
   proxy_context_free_stmt (ctx_p);
 
   ctx_p->client_id = PROXY_INVALID_CLIENT;
@@ -1439,6 +1448,7 @@ proxy_context_find_stmt (T_PROXY_CONTEXT * ctx_p, int stmt_h_id)
 	{
 	  continue;
 	}
+
       return stmt_list_p;
     }
 
@@ -1477,6 +1487,10 @@ proxy_context_add_stmt (T_PROXY_CONTEXT * ctx_p, T_SHARD_STMT * stmt_p)
   stmt_list_p->next = ctx_p->stmt_list;
   ctx_p->stmt_list = stmt_list_p;
 
+  PROXY_DEBUG_LOG ("add prepared statement to context. "
+		   "(context:(%s), stmt:(%s))",
+		   proxy_str_context (ctx_p), shard_str_stmt (stmt_p));
+
   return stmt_list_p;
 }
 
@@ -1494,8 +1508,19 @@ proxy_context_free_stmt (T_PROXY_CONTEXT * ctx_p)
       stmt_p = shard_stmt_find_by_stmt_h_id (stmt_list_p->stmt_h_id);
       if (stmt_p)
 	{
+	  PROXY_DEBUG_LOG ("remove prepared statement from context. "
+			   "(context:(%s), stmt:(%s))",
+			   proxy_str_context (ctx_p),
+			   shard_str_stmt (stmt_p));
+
 	  shard_stmt_unpin (stmt_p);
-	  if (stmt_p->stmt_type != SHARD_STMT_TYPE_PREPARED)
+
+	  if (stmt_p->num_pinned <= 0
+	      && stmt_p->status == SHARD_STMT_STATUS_INVALID)
+	    {
+	      shard_stmt_free (stmt_p);
+	    }
+	  else if (stmt_p->stmt_type != SHARD_STMT_TYPE_PREPARED)
 	    {
 	      assert (stmt_p->num_pinned == 0);
 	      shard_stmt_free (stmt_p);
@@ -1676,7 +1701,7 @@ proxy_wakeup_context_by_shard (T_WAIT_CONTEXT * waiter_p,
   cas_io_p =
     proxy_cas_alloc_by_ctx (ctx_p->client_id, shard_id, cas_id,
 			    waiter_p->ctx_cid, waiter_p->ctx_uid,
-			    ctx_p->wait_timeout);
+			    ctx_p->wait_timeout, ctx_p->func_code);
   if (cas_io_p == NULL)
     {
       PROXY_DEBUG_LOG ("failed to proxy_cas_alloc_by_ctx. "

@@ -4282,6 +4282,12 @@ boot_check_db_at_num_shutdowns (bool force_nshutdowns)
 }
 #endif /* CUBRID_DEBUG */
 
+enum
+{
+  CHECK_ONLY = 0,
+  REPAIR_ALL = 1
+};
+
 /*
  * xboot_checkdb_table () - check consistency of table
  *                              as much as possible
@@ -4294,6 +4300,30 @@ xboot_checkdb_table (THREAD_ENTRY * thread_p, int check_flag, OID * oid)
 {
   HFID hfid;
   bool repair = check_flag & CHECKDB_REPAIR;
+
+  if (check_flag & CHECKDB_CHECK_PREV_LINK)
+    {
+      if (btree_repair_prev_link (thread_p, oid, CHECK_ONLY) != DISK_VALID)
+	{
+	  return ER_FAILED;
+	}
+      else
+	{
+	  return NO_ERROR;
+	}
+    }
+
+  if (check_flag & CHECKDB_REPAIR_PREV_LINK)
+    {
+      if (btree_repair_prev_link (thread_p, oid, REPAIR_ALL) != DISK_VALID)
+	{
+	  return ER_FAILED;
+	}
+      else
+	{
+	  return NO_ERROR;
+	}
+    }
 
   if (heap_get_hfid_from_class_oid (thread_p, oid, &hfid) != NO_ERROR
       || HFID_IS_NULL (&hfid))
@@ -4317,6 +4347,23 @@ xboot_checkdb_table (THREAD_ENTRY * thread_p, int check_flag, OID * oid)
     }
   return NO_ERROR;
 }
+
+/*
+ * xcallback_console_print -
+ *
+ * return:
+ *
+ *   print_str(in):
+ */
+#if defined (SA_MODE)
+int
+xcallback_console_print (THREAD_ENTRY * thread_p, char *print_str)
+{
+  fprintf (stdout, print_str);
+
+  return NO_ERROR;
+}
+#endif
 
 /*
  * xboot_check_db_consistency () - check consistency of database
@@ -4361,6 +4408,34 @@ xboot_check_db_consistency (THREAD_ENTRY * thread_p, int check_flag,
 	      error_code = ER_FAILED;
 	    }
 	}
+      return error_code;
+    }
+
+  if (check_flag & CHECKDB_CHECK_PREV_LINK)
+    {
+      if (isvalid != DISK_ERROR)
+	{
+	  isvalid = btree_repair_prev_link (thread_p, NULL, CHECK_ONLY);
+	  if (isvalid != DISK_VALID)
+	    {
+	      error_code = ER_FAILED;
+	    }
+	}
+
+      return error_code;
+    }
+
+  if (check_flag & CHECKDB_REPAIR_PREV_LINK)
+    {
+      if (isvalid != DISK_ERROR)
+	{
+	  isvalid = btree_repair_prev_link (thread_p, NULL, REPAIR_ALL);
+	  if (isvalid != DISK_VALID)
+	    {
+	      error_code = ER_FAILED;
+	    }
+	}
+
       return error_code;
     }
 

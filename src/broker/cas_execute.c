@@ -350,6 +350,7 @@ static char *get_backslash_escape_string (void);
 
 static void update_query_execution_count (T_APPL_SERVER_INFO * as_info_p,
 					  char stmt_type);
+static bool need_reconnect_on_rctime (void);
 
 
 static char cas_u_type[] = { 0,	/* 0 */
@@ -489,6 +490,8 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd,
   char *p;
   const char *host_connected = NULL;
 
+  as_info->force_reconnect = false;
+
   if (db_name == NULL || db_name[0] == '\0')
     {
       return ERROR_INFO_SET (-1, CAS_ERROR_INDICATOR);
@@ -496,30 +499,63 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd,
 
   host_connected = db_get_host_connected ();
 
-  if (get_db_connect_status () != 1	/* DB_CONNECTION_STATUS_CONNECTED */
+  if (cas_get_db_connect_status () != 1	/* DB_CONNECTION_STATUS_CONNECTED */
       || database_name[0] == '\0'
       || strcmp (database_name, db_name) != 0
       || strcmp (as_info->database_host, host_connected) != 0)
     {
+      if (cas_get_db_connect_status () == -1)	/* DB_CONNECTION_STATUS_RESET */
+	{
+	  db_clear_host_connected ();
+	}
+
       if (database_name[0] != '\0')
 	{
 	  ux_database_shutdown ();
 	}
+
       if (shm_appl->access_mode == READ_ONLY_ACCESS_MODE)
 	{
-	  client_type = 5;	/* DB_CLIENT_TYPE_READ_ONLY_BROKER in db.h */
-	  cas_log_debug (ARG_FILE_LINE,
-			 "ux_database_connect: read_only_broker");
+	  if (shm_appl->replica_only_flag)
+	    {
+	      client_type = 12;	/* DB_CLIENT_TYPE_RO_BROKER_REPLICA_ONLY in db.h */
+	      cas_log_debug (ARG_FILE_LINE,
+			     "ux_database_connect: read_replica_only_broker");
+	    }
+	  else
+	    {
+	      client_type = 5;	/* DB_CLIENT_TYPE_READ_ONLY_BROKER in db.h */
+	      cas_log_debug (ARG_FILE_LINE,
+			     "ux_database_connect: read_only_broker");
+	    }
 	}
       else if (shm_appl->access_mode == SLAVE_ONLY_ACCESS_MODE)
 	{
-	  client_type = 6;	/* DB_CLIENT_TYPE_SLAVE_ONLY_BROKER in db.h */
-	  cas_log_debug (ARG_FILE_LINE,
-			 "ux_database_connect: slave_only_broker");
+	  if (shm_appl->replica_only_flag)
+	    {
+	      client_type = 13;	/* DB_CLIENT_TYPE_SO_BROKER_REPLICA_ONLY in db.h */
+	      cas_log_debug (ARG_FILE_LINE,
+			     "ux_database_connect: slave_replica_only_broker");
+	    }
+	  else
+	    {
+	      client_type = 6;	/* DB_CLIENT_TYPE_SLAVE_ONLY_BROKER in db.h */
+	      cas_log_debug (ARG_FILE_LINE,
+			     "ux_database_connect: slave_only_broker");
+	    }
 	}
       else
 	{
-	  client_type = 4;	/* DB_CLIENT_TYPE_BROKER in db.h */
+	  if (shm_appl->replica_only_flag)
+	    {
+	      client_type = 11;	/* DB_CLIENT_TYPE_RW_BROKER_REPLICA_ONLY */
+	      cas_log_debug (ARG_FILE_LINE,
+			     "ux_database_connect: read_write_replica_only_broker");
+	    }
+	  else
+	    {
+	      client_type = 4;	/* DB_CLIENT_TYPE_BROKER in db.h */
+	    }
 	}
 
       db_set_preferred_hosts (shm_appl->preferred_hosts);
@@ -616,19 +652,46 @@ ux_database_reconnect (void)
 
   if (shm_appl->access_mode == READ_ONLY_ACCESS_MODE)
     {
-      client_type = 5;		/* DB_CLIENT_TYPE_READ_ONLY_BROKER in db.h */
-      cas_log_debug (ARG_FILE_LINE,
-		     "ux_database_reconnect: read_only_broker");
+      if (shm_appl->replica_only_flag)
+	{
+	  client_type = 12;	/* DB_CLIENT_TYPE_RO_BROKER_REPLICA_ONLY in db.h */
+	  cas_log_debug (ARG_FILE_LINE,
+			 "ux_database_connect: read_replica_only_broker");
+	}
+      else
+	{
+	  client_type = 5;	/* DB_CLIENT_TYPE_READ_ONLY_BROKER in db.h */
+	  cas_log_debug (ARG_FILE_LINE,
+			 "ux_database_connect: read_only_broker");
+	}
     }
   else if (shm_appl->access_mode == SLAVE_ONLY_ACCESS_MODE)
     {
-      client_type = 6;		/* DB_CLIENT_TYPE_SLAVE_ONLY_BROKER in db.h */
-      cas_log_debug (ARG_FILE_LINE,
-		     "ux_database_reconnect: slave_only_broker");
+      if (shm_appl->replica_only_flag)
+	{
+	  client_type = 13;	/* DB_CLIENT_TYPE_SO_BROKER_REPLICA_ONLY in db.h */
+	  cas_log_debug (ARG_FILE_LINE,
+			 "ux_database_connect: slave_replica_only_broker");
+	}
+      else
+	{
+	  client_type = 6;	/* DB_CLIENT_TYPE_SLAVE_ONLY_BROKER in db.h */
+	  cas_log_debug (ARG_FILE_LINE,
+			 "ux_database_connect: slave_only_broker");
+	}
     }
   else
     {
-      client_type = 4;		/* DB_CLIENT_TYPE_BROKER in db.h */
+      if (shm_appl->replica_only_flag)
+	{
+	  client_type = 11;	/* DB_CLIENT_TYPE_RW_BROKER_REPLICA_ONLY */
+	  cas_log_debug (ARG_FILE_LINE,
+			 "ux_database_connect: read_write_replica_only_broker");
+	}
+      else
+	{
+	  client_type = 4;	/* DB_CLIENT_TYPE_BROKER in db.h */
+	}
     }
 
   db_set_preferred_hosts (shm_appl->preferred_hosts);
@@ -767,6 +830,8 @@ ux_database_shutdown ()
 #ifndef LIBCAS_FOR_JSP
   as_info->database_name[0] = '\0';
   as_info->database_host[0] = '\0';
+  as_info->database_user[0] = '\0';
+  as_info->database_passwd[0] = '\0';
   as_info->last_connect_time = 0;
 #endif /* !LIBCAS_FOR_JSP */
   memset (database_name, 0, sizeof (database_name));
@@ -879,8 +944,7 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode,
       session = db_open_buffer (tmp);
       if (!session)
 	{
-	  err_code = ERROR_INFO_SET (CAS_ER_NO_MORE_MEMORY,
-				     CAS_ERROR_INDICATOR);
+	  err_code = ERROR_INFO_SET (db_error_code (), DBMS_ERROR_INDICATOR);
 	  goto prepare_error;
 	}
 
@@ -910,7 +974,7 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode,
   session = db_open_buffer (sql_stmt);
   if (!session)
     {
-      err_code = ERROR_INFO_SET (CAS_ER_NO_MORE_MEMORY, CAS_ERROR_INDICATOR);
+      err_code = ERROR_INFO_SET (db_error_code (), DBMS_ERROR_INDICATOR);
       goto prepare_error;
     }
 
@@ -1098,8 +1162,10 @@ ux_end_tran (int tran_type, bool reset_con_status)
     }
 
 #ifndef LIBCAS_FOR_JSP
-  if (get_db_connect_status () == -1 /* DB_CONNECTION_STATUS_RESET */ )
+  if (cas_get_db_connect_status () == -1	/* DB_CONNECTION_STATUS_RESET */
+      || need_reconnect_on_rctime ())
     {
+      db_clear_reconnect_reason ();
       as_info->reset_flag = TRUE;
     }
 #endif /* !LIBCAS_FOR_JSP */
@@ -1206,8 +1272,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
       session = db_open_buffer (srv_handle->sql_stmt);
       if (!session)
 	{
-	  err_code = ERROR_INFO_SET (CAS_ER_NO_MORE_MEMORY,
-				     CAS_ERROR_INDICATOR);
+	  err_code = ERROR_INFO_SET (db_error_code (), DBMS_ERROR_INDICATOR);
 	  goto execute_error;
 	}
       srv_handle->session = session;
@@ -8137,7 +8202,7 @@ sch_query_execute (T_SRV_HANDLE * srv_handle, char *sql_stmt,
   if (!session)
     {
       lang_set_parser_use_client_charset (true);
-      return ERROR_INFO_SET (CAS_ER_NO_MORE_MEMORY, CAS_ERROR_INDICATOR);
+      return ERROR_INFO_SET (db_error_code (), DBMS_ERROR_INDICATOR);
     }
 
   stmt_id = db_compile_statement (session);
@@ -9342,17 +9407,19 @@ check_auto_commit_after_fetch_done (T_SRV_HANDLE * srv_handle)
   return false;
 }
 
-int
-get_db_connect_status (void)
+#if !(defined(CAS_FOR_ORACLE) || defined(CAS_FOR_MYSQL))
+void
+cas_set_db_connect_status (int status)
 {
-  return db_Connect_status;
+  db_set_connect_status (status);
 }
 
-void
-set_db_connect_status (int status)
+int
+cas_get_db_connect_status (void)
 {
-  db_Connect_status = status;
+  return db_get_connect_status ();
 }
+#endif
 
 void
 cas_log_error_handler (unsigned int eid)
@@ -9771,4 +9838,19 @@ update_query_execution_count (T_APPL_SERVER_INFO * as_info_p, char stmt_type)
     default:
       break;
     }
+}
+
+static bool
+need_reconnect_on_rctime (void)
+{
+#if !defined(LIBCAS_FOR_JSP)
+  if (shm_appl->cas_rctime > 0 && db_get_need_reconnect ())
+    {
+      if ((time (NULL) - as_info->last_connect_time) > shm_appl->cas_rctime)
+	{
+	  return true;
+	}
+    }
+#endif /* !LIBCAS_FOR_JSP */
+  return false;
 }

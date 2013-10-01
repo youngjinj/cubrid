@@ -25,6 +25,7 @@
 #ident "$Id$"
 
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -187,6 +188,7 @@ static void trigger_time_str (DB_TRIGGER_TIME trig_time, char *buf);
 #endif /* 0 */
 
 static char get_stmt_type (const char *stmt);
+static const char *ignore_sql_comment (const char *stmt);
 static int execute_info_set (T_SRV_HANDLE * srv_handle, T_NET_BUF * net_buf,
 			     T_BROKER_VERSION client_version, char exec_flag);
 
@@ -264,10 +266,12 @@ ux_database_connect (char *db_alias, char *db_user, char *db_passwd,
   const char *host_connected = NULL;
   MY_CHARSET_INFO cs;
 
+  as_info->force_reconnect = false;
+
   if (db_alias == NULL || db_alias[0] == '\0')
     return -1;
 
-  if (get_db_connect_status () != DB_CONNECTION_STATUS_CONNECTED
+  if (cas_get_db_connect_status () != DB_CONNECTION_STATUS_CONNECTED
       || database_name[0] == '\0' || strcmp (database_name, db_alias) != 0)
     {
       if (database_name[0] != '\0')
@@ -347,6 +351,8 @@ ux_database_shutdown (void)
 		 "ux_database_shutdown: cas_mysql_disconnect_db ()");
   as_info->database_name[0] = '\0';
   as_info->database_host[0] = '\0';
+  as_info->database_user[0] = '\0';
+  as_info->database_passwd[0] = '\0';
   as_info->last_connect_time = 0;
   memset (database_name, 0, sizeof (database_name));
   memset (database_user, 0, sizeof (database_user));
@@ -446,7 +452,7 @@ ux_end_tran (int tran_type, bool reset_con_status)
       errors_in_transaction++;
     }
 
-  if (get_db_connect_status () == DB_CONNECTION_STATUS_RESET)
+  if (cas_get_db_connect_status () == DB_CONNECTION_STATUS_RESET)
     {
       as_info->reset_flag = TRUE;
     }
@@ -649,6 +655,11 @@ execute_all_error:
 	{
 	  db_value_clear (db_vals[i]);
 	}
+    }
+
+  if (err_info.err_number == CAS_ER_STMT_POOLING)
+    {
+      hm_srv_handle_free (srv_handle->id);
     }
 
   return err_code;
@@ -1933,25 +1944,21 @@ trigger_time_str (DB_TRIGGER_TIME trig_time, char *buf)
 }
 #endif /* 0 */
 
+/*
+ * cas_mysql recognize only type is CUBRID_STMT_SELECT or not.
+ */
 static char
 get_stmt_type (const char *stmt)
 {
-  const char *tbuf = stmt;
-  int size = strlen (stmt);
-  int i;
-  for (i = 0; i < size; i++)
+  const char *tbuf = NULL;
+
+  tbuf = ignore_sql_comment (stmt);
+
+  if (strncasecmp (tbuf, "select", 6) == 0)
     {
-      if (char_isalpha (tbuf[i]))
-	{
-	  break;
-	}
+      return CUBRID_STMT_SELECT;
     }
-  if (i >= strlen (stmt))
-    {
-      return CUBRID_MAX_STMT_TYPE;
-    }
-  tbuf += i;
-  if (strncasecmp (tbuf, "insert", 6) == 0)
+  else if (strncasecmp (tbuf, "insert", 6) == 0)
     {
       return CUBRID_STMT_INSERT;
     }
@@ -1963,18 +1970,134 @@ get_stmt_type (const char *stmt)
     {
       return CUBRID_STMT_DELETE;
     }
-  else if (strncasecmp (tbuf, "select", 6) == 0)
-    {
-      return CUBRID_STMT_SELECT;
-    }
   else if (strncasecmp (tbuf, "call", 4) == 0)
     {
       return CUBRID_STMT_CALL_SP;
+    }
+  else if (strncasecmp (tbuf, "replace", 7) == 0)
+    {
+      return CUBRID_STMT_INSERT;
+    }
+  else if (strncasecmp (tbuf, "truncate", 8) == 0)
+    {
+      return CUBRID_STMT_DELETE;
+    }
+  else if (strncasecmp (tbuf, "show", 4) == 0)
+    {
+      return CUBRID_STMT_SELECT;
+    }
+  else if (strncasecmp (tbuf, "describe", 8) == 0)
+    {
+      return CUBRID_STMT_SELECT;
+    }
+  else if (strncasecmp (tbuf, "explain", 7) == 0)
+    {
+      return CUBRID_STMT_SELECT;
+    }
+  else if (strncasecmp (tbuf, "create", 6) == 0)
+    {
+      return CUBRID_STMT_CREATE_CLASS;
+    }
+  else if (strncasecmp (tbuf, "alter", 5) == 0)
+    {
+      return CUBRID_STMT_ALTER_CLASS;
+    }
+  else if (strncasecmp (tbuf, "drop", 4) == 0)
+    {
+      return CUBRID_STMT_DROP_CLASS;
+    }
+  else if (strncasecmp (tbuf, "rename", 6) == 0)
+    {
+      return CUBRID_STMT_RENAME_CLASS;
     }
   else
     {
       return CUBRID_MAX_STMT_TYPE;
     }
+}
+
+static const char *
+ignore_sql_comment (const char *stmt)
+{
+  enum t_comment_type
+  {
+    COMMENT_TYPE_NONE = 0,
+    COMMENT_TYPE_C,
+    COMMENT_TYPE_SHARP,
+    COMMENT_TYPE_ANSI
+  } cmt_type = COMMENT_TYPE_NONE;
+  const char *p = NULL;
+
+  assert (stmt != NULL);
+
+  p = stmt;
+  while (*p != '\0')
+    {
+      if (cmt_type == COMMENT_TYPE_NONE)
+	{
+	  if (isspace (*p))
+	    {
+	      p += 1;
+	    }
+	  else if (*p == '#')
+	    {
+	      cmt_type = COMMENT_TYPE_SHARP;
+	      p += 1;
+	    }
+	  else if (*p == '/')
+	    {
+	      if (*(p + 1) == '*')
+		{
+		  cmt_type = COMMENT_TYPE_C;
+		  p += 2;
+		}
+	      else
+		{
+		  break;
+		}
+	    }
+	  else if (*p == '-')
+	    {
+	      if (*(p + 1) == '-' && isspace (*(p + 2)))
+		{
+		  cmt_type = COMMENT_TYPE_ANSI;
+		  p += 3;
+		}
+	      else
+		{
+		  break;
+		}
+	    }
+	  else
+	    {
+	      break;
+	    }
+	}
+      else if (cmt_type == COMMENT_TYPE_SHARP
+	       || cmt_type == COMMENT_TYPE_ANSI)
+	{
+	  if (*p == '\n')
+	    {
+	      cmt_type = COMMENT_TYPE_NONE;
+	    }
+
+	  p += 1;
+	}
+      else if (cmt_type == COMMENT_TYPE_C)
+	{
+	  if (*p == '*' && *(p + 1) == '/')
+	    {
+	      cmt_type = COMMENT_TYPE_NONE;
+	      p += 2;
+	    }
+	  else
+	    {
+	      p += 1;
+	    }
+	}
+    }
+
+  return p;
 }
 
 static int
@@ -2445,6 +2568,12 @@ cas_mysql_get_stmt_errno (MYSQL_STMT * stmt)
   emsg = mysql_stmt_error (stmt);
   cas_error_log_write (e, emsg);
 
+  if (e == CR_NEW_STMT_METADATA)
+    {
+      return ERROR_INFO_SET_WITH_MSG (CAS_ER_STMT_POOLING,
+				      CAS_ERROR_INDICATOR, emsg);
+    }
+
   return ERROR_INFO_SET_WITH_MSG (e, DBMS_ERROR_INDICATOR, emsg);
 }
 
@@ -2594,7 +2723,7 @@ cas_mysql_connect_db (char *alias, char *user, char *passwd)
     return cas_mysql_get_errno ();
 
   mysql_set_server_option (_db_conn, MYSQL_OPTION_MULTI_STATEMENTS_ON);
-  set_db_connect_status (DB_CONNECTION_STATUS_CONNECTED);
+  cas_set_db_connect_status (DB_CONNECTION_STATUS_CONNECTED);
   cas_mysql_set_host_connected (dbname, host, port);
 
   cas_mysql_autocommit (false);
@@ -2605,7 +2734,7 @@ cas_mysql_connect_db (char *alias, char *user, char *passwd)
 static void
 cas_mysql_disconnect_db (void)
 {
-  set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
+  cas_set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
 
   if (_db_conn == NULL)
     return;
@@ -2907,18 +3036,18 @@ cas_mysql_num_fields (MYSQL_RES * metaResult)
 }
 
 int
-get_db_connect_status (void)
+cas_get_db_connect_status (void)
 {
   if (!is_server_alive ())
     {
-      set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
+      cas_set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
     }
 
   return mysql_connect_status;
 }
 
 void
-set_db_connect_status (int status)
+cas_set_db_connect_status (int status)
 {
   mysql_connect_status = status;
 }

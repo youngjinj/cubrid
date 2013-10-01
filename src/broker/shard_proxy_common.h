@@ -32,6 +32,7 @@
 #include "broker_shm.h"
 #include "shard_proxy_queue.h"
 #include "shard_proxy_log.h"
+#include "memory_hash.h"
 #include "shard_statement.h"
 
 #if defined(WINDOWS)
@@ -266,6 +267,11 @@ struct t_proxy_context
   int stmt_hint_type;
   T_SHARD_STMT *prepared_stmt;
   int wait_timeout;
+
+  /* connection info */
+  bool is_connected;
+  char database_user[SRV_CON_DBUSER_SIZE];
+  char database_passwd[SRV_CON_DBPASSWD_SIZE];
 
   /* statement list */
   T_CONTEXT_STMT *stmt_list;

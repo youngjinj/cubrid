@@ -44,7 +44,7 @@
 
 #define SQUARE(n) ((n)*(n))
 
-/* Used by the "stats_update_statistics" routine to create the list of all
+/* Used by the "stats_update_all_statistics" routine to create the list of all
    classes from the extendible hashing directory used by the catalog manager. */
 typedef struct class_id_list CLASS_ID_LIST;
 struct class_id_list
@@ -60,13 +60,13 @@ struct partition_stats_acumulator
   double pages;			/* number of total pages */
   double height;		/* the height of the B+tree */
   double keys;			/* number of keys */
-  int key_size;			/* number of key columns */
+  int pkeys_size;		/* pkeys array size */
   double *pkeys;		/* partial keys info
 				   for example: index (a, b, ..., x)
 				   pkeys[0]          -> # of {a}
 				   pkeys[1]          -> # of {a, b}
 				   ...
-				   pkeys[key_size-1] -> # of {a, b, ..., x}
+				   pkeys[pkeys_size-1] -> # of {a, b, ..., x}
 				 */
 };
 
@@ -81,10 +81,10 @@ static int stats_compare_utime (DB_UTIME * utime1, DB_UTIME * utime2);
 static int stats_compare_datetime (DB_DATETIME * datetime1_p,
 				   DB_DATETIME * datetime2_p);
 static int stats_compare_money (DB_MONETARY * mn1, DB_MONETARY * mn2);
-static int stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
-						      OID * class_oid,
-						      OID * partitions,
-						      int count);
+static int stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
+						OID * class_oid,
+						OID * partitions, int count,
+						bool with_fullscan);
 static const BTREE_STATS *stats_find_inherited_index_stats (OR_CLASSREP *
 							    cls_rep,
 							    OR_CLASSREP *
@@ -92,16 +92,14 @@ static const BTREE_STATS *stats_find_inherited_index_stats (OR_CLASSREP *
 							    DISK_ATTR *
 							    subcls_attr,
 							    BTID * cls_btid);
-#if defined(CUBRID_DEBUG)
-static void stats_print_min_max (ATTR_STATS * attr_stats, FILE * fpp);
-#endif /* CUBRID_DEBUG */
 
 /*
- * xstats_update_class_statistics () -  Updates the statistics for the objects
- *                                    of a given class
+ * xstats_update_statistics () -  Updates the statistics for the objects
+ *                                of a given class
  *   return:
  *   class_id(in): Identifier of the class
  *   btids(in):
+ *   with_fullscan(in): true iff WITH FULLSCAN
  *
  * Note: It first retrieves the whole catalog information about this class,
  *       including all possible forms of disk representations for the instance
@@ -125,30 +123,22 @@ static void stats_print_min_max (ATTR_STATS * attr_stats, FILE * fpp);
  *       for the last class representation.
  */
 int
-xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
-				BTID_LIST * btids)
+xstats_update_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
+			  BTID_LIST * btids, bool with_fullscan)
 {
   CLS_INFO *cls_info_p = NULL;
   REPR_ID repr_id;
   DISK_REPR *disk_repr_p = NULL;
   DISK_ATTR *disk_attr_p = NULL;
   BTREE_STATS *btree_stats_p = NULL;
-  HEAP_SCANCACHE hf_scan_cache, *hf_scan_cache_p = NULL;
-  HEAP_CACHE_ATTRINFO hf_cache_attr_info, *hf_cache_attr_info_p = NULL;
-  RECDES recdes;
-  OID oid;
-  SCAN_CODE scan_rc;
-  DB_VALUE *db_value_p;
-  DB_DATA *db_data_p;
+  int npages, estimated_nobjs;
   char *class_name = NULL;
   int i, j;
   OID *partitions = NULL;
   int count = 0, error_code = NO_ERROR;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 #if !defined(NDEBUG)
   int track_id;
 #endif
-  bool need_free_classname = false;
 
 #if !defined(NDEBUG)
   track_id = thread_rc_track_enter (thread_p);
@@ -161,26 +151,20 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
     }
 
   class_name = heap_get_class_name (thread_p, class_id_p);
-  if (class_name == NULL)
-    {
-      class_name = (char *) "unknown class";
-    }
-  else
-    {
-      need_free_classname = true;
-    }
 
   er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
-	  ER_LOG_STARTED_TO_UPDATE_STATISTICS, 4, class_name,
+	  ER_LOG_STARTED_TO_UPDATE_STATISTICS, 4,
+	  class_name ? class_name : "*UNKNOWN-CLASS*",
 	  class_id_p->volid, class_id_p->pageid, class_id_p->slotid);
 
   /* if class information was not obtained */
   if (cls_info_p->hfid.vfid.fileid < 0 || cls_info_p->hfid.vfid.volid < 0)
     {
       /* The class does not have a heap file (i.e. it has no instances);
-         so no statistics can be obtained for this class; just set
-         'tot_objects' field to 0 and return. */
+         so no statistics can be obtained for this class;
+         just set to 0 and return. */
 
+      cls_info_p->tot_pages = 0;
       cls_info_p->tot_objects = 0;
 
       if (catalog_add_class_info (thread_p, class_id_p, cls_info_p) !=
@@ -205,10 +189,10 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
       assert (partitions != NULL);
       catalog_free_class_info (cls_info_p);
       cls_info_p = NULL;
-      error_code = stats_update_partitioned_class_statistics (thread_p,
-							      class_id_p,
-							      partitions,
-							      count);
+      error_code = stats_update_partitioned_statistics (thread_p,
+							class_id_p,
+							partitions, count,
+							with_fullscan);
       db_private_free (thread_p, partitions);
       if (error_code != NO_ERROR)
 	{
@@ -230,105 +214,21 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
       goto error;
     }
 
-  cls_info_p->tot_pages = file_get_numpages (thread_p,
-					     &cls_info_p->hfid.vfid);
-  cls_info_p->tot_objects = 0;
-  disk_repr_p->num_objects = 0;
+  npages = estimated_nobjs = 0;
 
-  /* scan whole object of the class and update the statistics */
+  /* do not use estimated npages, get correct info */
+  npages = file_get_numpages (thread_p, &(cls_info_p->hfid.vfid));
+  cls_info_p->tot_pages = MAX (npages, 0);
 
-  if (class_id_p != NULL && !OID_IS_ROOTOID (class_id_p))
+  estimated_nobjs = heap_estimate_num_objects (thread_p, &(cls_info_p->hfid));
+  if (estimated_nobjs == -1)
     {
-      /* be conservative */
-      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      /* cannot get estimates from the heap, use old info */
+      assert (cls_info_p->tot_objects >= 0);
     }
-  if (heap_scancache_start (thread_p, &hf_scan_cache, &(cls_info_p->hfid),
-			    class_id_p, true, false,
-			    LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+  else
     {
-      goto error;
-    }
-
-  hf_scan_cache_p = &hf_scan_cache;
-
-  if (heap_attrinfo_start (thread_p, class_id_p, -1, NULL,
-			   &hf_cache_attr_info) != NO_ERROR)
-    {
-      goto error;
-    }
-  hf_cache_attr_info_p = &hf_cache_attr_info;
-
-  /* Obtain minimum and maximum value of the instances for each attribute of
-     the class and count the number of objects by scanning heap file */
-
-  recdes.area_size = -1;
-  scan_rc = heap_first (thread_p, &(cls_info_p->hfid), class_id_p, &oid,
-			&recdes, hf_scan_cache_p, PEEK);
-
-  while (scan_rc == S_SUCCESS)
-    {
-      if (heap_attrinfo_read_dbvalues (thread_p, &oid, &recdes,
-				       hf_cache_attr_info_p) != NO_ERROR)
-	{
-	  scan_rc = S_ERROR;
-	  break;
-	}
-
-      /* Consider attributes only whose type are fixed because min/max value
-         statistics are useful only for those type when calculating the cost
-         of query plan by query optimizer. Variable type attributes, for
-         example VARCHAR(STRING), take constant number of selectivity. */
-
-      for (i = 0; i < disk_repr_p->n_fixed; i++)
-	{
-	  disk_attr_p = &(disk_repr_p->fixed[i]);
-
-	  db_value_p = heap_attrinfo_access (disk_attr_p->id,
-					     hf_cache_attr_info_p);
-	  if (db_value_p != NULL && db_value_is_null (db_value_p) != true)
-	    {
-	      db_data_p = db_value_get_db_data (db_value_p);
-
-	      if (disk_repr_p->num_objects == 0)
-		{
-		  /* first object */
-		  disk_attr_p->min_value = *db_data_p;
-		  disk_attr_p->max_value = *db_data_p;
-		}
-	      else
-		{
-		  /* compare with previous values */
-		  if (stats_compare_data (db_data_p, &disk_attr_p->min_value,
-					  disk_attr_p->type) < 0)
-		    {
-		      disk_attr_p->min_value = *db_data_p;
-		    }
-
-		  if (stats_compare_data (db_data_p, &disk_attr_p->max_value,
-					  disk_attr_p->type) > 0)
-		    {
-		      disk_attr_p->max_value = *db_data_p;
-		    }
-		}
-	    }
-	}
-
-      cls_info_p->tot_objects++;
-      disk_repr_p->num_objects++;
-
-      scan_rc = heap_next (thread_p, &(cls_info_p->hfid), class_id_p, &oid,
-			   &recdes, hf_scan_cache_p, PEEK);
-    }
-
-  if (scan_rc == S_ERROR)
-    {
-      goto error;
-    }
-
-  heap_attrinfo_end (thread_p, hf_cache_attr_info_p);
-  if (heap_scancache_end (thread_p, hf_scan_cache_p) != NO_ERROR)
-    {
-      goto error;
+      cls_info_p->tot_objects = estimated_nobjs;
     }
 
   /* update the index statistics for each attribute */
@@ -348,7 +248,9 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
 	   j < disk_attr_p->n_btstats; j++, btree_stats_p++)
 	{
 	  assert_release (!BTID_IS_NULL (&btree_stats_p->btid));
-	  assert_release (btree_stats_p->key_size > 0);
+	  assert_release (btree_stats_p->pkeys_size > 0);
+	  assert_release (btree_stats_p->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+
 	  if (btids)
 	    {
 	      BTID_LIST *b = btids;
@@ -360,7 +262,8 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
 		      continue;
 		    }
 
-		  if (btree_get_stats (thread_p, btree_stats_p) != NO_ERROR)
+		  if (btree_get_stats (thread_p, btree_stats_p,
+				       with_fullscan) != NO_ERROR)
 		    {
 		      goto error;
 		    }
@@ -369,13 +272,16 @@ xstats_update_class_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
 	    }
 	  else
 	    {
-	      if (btree_get_stats (thread_p, btree_stats_p) != NO_ERROR)
+	      if (btree_get_stats (thread_p, btree_stats_p,
+				   with_fullscan) != NO_ERROR)
 		{
 		  goto error;
 		}
 	    }
-	}
-    }
+
+	  assert_release (btree_stats_p->keys >= 0);
+	}			/* for (j = 0; ...) */
+    }				/* for (i = 0; ...) */
 
   /* replace the current disk representation structure/information in the
      catalog with the newly computed statistics */
@@ -404,6 +310,17 @@ end:
       catalog_free_class_info (cls_info_p);
     }
 
+  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
+	  ER_LOG_FINISHED_TO_UPDATE_STATISTICS, 5,
+	  class_name ? class_name : "*UNKNOWN-CLASS*",
+	  class_id_p->volid, class_id_p->pageid, class_id_p->slotid,
+	  error_code);
+
+  if (class_name)
+    {
+      free_and_init (class_name);
+    }
+
 #if !defined(NDEBUG)
   if (thread_rc_track_exit (thread_p, track_id) != NO_ERROR)
     {
@@ -411,28 +328,9 @@ end:
     }
 #endif
 
-  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
-	  ER_LOG_FINISHED_TO_UPDATE_STATISTICS, 5, class_name,
-	  class_id_p->volid, class_id_p->pageid, class_id_p->slotid,
-	  error_code);
-
-  if (need_free_classname)
-    {
-      free_and_init (class_name);
-    }
-
   return error_code;
 
 error:
-  if (hf_cache_attr_info_p)
-    {
-      heap_attrinfo_end (thread_p, hf_cache_attr_info_p);
-    }
-
-  if (hf_scan_cache_p)
-    {
-      (void) heap_scancache_end (thread_p, hf_scan_cache_p);
-    }
 
   if (error_code == NO_ERROR && (error_code = er_errid ()) == NO_ERROR)
     {
@@ -442,18 +340,19 @@ error:
 }
 
 /*
- * xstats_update_statistics () - Updates the statistics for all the classes of
- *                             the database
+ * xstats_update_all_statistics () - Updates the statistics
+ *                                   for all the classes of the database
  *   return:
+ *   with_fullscan(in): true iff WITH FULLSCAN
  *
  * Note: It performs this by getting the list of all classes existing in the
  *       database and their OID's from the catalog's class collection
  *       (maintained in an extendible hashing structure) and calling the
- *       "stats_update_class_statistics" function for each one of the elements
+ *       "stats_update_statistics" function for each one of the elements
  *       of this list one by one.
  */
 int
-xstats_update_statistics (THREAD_ENTRY * thread_p)
+xstats_update_all_statistics (THREAD_ENTRY * thread_p, bool with_fullscan)
 {
   int error;
   OID class_id;
@@ -469,7 +368,8 @@ xstats_update_statistics (THREAD_ENTRY * thread_p)
       class_id.pageid = class_id_item_p->class_id.pageid;
       class_id.slotid = class_id_item_p->class_id.slotid;
 
-      error = xstats_update_class_statistics (thread_p, &class_id, NULL);
+      error =
+	xstats_update_statistics (thread_p, &class_id, NULL, with_fullscan);
       if (error != NO_ERROR)
 	{
 	  stats_free_class_list (class_id_list_p);
@@ -505,10 +405,10 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
   DISK_REPR *disk_repr_p;
   DISK_ATTR *disk_attr_p;
   BTREE_STATS *btree_stats_p;
-  int npages, estimated_nobjs, dummy_avg_length;
+  int npages, estimated_nobjs;
   int i, j, k, size, n_attrs, tot_n_btstats, tot_key_info_size;
-  int tot_bt_min_max_size;
   char *buf_p, *start_p;
+  int key_size;
 #if !defined(NDEBUG)
   int track_id;
 #endif
@@ -549,7 +449,7 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 
   n_attrs = disk_repr_p->n_fixed + disk_repr_p->n_variable;
 
-  tot_n_btstats = tot_key_info_size = tot_bt_min_max_size = 0;
+  tot_n_btstats = tot_key_info_size = 0;
   for (i = 0; i < n_attrs; i++)
     {
       if (i < disk_repr_p->n_fixed)
@@ -566,14 +466,9 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 	   j < disk_attr_p->n_btstats; j++, btree_stats_p++)
 	{
 	  tot_key_info_size +=
-	    (or_packed_domain_size (btree_stats_p->key_type, 0) +
-	     (OR_INT_SIZE * btree_stats_p->key_size));
-	  if (btree_stats_p->has_function > 0)
-	    {
-	      tot_bt_min_max_size +=
-		OR_VALUE_ALIGNED_SIZE (&btree_stats_p->min_value) +
-		OR_VALUE_ALIGNED_SIZE (&btree_stats_p->max_value);
-	    }
+	    or_packed_domain_size (btree_stats_p->key_type, 0);
+	  assert (btree_stats_p->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	  tot_key_info_size += (btree_stats_p->pkeys_size * OR_INT_SIZE);	/* pkeys[] */
 	}
     }
 
@@ -583,8 +478,6 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 	  + OR_INT_SIZE		/* n_attrs from DISK_REPR */
 	  + (OR_INT_SIZE	/* id of DISK_ATTR */
 	     + OR_INT_SIZE	/* type of DISK_ATTR */
-	     + STATS_MIN_MAX_SIZE	/* min_value of DISK_ATTR */
-	     + STATS_MIN_MAX_SIZE	/* max_value of DISK_ATTR */
 	     + OR_INT_SIZE	/* n_btstats of DISK_ATTR */
 	  ) * n_attrs);		/* number of attributes */
 
@@ -598,7 +491,6 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 	   ) * tot_n_btstats);	/* total number of indexes */
 
   size += tot_key_info_size;	/* key_type, pkeys[] of BTREE_STATS */
-  size += tot_bt_min_max_size;	/* min, max value of BTREE_STATS */
 
   start_p = buf_p = (char *) malloc (size);
   if (buf_p == NULL)
@@ -610,37 +502,53 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
   OR_PUT_INT (buf_p, cls_info_p->time_stamp);
   buf_p += OR_INT_SIZE;
 
-  npages = estimated_nobjs = dummy_avg_length = 0;
+  npages = estimated_nobjs = 0;
 
-  if (!HFID_IS_NULL (&cls_info_p->hfid)
-      && heap_estimate (thread_p, &cls_info_p->hfid, &npages,
-			&estimated_nobjs, &dummy_avg_length) != ER_FAILED)
+  assert (cls_info_p->tot_objects >= 0);
+  assert (cls_info_p->tot_pages >= 0);
+
+  if (HFID_IS_NULL (&cls_info_p->hfid))
     {
-      /* use estimates from the heap since it is likely that its estimates
-         are more accurate than the ones gathered at update statistics time */
-      assert (estimated_nobjs >= 0 && npages >= 0);
-
-      /* heuristic is that big nobjs is better than small */
-      estimated_nobjs = MAX (estimated_nobjs, cls_info_p->tot_objects);
-      OR_PUT_INT (buf_p, estimated_nobjs);
+      /* The class does not have a heap file (i.e. it has no instances);
+       * so no statistics can be obtained for this class
+       */
+      OR_PUT_INT (buf_p, cls_info_p->tot_objects);	/* #objects */
       buf_p += OR_INT_SIZE;
 
-      /* do not use estimated npages, use correct info */
-      assert (!VFID_ISNULL (&cls_info_p->hfid.vfid));
-      npages = file_get_numpages (thread_p, &cls_info_p->hfid.vfid);
-
-      OR_PUT_INT (buf_p, npages);
+      OR_PUT_INT (buf_p, cls_info_p->tot_pages);	/* #pages */
       buf_p += OR_INT_SIZE;
     }
   else
     {
-      /* cannot get estimates from the heap, use ones from the catalog */
-      assert (cls_info_p->tot_objects >= 0 && cls_info_p->tot_pages >= 0);
+      /* use estimates from the heap since it is likely that its estimates
+       * are more accurate than the ones gathered at update statistics time
+       */
+      estimated_nobjs = heap_estimate_num_objects (thread_p,
+						   &(cls_info_p->hfid));
+      if (estimated_nobjs == -1)
+	{
+	  /* cannot get estimates from the heap, use ones from the catalog */
+	  estimated_nobjs = cls_info_p->tot_objects;
+	}
+      else
+	{
+	  /* heuristic is that big nobjs is better than small */
+	  estimated_nobjs = MAX (estimated_nobjs, cls_info_p->tot_objects);
+	}
 
-      OR_PUT_INT (buf_p, cls_info_p->tot_objects);
+      OR_PUT_INT (buf_p, estimated_nobjs);	/* #objects */
       buf_p += OR_INT_SIZE;
 
-      OR_PUT_INT (buf_p, cls_info_p->tot_pages);
+      /* do not use estimated npages, get correct info */
+      assert (!VFID_ISNULL (&cls_info_p->hfid.vfid));
+      npages = file_get_numpages (thread_p, &cls_info_p->hfid.vfid);
+      if (npages < 0)
+	{
+	  /* cannot get #pages from the heap, use ones from the catalog */
+	  npages = cls_info_p->tot_pages;
+	}
+
+      OR_PUT_INT (buf_p, npages);	/* #pages */
       buf_p += OR_INT_SIZE;
     }
 
@@ -664,83 +572,6 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 
       OR_PUT_INT (buf_p, disk_attr_p->type);
       buf_p += OR_INT_SIZE;
-
-      switch (disk_attr_p->type)
-	{
-	case DB_TYPE_INTEGER:
-	  OR_PUT_INT (buf_p, disk_attr_p->min_value.i);
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_INT (buf_p, disk_attr_p->max_value.i);
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_BIGINT:
-	  OR_PUT_BIGINT (buf_p, &(disk_attr_p->min_value.bigint));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_BIGINT (buf_p, &(disk_attr_p->max_value.bigint));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_SHORT:
-	  /* store these as full integers because of alignment */
-	  OR_PUT_INT (buf_p, disk_attr_p->min_value.i);
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_INT (buf_p, disk_attr_p->max_value.i);
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_FLOAT:
-	  OR_PUT_FLOAT (buf_p, &(disk_attr_p->min_value.f));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_FLOAT (buf_p, &(disk_attr_p->max_value.f));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_DOUBLE:
-	  OR_PUT_DOUBLE (buf_p, &(disk_attr_p->min_value.d));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_DOUBLE (buf_p, &(disk_attr_p->max_value.d));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_DATE:
-	  OR_PUT_DATE (buf_p, &(disk_attr_p->min_value.date));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_DATE (buf_p, &(disk_attr_p->max_value.date));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_TIME:
-	  OR_PUT_TIME (buf_p, &(disk_attr_p->min_value.time));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_TIME (buf_p, &(disk_attr_p->max_value.time));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_UTIME:
-	  OR_PUT_UTIME (buf_p, &(disk_attr_p->min_value.utime));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_UTIME (buf_p, &(disk_attr_p->max_value.utime));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_DATETIME:
-	  OR_PUT_DATETIME (buf_p, &(disk_attr_p->min_value.datetime));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_DATETIME (buf_p, &(disk_attr_p->max_value.datetime));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	case DB_TYPE_MONETARY:
-	  OR_PUT_MONETARY (buf_p, &(disk_attr_p->min_value.money));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  OR_PUT_MONETARY (buf_p, &(disk_attr_p->max_value.money));
-	  buf_p += STATS_MIN_MAX_SIZE;
-	  break;
-
-	default:
-	  break;
-	}
 
       OR_PUT_INT (buf_p, disk_attr_p->n_btstats);
       buf_p += OR_INT_SIZE;
@@ -786,21 +617,28 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 	  OR_PUT_INT (buf_p, btree_stats_p->has_function);
 	  buf_p += OR_INT_SIZE;
 
-	  /* If the estimated objects from heap manager is greater than the
-	     estimate when the statistics were gathered, assume that the
-	     difference is in distinct keys. */
-	  if (estimated_nobjs > cls_info_p->tot_objects)
+	  /* check and handle with estimation,
+	   * since pkeys[] is not gathered before update stats
+	   */
+	  if (estimated_nobjs > 0)
 	    {
-	      OR_PUT_INT (buf_p, (btree_stats_p->keys +
-				  (estimated_nobjs -
-				   cls_info_p->tot_objects)));
-	      buf_p += OR_INT_SIZE;
+	      /* is non-empty index */
+	      btree_stats_p->keys = MAX (btree_stats_p->keys, 1);
+
+	      /* If the estimated objects from heap manager is greater than
+	       * the estimate when the statistics were gathered, assume that
+	       * the difference is in distinct keys.
+	       */
+	      if (cls_info_p->tot_objects > 0
+		  && estimated_nobjs > cls_info_p->tot_objects)
+		{
+		  btree_stats_p->keys +=
+		    (estimated_nobjs - cls_info_p->tot_objects);
+		}
 	    }
-	  else
-	    {
-	      OR_PUT_INT (buf_p, btree_stats_p->keys);
-	      buf_p += OR_INT_SIZE;
-	    }
+
+	  OR_PUT_INT (buf_p, btree_stats_p->keys);
+	  buf_p += OR_INT_SIZE;
 
 	  assert_release (btree_stats_p->leafs >= 1);
 	  assert_release (btree_stats_p->pages >= 1);
@@ -809,19 +647,39 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 
 	  buf_p = or_pack_domain (buf_p, btree_stats_p->key_type, 0, 0);
 
-	  for (k = 0; k < btree_stats_p->key_size; k++)
+	  /* get full key size */
+	  if (TP_DOMAIN_TYPE (btree_stats_p->key_type) == DB_TYPE_MIDXKEY)
 	    {
+	      key_size = tp_domain_size (btree_stats_p->key_type->setdomain);
+	    }
+	  else
+	    {
+	      key_size = 1;
+	    }
+	  assert (key_size >= btree_stats_p->pkeys_size);
+
+	  assert (btree_stats_p->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	  for (k = 0; k < btree_stats_p->pkeys_size; k++)
+	    {
+	      /* check and handle with estimation,
+	       * since pkeys[] is not gathered before update stats
+	       */
+	      if (estimated_nobjs > 0)
+		{
+		  /* is non-empty index */
+		  btree_stats_p->pkeys[k] = MAX (btree_stats_p->pkeys[k], 1);
+		}
+
+	      if (k + 1 == key_size)
+		{
+		  /* this last pkeys must be equal to keys */
+		  btree_stats_p->pkeys[k] = btree_stats_p->keys;
+		}
+
 	      OR_PUT_INT (buf_p, btree_stats_p->pkeys[k]);
 	      buf_p += OR_INT_SIZE;
 	    }
-
-	  if (btree_stats_p->has_function > 0)
-	    {
-	      buf_p = or_pack_db_value (buf_p, &btree_stats_p->min_value);
-
-	      buf_p = or_pack_db_value (buf_p, &btree_stats_p->max_value);
-	    }
-	}
+	}			/* for (j = 0, ...) */
     }
 
   catalog_free_representation (disk_repr_p);
@@ -1113,24 +971,6 @@ stats_compare_data (DB_DATA * data1_p, DB_DATA * data2_p, DB_TYPE type)
 
 #if defined(CUBRID_DEBUG)
 /*
- * stats_print_min_max () -
- *   return:
- *   attr_stats(in): attribute description
- *   fpp(in):
- */
-static void
-stats_print_min_max (ATTR_STATS * attr_stats, FILE * fpp)
-{
-  (void) fprintf (fpp, "    Minimum value: ");
-  db_print_data (attr_stats->type, &attr_stats->min_value, fpp);
-
-  (void) fprintf (fpp, "\n    Maximum value: ");
-  db_print_data (attr_stats->type, &attr_stats->max_value, fpp);
-
-  (void) fprintf (fpp, "\n");
-}
-
-/*
  * stats_dump_class_stats () - Dumps the given statistics about a class
  *   return:
  *   class_stats(in): statistics to be printed
@@ -1152,8 +992,9 @@ stats_dump_class_statistics (CLASS_STATS * class_stats, FILE * fpp)
   fprintf (fpp, "****************\n");
   tloc = (time_t) class_stats->time_stamp;
   fprintf (fpp, " Timestamp: %s", ctime (&tloc));
-  fprintf (fpp, " Total Pages in Class Heap: %d\n", class_stats->heap_size);
-  fprintf (fpp, " Total Objects: %d\n", class_stats->num_objects);
+  fprintf (fpp, " Total Pages in Class Heap: %d\n",
+	   class_stats->heap_num_pages);
+  fprintf (fpp, " Total Objects: %d\n", class_stats->heap_num_objects);
   fprintf (fpp, " Number of attributes: %d\n", class_stats->n_attrs);
 
   for (i = 0; i < class_stats->n_attrs; i++)
@@ -1280,7 +1121,6 @@ stats_dump_class_statistics (CLASS_STATS * class_stats, FILE * fpp)
 	  break;
 	}
 
-      stats_print_min_max (&(class_stats->attr_stats[i]), fpp);
       fprintf (fpp, "    BTree statistics:\n");
 
       for (j = 0; j < class_stats->attr_stats[i].n_btstats; j++)
@@ -1291,7 +1131,8 @@ stats_dump_class_statistics (CLASS_STATS * class_stats, FILE * fpp)
 	  fprintf (fpp, "        Cardinality: %d (", bt_statsp->keys);
 
 	  prefix = "";
-	  for (k = 0; k < bt_statsp->key_size; k++)
+	  assert (bt_statsp->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	  for (k = 0; k < bt_statsp->pkeys_size; k++)
 	    {
 	      fprintf (fpp, "%s%d", prefix, bt_statsp->pkeys[k]);
 	      prefix = ",";
@@ -1310,13 +1151,14 @@ stats_dump_class_statistics (CLASS_STATS * class_stats, FILE * fpp)
 #endif /* CUBRID_DEBUG */
 
 /*
- * stats_update_partitioned_class_statistics () - compute statistics for a
+ * stats_update_partitioned_statistics () - compute statistics for a
  *						  partitioned class
  * return : error code or NO_ERROR
  * thread_p (in) :
  * class_id_p (in) : oid of the partitioned class
  * partitions (in) : oids of partitions
  * int partitions_count (in) : number of partitions
+ * with_fullscan(in): true iff WITH FULLSCAN
  *
  * Note: Since, during plan generation we only have access to the partitioned
  * class, we have to keep an estimate of average statistics in this class. We
@@ -1331,9 +1173,9 @@ stats_dump_class_statistics (CLASS_STATS * class_stats, FILE * fpp)
  * will be used in the query.
  */
 static int
-stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
-					   OID * class_id_p, OID * partitions,
-					   int partitions_count)
+stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
+				     OID * class_id_p, OID * partitions,
+				     int partitions_count, bool with_fullscan)
 {
   int i, j, k, btree_iter, m;
   int error = NO_ERROR;
@@ -1345,7 +1187,6 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
   BTREE_STATS *btree_stats_p = NULL;
   BTREE_STATS *computed_stats = NULL;
   int n_btrees = 0;
-  bool *is_disk_min_max_set = NULL;
   PARTITION_STATS_ACUMULATOR *mean = NULL, *stddev = NULL;
   OR_CLASSREP *cls_rep = NULL;
   OR_CLASSREP *subcls_rep = NULL;
@@ -1357,7 +1198,9 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 
   for (i = 0; i < partitions_count; i++)
     {
-      error = xstats_update_class_statistics (thread_p, &partitions[i], NULL);
+      error =
+	xstats_update_statistics (thread_p, &partitions[i], NULL,
+				  with_fullscan);
       if (error != NO_ERROR)
 	{
 	  goto cleanup;
@@ -1385,18 +1228,6 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
     {
       error = er_errid ();
       goto cleanup;
-    }
-  if (disk_repr_p->n_fixed != 0)
-    {
-      is_disk_min_max_set =
-	(bool *) db_private_alloc (thread_p,
-				   disk_repr_p->n_fixed * sizeof (bool));
-      if (is_disk_min_max_set == NULL)
-	{
-	  error = ER_FAILED;
-	  goto cleanup;
-	}
-      memset (is_disk_min_max_set, 0, disk_repr_p->n_fixed * sizeof (bool));
     }
   /* partitions_count number of btree_stats we will need to use */
   n_btrees = 0;
@@ -1466,10 +1297,10 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
       for (j = 0, btree_stats_p = disk_attr_p->bt_stats;
 	   j < disk_attr_p->n_btstats; j++, btree_stats_p++)
 	{
-	  mean[btree_iter].key_size = btree_stats_p->key_size;
+	  mean[btree_iter].pkeys_size = btree_stats_p->pkeys_size;
 	  mean[btree_iter].pkeys =
 	    (double *) db_private_alloc (thread_p,
-					 mean[btree_iter].key_size *
+					 mean[btree_iter].pkeys_size *
 					 sizeof (double));
 	  if (mean[btree_iter].pkeys == NULL)
 	    {
@@ -1477,12 +1308,12 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 	      goto cleanup;
 	    }
 	  memset (mean[btree_iter].pkeys, 0,
-		  mean[btree_iter].key_size * sizeof (double));
+		  mean[btree_iter].pkeys_size * sizeof (double));
 
-	  stddev[btree_iter].key_size = btree_stats_p->key_size;
+	  stddev[btree_iter].pkeys_size = btree_stats_p->pkeys_size;
 	  stddev[btree_iter].pkeys =
 	    (double *) db_private_alloc (thread_p,
-					 mean[btree_iter].key_size *
+					 mean[btree_iter].pkeys_size *
 					 sizeof (double));
 	  if (stddev[btree_iter].pkeys == NULL)
 	    {
@@ -1490,9 +1321,7 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 	      goto cleanup;
 	    }
 	  memset (stddev[btree_iter].pkeys, 0,
-		  mean[btree_iter].key_size * sizeof (double));
-	  pr_clear_value (&(btree_stats_p->min_value));
-	  pr_clear_value (&(btree_stats_p->max_value));
+		  mean[btree_iter].pkeys_size * sizeof (double));
 	  btree_iter++;
 	}
     }
@@ -1578,33 +1407,6 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 	    {
 	      subcls_attr_p = subcls_disk_rep->fixed + j;
 	      disk_attr_p = disk_repr_p->fixed + j;
-	      if (subcls_disk_rep->num_objects != 0)
-		{
-		  /* Use this opportunity to update min/max values here */
-		  if (!is_disk_min_max_set[j])
-		    {
-		      /* shallow copy */
-		      disk_attr_p->min_value = subcls_attr_p->min_value;
-		      disk_attr_p->max_value = subcls_attr_p->max_value;
-		      is_disk_min_max_set[j] = true;
-		    }
-		  else
-		    {
-		      if (stats_compare_data
-			  (&disk_attr_p->min_value, &subcls_attr_p->min_value,
-			   disk_attr_p->type) > 0)
-			{
-			  disk_attr_p->min_value = subcls_attr_p->min_value;
-			}
-
-		      if (stats_compare_data
-			  (&disk_attr_p->max_value, &subcls_attr_p->max_value,
-			   disk_attr_p->type) < 0)
-			{
-			  disk_attr_p->max_value = subcls_attr_p->max_value;
-			}
-		    }
-		}
 	    }
 	  else
 	    {
@@ -1644,7 +1446,9 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 	      mean[btree_iter].height += subcls_stats->height;
 
 	      mean[btree_iter].keys += subcls_stats->keys;
-	      for (m = 0; m < subcls_stats->key_size; m++)
+
+	      assert (subcls_stats->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	      for (m = 0; m < subcls_stats->pkeys_size; m++)
 		{
 		  mean[btree_iter].pkeys[m] += subcls_stats->pkeys[m];
 		}
@@ -1665,7 +1469,8 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 
       mean[btree_iter].keys /= partitions_count;
 
-      for (m = 0; m < mean[btree_iter].key_size; m++)
+      assert (mean[btree_iter].pkeys_size <= BTREE_STATS_PKEYS_NUM);
+      for (m = 0; m < mean[btree_iter].pkeys_size; m++)
 	{
 	  mean[btree_iter].pkeys[m] /= partitions_count;
 	}
@@ -1751,7 +1556,9 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 
 	      stddev[btree_iter].keys +=
 		SQUARE (subcls_stats->keys - mean[btree_iter].keys);
-	      for (m = 0; m < subcls_stats->key_size; m++)
+
+	      assert (subcls_stats->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	      for (m = 0; m < subcls_stats->pkeys_size; m++)
 		{
 		  stddev[btree_iter].pkeys[m] +=
 		    SQUARE (subcls_stats->pkeys[m] -
@@ -1762,7 +1569,6 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 	    }
 	}
     }
-
 
   for (btree_iter = 0; btree_iter < n_btrees; btree_iter++)
     {
@@ -1778,7 +1584,8 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
       stddev[btree_iter].keys =
 	sqrt (stddev[btree_iter].keys / partitions_count);
 
-      for (m = 0; m < mean[btree_iter].key_size; m++)
+      assert (mean[btree_iter].pkeys_size <= BTREE_STATS_PKEYS_NUM);
+      for (m = 0; m < mean[btree_iter].pkeys_size; m++)
 	{
 	  stddev[btree_iter].pkeys[m] =
 	    sqrt (stddev[btree_iter].pkeys[m] / partitions_count);
@@ -1828,7 +1635,9 @@ stats_update_partitioned_class_statistics (THREAD_ENTRY * thread_p,
 		(int) (mean[btree_iter].keys *
 		       (1 + stddev[btree_iter].keys / mean[btree_iter].keys));
 	    }
-	  for (m = 0; m < mean[btree_iter].key_size; m++)
+
+	  assert (mean[btree_iter].pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	  for (m = 0; m < mean[btree_iter].pkeys_size; m++)
 	    {
 	      if (mean[btree_iter].pkeys[m] != 0)
 		{
@@ -1865,10 +1674,6 @@ cleanup:
   if (subcls_rep != NULL)
     {
       heap_classrepr_free (subcls_rep, &subcls_idx_cache);
-    }
-  if (is_disk_min_max_set != NULL)
-    {
-      db_private_free (thread_p, is_disk_min_max_set);
     }
   if (mean != NULL)
     {

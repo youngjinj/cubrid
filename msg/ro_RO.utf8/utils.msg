@@ -199,12 +199,13 @@ Comenzi disponibile:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          nume-broker\n\
     off         nume-broker\n\
     reset       nume-broker\n\
     acl         <status|reload> [nume-broker]\n\
-    getid       -b <nume-broker> [-f] cheie-shard\n
+    getid       -b <nume-broker> [-f] cheie-shard\n\
+    test        nume-broker [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 utilitar CUBRID, versiunea %s\n\
 utilizare: %s manager <command>\n\
 \n\
@@ -652,7 +653,9 @@ opţiuni valide:\n\
   -C, --CS-mode                  mod de execuţie client-server\n\
   -r, --repair                   repară inconsistenţele detectate\n\
   -i, --input-class-file=FIŞIER  fişier de intrare cu numele claselor\n\
-                                 implicit: se verifică toate clasele\n
+                                 implicit: se verifică toate clasele\n\
+      --check-prev-link        check only previous links of indices\n\
+      --repair-prev-link       repair previous links of indices\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

@@ -387,6 +387,14 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_HA_REPLICA_TIME_BOUND "ha_replica_time_bound"
 
+#define PRM_NAME_HA_DELAY_LIMIT "ha_delay_limit"
+
+#define PRM_NAME_HA_DELAY_LIMIT_DELTA "ha_delay_limit_delta"
+
+#define PRM_NAME_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL_IN_MSECS "ha_applylogdb_max_commit_interval_in_msecs"
+
+#define PRM_NAME_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL "ha_applylogdb_max_commit_interval"
+
 #define PRM_NAME_JAVA_STORED_PROCEDURE "java_stored_procedure"
 
 #define PRM_NAME_COMPAT_PRIMARY_KEY "compat_primary_key"
@@ -426,6 +434,8 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_TCP_SNDBUF_SIZE "tcp_sndbuf_size"
 
 #define PRM_NAME_TCP_NODELAY "tcp_nodealy"
+
+#define PRM_NAME_TCP_KEEPALIVE "tcp_keepalive"
 
 #define PRM_NAME_CSQL_SINGLE_LINE_MODE "csql_single_line_mode"
 
@@ -1368,6 +1378,24 @@ const char *PRM_HA_REPLICA_TIME_BOUND = "";
 static const char *prm_ha_replica_time_bound_default = NULL;
 static unsigned int prm_ha_replica_time_bound_flag = 0;
 
+int PRM_HA_DELAY_LIMIT_IN_SECS = 0;
+static int prm_ha_delay_limit_in_secs_default = 0;
+static int prm_ha_delay_limit_in_secs_upper = INT_MAX;
+static int prm_ha_delay_limit_in_secs_lower = 0;
+static unsigned int prm_ha_delay_limit_in_secs_flag = 0;
+
+int PRM_HA_DELAY_LIMIT_DELTA_IN_SECS = 0;
+static int prm_ha_delay_limit_delta_in_secs_default = 0;
+static int prm_ha_delay_limit_delta_in_secs_upper = INT_MAX;
+static int prm_ha_delay_limit_delta_in_secs_lower = 0;
+static unsigned int prm_ha_delay_limit_delta_in_secs_flag = 0;
+
+int PRM_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL_IN_MSECS = 500;
+static int prm_ha_applylogdb_max_commit_interval_in_msecs_default = 500;
+static int prm_ha_applylogdb_max_commit_interval_in_msecs_upper = INT_MAX;
+static int prm_ha_applylogdb_max_commit_interval_in_msecs_lower = 0;
+static unsigned int prm_ha_applylogdb_max_commit_interval_in_msecs_flag = 0;
+
 bool PRM_JAVA_STORED_PROCEDURE = false;
 static bool prm_java_stored_procedure_default = false;
 static unsigned int prm_java_stored_procedure_flag = 0;
@@ -1447,6 +1475,10 @@ static unsigned int prm_tcp_sndbuf_size_flag = 0;
 int PRM_TCP_NODELAY = -1;
 static int prm_tcp_nodelay_default = -1;
 static unsigned int prm_tcp_nodelay_flag = 0;
+
+int PRM_TCP_KEEPALIVE = 1;
+static int prm_tcp_keepalive_default = 1;
+static unsigned int prm_tcp_keepalive_flag = 0;
 
 bool PRM_CSQL_SINGLE_LINE_MODE = false;
 static bool prm_csql_single_line_mode_default = false;
@@ -3200,6 +3232,52 @@ static SYSPRM_PARAM prm_Def[] = {
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_DELAY_LIMIT,
+   (PRM_FOR_SERVER | PRM_FOR_HA | PRM_USER_CHANGE | PRM_TIME_UNIT |
+    PRM_DIFFER_UNIT),
+   PRM_INTEGER,
+   (void *) &prm_ha_delay_limit_in_secs_flag,
+   (void *) &prm_ha_delay_limit_in_secs_default,
+   (void *) &PRM_HA_DELAY_LIMIT_IN_SECS,
+   (void *) &prm_ha_delay_limit_in_secs_upper,
+   (void *) &prm_ha_delay_limit_in_secs_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) prm_msec_to_sec,
+   (DUP_PRM_FUNC) prm_sec_to_msec},
+  {PRM_NAME_HA_DELAY_LIMIT_DELTA,
+   (PRM_FOR_SERVER | PRM_FOR_HA | PRM_USER_CHANGE | PRM_TIME_UNIT |
+    PRM_DIFFER_UNIT),
+   PRM_INTEGER,
+   (void *) &prm_ha_delay_limit_delta_in_secs_flag,
+   (void *) &prm_ha_delay_limit_delta_in_secs_default,
+   (void *) &PRM_HA_DELAY_LIMIT_DELTA_IN_SECS,
+   (void *) &prm_ha_delay_limit_delta_in_secs_upper,
+   (void *) &prm_ha_delay_limit_delta_in_secs_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) prm_msec_to_sec,
+   (DUP_PRM_FUNC) prm_sec_to_msec},
+  {PRM_NAME_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL_IN_MSECS,
+   (PRM_FOR_CLIENT | PRM_FOR_HA),
+   PRM_INTEGER,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_flag,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_default,
+   (void *) &PRM_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL_IN_MSECS,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_upper,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL,
+   (PRM_FOR_CLIENT | PRM_FOR_HA | PRM_TIME_UNIT),
+   PRM_INTEGER,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_flag,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_default,
+   (void *) &PRM_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL_IN_MSECS,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_upper,
+   (void *) &prm_ha_applylogdb_max_commit_interval_in_msecs_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
   {PRM_NAME_JAVA_STORED_PROCEDURE,
    (PRM_FOR_SERVER),
    PRM_BOOLEAN,
@@ -3403,6 +3481,16 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &prm_tcp_nodelay_flag,
    (void *) &prm_tcp_nodelay_default,
    (void *) &PRM_TCP_NODELAY,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_TCP_KEEPALIVE,
+   (PRM_FOR_SERVER | PRM_FOR_CLIENT),
+   PRM_INTEGER,
+   (void *) &prm_tcp_keepalive_flag,
+   (void *) &prm_tcp_keepalive_default,
+   (void *) &PRM_TCP_KEEPALIVE,
    (void *) NULL, (void *) NULL,
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
@@ -3910,8 +3998,13 @@ static SYSPRM_PARAM prm_Def[] = {
 #define GET_PRM_DYNAMIC_FLAG(id) ((GET_PRM (id))->dynamic_flag)
 #define GET_PRM_DATATYPE(id) ((GET_PRM (id))->datatype)
 
+#if defined (CS_MODE)
 #define PRM_PRINT_QRY_STRING(id) (PRM_IS_DIFFERENT (*(GET_PRM_DYNAMIC_FLAG (id))) \
 			&& PRM_IS_FOR_QRY_STRING (GET_PRM_STATIC_FLAG (id)))
+#else
+#define PRM_PRINT_QRY_STRING(id) (PRM_IS_FOR_QRY_STRING (GET_PRM_STATIC_FLAG (id)))
+#endif
+
 #define PRM_SERVER_SESSION(id) (PRM_IS_FOR_SESSION (GET_PRM_STATIC_FLAG (id)) \
 			&& PRM_IS_FOR_SERVER (GET_PRM_STATIC_FLAG (id)) \
 			&& !PRM_CLIENT_SESSION_ONLY (GET_PRM_STATIC_FLAG (id)))
@@ -4286,6 +4379,9 @@ static SYSPRM_ERR sysprm_set_session_parameter_default (SESSION_PARAM *
 							int prm_id);
 #endif /* SERVER_MODE */
 
+#if defined (CS_MODE)
+static void sysprm_update_cached_session_param_val (const PARAM_ID prm_id);
+#endif
 
 /* conf files that have been loaded */
 #define MAX_NUM_OF_PRM_FILES_LOADED	10
@@ -7887,6 +7983,9 @@ sysprm_final (void)
 	  valp = (char **) prm->value;
 	  *valp = NULL;
 	}
+
+      /* reset all dynamic flags */
+      *prm->dynamic_flag = 0;
     }
 
   for (i = 0; i < MAX_NUM_OF_PRM_FILES_LOADED; i++)
@@ -9958,37 +10057,44 @@ sysprm_init_intl_param (void)
   prm_number_lang = prm_find (PRM_NAME_INTL_NUMBER_LANG, NULL);
   prm_intl_collation = prm_find (PRM_NAME_INTL_COLLATION, NULL);
 
+  /* intl system parameters are session based and depend on system language;
+   * The language is read from DB (and client from server), after the system
+   * parameters module was initialized and default values read from
+   * configuration file.
+   * This function avoids to override any value already read from config.
+   * If no values are set from config, then this function sets the values
+   * according to the default language.
+   *
+   * On client (CAS), we set the client copy of the value, and also the cached
+   * session parameter value (which is the default starting value, when the
+   * existing CAS serves another session) is intialized.
+   */
+
   if (prm_date_lang != NULL && !PRM_IS_SET (*prm_date_lang->dynamic_flag))
     {
-      if (PRM_GET_STRING (prm_date_lang->value))
-	{
-	  free_and_init (PRM_GET_STRING (prm_date_lang->value));
-	}
-      PRM_CLEAR_BIT (PRM_ALLOCATED, *prm_date_lang->dynamic_flag);
       prm_set (prm_date_lang, lang_get_Lang_name (), true);
+#if defined (CS_MODE)
+      sysprm_update_cached_session_param_val (PRM_ID_INTL_DATE_LANG);
+#endif
     }
 
   if (prm_number_lang != NULL && !PRM_IS_SET (*prm_number_lang->dynamic_flag))
     {
-      if (PRM_GET_STRING (prm_number_lang->value))
-	{
-	  free_and_init (PRM_GET_STRING (prm_number_lang->value));
-	}
-      PRM_CLEAR_BIT (PRM_ALLOCATED, *prm_number_lang->dynamic_flag);
       prm_set (prm_number_lang, lang_get_Lang_name (), true);
+#if defined (CS_MODE)
+      sysprm_update_cached_session_param_val (PRM_ID_INTL_NUMBER_LANG);
+#endif
     }
 
   if (prm_intl_collation != NULL
       && !PRM_IS_SET (*prm_intl_collation->dynamic_flag))
     {
-      if (PRM_GET_STRING (prm_intl_collation->value))
-	{
-	  free_and_init (PRM_GET_STRING (prm_intl_collation->value));
-	}
-      PRM_CLEAR_BIT (PRM_ALLOCATED, *prm_intl_collation->dynamic_flag);
       prm_set (prm_intl_collation,
-	       lang_get_collation_name
-	       (LANG_GET_BINARY_COLLATION (LANG_SYS_CODESET)), true);
+	       lang_get_collation_name (LANG_GET_BINARY_COLLATION
+					(LANG_SYS_CODESET)), true);
+#if defined (CS_MODE)
+      sysprm_update_cached_session_param_val (PRM_ID_INTL_COLLATION);
+#endif
     }
 }
 #endif /* !SERVER_MODE */
@@ -10076,3 +10182,42 @@ sysprm_get_session_parameters_count (void)
 {
   return NUM_SESSION_PRM;
 }
+
+#if defined (CS_MODE)
+/*
+ * sysprm_update_cached_session_param_val () - updates value of a cached
+ *		 session parameter
+ * prm_id (in) : cached session system paramater id to update
+ *
+ *  Note : cached session parameters (global cached_session_parameters) are
+ *	   default value copies of the system parameters which can be changed
+ *	   in a session context; this should be used only during init process
+ *	   to alter the default initial value of system parameter for session.
+ */
+static void
+sysprm_update_cached_session_param_val (const PARAM_ID prm_id)
+{
+  SESSION_PARAM *cached_session_prm;
+  SYSPRM_PARAM *sys_prm;
+  int i;
+
+  assert (NUM_SESSION_PRM > 0);
+
+  sys_prm = GET_PRM (prm_id);
+
+  for (i = 0; i < NUM_SESSION_PRM; i++)
+    {
+      cached_session_prm = &cached_session_parameters[i];
+      if (cached_session_prm->prm_id != prm_id)
+	{
+	  continue;
+	}
+
+      cached_session_prm->flag = *sys_prm->dynamic_flag;
+      sysprm_set_sysprm_value_from_parameter (&cached_session_prm->value,
+					      sys_prm);
+      sysprm_update_session_prm_flag_allocated (cached_session_prm);
+      break;
+    }
+}
+#endif /* CS_MODE */

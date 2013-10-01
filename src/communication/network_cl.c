@@ -116,7 +116,7 @@ static int client_capabilities (void);
 static int check_server_capabilities (int server_cap, int client_type,
 				      int rel_compare,
 				      REL_COMPATIBILITY * compatibility,
-				      const char *server_host);
+				      const char *server_host, int opt_cap);
 static void set_alloc_err_and_read_expected_packets (int *err, int rc,
 						     int num_packets,
 						     const char *file,
@@ -138,6 +138,8 @@ static int set_server_error (int error);
 static void net_histo_setup_names (void);
 static void net_histo_add_entry (int request, int data_sent);
 static void net_histo_request_finished (int request, int data_received);
+
+static const char *get_capability_string (int cap, int cap_type);
 
 /*
  * Shouldn't know about db_Connect_status at this level, must set this
@@ -245,7 +247,36 @@ client_capabilities (void)
     {
       capabilities |= NET_CAP_UPDATE_DISABLED;
     }
+
   return capabilities;
+}
+
+/*
+ * get_capability_string - for the purpose of error logging,
+ *                         it translate cap into a word
+ *
+ * return:
+ */
+static const char *
+get_capability_string (int cap, int cap_type)
+{
+  switch (cap_type)
+    {
+    case NET_CAP_INTERRUPT_ENABLED:
+      if (cap & NET_CAP_INTERRUPT_ENABLED)
+	{
+	  return "enabled";
+	}
+      return "disabled";
+    case NET_CAP_UPDATE_DISABLED:
+      if (cap & NET_CAP_UPDATE_DISABLED)
+	{
+	  return "read only";
+	}
+      return "read/write";
+    default:
+      return "-";
+    }
 }
 
 /*
@@ -256,27 +287,67 @@ client_capabilities (void)
 static int
 check_server_capabilities (int server_cap, int client_type, int rel_compare,
 			   REL_COMPATIBILITY * compatibility,
-			   const char *server_host)
+			   const char *server_host, int opt_cap)
 {
   int client_cap;
 
   assert (compatibility != NULL);
 
   client_cap = client_capabilities ();
+  client_cap |= opt_cap;
+
   /* interrupt-ability should be same */
   if ((client_cap ^ server_cap) & NET_CAP_INTERRUPT_ENABLED)
     {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+	      ER_NET_HS_INCOMPAT_INTERRUPTIBILITY, 3, net_Server_host,
+	      get_capability_string (client_cap, NET_CAP_INTERRUPT_ENABLED),
+	      get_capability_string (server_cap, NET_CAP_INTERRUPT_ENABLED));
       server_cap ^= NET_CAP_INTERRUPT_ENABLED;
     }
 
-  /* update-ability should be same */
-  if ((client_cap ^ server_cap) & NET_CAP_UPDATE_DISABLED)
+  /* replica only client should check whether the server is replica */
+  if (BOOT_REPLICA_ONLY_BROKER_CLIENT_TYPE (client_type))
     {
-      er_log_debug (ARG_FILE_LINE,
-		    "NET_CAP_UPDATE_DISABLED client_cap %d server_cap %d\n",
-		    client_cap & NET_CAP_UPDATE_DISABLED,
-		    server_cap & NET_CAP_UPDATE_DISABLED);
-      server_cap ^= NET_CAP_UPDATE_DISABLED;
+      if (~server_cap & NET_CAP_HA_REPLICA)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_NET_HS_HA_REPLICA_ONLY,
+		  1, net_Server_host);
+	  server_cap ^= NET_CAP_HA_REPLICA;
+	}
+    }
+  else
+    {
+      /* update-ability should be same */
+      if ((client_cap ^ server_cap) & NET_CAP_UPDATE_DISABLED)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_NET_HS_INCOMPAT_RW_MODE, 3, net_Server_host,
+		  get_capability_string (client_cap, NET_CAP_UPDATE_DISABLED),
+		  get_capability_string (server_cap,
+					 NET_CAP_UPDATE_DISABLED));
+	  server_cap ^= NET_CAP_UPDATE_DISABLED;
+
+	  db_set_reconnect_reason (DB_RC_MISMATCHED_RW_MODE);
+	}
+      else
+	{
+	  db_unset_reconnect_reason (DB_RC_MISMATCHED_RW_MODE);
+	}
+    }
+
+  /*
+   * check HA replication delay
+   * if client_cap is on, it checks the server delay status
+   * else, it ignores the delay status.
+   */
+  if (client_cap & NET_CAP_HA_REPL_DELAY & server_cap)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_NET_HS_HA_REPL_DELAY, 1,
+	      net_Server_host);
+      server_cap ^= NET_CAP_HA_REPL_DELAY;
+
+      db_set_reconnect_reason (DB_RC_HA_REPL_DELAY);
     }
 
   /* network protocol compatibility */
@@ -311,10 +382,8 @@ check_server_capabilities (int server_cap, int client_type, int rel_compare,
       && !BOOT_IS_ALLOWED_CLIENT_TYPE_IN_MT_MODE (server_host, boot_Host_name,
 						  client_type))
     {
-      er_log_debug (ARG_FILE_LINE,
-		    "NET_CAP_REMOTE_DISABLED client %s %d server %s %d\n",
-		    boot_Host_name, client_cap & NET_CAP_REMOTE_DISABLED,
-		    server_host, server_cap & NET_CAP_REMOTE_DISABLED);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_NET_HS_REMOTE_DISABLED, 1,
+	      net_Server_host);
       server_cap ^= NET_CAP_REMOTE_DISABLED;
     }
 
@@ -624,12 +693,12 @@ net_histo_setup_names (void)
     "NET_SERVER_DISK_GET_PURPOSE_AND_SPACE_INFO";
   net_Req_buffer[NET_SERVER_DISK_VLABEL].name = "NET_SERVER_DISK_VLABEL";
 
-  net_Req_buffer[NET_SERVER_QST_SERVER_GET_STATISTICS].name =
-    "NET_SERVER_QST_SERVER_GET_STATISTICS";
-  net_Req_buffer[NET_SERVER_QST_UPDATE_CLASS_STATISTICS].name =
-    "NET_SERVER_QST_UPDATE_CLASS_STATISTICS";
+  net_Req_buffer[NET_SERVER_QST_GET_STATISTICS].name =
+    "NET_SERVER_QST_GET_STATISTICS";
   net_Req_buffer[NET_SERVER_QST_UPDATE_STATISTICS].name =
     "NET_SERVER_QST_UPDATE_STATISTICS";
+  net_Req_buffer[NET_SERVER_QST_UPDATE_ALL_STATISTICS].name =
+    "NET_SERVER_QST_UPDATE_ALL_STATISTICS";
 
   net_Req_buffer[NET_SERVER_QM_QUERY_PREPARE].name =
     "NET_SERVER_QM_QUERY_PREPARE";
@@ -2311,6 +2380,44 @@ net_client_request_with_callback (int request, char *argbuf, int argsize,
 	      /* expecting another reply */
 	      css_queue_receive_data_buffer (rc, replybuf, replysize);
 
+	      break;
+
+	    case CONSOLE_OUTPUT:
+	      {
+		int length;
+		char *print_data, *print_str;
+
+		ptr = or_unpack_int (ptr, &length);
+		ptr = or_unpack_int (ptr, &length);
+		COMPARE_AND_FREE_BUFFER (replybuf, reply);
+
+		print_data = (char *) malloc (length);
+		if (print_data != NULL)
+		  {
+		    css_queue_receive_data_buffer (rc, print_data, length);
+		    error = css_receive_data_from_server (rc, &reply,
+							  &length);
+		    if (error != NO_ERROR || reply == NULL)
+		      {
+			server_request = END_CALLBACK;
+			COMPARE_AND_FREE_BUFFER (print_data, reply);
+			free_and_init (print_data);
+			return set_server_error (error);
+		      }
+		    else
+		      {
+			ptr = or_unpack_string_nocopy (reply, &print_str);
+			fprintf (stdout, print_str);
+			fflush (stdout);
+		      }
+		    free_and_init (print_data);
+		  }
+	      }
+
+	      /* expecting another reply */
+	      css_queue_receive_data_buffer (rc, replybuf, replysize);
+
+	      error = NO_ERROR;
 	      break;
 
 	    default:
@@ -4184,7 +4291,7 @@ net_client_ping_server (int client_val, int *server_val, int timeout)
  */
 int
 net_client_ping_server_with_handshake (int client_type,
-				       bool check_capabilities)
+				       bool check_capabilities, int opt_cap)
 {
   const char *client_release;
   char *server_release, *server_host, *server_handshake, *ptr;
@@ -4271,8 +4378,8 @@ net_client_ping_server_with_handshake (int client_type,
   /* If we can't get the server version, we have to disconnect it. */
   if (server_release == NULL)
     {
-      error = ER_NET_SERVER_HAND_SHAKE;
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, net_Server_host);
+      error = ER_NET_HS_UNKNOWN_SERVER_REL;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
       return error;
     }
 
@@ -4288,7 +4395,8 @@ net_client_ping_server_with_handshake (int client_type,
 				    rel_compare (client_release,
 						 server_release),
 				    &compat,
-				    server_host) != server_capabilities)
+				    server_host,
+				    opt_cap) != server_capabilities)
     {
       error = ER_NET_SERVER_HAND_SHAKE;
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, net_Server_host);

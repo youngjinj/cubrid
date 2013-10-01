@@ -4440,7 +4440,14 @@ boot_check_db_consistency (int check_flag, OID * oids, int num_oids)
 #if defined(CS_MODE)
   int success = ER_FAILED;
   int req_error;
+#if defined (CALLBACK_CONSOLE_PRINT)
+  int cb_type;
+  char *rd1, *rd2;
+  int d1, d2;
+  OR_ALIGNED_BUF (OR_INT_SIZE * 3) a_reply;
+#else
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+#endif
   char *reply;
   char *request, *ptr;
   size_t request_size;
@@ -4460,6 +4467,20 @@ boot_check_db_consistency (int check_flag, OID * oids, int num_oids)
     }
 
   reply = OR_ALIGNED_BUF_START (a_reply);
+#if defined (CALLBACK_CONSOLE_PRINT)
+  req_error =
+    net_client_request_with_callback (NET_SERVER_BO_CHECK_DBCONSISTENCY,
+				      request, request_size, reply,
+				      OR_ALIGNED_BUF_SIZE (a_reply),
+				      NULL, 0, NULL, 0, &rd1, &d1, &rd2, &d2);
+  free_and_init (request);
+
+  if (!req_error)
+    {
+      ptr = or_unpack_int (reply, &cb_type);
+      or_unpack_int (ptr, &success);
+    }
+#else
   req_error = net_client_request (NET_SERVER_BO_CHECK_DBCONSISTENCY,
 				  request, request_size, reply,
 				  OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0,
@@ -4470,6 +4491,7 @@ boot_check_db_consistency (int check_flag, OID * oids, int num_oids)
     {
       or_unpack_int (reply, &success);
     }
+#endif
 
   return success;
 #else /* CS_MODE */
@@ -6427,7 +6449,7 @@ stats_get_statistics_from_server (OID * classoid, unsigned int timestamp,
   ptr = or_pack_oid (request, classoid);
   ptr = or_pack_int (ptr, (int) timestamp);
 
-  req_error = net_client_request2 (NET_SERVER_QST_SERVER_GET_STATISTICS,
+  req_error = net_client_request2 (NET_SERVER_QST_GET_STATISTICS,
 				   request, OR_ALIGNED_BUF_SIZE (a_request),
 				   reply, OR_ALIGNED_BUF_SIZE (a_reply),
 				   NULL, 0, &area, length_ptr);
@@ -6455,7 +6477,7 @@ stats_get_statistics_from_server (OID * classoid, unsigned int timestamp,
 }
 
 /*
- * stats_update_class_statistics -
+ * stats_update_statistics -
  *
  * return:
  *
@@ -6464,12 +6486,14 @@ stats_get_statistics_from_server (OID * classoid, unsigned int timestamp,
  * NOTE:
  */
 int
-stats_update_class_statistics (OID * classoid, BTID * btid, int do_now)
+stats_update_statistics (OID * classoid, BTID * btid, int do_now,
+			 int with_fullscan)
 {
 #if defined(CS_MODE)
   int error = ER_NET_CLIENT_DATA_RECEIVE;
   int req_error;
-  OR_ALIGNED_BUF (OR_OID_SIZE + OR_INT_SIZE + OR_BTID_SIZE) a_request;
+  OR_ALIGNED_BUF (OR_OID_SIZE + OR_INT_SIZE + OR_INT_SIZE +
+		  OR_BTID_SIZE) a_request;
   char *request;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
   char *reply;
@@ -6480,6 +6504,7 @@ stats_update_class_statistics (OID * classoid, BTID * btid, int do_now)
 
   ptr = or_pack_oid (request, classoid);
   ptr = or_pack_int (ptr, do_now);
+  ptr = or_pack_int (ptr, with_fullscan);
   if (btid == NULL)
     {
       BTID id;
@@ -6492,7 +6517,7 @@ stats_update_class_statistics (OID * classoid, BTID * btid, int do_now)
       ptr = or_pack_btid (ptr, btid);
     }
 
-  req_error = net_client_request (NET_SERVER_QST_UPDATE_CLASS_STATISTICS,
+  req_error = net_client_request (NET_SERVER_QST_UPDATE_STATISTICS,
 				  request, OR_ALIGNED_BUF_SIZE (a_request),
 				  reply,
 				  OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0,
@@ -6518,7 +6543,10 @@ stats_update_class_statistics (OID * classoid, BTID * btid, int do_now)
 
   if (btid == NULL || BTID_IS_NULL (btid))
     {
-      success = xstats_update_class_statistics (NULL, classoid, NULL);
+      success =
+	xstats_update_statistics (NULL, classoid, NULL,
+				  (with_fullscan ? STATS_WITH_FULLSCAN :
+				   STATS_WITH_SAMPLING));
     }
   else
     {
@@ -6526,7 +6554,10 @@ stats_update_class_statistics (OID * classoid, BTID * btid, int do_now)
 
       b.next = NULL;
       BTID_COPY (&b.btid, btid);
-      success = xstats_update_class_statistics (NULL, classoid, &b);
+      success =
+	xstats_update_statistics (NULL, classoid, &b,
+				  (with_fullscan ? STATS_WITH_FULLSCAN :
+				   STATS_WITH_SAMPLING));
     }
 
   EXIT_SERVER ();
@@ -6536,25 +6567,33 @@ stats_update_class_statistics (OID * classoid, BTID * btid, int do_now)
 }
 
 /*
- * stats_update_statistics -
+ * stats_update_all_statistics -
  *
  * return:
+ *   with_fullscan(in): true iff WITH FULLSCAN
  *
  * NOTE:
  */
 int
-stats_update_statistics (void)
+stats_update_all_statistics (int with_fullscan)
 {
 #if defined(CS_MODE)
   int error = ER_NET_CLIENT_DATA_RECEIVE;
   int req_error;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_request;
+  char *request;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
   char *reply;
+  char *ptr;
 
+  request = OR_ALIGNED_BUF_START (a_request);
   reply = OR_ALIGNED_BUF_START (a_reply);
 
-  req_error = net_client_request (NET_SERVER_QST_UPDATE_STATISTICS,
-				  NULL, 0, reply,
+  ptr = or_pack_int (request, with_fullscan);
+
+  req_error = net_client_request (NET_SERVER_QST_UPDATE_ALL_STATISTICS,
+				  request, OR_ALIGNED_BUF_SIZE (a_request),
+				  reply,
 				  OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0,
 				  NULL, 0);
   if (!req_error)
@@ -6568,7 +6607,10 @@ stats_update_statistics (void)
 
   ENTER_SERVER ();
 
-  success = xstats_update_statistics (NULL);
+  success =
+    xstats_update_all_statistics (NULL,
+				  (with_fullscan ? STATS_WITH_FULLSCAN :
+				   STATS_WITH_SAMPLING));
 
   EXIT_SERVER ();
 
@@ -9260,15 +9302,17 @@ btree_get_statistics (BTID * btid, BTREE_STATS * stat_info)
   ENTER_SERVER ();
 
   assert_release (!BTID_IS_NULL (btid));
-  assert_release (stat_info->key_size == 0);
+  assert_release (stat_info->keys == 0);
+  assert_release (stat_info->pkeys_size == 0);
+  assert_release (stat_info->pkeys == NULL);
 
   BTID_COPY (&stat_info->btid, btid);
-  if (stat_info->key_size != 0)
+  if (stat_info->pkeys_size != 0)
     {
-      stat_info->key_size = 0;	/* do not request pkeys info */
+      stat_info->pkeys_size = 0;	/* do not request pkeys info */
     }
 
-  success = btree_get_stats (NULL, stat_info);
+  success = btree_get_stats (NULL, stat_info, STATS_WITH_FULLSCAN);
 
   assert_release (stat_info->leafs > 0);
   assert_release (stat_info->pages > 0);

@@ -174,8 +174,11 @@ struct event_stat
   struct timeval latch_waits;
 
   /* temp volume expand stats */
-  int temp_expand_pages;
   struct timeval temp_expand_time;
+  int temp_expand_pages;
+
+  /* save PRM_ID_SQL_TRACE_SLOW_MSECS for performance */
+  bool trace_slow_query;
 };
 
 struct thread_entry
@@ -368,7 +371,12 @@ extern void thread_wakeup_oob_handler_thread (void);
 extern void thread_wakeup_session_control_thread (void);
 extern void thread_wakeup_auto_volume_expansion_thread (void);
 extern void thread_wakeup_auto_vacuum_thread (void);
+#if !defined (WINDOWS)
+extern void thread_wakeup_check_ha_delay_info_thread (void);
+#endif /* !WINDOWS */
+
 extern bool thread_auto_volume_expansion_thread_is_running (void);
+
 extern THREAD_ENTRY *thread_find_first_lockwait_entry (int *thrd_index);
 extern THREAD_ENTRY *thread_find_next_lockwait_entry (int *thrd_index);
 extern THREAD_ENTRY *thread_find_entry_by_index (int thrd_index);

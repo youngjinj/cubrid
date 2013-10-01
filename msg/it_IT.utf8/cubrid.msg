@@ -1091,16 +1091,16 @@ $ LOADDB
 1022 Valore "%d" non valido per lunghezza del prefisso dell'index.
 1023 Codice di errore riservato per HA.
 1024 Codice di errore riservato per HA.
-1025 Codice di errore riservato per HA.
-1026 Codice di errore riservato per HA.
+1025 HA delay info: The replication delay (%1$d secs) has exceeded the limit (%2$d secs).
+1026 HA delay info: The replication delay (%1$d secs) is decreased below the acceptable level (%2$d secs).
 1027 log applier: non è riuscito a cambiare stato dell'applicare dal '%1$s' a '%2$s'.
 1028 log applier: voce EOF imprevisto nel log dei transazioni. LSA: %1$lld|%2$d.
 1029 log applier: offset/pagina non valida del log di replicazione . HDR della pagina: %1$1lld|%2$d, final: %3$lld|%4$d, Append LSA: %5$lld|%6$d, EOF LSA: %7$lld|%8$d, stato del file HA: %9$d, is end-of-log: %10$d.
 1030 log applier: voce di replicazione don valida. LSA: %1$lld|%2$d, forw LSA: %3$lld|%4$d, backw LSA: %5$lld|%6$d, Trid: %7$d, prev tran LSA: %8$lld|%9$d, type: %10$d.
-1031 log applier: non riuscito ad applicare il log del replicazione della schema. classe: "%1$s", schema: "%2$s", Errore interno: %3$d. 
-1032 log applier: non riuscito ad applicare il log del replicazione della schema. classe: "%1$s", chiave: "%2$s", Errore interno: %3$d.  
-1033 log applier: non riuscito ad applicare il log del replicazione dell'UPDATE. classe: "%1$s", chiave: "%2$s", Errore interno: %3$d.  
-1034 log applier: non riuscito ad applicare il log del replicazione del DELETE. classe: "%1$s", chiave: "%2$s", Errore interno: %3$d.  
+1031 log applier: failed to apply schema replication log. class: "%1$s", schema: "%2$s", server error: %3$d, %4$s. 
+1032 log applier: failed to apply insert replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1033 log applier: failed to apply update replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1034 log applier: failed to apply delete replication log. class: "%1$s", key: "%2$s", server error: %3$d.
 1035 log applier: dimensione della memoria (%1$d MB) dell'applicatore di log è maggiore della dimensione massima di memoria (%2$d MB) o è stato aumentato più di 2 volte (%3$d MB). LSA richiesto: %4$lld|%5$d. ultimo LSA commesso : %6$lld|%7$d.
 1036 log applier: log applier sé arrestato dal segnale.
 1037 log writer: log writer sé arrestato dal segnale.
@@ -1199,6 +1199,17 @@ $ LOADDB
 1130 Transazione viene interrotta perché numero di lock counts supera il valore %1$d.
 1131 Errore interno: La pagina %1$d di volume "%2$s" potrebbe essere danneggiata.\n%3$s
 1132 Encryption library failure: %s
+1133 Copylogdb for %1$s already exists.
+1134 Applylogdb for %1$s already exists.
+1135 A previous link of B+tree(%1$s) is corrupted.: vpid = (%2$d, %3$d)
+1136 A previous link of B+tree(%1$s) is repaired.: vpid = (%2$d, %3$d)
+1137 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
+1138 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
+1139 Handshake error (peer host %1$s): HA replication delayed.
+1140 Handshake error (peer host %1$s): replica-only client to non-replica server.
+1141 Handshake error (peer host %1$s): unidentified server version.
+1142 Handshake error (peer host %1$s): remote access to server not allowed.
+1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 Ultimo errore
 

@@ -280,9 +280,11 @@ css_tcp_client_open_with_retry (const char *host_name, int port,
     }
 
   /* ask for the "keep alive" option, ignore errors */
-  bool_value = 1;
-  (void) setsockopt (s, SOL_SOCKET, SO_KEEPALIVE,
-		     (const char *) &bool_value, sizeof (int));
+  if (prm_get_integer_value (PRM_ID_TCP_KEEPALIVE) > 0)
+    {
+      setsockopt (s, SOL_SOCKET, SO_KEEPALIVE,
+		  (int *) prm_get_value (PRM_ID_TCP_KEEPALIVE), sizeof (int));
+    }
 
   /* ask for NODELAY, this one is rather important */
   bool_value = 1;
@@ -698,6 +700,12 @@ css_open_server_connection_socket (void)
   bool_value = 1;
   setsockopt (fd, IPPROTO_TCP, TCP_NODELAY,
 	      (const char *) &bool_value, sizeof (int));
+
+  if (prm_get_integer_value (PRM_ID_TCP_KEEPALIVE) > 0)
+    {
+      setsockopt (fd, SOL_SOCKET, SO_KEEPALIVE,
+		  (int *) prm_get_value (PRM_ID_TCP_KEEPALIVE), sizeof (int));
+    }
 
   /*
    * Set up an address asking for "any" (the local ?) IP addres

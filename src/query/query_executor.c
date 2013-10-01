@@ -12731,13 +12731,10 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       break;
 
     case UPDATE_PROC:
-      if (!LOG_CHECK_LOG_APPLIER (thread_p))
+      CHECK_MODIFICATION_NO_RETURN (thread_p, error);
+      if (error != NO_ERROR)
 	{
-	  CHECK_MODIFICATION_NO_RETURN (thread_p, error);
-	  if (error != NO_ERROR)
-	    {
-	      return error;
-	    }
+	  return error;
 	}
 
       old_wait_msecs = XASL_WAIT_MSECS_NOCHANGE;
@@ -12760,13 +12757,10 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       break;
 
     case DELETE_PROC:
-      if (!LOG_CHECK_LOG_APPLIER (thread_p))
+      CHECK_MODIFICATION_NO_RETURN (thread_p, error);
+      if (error != NO_ERROR)
 	{
-	  CHECK_MODIFICATION_NO_RETURN (thread_p, error);
-	  if (error != NO_ERROR)
-	    {
-	      return error;
-	    }
+	  return error;
 	}
 
       old_wait_msecs = XASL_WAIT_MSECS_NOCHANGE;
@@ -12789,13 +12783,10 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       break;
 
     case INSERT_PROC:
-      if (!LOG_CHECK_LOG_APPLIER (thread_p))
+      CHECK_MODIFICATION_NO_RETURN (thread_p, error);
+      if (error != NO_ERROR)
 	{
-	  CHECK_MODIFICATION_NO_RETURN (thread_p, error);
-	  if (error != NO_ERROR)
-	    {
-	      return error;
-	    }
+	  return error;
 	}
 
       old_wait_msecs = XASL_WAIT_MSECS_NOCHANGE;
@@ -12826,14 +12817,12 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       break;
 
     case MERGE_PROC:
-      if (!LOG_CHECK_LOG_APPLIER (thread_p))
+      CHECK_MODIFICATION_NO_RETURN (thread_p, error);
+      if (error != NO_ERROR)
 	{
-	  CHECK_MODIFICATION_NO_RETURN (thread_p, error);
-	  if (error != NO_ERROR)
-	    {
-	      return error;
-	    }
+	  return error;
 	}
+
       /* setup waiting time */
       old_wait_msecs = XASL_WAIT_MSECS_NOCHANGE;
       if (xasl->proc.merge.update_xasl)
@@ -12897,13 +12886,10 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       /* click counter check */
       if (xasl->selected_upd_list)
 	{
-	  if (!LOG_CHECK_LOG_APPLIER (thread_p))
+	  CHECK_MODIFICATION_NO_RETURN (thread_p, error);
+	  if (error != NO_ERROR)
 	    {
-	      CHECK_MODIFICATION_NO_RETURN (thread_p, error);
-	      if (error != NO_ERROR)
-		{
-		  return error;
-		}
+	      return error;
 	    }
 	}
 

@@ -42,6 +42,7 @@
 #define CAS_NO_ERROR		0
 #define ERR_MSG_LENGTH		1024
 #define ERR_FILE_LENGTH		256
+#define MAX_SHARD_INFO_LENGTH   30
 
 typedef struct t_object T_OBJECT;
 struct t_object
@@ -132,4 +133,8 @@ extern int query_seq_num_current_value (void);
 
 extern void set_hang_check_time (void);
 extern void unset_hang_check_time (void);
+
+extern void cas_set_db_connect_status (int status);
+extern int cas_get_db_connect_status (void);
+
 #endif /* _CAS_H_ */

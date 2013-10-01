@@ -147,6 +147,9 @@ static int shard_shm_set_param_as_in_proxy (T_SHM_PROXY * proxy_p,
 					    int as_number);
 static int shard_shm_check_max_file_open_limit (T_BROKER_INFO * br_info,
 						T_SHM_PROXY * proxy_p);
+static void get_shard_db_password (T_BROKER_INFO * br_info_p);
+static void get_upper_str (char *upper_str, int len, char *value);
+
 static void rename_access_log_file_name (char *access_log_file,
 					 struct tm *ct);
 static void rename_error_log_file_name (char *error_log_file, struct tm *ct);
@@ -185,6 +188,8 @@ static void proxy_inactivate (T_BROKER_INFO * br_info_p,
 static int get_cubrid_version (void);
 #endif
 #endif /* !WINDOWS */
+
+static char shard_db_password_env_str[MAX_BROKER_NUM][128];
 
 char admin_err_msg[ADMIN_ERR_MSG_SIZE];
 
@@ -276,6 +281,7 @@ admin_start_cmd (T_BROKER_INFO * br_info, int br_num, int master_shm_id,
   int i;
   int res = 0;
   char path[BROKER_PATH_MAX];
+  char upper_broker_name[BROKER_NAME_LEN];
   T_SHM_BROKER *shm_br;
   T_SHM_APPL_SERVER *shm_as_p = NULL;
   T_SHM_PROXY *shm_proxy_p = NULL;
@@ -338,14 +344,33 @@ admin_start_cmd (T_BROKER_INFO * br_info, int br_num, int master_shm_id,
   if (shm_br == NULL)
     {
       strcpy (admin_err_msg, "failed to initialize broker shared memory");
-      uw_shm_destroy (master_shm_id);
       return -1;
     }
 
   for (i = 0; i < br_num; i++)
     {
-      T_SHM_APPL_SERVER *shm_as_p = NULL;
-      T_SHM_PROXY *shm_proxy_p = NULL;
+      if (br_info[i].shard_flag == OFF)
+	{
+	  continue;
+	}
+
+      if (br_info[i].shard_db_password[0] == '\0')
+	{
+	  get_shard_db_password (&shm_br->br_info[i]);
+	}
+
+      get_upper_str (upper_broker_name, BROKER_NAME_LEN, br_info[i].name);
+
+      snprintf (shard_db_password_env_str[i],
+		sizeof (shard_db_password_env_str[i]),
+		"%s_SHARD_DB_PASSWORD=", upper_broker_name);
+      putenv (shard_db_password_env_str[i]);
+    }
+
+  for (i = 0; i < br_num; i++)
+    {
+      shm_as_p = NULL;
+      shm_proxy_p = NULL;
 
       if (br_info[i].service_flag == ON)
 	{
@@ -420,6 +445,20 @@ admin_start_cmd (T_BROKER_INFO * br_info, int br_num, int master_shm_id,
     {
       char err_msg_backup[ADMIN_ERR_MSG_SIZE];
       memcpy (err_msg_backup, admin_err_msg, ADMIN_ERR_MSG_SIZE);
+
+      /* if shm_as_p == NULL then, it is expected that failed creating shared memory */
+      if (shm_as_p == NULL)
+	{
+	  if (shm_br->br_info[i].shard_flag == ON && shm_proxy_p)
+	    {
+	      uw_shm_detach (shm_proxy_p);
+	      shm_proxy_p = NULL;
+
+	      uw_shm_destroy (shm_br->br_info[i].proxy_shm_id);
+	    }
+
+	  --i;
+	}
 
       for (; i >= 0; i--)
 	{
@@ -902,6 +941,7 @@ int
 admin_on_cmd (int master_shm_id, const char *broker_name)
 {
   int i, res = 0;
+  char upper_broker_name[BROKER_NAME_LEN];
   T_SHM_BROKER *shm_br;
   T_SHM_APPL_SERVER *shm_as_p = NULL;
   T_SHM_PROXY *shm_proxy_p = NULL;
@@ -913,6 +953,22 @@ admin_on_cmd (int master_shm_id, const char *broker_name)
       SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
 			uw_get_os_error_code ());
       return -1;
+    }
+
+  for (i = 0; i < shm_br->num_broker; i++)
+    {
+      if (shm_br->br_info[i].shard_flag == OFF)
+	{
+	  continue;
+	}
+
+      get_upper_str (upper_broker_name, BROKER_NAME_LEN,
+		     shm_br->br_info[i].name);
+
+      snprintf (shard_db_password_env_str[i],
+		sizeof (shard_db_password_env_str[i]),
+		"%s_SHARD_DB_PASSWORD=", upper_broker_name);
+      putenv (shard_db_password_env_str[i]);
     }
 
   for (i = 0; i < shm_br->num_broker; i++)
@@ -986,6 +1042,22 @@ admin_on_cmd (int master_shm_id, const char *broker_name)
   if (res < 0)
     {
       char err_msg_backup[ADMIN_ERR_MSG_SIZE];
+
+      /* if shm_as_p == NULL then, it is expected that failed creating shared memory */
+      if (shm_as_p == NULL)
+	{
+	  if (shm_br->br_info[i].shard_flag == ON && shm_proxy_p)
+	    {
+	      uw_shm_detach (shm_proxy_p);
+
+	      uw_shm_destroy (shm_br->br_info[i].proxy_shm_id);
+	    }
+
+	  uw_shm_detach (shm_br);
+
+	  return -1;
+	}
+
       memcpy (err_msg_backup, admin_err_msg, ADMIN_ERR_MSG_SIZE);
 
       br_inactivate (&(shm_br->br_info[i]));
@@ -1002,19 +1074,10 @@ admin_on_cmd (int master_shm_id, const char *broker_name)
   if (i >= shm_br->num_broker)
     {
       sprintf (admin_err_msg, "Cannot find broker [%s]", broker_name);
-      uw_shm_detach (shm_br);
 
-      if (shm_as_p)
-	{
-	  uw_shm_detach (shm_as_p);
-	}
-      if (shm_proxy_p)
-	{
-	  uw_shm_detach (shm_proxy_p);
-	}
-
-      return -1;
+      res = -1;
     }
+
   uw_shm_detach (shm_br);
   if (shm_as_p)
     {
@@ -1576,10 +1639,17 @@ static int
 make_sp_value (SP_VALUE * value_p, char *shard_key)
 {
   int length = strlen (shard_key);
+  char *end;
 
   if (key_isdigit (shard_key))
     {
-      value_p->integer = atoi (shard_key);
+      errno = 0;
+      value_p->integer = strtoll (shard_key, &end, 10);
+      if (errno == ERANGE || *end != '\0')
+	{
+	  return -1;
+	}
+
       value_p->type = VT_INTEGER;
     }
   else
@@ -2130,6 +2200,20 @@ admin_conf_change (int master_shm_id, const char *br_name,
 	      shm_as_p->as_info[i].reset_flag = TRUE;
 	    }
 	}
+    }
+  else if (strcasecmp (conf_name, "RECONNECT_TIME") == 0)
+    {
+      int rctime;
+
+      rctime = (int) ut_time_string_to_sec (conf_value, "sec");
+      if (rctime < 0)
+	{
+	  sprintf (admin_err_msg, "invalid value : %s", conf_value);
+	  goto set_conf_error;
+	}
+
+      br_info_p->cas_rctime = rctime;
+      shm_as_p->cas_rctime = rctime;
     }
   else if (strcasecmp (conf_name, "SQL_LOG_MAX_SIZE") == 0)
     {
@@ -3020,6 +3104,10 @@ br_activate (T_BROKER_INFO * br_info, int master_shm_id,
 	{
 	  as_activate (shm_br, br_info, shm_appl, &shm_appl->as_info[i], i,
 		       env, env_num);
+	}
+      for (; i < br_info->appl_server_max_num; i++)
+	{
+	  CON_STATUS_LOCK_INIT (&(shm_appl->as_info[i]));
 	}
     }
 
@@ -4103,4 +4191,40 @@ shard_shm_check_max_file_open_limit (T_BROKER_INFO * br_info,
     }
 #endif /* LINUX */
   return 0;
+}
+
+static void
+get_shard_db_password (T_BROKER_INFO * br_info_p)
+{
+  char env_str[128];
+  char upper_broker_name[BROKER_NAME_LEN];
+  char *p = NULL;
+
+  get_upper_str (upper_broker_name, BROKER_NAME_LEN, br_info_p->name);
+
+  snprintf (env_str, sizeof (env_str), "%s_SHARD_DB_PASSWORD",
+	    upper_broker_name);
+
+  p = getenv (env_str);
+  if (p != NULL)
+    {
+      strncpy (br_info_p->shard_db_password, p,
+	       sizeof (br_info_p->shard_db_password) - 1);
+    }
+
+  return;
+}
+
+static void
+get_upper_str (char *upper_str, int len, char *value)
+{
+  int i;
+
+  for (i = 0; i < len - 1; i++)
+    {
+      upper_str[i] = (char) toupper (value[i]);
+    }
+  upper_str[i] = '\0';
+
+  return;
 }

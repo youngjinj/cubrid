@@ -40,7 +40,8 @@ enum
 {
   SHARD_STMT_STATUS_UNUSED = 0,
   SHARD_STMT_STATUS_IN_PROGRESS = 1,
-  SHARD_STMT_STATUS_COMPLETE = 2
+  SHARD_STMT_STATUS_COMPLETE = 2,
+  SHARD_STMT_STATUS_INVALID = 3
 };
 
 enum
@@ -64,10 +65,13 @@ struct t_shard_stmt
 
   int ctx_cid;			/* owner context cid */
   unsigned int ctx_uid;		/* owner context uid */
+  char database_user[SRV_CON_DBUSER_SIZE];
 
   int num_pinned;		/* pinned count */
   T_SHARD_STMT *lru_next;
   T_SHARD_STMT *lru_prev;
+  T_SHARD_STMT *hash_next;
+  T_SHARD_STMT *hash_prev;
 
   SP_PARSER_CTX *parser;	/* parser context */
 
@@ -93,9 +97,12 @@ struct t_shard_stmt_global
   T_SHARD_STMT *mru;		/* tail */
 
   T_SHARD_STMT *stmt_ent;
+
+  MHT_TABLE *stmt_map;
 };
 
 extern T_SHARD_STMT *shard_stmt_find_by_sql (char *sql_stmt,
+					     const char *db_user,
 					     T_BROKER_VERSION client_version);
 extern T_SHARD_STMT *shard_stmt_find_by_stmt_h_id (int stmt_h_id);
 extern int shard_stmt_pin (T_SHARD_STMT * stmt_p);
@@ -146,4 +153,5 @@ extern char *shard_stmt_rewrite_sql (bool * has_shard_val_hint,
 				     char *sql_stmt, char appl_server);
 
 extern void shard_statement_wait_timer (void);
+extern void shard_stmt_set_status_invalid (int stmt_h_id);
 #endif /* _SHARD_STATEMENT_H_ */

@@ -36,6 +36,7 @@
 #include "porting.h"
 #include "shard_proxy_io.h"
 #include "shard_proxy_handler.h"
+#include "shard_proxy_function.h"
 #include "cas_protocol.h"
 #include "cas_error.h"
 #include "shard_shm.h"
@@ -73,6 +74,9 @@ extern int proxy_id;
 
 extern T_PROXY_HANDLER proxy_Handler;
 extern T_PROXY_CONTEXT proxy_Context;
+
+typedef T_CAS_IO *(*T_FUNC_FIND_CAS) (int shard_id, int cas_id, int ctx_cid,
+				      unsigned int ctx_uid);
 
 extern void proxy_term (void);
 extern bool proxy_Keep_running;
@@ -157,6 +161,29 @@ static void proxy_init_net_buf (T_NET_BUF * net_buf);
 
 static int proxy_io_make_ex_get_int (char *driver_info, char **buffer,
 				     int *argv);
+static void proxy_set_conn_info (int func_code, int ctx_cid, int ctx_uid,
+				 int shard_id, int cas_id);
+static T_CAS_IO *proxy_find_idle_cas_by_asc (int shard_id, int cas_id,
+					     int ctx_cid,
+					     unsigned int ctx_uid);
+static T_CAS_IO *proxy_find_idle_cas_by_desc (int shard_id, int cas_id,
+					      int ctx_cid,
+					      unsigned int ctx_uid);
+static T_CAS_IO *proxy_find_idle_cas_by_conn_info (int shard_id, int cas_id,
+						   int ctx_cid,
+						   unsigned int ctx_uid);
+static T_CAS_IO *proxy_cas_alloc_by_shard_and_cas_id (int client_id,
+						      int shard_id,
+						      int cas_id, int ctx_cid,
+						      unsigned int ctx_uid);
+static T_CAS_IO *proxy_cas_alloc_anything (int client_id, int shard_id,
+					   int cas_id, int ctx_cid,
+					   unsigned int ctx_uid,
+					   T_FUNC_FIND_CAS function);
+static int proxy_check_authorization (T_PROXY_CONTEXT * ctx_p,
+				      const char *db_name,
+				      const char *db_user,
+				      const char *db_passwd);
 
 #if defined(LINUX)
 static int proxy_get_max_socket (void);
@@ -631,6 +658,10 @@ proxy_io_make_error_msg (char *driver_info, char **buffer,
 	}
     }
 
+  error_code = proxy_convert_error_code (error_ind, error_code, driver_info,
+					 client_version,
+					 PROXY_CONV_ERR_TO_OLD);
+
   /* error code */
   net_buf_cp_int (&net_buf, error_code, NULL);
 
@@ -644,6 +675,11 @@ proxy_io_make_error_msg (char *driver_info, char **buffer,
   set_data_length (*buffer, net_buf.data_size);
 
   net_buf.data = NULL;
+
+  PROXY_DEBUG_LOG ("make error to send to the client. "
+		   "(error_ind:%d, error_code:%d, errro_msg:%s)",
+		   error_ind, error_code,
+		   (error_msg && error_msg[0]) ? error_msg : "-");
 
   return (net_buf.data_size + MSG_HEADER_SIZE);
 
@@ -1087,6 +1123,39 @@ proxy_io_make_shard_info (char *driver_info, char **buffer)
   return (net_buf.data_size + MSG_HEADER_SIZE);
 }
 
+int
+proxy_io_make_check_cas (char *driver_info, char **buffer)
+{
+  int error;
+  T_NET_BUF net_buf;
+
+  assert (buffer);
+  assert (*buffer == NULL);
+
+  error = proxy_make_net_buf (&net_buf, MSG_HEADER_SIZE);
+  if (error)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		 "Failed to make net buffer. (error:%d).", error);
+      *buffer = NULL;
+      return -1;
+    }
+
+  net_buf.data_size = 0;
+  proxy_init_net_buf (&net_buf);
+
+  /* function code */
+  net_buf_cp_byte (&net_buf, (unsigned char) CAS_FC_CHECK_CAS);
+
+  *buffer = net_buf.data;
+  set_data_length (*buffer, net_buf.data_size);
+
+  proxy_set_force_out_tran (*buffer);
+
+  net_buf.data = NULL;
+  return (net_buf.data_size + MSG_HEADER_SIZE);
+}
+
 void
 proxy_io_buffer_clear (T_IO_BUFFER * io_buffer)
 {
@@ -1309,6 +1378,19 @@ proxy_socket_io_add (SOCKET fd, bool from_cas)
       return NULL;
     }
 
+  sock_io_p = &(proxy_Socket_io.ent[fd]);
+
+  if (sock_io_p->fd > INVALID_SOCKET || sock_io_p->status != SOCK_IO_IDLE)
+    {
+      assert (false);
+      proxy_Keep_running = false;
+      PROXY_LOG (PROXY_LOG_MODE_ERROR,
+		 "Receive duplicated socket fd. "
+		 "(received socket:%d, status:%d)",
+		 sock_io_p->fd, sock_io_p->status);
+      return NULL;
+    }
+
   shard_io_set_fl (fd, O_NONBLOCK);
 
 #if defined(LINUX)
@@ -1322,19 +1404,6 @@ proxy_socket_io_add (SOCKET fd, bool from_cas)
   FD_SET (fd, &allset);
   maxfd = max (maxfd, fd);
 #endif /* !LINUX */
-
-  sock_io_p = &(proxy_Socket_io.ent[fd]);
-
-  if (sock_io_p->fd > INVALID_SOCKET || sock_io_p->status != SOCK_IO_IDLE)
-    {
-      assert (false);
-      proxy_Keep_running = false;
-      PROXY_LOG (PROXY_LOG_MODE_ERROR,
-		 "Receive duplicated socket fd. "
-		 "(received socket:%d, status:%d)",
-		 sock_io_p->fd, sock_io_p->status);
-      return NULL;
-    }
 
   sock_io_p->fd = fd;
   sock_io_p->status = SOCK_IO_REG_WAIT;
@@ -1401,6 +1470,33 @@ proxy_socket_io_delete (SOCKET fd)
   proxy_Socket_io.cur_socket--;
 
   EXIT_FUNC ();
+  return 0;
+}
+
+int
+proxy_io_set_established_by_ctx (T_PROXY_CONTEXT * ctx_p)
+{
+  int error = 0;
+  T_CLIENT_IO *cli_io_p = NULL;
+  T_SOCKET_IO *sock_io_p = NULL;
+
+  /* find client io */
+  cli_io_p = proxy_client_io_find_by_ctx (ctx_p->client_id, ctx_p->cid,
+					  ctx_p->uid);
+  if (cli_io_p == NULL)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to find client. "
+		 "(client_id:%d, context id:%d, context uid:%u).",
+		 ctx_p->client_id, ctx_p->cid, ctx_p->uid);
+
+      EXIT_FUNC ();
+      return -1;
+    }
+
+  sock_io_p = proxy_socket_io_find (cli_io_p->fd);
+  assert (sock_io_p != NULL);
+
+  sock_io_p->status = SOCK_IO_ESTABLISHED;
   return 0;
 }
 
@@ -1582,7 +1678,6 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
   struct timeval client_start_time;
   T_PROXY_CONTEXT *ctx_p;
   T_IO_BUFFER *read_buffer;
-  T_SHARD_USER *user_p;
   T_PROXY_EVENT *event_p;
   T_CLIENT_INFO *client_info_p;
   unsigned char *ip_addr;
@@ -1720,46 +1815,6 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
       db_sessionid[SRV_CON_DBSESS_ID_SIZE - 1] = '\0';
     }
 
-  user_p = shard_metadata_get_shard_user (shm_user_p);
-  assert (user_p);
-
-  if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL
-      || proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL51)
-    {
-      if (strcmp (db_name, user_p->db_name)
-	  || strcmp (db_user, user_p->db_user)
-	  || strcmp (db_passwd, user_p->db_password))
-	{
-	  snprintf (err_msg, sizeof (err_msg), "Authorization error.");
-	  proxy_context_set_error_with_msg (ctx_p, DBMS_ERROR_INDICATOR,
-					    CAS_ER_NOT_AUTHORIZED_CLIENT,
-					    err_msg);
-
-	  PROXY_LOG (PROXY_LOG_MODE_ERROR, "Authentication failure. "
-		     "(db_name:[%s], db_user:[%s], db_passwd:[%s]).",
-		     db_name, db_user, db_passwd);
-
-	  goto connection_established;
-	}
-    }
-  else
-    {
-      if (strcasecmp (db_name, user_p->db_name)
-	  || strcasecmp (db_user, user_p->db_user)
-	  || strcmp (db_passwd, user_p->db_password))
-	{
-	  snprintf (err_msg, sizeof (err_msg), "Authorization error.");
-	  proxy_context_set_error_with_msg (ctx_p, DBMS_ERROR_INDICATOR,
-					    CAS_ER_NOT_AUTHORIZED_CLIENT,
-					    err_msg);
-
-	  PROXY_LOG (PROXY_LOG_MODE_ERROR, "Authentication failure. "
-		     "(db_name:[%s], db_user:[%s], db_passwd:[%s]).",
-		     db_name, db_user, db_passwd);
-	  goto connection_established;
-	}
-    }
-
   ip_addr = (unsigned char *) (&sock_io_p->ip_addr);
 
   /* check acl */
@@ -1789,6 +1844,51 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
 
 	  goto connection_established;
 	}
+    }
+
+  error = proxy_check_authorization (ctx_p, db_name, db_user, db_passwd);
+  if (error < 0)
+    {
+      goto connection_established;
+    }
+
+  strncpy (ctx_p->database_user, db_user, SRV_CON_DBUSER_SIZE - 1);
+  strncpy (ctx_p->database_passwd, db_passwd, SRV_CON_DBPASSWD_SIZE - 1);
+
+  if (proxy_info_p->fixed_conn_info == false)
+    {
+      event_p = proxy_event_new_with_rsp (driver_info,
+					  PROXY_EVENT_CLIENT_REQUEST,
+					  PROXY_EVENT_FROM_CLIENT,
+					  proxy_io_make_check_cas);
+      if (event_p == NULL)
+	{
+	  proxy_socket_io_read_error (sock_io_p);
+
+	  EXIT_FUNC ();
+	  return -1;
+	}
+
+      proxy_event_set_context (event_p, ctx_p->cid, ctx_p->uid);
+
+      error =
+	shard_queue_enqueue (&proxy_Handler.cli_rcv_q, (void *) event_p);
+      if (error)
+	{
+	  PROXY_LOG (PROXY_LOG_MODE_ERROR, "Failed to queue client event. "
+		     "context(%s). event(%s).",
+		     proxy_str_context (ctx_p), proxy_str_event (event_p));
+
+	  proxy_event_free (event_p);
+	  event_p = NULL;
+
+	  proxy_context_free (ctx_p);
+
+	  EXIT_FUNC ();
+	  return -1;
+	}
+
+      goto clear_event_and_return;
     }
 
 connection_established:
@@ -1832,16 +1932,18 @@ connection_established:
 	  EXIT_FUNC ();
 	  return -1;
 	}
-    }
 
-  sock_io_p->status = SOCK_IO_ESTABLISHED;
+      ctx_p->is_connected = true;
 
-  if (shm_as_p->access_log == ON)
-    {
-      proxy_access_log (&client_start_time,
-			sock_io_p->ip_addr,
-			(db_name) ? (const char *) db_name : "-",
-			(db_user) ? (const char *) db_user : "-", true);
+      sock_io_p->status = SOCK_IO_ESTABLISHED;
+
+      if (shm_as_p->access_log == ON)
+	{
+	  proxy_access_log (&client_start_time,
+			    sock_io_p->ip_addr,
+			    (db_name) ? (const char *) db_name : "-",
+			    (db_user) ? (const char *) db_user : "-", true);
+	}
     }
 
 clear_event_and_return:
@@ -3473,8 +3575,8 @@ proxy_cas_io_new (int shard_id, int cas_id, SOCKET fd)
   if (cas_io_p->fd != INVALID_SOCKET || cas_io_p->is_in_tran)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR, "Already registered CAS. "
-		 "(shard_id:%d, cas_id:%d, max_num_cas:%d).",
-		 shard_id, cas_id, shard_io_p->max_num_cas);
+		 "(fd:%d, shard_id:%d, cas_id:%d, max_num_cas:%d).",
+		 cas_io_p->fd, shard_id, cas_id, shard_io_p->max_num_cas);
       return NULL;
     }
   assert (cas_io_p->fd == INVALID_SOCKET);
@@ -3720,20 +3822,17 @@ proxy_cas_find_io_by_ctx (int shard_id, int cas_id, int ctx_cid,
 }
 
 T_CAS_IO *
-proxy_cas_alloc_by_ctx (int client_id, int shard_id, int cas_id, int ctx_cid,
-			unsigned int ctx_uid, int timeout)
+proxy_cas_alloc_by_ctx (int client_id, int shard_id, int cas_id,
+			int ctx_cid, unsigned int ctx_uid, int timeout,
+			int func_code)
 {
   int error;
   T_SHARD_IO *shard_io_p;
   T_CAS_IO *cas_io_p;
   T_CLIENT_INFO *client_info_p;
-  unsigned int retry_count = 0;
 
-  int i;
-  unsigned int curr_shard_id;
+  unsigned int curr_shard_id = 0;
   static unsigned int last_shard_id = 0;
-  unsigned int last_shard_id_inc = 1;
-  const unsigned int max_retry = (proxy_Shard_io.max_shard / 2);
 
   /* valid shard id */
   if ((shard_id < 0 && cas_id >= 0) || (shard_id >= proxy_Shard_io.max_shard))
@@ -3748,169 +3847,39 @@ proxy_cas_alloc_by_ctx (int client_id, int shard_id, int cas_id, int ctx_cid,
 
   if (shard_id >= 0 && cas_id >= 0)
     {
-      shard_io_p = &(proxy_Shard_io.ent[shard_id]);
-
-      if (0 > cas_id || cas_id >= shard_io_p->max_num_cas)
-	{
-	  PROXY_LOG (PROXY_LOG_MODE_ERROR, "Unable to find available CAS. "
-		     "(shard_id:%d, cas_id:%d, max_num_cas:%d).", shard_id,
-		     cas_id, shard_io_p->max_num_cas);
-	  return NULL;
-	}
-      cas_io_p = &(shard_io_p->ent[cas_id]);
-
-      if ((cas_io_p->ctx_cid != PROXY_INVALID_CONTEXT
-	   && cas_io_p->ctx_cid != ctx_cid)
-	  || (cas_io_p->ctx_uid != 0 && cas_io_p->ctx_uid != ctx_uid))
-	{
-	  PROXY_LOG (PROXY_LOG_MODE_ERROR, "Invalid CAS status. "
-		     "(context id:%d, context uid:%d). CAS(%s). ", ctx_cid,
-		     ctx_uid, proxy_str_cas_io (cas_io_p));
-
-	  assert (false);
-	  return NULL;
-	}
-
-      if (cas_io_p->status != CAS_IO_CONNECTED)
-	{
-	  PROXY_DEBUG_LOG
-	    ("Unexpected CAS status. (context id:%d, context uid:%d). "
-	     "CAS(%s). ", ctx_cid, ctx_uid, proxy_str_cas_io (cas_io_p));
-	  return NULL;
-	}
-
-      if (cas_io_p->ctx_cid == PROXY_INVALID_CONTEXT)
-	{
-	  shard_io_p->num_cas_in_tran++;
-
-	  PROXY_DEBUG_LOG
-	    ("Shard IO status. (num_cas_in_tran=%d, shard_id=%d).",
-	     shard_io_p->num_cas_in_tran, shard_io_p->shard_id);
-
-	  assert (shard_io_p->cur_num_cas >= shard_io_p->num_cas_in_tran);
-	  assert (cas_io_p->is_in_tran == false);
-	  assert (cas_io_p->ctx_uid == 0);
-	}
-
-      client_info_p = shard_shm_get_client_info (proxy_info_p, client_id);
-      if (client_info_p == NULL)
-	{
-	  PROXY_LOG (PROXY_LOG_MODE_ERROR,
-		     "Unable to find cilent info in shared memory. "
-		     "(context id:%d, context uid:%d)", ctx_cid, ctx_uid);
-	}
-      else
-	if (shard_shm_set_as_client_info_with_db_param
-	    (proxy_info_p, shm_as_p, cas_io_p->shard_id, cas_io_p->cas_id,
-	     client_info_p) == false)
-	{
-
-	  PROXY_LOG (PROXY_LOG_MODE_ERROR,
-		     "Unable to find CAS info in shared memory. "
-		     "(shard_id:%d, cas_id:%d).", cas_io_p->shard_id,
-		     cas_io_p->cas_id);
-	}
-
-      cas_io_p->is_in_tran = true;
-      cas_io_p->ctx_cid = ctx_cid;
-      cas_io_p->ctx_uid = ctx_uid;
-
-      return cas_io_p;
+      cas_io_p = proxy_cas_alloc_by_shard_and_cas_id (client_id, shard_id,
+						      cas_id, ctx_cid,
+						      ctx_uid);
     }
-
-  do
+  else
     {
-      if (shard_id >= 0)
+      if (func_code == CAS_FC_CHECK_CAS)
 	{
-	  shard_io_p = &(proxy_Shard_io.ent[shard_id]);
+	  cas_io_p = proxy_cas_alloc_anything (client_id, shard_id,
+					       cas_id, ctx_cid, ctx_uid,
+					       proxy_find_idle_cas_by_desc);
 	}
       else
 	{
-	  /* find any shard */
-	  for (i = 0; i < proxy_Shard_io.max_shard; i++)
+	  cas_io_p = proxy_cas_alloc_anything (client_id, shard_id,
+					       cas_id, ctx_cid, ctx_uid,
+					       proxy_find_idle_cas_by_conn_info);
+	  if (cas_io_p == NULL)
 	    {
-	      curr_shard_id = (last_shard_id + i) % proxy_Shard_io.max_shard;
-	      shard_io_p = &(proxy_Shard_io.ent[curr_shard_id]);
-
-	      assert (shard_io_p->cur_num_cas >= shard_io_p->num_cas_in_tran);
-	      if (shard_io_p->cur_num_cas == shard_io_p->num_cas_in_tran)
-		{
-		  last_shard_id_inc++;
-		  continue;
-		}
-	      break;
-	    }
-
-	  last_shard_id += last_shard_id_inc;
-
-	  /* not found */
-	  if (i >= proxy_Shard_io.max_shard)
-	    {
-	      PROXY_LOG (PROXY_LOG_MODE_SHARD_DETAIL,
-			 "Unable to find avaiable shard. (index:%d, max_shard:%d).",
-			 i, proxy_Shard_io.max_shard);
-	      goto set_waiter;
+	      cas_io_p = proxy_cas_alloc_anything (client_id, shard_id,
+						   cas_id, ctx_cid, ctx_uid,
+						   proxy_find_idle_cas_by_asc);
 	    }
 	}
-
-      assert (cas_id <= shard_io_p->max_num_cas);
-
-      /* select any cas */
-      for (i = 0; i < shard_io_p->max_num_cas; i++)
-	{
-	  cas_io_p = &(shard_io_p->ent[i]);
-
-	  /* find idle */
-	  if (cas_io_p->is_in_tran || cas_io_p->status != CAS_IO_CONNECTED)
-	    {
-	      continue;
-	    }
-
-	  break;
-	}
-
-      /* not found */
-#if 0
-      if (i >= shard_io_p->cur_num_cas)
-#else
-      if (i >= shard_io_p->max_num_cas)
-#endif
-	{
-	  PROXY_LOG (PROXY_LOG_MODE_SHARD_DETAIL,
-		     "Unable to find avaiable shard. (shard_id:%d, index:%d, max_num_cas:%d).",
-		     shard_io_p->shard_id, i, shard_io_p->max_num_cas);
-
-	  cas_io_p = NULL;	/* cannot find idle cas in this shard */
-	  if (shard_id >= 0)	/* shard id is specified */
-	    {
-	      break;
-	    }
-	  else
-	    {
-	      /* try again */
-	      continue;
-	    }
-	}
-
-      break;
     }
-  while ((++retry_count) < max_retry);
 
   if (cas_io_p == NULL)
     {
       goto set_waiter;
     }
 
-  shard_io_p->num_cas_in_tran++;
-
-  PROXY_DEBUG_LOG ("Shard status. (num_cas_in_tran=%d, shard_id=%d).",
-		   shard_io_p->num_cas_in_tran, shard_io_p->shard_id);
-
-  assert (shard_io_p->cur_num_cas >= shard_io_p->num_cas_in_tran);
-  assert (cas_io_p->is_in_tran == false);
-  assert (cas_io_p->ctx_cid == PROXY_INVALID_CONTEXT);
-  assert (cas_io_p->ctx_uid == 0);
-  assert (cas_io_p->fd != INVALID_SOCKET);
+  shard_id = cas_io_p->shard_id;
+  cas_id = cas_io_p->cas_id;
 
   client_info_p = shard_shm_get_client_info (proxy_info_p, client_id);
   if (client_info_p == NULL)
@@ -3924,6 +3893,7 @@ proxy_cas_alloc_by_ctx (int client_id, int shard_id, int cas_id, int ctx_cid,
 	(proxy_info_p, shm_as_p, cas_io_p->shard_id, cas_io_p->cas_id,
 	 client_info_p) == false)
     {
+
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
 		 "Unable to find CAS info in shared memory. "
 		 "(shard_id:%d, cas_id:%d).", cas_io_p->shard_id,
@@ -3933,6 +3903,8 @@ proxy_cas_alloc_by_ctx (int client_id, int shard_id, int cas_id, int ctx_cid,
   cas_io_p->is_in_tran = true;
   cas_io_p->ctx_cid = ctx_cid;
   cas_io_p->ctx_uid = ctx_uid;
+
+  proxy_set_conn_info (func_code, ctx_cid, ctx_uid, shard_id, cas_id);
 
   return cas_io_p;
 
@@ -3944,7 +3916,9 @@ set_waiter:
   else
     {
       curr_shard_id =
-	(unsigned int) (last_shard_id - 1) % proxy_Shard_io.max_shard;
+	(unsigned int) (last_shard_id + 1) % proxy_Shard_io.max_shard;
+
+      last_shard_id = curr_shard_id;
     }
 
   shard_io_p = &(proxy_Shard_io.ent[curr_shard_id]);
@@ -4898,6 +4872,380 @@ proxy_available_cas_wait_timer (void)
     }
 
   return;
+}
+
+static void
+proxy_set_conn_info (int func_code, int ctx_cid, int ctx_uid, int shard_id,
+		     int cas_id)
+{
+  T_PROXY_CONTEXT *ctx_p = NULL;
+  T_APPL_SERVER_INFO *as_info_p = NULL;
+
+  ctx_p = proxy_context_find (ctx_cid, ctx_uid);
+  assert (ctx_p != NULL);
+
+  as_info_p =
+    shard_shm_get_as_info (proxy_info_p, shm_as_p, shard_id, cas_id);
+  assert (as_info_p != NULL);
+
+  if (func_code == CAS_FC_CHECK_CAS)
+    {
+      as_info_p->force_reconnect = true;
+    }
+
+  if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL)
+    {
+      if (strcmp (as_info_p->database_user, ctx_p->database_user) == 0
+	  && strcmp (as_info_p->database_passwd, ctx_p->database_passwd) == 0)
+	{
+	  return;
+	}
+    }
+  else
+    {
+      if (strcasecmp (as_info_p->database_user, ctx_p->database_user) == 0
+	  && strcmp (as_info_p->database_passwd, ctx_p->database_passwd) == 0)
+	{
+	  return;
+	}
+    }
+
+  /* this cas will reconnect to database. */
+  shard_stmt_del_all_srv_h_id_for_shard_cas (shard_id, cas_id);
+
+  strncpy (as_info_p->database_user, ctx_p->database_user,
+	   SRV_CON_DBUSER_SIZE - 1);
+  strncpy (as_info_p->database_passwd, ctx_p->database_passwd,
+	   SRV_CON_DBPASSWD_SIZE - 1);
+}
+
+static T_CAS_IO *
+proxy_cas_alloc_by_shard_and_cas_id (int client_id, int shard_id, int cas_id,
+				     int ctx_cid, unsigned int ctx_uid)
+{
+  int error;
+  T_SHARD_IO *shard_io_p = NULL;
+  T_CAS_IO *cas_io_p = NULL;
+
+  assert (shard_id >= 0 && cas_id >= 0);
+
+  shard_io_p = &(proxy_Shard_io.ent[shard_id]);
+
+  if (0 > cas_id || cas_id >= shard_io_p->max_num_cas)
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR, "Unable to find available CAS. "
+		 "(shard_id:%d, cas_id:%d, max_num_cas:%d).", shard_id,
+		 cas_id, shard_io_p->max_num_cas);
+      return NULL;
+    }
+  cas_io_p = &(shard_io_p->ent[cas_id]);
+
+  if ((cas_io_p->ctx_cid != PROXY_INVALID_CONTEXT
+       && cas_io_p->ctx_cid != ctx_cid)
+      || (cas_io_p->ctx_uid != 0 && cas_io_p->ctx_uid != ctx_uid))
+    {
+      PROXY_LOG (PROXY_LOG_MODE_ERROR, "Invalid CAS status. "
+		 "(context id:%d, context uid:%d). CAS(%s). ", ctx_cid,
+		 ctx_uid, proxy_str_cas_io (cas_io_p));
+
+      assert (false);
+      return NULL;
+    }
+
+  if (cas_io_p->status != CAS_IO_CONNECTED)
+    {
+      PROXY_DEBUG_LOG
+	("Unexpected CAS status. (context id:%d, context uid:%d). "
+	 "CAS(%s). ", ctx_cid, ctx_uid, proxy_str_cas_io (cas_io_p));
+      return NULL;
+    }
+
+  if (cas_io_p->ctx_cid == PROXY_INVALID_CONTEXT)
+    {
+      shard_io_p->num_cas_in_tran++;
+
+      PROXY_DEBUG_LOG
+	("Shard IO status. (num_cas_in_tran=%d, shard_id=%d).",
+	 shard_io_p->num_cas_in_tran, shard_io_p->shard_id);
+
+      assert (shard_io_p->cur_num_cas >= shard_io_p->num_cas_in_tran);
+      assert (cas_io_p->is_in_tran == false);
+      assert (cas_io_p->ctx_uid == 0);
+    }
+
+  return cas_io_p;
+}
+
+static T_CAS_IO *
+proxy_find_idle_cas_by_asc (int shard_id, int cas_id,
+			    int ctx_cid, unsigned int ctx_uid)
+{
+  int i = 0;
+  T_CAS_IO *cas_io_p = NULL;
+  T_SHARD_IO *shard_io_p = NULL;
+
+  shard_io_p = &(proxy_Shard_io.ent[shard_id]);
+
+  for (i = 0; i < shard_io_p->cur_num_cas; i++)
+    {
+      cas_io_p = &(shard_io_p->ent[i]);
+
+      if (cas_io_p->is_in_tran || cas_io_p->status != CAS_IO_CONNECTED)
+	{
+	  continue;
+	}
+
+      return cas_io_p;
+    }
+
+  return NULL;
+}
+
+static T_CAS_IO *
+proxy_find_idle_cas_by_desc (int shard_id, int cas_id,
+			     int ctx_cid, unsigned int ctx_uid)
+{
+  int i = 0;
+  T_CAS_IO *cas_io_p = NULL;
+  T_SHARD_IO *shard_io_p = NULL;
+
+  shard_io_p = &(proxy_Shard_io.ent[shard_id]);
+
+  for (i = shard_io_p->cur_num_cas - 1; i >= 0; i--)
+    {
+      cas_io_p = &(shard_io_p->ent[i]);
+
+      if (cas_io_p->is_in_tran || cas_io_p->status != CAS_IO_CONNECTED)
+	{
+	  continue;
+	}
+
+      return cas_io_p;
+    }
+
+  return NULL;
+}
+
+static T_CAS_IO *
+proxy_find_idle_cas_by_conn_info (int shard_id, int cas_id,
+				  int ctx_cid, unsigned int ctx_uid)
+{
+  int i = 0;
+  T_CAS_IO *cas_io_p = NULL;
+  T_SHARD_IO *shard_io_p = NULL;
+  T_PROXY_CONTEXT *ctx_p = NULL;
+  T_APPL_SERVER_INFO *as_info_p = NULL;
+
+  shard_io_p = &(proxy_Shard_io.ent[shard_id]);
+
+  ctx_p = proxy_context_find (ctx_cid, ctx_uid);
+  assert (ctx_p != NULL);
+
+  for (i = 0; i < shard_io_p->cur_num_cas; i++)
+    {
+      as_info_p = shard_shm_get_as_info (proxy_info_p, shm_as_p, shard_id, i);
+
+      cas_io_p = &(shard_io_p->ent[i]);
+
+      if (cas_io_p->is_in_tran || cas_io_p->status != CAS_IO_CONNECTED)
+	{
+	  continue;
+	}
+
+      if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL)
+	{
+	  if (strcmp (as_info_p->database_user, ctx_p->database_user)
+	      || strcmp (as_info_p->database_passwd, ctx_p->database_passwd))
+	    {
+	      continue;
+	    }
+	}
+      else
+	{
+	  if (strcasecmp (as_info_p->database_user, ctx_p->database_user)
+	      || strcmp (as_info_p->database_passwd, ctx_p->database_passwd))
+	    {
+	      continue;
+	    }
+	}
+
+      return cas_io_p;
+    }
+
+  return NULL;
+}
+
+static T_CAS_IO *
+proxy_cas_alloc_anything (int client_id, int shard_id, int cas_id,
+			  int ctx_cid, unsigned int ctx_uid,
+			  T_FUNC_FIND_CAS function)
+{
+  int i = 0;
+  int error = 0;
+  T_SHARD_IO *shard_io_p = NULL;
+  T_CAS_IO *cas_io_p = NULL;
+  static int last_shard_id = -1;
+
+  if (shard_id >= 0)
+    {
+      shard_io_p = &(proxy_Shard_io.ent[shard_id]);
+
+      cas_io_p = function (shard_id, cas_id, ctx_cid, ctx_uid);
+    }
+  else
+    {
+      /* select any shard */
+      shard_id = last_shard_id;
+      for (i = 0; i < proxy_Shard_io.max_shard; i++)
+	{
+	  shard_id = (shard_id + 1) % proxy_Shard_io.max_shard;
+	  shard_io_p = &(proxy_Shard_io.ent[shard_id]);
+	  assert (shard_io_p->cur_num_cas >= shard_io_p->num_cas_in_tran);
+
+	  if (shard_io_p->cur_num_cas == shard_io_p->num_cas_in_tran)
+	    {
+	      continue;
+	    }
+
+	  cas_io_p = function (shard_id, cas_id, ctx_cid, ctx_uid);
+	  if (cas_io_p != NULL)
+	    {
+	      break;
+	    }
+	}
+
+      if (i >= proxy_Shard_io.max_shard)
+	{
+	  PROXY_LOG (PROXY_LOG_MODE_SHARD_DETAIL,
+		     "Unable to find avaiable shard. (index:%d, max_shard:%d).",
+		     i, proxy_Shard_io.max_shard);
+
+	  return NULL;
+	}
+
+      last_shard_id = shard_id;
+
+      assert (cas_io_p != NULL);
+    }
+
+  if (cas_io_p != NULL)
+    {
+      shard_io_p->num_cas_in_tran++;
+
+      PROXY_DEBUG_LOG ("Shard status. (num_cas_in_tran=%d, shard_id=%d).",
+		       shard_io_p->num_cas_in_tran, shard_io_p->shard_id);
+
+      assert (shard_io_p->cur_num_cas >= shard_io_p->num_cas_in_tran);
+      assert (cas_io_p->is_in_tran == false);
+      assert (cas_io_p->ctx_cid == PROXY_INVALID_CONTEXT);
+      assert (cas_io_p->ctx_uid == 0);
+      assert (cas_io_p->fd != INVALID_SOCKET);
+    }
+
+  return cas_io_p;
+}
+
+static int
+proxy_check_authorization (T_PROXY_CONTEXT * ctx_p, const char *db_name,
+			   const char *db_user, const char *db_passwd)
+{
+  T_SHARD_USER *user_p = NULL;
+  char err_msg[256];
+
+  user_p = shard_metadata_get_shard_user (shm_user_p);
+  assert (user_p);
+
+  if (proxy_info_p->appl_server == APPL_SERVER_CAS_MYSQL)
+    {
+      if (strcmp (db_name, user_p->db_name))
+	{
+	  goto authorization_error;
+	}
+
+      if (proxy_info_p->fixed_conn_info == false)
+	{
+	  return 0;
+	}
+
+      if (strcmp (db_user, user_p->db_user)
+	  || strcmp (db_passwd, user_p->db_password))
+	{
+	  goto authorization_error;
+	}
+    }
+  else
+    {
+      if (strcasecmp (db_name, user_p->db_name))
+	{
+	  goto authorization_error;
+	}
+
+      if (proxy_info_p->fixed_conn_info == false)
+	{
+	  return 0;
+	}
+
+      if (strcasecmp (db_user, user_p->db_user)
+	  || strcmp (db_passwd, user_p->db_password))
+	{
+	  goto authorization_error;
+	}
+    }
+
+  return 0;
+
+authorization_error:
+  snprintf (err_msg, sizeof (err_msg), "Authorization error.");
+  proxy_context_set_error_with_msg (ctx_p, DBMS_ERROR_INDICATOR,
+				    CAS_ER_NOT_AUTHORIZED_CLIENT, err_msg);
+
+  PROXY_LOG (PROXY_LOG_MODE_ERROR, "Authentication failure. "
+	     "(db_name:[%s], db_user:[%s], db_passwd:[%s]).",
+	     db_name, db_user, db_passwd);
+
+  return -1;
+}
+
+int
+proxy_convert_error_code (int error_ind, int error_code, char *driver_info,
+			  T_BROKER_VERSION client_version, bool to_new)
+{
+  if (error_code >= 0)
+    {
+      assert (error_code == 0);
+      return error_code;
+    }
+
+  if (client_version < CAS_MAKE_VER (8, 3, 0))
+    {
+      if (to_new == PROXY_CONV_ERR_TO_NEW)
+	{
+	  error_code = CAS_CONV_ERROR_TO_NEW (error_code);
+	}
+      else
+	{
+	  error_code = CAS_CONV_ERROR_TO_OLD (error_code);
+	}
+    }
+  else if (!DOES_CLIENT_MATCH_THE_PROTOCOL (client_version, PROTOCOL_V2)
+	   && !cas_di_understand_renewed_error_code (driver_info)
+	   && error_code != NO_ERROR)
+    {
+      if (error_ind == CAS_ERROR_INDICATOR
+	  || error_code == CAS_ER_NOT_AUTHORIZED_CLIENT)
+	{
+	  if (to_new == PROXY_CONV_ERR_TO_NEW)
+	    {
+	      error_code = CAS_CONV_ERROR_TO_NEW (error_code);
+	    }
+	  else
+	    {
+	      error_code = CAS_CONV_ERROR_TO_OLD (error_code);
+	    }
+	}
+    }
+
+  return error_code;
 }
 
 #if defined(LINUX)

@@ -680,6 +680,31 @@ tp_init (void)
     }
 }
 
+/*
+ * tp_apply_sys_charset - applies system charset to string domains
+ *    return: none
+ */
+void
+tp_apply_sys_charset (void)
+{
+  if (tp_Domain_area == NULL)
+    {
+      return;
+    }
+
+  /* update string domains with current codeset */
+  tp_String_domain.codeset = LANG_SYS_CODESET;
+  tp_Char_domain.codeset = LANG_SYS_CODESET;
+  tp_NChar_domain.codeset = LANG_SYS_CODESET;
+  tp_VarNChar_domain.codeset = LANG_SYS_CODESET;
+  tp_Enumeration_domain.codeset = LANG_SYS_CODESET;
+
+  tp_String_domain.collation_id = LANG_SYS_COLLATION;
+  tp_Char_domain.collation_id = LANG_SYS_COLLATION;
+  tp_NChar_domain.collation_id = LANG_SYS_COLLATION;
+  tp_VarNChar_domain.collation_id = LANG_SYS_COLLATION;
+  tp_Enumeration_domain.collation_id = LANG_SYS_COLLATION;
+}
 
 /*
  * tp_final - Global shutdown for this module.
@@ -8209,9 +8234,13 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest,
 	    default:
 	      {
 		DB_VALUE tmpval;
+		DB_VALUE cs;
 
 		DB_MAKE_NULL (&tmpval);
-		err = db_clob_to_char (src, NULL, &tmpval);
+		/* convert directly from CLOB into charset of desired domain
+		 * string */
+		DB_MAKE_INTEGER (&cs, desired_domain->codeset);
+		err = db_clob_to_char (src, &cs, &tmpval);
 		if (err == NO_ERROR)
 		  {
 		    err =

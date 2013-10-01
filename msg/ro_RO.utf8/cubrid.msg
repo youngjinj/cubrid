@@ -1091,16 +1091,16 @@ $ LOADDB
 1022 Valoare invalidă "%d" pentru lungimea indexului prefixat.
 1023 Cod de eroare rezervat pentru HA.
 1024 Cod de eroare rezervat pentru HA.
-1025 Cod de eroare rezervat pentru HA.
-1026 Cod de eroare rezervat pentru HA.
+1025 HA delay info: The replication delay (%1$d secs) has exceeded the limit (%2$d secs).
+1026 HA delay info: The replication delay (%1$d secs) is decreased below the acceptable level (%2$d secs).
 1027 log applier: eşec la schimbarea stării de aplicare din '%1$s' în '%2$s'.
 1028 log applier: înregistrare EOF neaşteptată în log. LSA: %1$lld|%2$d.
 1029 log applier: pagină/offset invalid în logul de replicare. HDR de pagină: %1$1lld|%2$d, final: %3$lld|%4$d, APPEND LSA: %5$lld|%6$d, EOF LSA: %7$lld|%8$d, stare HA a fişierului: %9$d, este end-of-log: %10$d.
 1030 log applier: înregistrare de replicare invalidă. LSA: %1$lld|%2$d, forw LSA: %3$lld|%4$d, backw LSA: %5$lld|%6$d, Trid: %7$d, prev tran LSA: %8$lld|%9$d, type: %10$d.
-1031 log applier: eşec la aplicarea logului de replicare de schemă. Clasă: "%1$s", schemă: "%2$s", eroare internă: %3$d. 
-1032 log applier: eşec la aplicarea logului de replicare de INSERT. Clasă: "%1$s", cheie: "%2$s", eroare internă: %3$d.  
-1033 log applier: eşec la aplicarea logului de replicare de UPDATE. Clasă: "%1$s", cheie: "%2$s", eroare internă: %3$d.  
-1034 log applier: eşec la aplicarea logului de replicare de DELETE. Clasă: "%1$s", cheie: "%2$s", eroare internă: %3$d.  
+1031 log applier: failed to apply schema replication log. class: "%1$s", schema: "%2$s", server error: %3$d, %4$s. 
+1032 log applier: failed to apply insert replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1033 log applier: failed to apply update replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1034 log applier: failed to apply delete replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
 1035 log applier: Dimensiunea memoriei(%1$d MB) aplicatorului de log este mai mare decât dimensiunea maximă admisă (%2$d MB) sau a fost extinsă de mai mult de 2 ori (%3$d MB). LSA necesar: %4$lld|%5$d. Ultimul LSA salvat prin COMMIT: %6$lld|%7$d.
 1036 log applier: oprit la primirea unui semnal.
 1037 log writer: oprit la primirea unui semnal.
@@ -1199,6 +1199,17 @@ $ LOADDB
 1130 Tranzacţia a fost abandonată deoarece numărul de lock-uri asociate tranzacţiei depăşeşte %1$d.
 1131 Eroare internă: Pagina %1$d din volumul "%2$s" ar putea fi coruptă.\n%3$s
 1132 Encryption library failure: %s
+1133 Copylogdb for %1$s already exists.
+1134 Applylogdb for %1$s already exists.
+1135 A previous link of B+tree(%1$s) is corrupted.: vpid = (%2$d, %3$d)
+1136 A previous link of B+tree(%1$s) is repaired.: vpid = (%2$d, %3$d)
+1137 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
+1138 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
+1139 Handshake error (peer host %1$s): HA replication delayed.
+1140 Handshake error (peer host %1$s): replica-only client to non-replica server.
+1141 Handshake error (peer host %1$s): unidentified server version.
+1142 Handshake error (peer host %1$s): remote access to server not allowed.
+1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 Ultima eroare
 

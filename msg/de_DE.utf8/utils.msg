@@ -199,12 +199,13 @@ Vorhandene Befehle:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          Brokername\n\
     off         Brokername\n\
     reset       Brokername\n\
     acl         <status|reload> [Brokername]\n\
-    getid       -b <broker-name> [-f] shard-key\n
+    getid       -b Brokername [-f] shard-key\n\
+    test        Brokername [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 Cubrid Utility, Version %s\n\
 Anwendung: %s manager <Befehl>\n\
 \n\
@@ -631,7 +632,9 @@ gültige Optionen:\n\
   -C, --CS-mode                Client-Server-Ausführung\n\
   -r, --repair                 Inkonsistenzen reparieren, wenn gefunden\n\
   -i, --input-class-file=DATEI  Eingangsdatei mit Klassennamen \n\
-                               Standard: alle Klassen prüfen\n
+                               Standard: alle Klassen prüfen\n\
+      --check-prev-link        check only previous links of indices\n\
+      --repair-prev-link       repair previous links of indices\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

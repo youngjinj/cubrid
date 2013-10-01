@@ -199,12 +199,13 @@ cubrid 관리자 유틸리티, 버전 %s\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          <브로커 이름>\n\
     off         <브로커 이름>\n\
     reset       <브로커 이름>\n\
     acl         <status|reload> [브로커 이름]\n\
-    getid       -b <broker-name> [-f] shard-key\n
+    getid       -b <브로커 이름> [-f] shard-key\n\
+    test        <브로커 이름> [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 cubrid 유틸리티, 버전 %s\n\
 사용법: %s manager <명령어>\n\
 \n\
@@ -632,7 +633,9 @@ checkdb: 데이터베이스 일관성 검사.\n\
   -C, --CS-mode                클라이언트 서버 모드 실행\n\
   -r, --repair                 비 일관성 발견 시 복구\n\
   -i, --input-class-file=FILE  클래스 이름이 나열된 입력 파일 명시\n\
-                               기본값: 모든 클래스를 검사\n
+                               기본값: 모든 클래스를 검사\n\
+      --check-prev-link        인덱스 링크의 오류를 검사\n\
+      --repair-prev-link       인덱스 링크가 잘못된 경우 복구 수행\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

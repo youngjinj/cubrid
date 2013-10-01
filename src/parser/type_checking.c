@@ -4454,7 +4454,7 @@ pt_coerce_expression_argument (PARSER_CONTEXT * parser, PT_NODE * expr,
 	    }
 	  new_node =
 	    pt_wrap_collection_with_cast_op (parser, node, def_type,
-					     data_type);
+					     data_type, false);
 	}
       else
 	{
@@ -5226,7 +5226,7 @@ pt_coerce_range_expr_arguments (PARSER_CONTEXT * parser, PT_NODE * expr,
 
       arg2 =
 	pt_wrap_collection_with_cast_op (parser, arg2, sig.arg2_type.val.type,
-					 data_type);
+					 data_type, false);
       if (!arg2)
 	{
 	  return NULL;
@@ -6894,6 +6894,12 @@ pt_to_false_subquery (PARSER_CONTEXT * parser, PT_NODE * node)
 	  /* set line number to dummy class, dummy attr */
 	  spec->info.spec.range_var = pt_name (parser, "av6749");
 	  spec->info.spec.as_attr_list = pt_name (parser, "av_1");
+
+	  if (spec->info.spec.as_attr_list)
+	    {
+	      PT_NAME_INFO_SET_FLAG (spec->info.spec.as_attr_list,
+				     PT_NAME_GENERATED_DERIVED_SPEC);
+	    }
 	  subq->from = spec;
 	}
       else
@@ -8159,7 +8165,8 @@ pt_wrap_select_list_with_cast_op (PARSER_CONTEXT * parser, PT_NODE * query,
 
 PT_NODE *
 pt_wrap_collection_with_cast_op (PARSER_CONTEXT * parser, PT_NODE * arg,
-				 PT_TYPE_ENUM set_type, PT_NODE * set_data)
+				 PT_TYPE_ENUM set_type, PT_NODE * set_data,
+				 bool for_collation)
 {
   PT_NODE *new_att, *set_dt, *next_att;
 
@@ -8182,20 +8189,28 @@ pt_wrap_collection_with_cast_op (PARSER_CONTEXT * parser, PT_NODE * arg,
 	      {
 		next_att = arg_list->next;
 
-		if (set_data->type_enum != arg_list->type_enum && (!is_numeric
-								   ||
-								   !PT_IS_NUMERIC_TYPE
-								   (arg_list->
-								    type_enum)))
+		if ((set_data->type_enum != arg_list->type_enum
+		     && (!is_numeric
+			 || !PT_IS_NUMERIC_TYPE (arg_list->type_enum)))
+		    || (for_collation == true
+			&& PT_HAS_COLLATION (set_data->type_enum)
+			&& PT_HAS_COLLATION (arg_list->type_enum)
+			&& arg_list->data_type != NULL
+			&& set_data->info.data_type.collation_id
+			!= arg_list->data_type->info.data_type.collation_id))
 		  {
 		    /* Set the expected domain of host variable to type
 		       set_data so that at runtime the host variable should
 		       be casted to it if needed */
 		    if (arg_list->type_enum == PT_TYPE_MAYBE)
 		      {
-			arg_list->expected_domain =
-			  pt_data_type_to_db_domain (parser, set_data, NULL);
-			pt_preset_hostvar (parser, arg_list);
+			if (for_collation == false)
+			  {
+			    arg_list->expected_domain =
+			      pt_data_type_to_db_domain (parser, set_data,
+							 NULL);
+			    pt_preset_hostvar (parser, arg_list);
+			  }
 		      }
 		    else
 		      {
@@ -13275,10 +13290,6 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
 	PT_NODE *new_node;
 	PT_TYPE_ENUM sep_type;
 
-	coll_infer1.coll_id = LANG_SYS_COLLATION;
-	coll_infer1.codeset = LANG_SYS_CODESET;
-	coll_infer1.coerc_level = PT_COLLATION_NOT_COERC;
-
 	(void) pt_get_collation_info (arg_list, &coll_infer1);
 
 	sep_type = (arg_list->next) ? arg_list->next->type_enum :
@@ -13329,8 +13340,10 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
 	coll_infer4.codeset = LANG_SYS_CODESET;
 	coll_infer1.coll_id = LANG_SYS_COLLATION;
 	coll_infer4.coll_id = LANG_SYS_COLLATION;
-	coll_infer1.coerc_level = PT_COLLATION_NOT_COERC;
-	coll_infer4.coerc_level = PT_COLLATION_NOT_COERC;
+	coll_infer1.coerc_level = PT_COLLATION_NOT_APPLICABLE;
+	coll_infer4.coerc_level = PT_COLLATION_NOT_APPLICABLE;
+	coll_infer1.can_force_cs = true;
+	coll_infer4.can_force_cs = true;
 
 	if (pt_node_list_to_array (parser, arg_list, arg_array,
 				   NUM_F_INSERT_SUBSTRING_ARGS,
@@ -13446,6 +13459,8 @@ pt_eval_function_type (PARSER_CONTEXT * parser, PT_NODE * node)
 	func_coll_infer.coll_id = LANG_SYS_COLLATION;
 	arg_coll_infer.coerc_level = PT_COLLATION_NOT_COERC;
 	func_coll_infer.coerc_level = PT_COLLATION_NOT_COERC;
+	arg_coll_infer.can_force_cs = false;
+	func_coll_infer.can_force_cs = false;
 
 	arg_type = (arg_list != NULL) ? arg_list->type_enum : PT_TYPE_NONE;
 	func_res_type = node->type_enum;
@@ -21098,7 +21113,7 @@ pt_get_collation_info (PT_NODE * node, PT_COLL_INFER * coll_infer)
 	  coll_infer->coerc_level = coll_infer_dummy.coerc_level;
 	  coll_infer->can_force_cs = coll_infer_dummy.can_force_cs;
 
-	  if (PT_IS_NUMERIC_TYPE (node->info.expr.arg1->type_enum))
+	  if (!PT_HAS_COLLATION (node->info.expr.arg1->type_enum))
 	    {
 	      coll_infer->can_force_cs = true;
 	    }
@@ -21126,6 +21141,23 @@ pt_get_collation_info (PT_NODE * node, PT_COLL_INFER * coll_infer)
       break;
 
     case PT_NAME:
+      if (PT_NAME_INFO_IS_FLAGED (node, PT_NAME_GENERATED_DERIVED_SPEC))
+	{
+	  if (coll_infer->coll_id == LANG_COLL_ISO_BINARY)
+	    {
+	      coll_infer->coerc_level = PT_COLLATION_L2_ISO_BIN_COERC;
+	    }
+	  else if (LANG_IS_COERCIBLE_COLL (coll_infer->coll_id))
+	    {
+	      coll_infer->coerc_level = PT_COLLATION_L2_BIN_COERC;
+	    }
+	  else
+	    {
+	      coll_infer->coerc_level = PT_COLLATION_L2_COERC;
+	    }
+	  break;
+	}
+      /* Fall through */
     case PT_DOT_:
       if (coll_infer->coll_id == LANG_COLL_ISO_BINARY)
 	{
@@ -21432,7 +21464,8 @@ pt_coerce_node_collation (PARSER_CONTEXT * parser, PT_NODE * node,
 	  if (apply_wrap_cast)
 	    {
 	      node = pt_wrap_collection_with_cast_op (parser, node,
-						      node->type_enum, dt);
+						      node->type_enum, dt,
+						      true);
 	      /* flag PT_EXPR_INFO_CAST_COLL_MODIFIER is not set here;
 	       * COLLATE modifier is not supported for this context */
 	    }
@@ -21733,11 +21766,10 @@ pt_common_collation (PT_COLL_INFER * arg1_coll_infer,
 		     const int args_w_coll, bool op_has_3_args,
 		     int *common_coll, INTL_CODESET * common_cs)
 {
-#define MORE_COERCIBLE(arg1_coll_infer, arg2_coll_infer)		  \
-  (((arg1_coll_infer)->coerc_level > (arg2_coll_infer)->coerc_level)	  \
-   || ((arg1_coll_infer)->coerc_level == (arg2_coll_infer)->coerc_level   \
-	&& (arg1_coll_infer)->can_force_cs				  \
-	&& !((arg2_coll_infer)->can_force_cs)))
+#define MORE_COERCIBLE(arg1_coll_infer, arg2_coll_infer)		     \
+  ((((arg1_coll_infer)->can_force_cs) && !((arg2_coll_infer)->can_force_cs)) \
+   || ((arg1_coll_infer)->coerc_level > (arg2_coll_infer)->coerc_level	     \
+       && (arg1_coll_infer)->can_force_cs == (arg2_coll_infer)->can_force_cs))
 
   assert (common_coll != NULL);
   assert (common_cs != NULL);
@@ -21787,10 +21819,16 @@ pt_common_collation (PT_COLL_INFER * arg1_coll_infer,
 
 	  if (set_arg3)
 	    {
-	      /* coerce arg2 collation */
+	      /* coerce to collation of arg3 */
 	      if (!INTL_CAN_COERCE_CS (arg2_coll_infer->codeset,
 				       arg3_coll_infer->codeset)
 		  && !arg2_coll_infer->can_force_cs)
+		{
+		  goto error;
+		}
+	      if (!INTL_CAN_COERCE_CS (arg1_coll_infer->codeset,
+				       arg3_coll_infer->codeset)
+		  && !arg1_coll_infer->can_force_cs)
 		{
 		  goto error;
 		}
@@ -21815,10 +21853,8 @@ pt_common_collation (PT_COLL_INFER * arg1_coll_infer,
     }
   else
     {
-      assert ((arg1_coll_infer->coerc_level < arg2_coll_infer->coerc_level)
-	      || (arg1_coll_infer->coerc_level == arg2_coll_infer->coerc_level
-		  && (arg1_coll_infer->coll_id == arg2_coll_infer->coll_id
-		      || !arg1_coll_infer->can_force_cs)));
+      assert (MORE_COERCIBLE (arg2_coll_infer, arg1_coll_infer)
+	      || arg2_coll_infer->coll_id == arg1_coll_infer->coll_id);
 
       /* coerce arg2 collation */
       if (!INTL_CAN_COERCE_CS (arg2_coll_infer->codeset,
@@ -21850,10 +21886,17 @@ pt_common_collation (PT_COLL_INFER * arg1_coll_infer,
 
 	  if (set_arg3)
 	    {
-	      /* coerce arg1 collation */
+	      /* coerce to collation of arg3 */
 	      if (!INTL_CAN_COERCE_CS (arg1_coll_infer->codeset,
 				       arg3_coll_infer->codeset)
 		  && !arg1_coll_infer->can_force_cs)
+		{
+		  goto error;
+		}
+
+	      if (!INTL_CAN_COERCE_CS (arg2_coll_infer->codeset,
+				       arg3_coll_infer->codeset)
+		  && !arg2_coll_infer->can_force_cs)
 		{
 		  goto error;
 		}
@@ -21921,7 +21964,9 @@ pt_check_expr_collation (PARSER_CONTEXT * parser, PT_NODE ** node)
   arg1_coll_inf.codeset = arg2_coll_inf.codeset = arg3_coll_inf.codeset
     = LANG_COERCIBLE_CODESET;
   arg1_coll_inf.coerc_level = arg2_coll_inf.coerc_level =
-    arg3_coll_inf.coerc_level = PT_COLLATION_NOT_COERC;
+    arg3_coll_inf.coerc_level = PT_COLLATION_NOT_APPLICABLE;
+  arg1_coll_inf.can_force_cs = arg2_coll_inf.can_force_cs =
+    arg3_coll_inf.can_force_cs = true;
 
   /* NULL has no collation */
   if (expr->type_enum == PT_TYPE_NULL)
@@ -22143,6 +22188,31 @@ pt_check_expr_collation (PARSER_CONTEXT * parser, PT_NODE ** node)
       goto coerce_arg;
     }
 
+  if (args_w_coll == 0)
+    {
+      /* we don't have any argument from which we can get an exact collation
+       * (strings, enums or collections with strings);
+       * try to get common codeset and collation from TYPE_MAYBE arguments:
+       * all TYPE_MAYBE arguments of this expression have the same codeset and
+       * collation (those of the client), so it doesn't matter which one we
+       * use */
+      if (arg1_type == PT_TYPE_MAYBE)
+	{
+	  common_coll = arg1_coll_inf.coll_id;
+	  common_cs = arg1_coll_inf.codeset;
+	}
+      else if (arg2_type == PT_TYPE_MAYBE)
+	{
+	  common_coll = arg2_coll_inf.coll_id;
+	  common_cs = arg2_coll_inf.codeset;
+	}
+      else if (arg3_type == PT_TYPE_MAYBE)
+	{
+	  common_coll = arg3_coll_inf.coll_id;
+	  common_cs = arg3_coll_inf.codeset;
+	}
+    }
+
   if (args_w_coll <= 1)
     {
       goto coerce_result;
@@ -22160,7 +22230,7 @@ pt_check_expr_collation (PARSER_CONTEXT * parser, PT_NODE ** node)
 	    {
 	      arg1_coll_inf.coll_id = common_coll;
 	      arg1_coll_inf.codeset = common_cs;
-	      arg1_coll_inf.coerc_level = PT_COLLATION_FULLY_COERC;
+	      arg1_coll_inf.coerc_level = PT_COLLATION_NOT_APPLICABLE;
 	    }
 
 	  if (!(PT_HAS_COLLATION (arg2_type) || arg2_type == PT_TYPE_MAYBE
@@ -22168,7 +22238,7 @@ pt_check_expr_collation (PARSER_CONTEXT * parser, PT_NODE ** node)
 	    {
 	      arg2_coll_inf.coll_id = common_coll;
 	      arg2_coll_inf.codeset = common_cs;
-	      arg2_coll_inf.coerc_level = PT_COLLATION_FULLY_COERC;
+	      arg2_coll_inf.coerc_level = PT_COLLATION_NOT_APPLICABLE;
 	    }
 
 	  if (!(PT_HAS_COLLATION (arg3_type) || arg3_type == PT_TYPE_MAYBE
@@ -22176,7 +22246,7 @@ pt_check_expr_collation (PARSER_CONTEXT * parser, PT_NODE ** node)
 	    {
 	      arg3_coll_inf.coll_id = common_coll;
 	      arg3_coll_inf.codeset = common_cs;
-	      arg3_coll_inf.coerc_level = PT_COLLATION_FULLY_COERC;
+	      arg3_coll_inf.coerc_level = PT_COLLATION_NOT_APPLICABLE;
 	    }
 	}
 
@@ -22274,8 +22344,8 @@ coerce_arg:
 coerce_result:
   if (op == PT_CHR || op == PT_CLOB_TO_CHAR)
     {
-      /* for these operators, we don't we the arguments' collaitons to infere
-       * common collation, but special values for arg2 */
+      /* for these operators, we don't want the arguments' collations to
+       * infere common collation, but special values of arg2 */
       common_cs = expr->data_type->info.data_type.units;
       common_coll = expr->data_type->info.data_type.collation_id;
     }
@@ -22436,7 +22506,7 @@ pt_check_recursive_expr_collation (PARSER_CONTEXT * parser, PT_NODE ** node)
   PT_OP_TYPE op;
   int recurs_coll = -1;
   INTL_CODESET recurs_cs = INTL_CODESET_NONE;
-  PT_COLL_COERC_LEV recurs_coerc_level = PT_COLLATION_FULLY_COERC;
+  PT_COLL_COERC_LEV recurs_coerc_level = PT_COLLATION_NOT_APPLICABLE;
   bool need_arg_coerc = false;
 
   assert (expr != NULL);

@@ -609,6 +609,7 @@ typedef struct YYLTYPE
 %type <number> of_leading_trailing_both
 %type <number> datetime_field
 %type <number> opt_paren_plus
+%type <number> opt_with_fullscan
 %type <number> comp_op
 %type <number> opt_of_all_some_any
 %type <number> set_op
@@ -1201,7 +1202,6 @@ typedef struct YYLTYPE
 %token NOT
 %token Null
 %token NULLIF
-%token NULLS
 %token NUMERIC
 %token OBJECT
 %token OCTET_LENGTH
@@ -1243,7 +1243,6 @@ typedef struct YYLTYPE
 %token RENAME
 %token REPLACE
 %token RESIGNAL
-%token RESPECT
 %token RESTRICT
 %token RETURN
 %token RETURNS
@@ -1414,6 +1413,7 @@ typedef struct YYLTYPE
 %token <cptr> ELT
 %token <cptr> EXPLAIN
 %token <cptr> FIRST_VALUE
+%token <cptr> FULLSCAN
 %token <cptr> GE_INF_
 %token <cptr> GE_LE_
 %token <cptr> GE_LT_
@@ -3910,7 +3910,7 @@ index_column_name_list
 	;
 
 update_statistics_stmt
-	: UPDATE STATISTICS ON_ only_class_name_list
+	: UPDATE STATISTICS ON_ only_class_name_list opt_with_fullscan
 		{{
 
 			PT_NODE *ups = parser_new_node (this_parser, PT_UPDATE_STATS);
@@ -3918,12 +3918,13 @@ update_statistics_stmt
 			  {
 			    ups->info.update_stats.class_list = $4;
 			    ups->info.update_stats.all_classes = 0;
+			    ups->info.update_stats.with_fullscan = $5;
 			  }
 			$$ = ups;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| UPDATE STATISTICS ON_ ALL CLASSES
+	| UPDATE STATISTICS ON_ ALL CLASSES opt_with_fullscan
 		{{
 
 			PT_NODE *ups = parser_new_node (this_parser, PT_UPDATE_STATS);
@@ -3931,12 +3932,13 @@ update_statistics_stmt
 			  {
 			    ups->info.update_stats.class_list = NULL;
 			    ups->info.update_stats.all_classes = 1;
+			    ups->info.update_stats.with_fullscan = $6;
 			  }
 			$$ = ups;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| UPDATE STATISTICS ON_ CATALOG CLASSES
+	| UPDATE STATISTICS ON_ CATALOG CLASSES opt_with_fullscan
 		{{
 
 			PT_NODE *ups = parser_new_node (this_parser, PT_UPDATE_STATS);
@@ -3944,6 +3946,7 @@ update_statistics_stmt
 			  {
 			    ups->info.update_stats.class_list = NULL;
 			    ups->info.update_stats.all_classes = -1;
+			    ups->info.update_stats.with_fullscan = $6;
 			  }
 			$$ = ups;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -3967,6 +3970,21 @@ only_class_name_list
 
 		DBG_PRINT}}
 	;
+
+opt_with_fullscan
+        : /* empty */
+                {{
+
+                        $$ = 0;
+
+                DBG_PRINT}}
+        | WITH FULLSCAN
+                {{
+
+                        $$ = 1;
+
+                DBG_PRINT}}
+        ;
 
 opt_of_to_eq
 	: /* empty */
@@ -17948,7 +17966,6 @@ primitive_type
 
 			int elem_cs = -1;
 			int list_cs = -1;
-			bool has_cs_introducer = false;
 			int has_error = 0;
 
 			PT_NODE *charset_node = $5;
@@ -17975,7 +17992,6 @@ primitive_type
 				if (list_cs == -1)
 				  {
 				    list_cs = elem_cs;
-				    has_cs_introducer = true;
 				  }
 				else if (list_cs != elem_cs)
 				  {
@@ -17998,18 +18014,9 @@ primitive_type
 
 			    if (charset_node == NULL && coll_node == NULL)
 			      {
-				if (has_cs_introducer)
-				  {
-				    charset = list_cs;
-				    coll_id = LANG_GET_BINARY_COLLATION (list_cs);
-				    dt->info.data_type.has_cs_spec = true;
-				  }
-				else
-				  {
-				    charset = lang_get_client_charset ();
-				    coll_id = lang_get_client_collation ();
-				    dt->info.data_type.has_cs_spec = false;
-				  }
+				charset = LANG_SYS_CODESET;
+				coll_id = LANG_GET_BINARY_COLLATION (list_cs);
+				dt->info.data_type.has_cs_spec = false;
 				dt->info.data_type.has_coll_spec = false;
 			      }
 			    else if (pt_check_grammar_charset_collation (
@@ -18017,16 +18024,6 @@ primitive_type
 					coll_node, &charset,
 					&coll_id) == NO_ERROR)
 			      {
-				if (has_cs_introducer && list_cs != charset)
-				  {
-				    charset = -1;
-				    coll_id = -1;
-				    has_error = 1;
-				    PT_ERRORm (this_parser, charset_node,
-					       MSGCAT_SET_PARSER_SEMANTIC,
-					       MSGCAT_SEMANTIC_INCOMPATIBLE_CS_COLL);
-				  }
-				  
 				if (charset_node)
 				  {
 				    dt->info.data_type.has_cs_spec = true;
@@ -18053,16 +18050,6 @@ primitive_type
 
 			    if (!has_error)
 			      {
-				elem = elem_list;
-				while (elem != NULL)
-				  {
-				    if (elem->data_type != NULL)
-				      {
-					elem->data_type->info.data_type.units = charset;
-					elem->data_type->info.data_type.collation_id = coll_id;
-				      }
-				    elem = elem->next;
-				  }
 				dt->info.data_type.units = charset;
 				dt->info.data_type.collation_id = coll_id;
 			      }
@@ -19017,6 +19004,16 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}		
+        | FULLSCAN
+                {{
+
+                        PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+                        if (p)
+                          p->info.name.original = $1;
+                        $$ = p;
+                        PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+                DBG_PRINT}}
 	| GE_INF_
 		{{
 
@@ -19975,7 +19972,12 @@ escape_literal
 	: string_literal_or_input_hv
 		{{
 
-			$$ = $1;
+			PT_NODE *node = $1;
+			if (node->node_type == PT_VALUE)
+			  {
+			    node->info.value.print_collation = false;
+			  }
+			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}	
@@ -22657,6 +22659,10 @@ parser_keyword_func (const char *name, PT_NODE * args)
 	  return NULL;
 	}
       a1 = args;
+      if (key->op == PT_COERCIBILITY && a1)
+	{
+	  a1->do_not_fold = 1;
+	}
       return parser_make_expression (this_parser, key->op, a1, NULL, NULL);
 
     case PT_UNIX_TIMESTAMP:

@@ -73,17 +73,12 @@
 /* common collation to be used at runtime */
 #define LANG_RT_COMMON_COLL(c1, c2, coll)     \
   do {					      \
-    if ((c1) == (c2))			      \
-      {					      \
-	coll = (c1);			      \
-      }					      \
-    else if (LANG_IS_COERCIBLE_COLL (c1))     \
+    if (LANG_IS_COERCIBLE_COLL (c1))          \
       {					      \
 	coll = (c2);			      \
       }					      \
     else				      \
       {					      \
-	assert (LANG_IS_COERCIBLE_COLL (c2)); \
 	coll = (c1);			      \
       }					      \
   } while (0)
@@ -295,9 +290,10 @@ extern "C"
   extern INTL_LANG lang_get_lang_id_from_flag (const int flag,
 					       bool * has_user_format,
 					       bool * has_user_lang);
-  extern const char *lang_date_format (const INTL_LANG lang_id,
-				       const INTL_CODESET codeset,
-				       const DB_TYPE type);
+  extern const char *lang_date_format_parse (const INTL_LANG lang_id,
+					     const INTL_CODESET codeset,
+					     const DB_TYPE type,
+					     INTL_CODESET * format_codeset);
   extern char lang_digit_grouping_symbol (const INTL_LANG lang_id);
   extern char lang_digit_fractional_symbol (const INTL_LANG lang_id);
   extern bool lang_is_coll_name_allowed (const char *name);

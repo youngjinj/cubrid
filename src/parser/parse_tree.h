@@ -757,7 +757,8 @@ enum pt_custom_print
 				 * instead pt_print_tree
 				 */
   PT_SUPPRESS_BIGINT_CAST = 0x4000000,
-  PT_SUPPRESS_COLLATE_PRINT = 0x8000000
+  PT_SUPPRESS_COLLATE_PRINT = 0x8000000,
+  PT_CHARSET_COLLATE_FULL = 0x10000000
 };
 
 /* all statement node types should be assigned their API statement enumeration */
@@ -1159,7 +1160,7 @@ typedef enum
   PT_HINT_SELECT_KEY_INFO = 0x4000000,	/* 0100 0000 0000 0000 0000 0000 0000 */
   /* SELECT key information from index b-tree instead of table record data */
   PT_HINT_SELECT_BTREE_NODE_INFO = 0x8000000	/* 1000 0000 0000 0000 0000 0000 */
-  /* SELECT b-tree node information */
+    /* SELECT b-tree node information */
 } PT_HINT_ENUM;
 
 
@@ -2497,6 +2498,10 @@ struct pt_name_info
 					   and execution */
 #define PT_NAME_ALLOW_REUSABLE_OID 512	/* ignore the REUSABLE_OID
 					   restrictions for this name */
+#define PT_NAME_GENERATED_DERIVED_SPEC 1024	/* attribute generated from
+						 * derived spec
+						 */
+
 
   short flag;
 #define PT_NAME_INFO_IS_FLAGED(e, f)    ((e)->info.name.flag & (short) (f))
@@ -2788,6 +2793,7 @@ struct pt_update_stats_info
 {
   PT_NODE *class_list;		/* PT_NAME */
   int all_classes;		/* 1 iff ALL CLASSES */
+  int with_fullscan;		/* 1 iff WITH FULLSCAN */
 };
 
 /* GET STATISTICS INFO */
@@ -3506,6 +3512,10 @@ enum pt_coll_coerc_lev
   PT_COLLATION_L4_BIN_COERC,	/* with binary collation */
   /* HV, session variables */
   PT_COLLATION_L5_COERC,
+  /* nodes not having collation (internal use) */
+  PT_COLLATION_L6_COERC,
+
+  PT_COLLATION_NOT_APPLICABLE = PT_COLLATION_L6_COERC,
   PT_COLLATION_NOT_COERC = PT_COLLATION_L0_COERC,
   PT_COLLATION_FULLY_COERC = PT_COLLATION_L5_COERC
 };

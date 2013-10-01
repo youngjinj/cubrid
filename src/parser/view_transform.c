@@ -8476,13 +8476,13 @@ mq_make_derived_spec (PARSER_CONTEXT * parser, PT_NODE * node,
   spec->info.spec.as_attr_list = as_attr_list = NULL;	/* init */
   for (col = pt_get_select_list (parser, subquery); col; col = col->next)
     {
-
       tmp = pt_name (parser, mq_generate_name (parser, "av", idx));
       tmp->info.name.meta_class = PT_NORMAL;
       tmp->info.name.resolved = spec->info.spec.range_var->info.name.original;
       tmp->info.name.spec_id = spec->info.spec.id;
       tmp->type_enum = col->type_enum;
       tmp->data_type = parser_copy_tree (parser, col->data_type);
+      PT_NAME_INFO_SET_FLAG (tmp, PT_NAME_GENERATED_DERIVED_SPEC);
       /* keep out hidden columns from derived select list */
       if (subquery->info.query.order_by && col->is_hidden_column)
 	{

@@ -199,12 +199,13 @@ commandដែលមាន:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          ឈ្មោះbroker\n\
     off         ឈ្មោះbroker\n\
     reset       ឈ្មោះbroker\n\
     acl         <status|reload> [ឈ្មោះbroker]\n\
-    getid       -b <broker-name> [-f] shard-key\n
+    getid       -b <ឈ្មោះbroker> [-f] shard-key\n\
+    test        ឈ្មោះbroker [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 cubrid utility, version %s\n\
 usage: %s manager <command>\n\
 \n\
@@ -631,7 +632,9 @@ usage: %s checkdb [OPTION] ឈ្មោះដែលតាបេស [class_name1 
   -C, --CS-mode                ការប្រតិបត្តិclient-server mode \n\
   -r, --repair                 ជួសជុលនៅពេលភាពជាប់លាប់ត្រូវបានរកឃើញ។ \n\
   -i, --input-class-file=FILE  ដាកបញ្ជូល FILE នៃឈ្មោះ class \n\
-                               default: ពិនិត្យមើលclassesទាំងអស់\n
+                               default: ពិនិត្យមើលclassesទាំងអស់\n\
+      --check-prev-link        check only previous links of indices\n\
+      --repair-prev-link       repair previous links of indices\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

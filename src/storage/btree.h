@@ -351,7 +351,8 @@ extern int btree_get_unique_statistics (THREAD_ENTRY * thread_p, BTID * btid,
 					int *oid_cnt, int *null_cnt,
 					int *key_cnt);
 
-extern int btree_get_stats (THREAD_ENTRY * thread_p, BTREE_STATS * stat_info);
+extern int btree_get_stats (THREAD_ENTRY * thread_p, BTREE_STATS * stat_info,
+			    bool with_fullscan);
 extern DISK_ISVALID btree_check_tree (THREAD_ENTRY * thread_p,
 				      const OID * class_oid_p, BTID * btid,
 				      const char *btname);
@@ -521,6 +522,9 @@ extern int btree_set_error (THREAD_ENTRY * thread_p, DB_VALUE * key,
 extern BTREE_LOCKED_KEYS btree_get_locked_keys (BTID * delete_btid,
 						BTID * search_btid,
 						bool duplicate_key_locked);
+extern DISK_ISVALID btree_repair_prev_link (THREAD_ENTRY * thread_p,
+					    OID * oid, bool repair);
+
 extern SCAN_CODE btree_get_next_key_info (THREAD_ENTRY * thread_p,
 					  BTID * btid, BTREE_SCAN * bts,
 					  int num_classes,

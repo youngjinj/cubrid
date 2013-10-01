@@ -1091,16 +1091,16 @@ $ LOADDB
 1022 Valeur non valide "%d" pour la longueur du préfixe de l'index.
 1023 Code d'erreur réservé pour HA.
 1024 Code d'erreur réservé pour HA.
-1025 Code d'erreur réservé pour HA.
-1026 Code d'erreur réservé pour HA.
+1025 HA delay info: The replication delay (%1$d secs) has exceeded the limit (%2$d secs).
+1026 HA delay info: The replication delay (%1$d secs) is decreased below the acceptable level (%2$d secs).
 1027 Applicateur du journal: pas réussi à changer l'état d'application '%1$s' à '%2$s'.
 1028 Applicateur du journal: enregistrement EOF inattendu dans le journal de transactions. LSA: %1$lld|%2$d.
 1029 Applicateur du journal: invalide la page du journal de réplication. page HDR: %1$1lld|%2$d, finale: %3$lld|%4$d, LSA annexé: %5$lld|%6$d, LSA EOF: %7$lld|%8$d, l'état des fichiers ha: %9$d, est en fin de journal (end-of-log): %10$d.
 1030 Applicateur du journal: enregistrement invalide de réplication. LSA: %1$lld|%2$d, forw LSA: %3$lld|%4$d, backw LSA: %5$lld|%6$d, Trid: %7$d, prev tran LSA: %8$lld|%9$d, type: %10$d.
-1031 Applicateur du journal: échoué d'appliquer le journal de réplication de schéma. Classe: "%1$s", schéma: "%2$s", erreur interne: %3$d.
-1032 Applicateur du journal: échoué d'appliquer le journal de réplication d'INSERT. Classe: "%1$s", clé: "%2$s", erreur interne: %3$d.  
-1033 Applicateur du journal: échoué d'appliquer le journal de réplication d'UPDATE. Classe: "%1$s", clé: "%2$s", erreur interne: %3$d.  
-1034 Applicateur du journal: échoué d'appliquer le journal de réplication de DELETE. Classe: "%1$s", clé: "%2$s", erreur interne: %3$d.  
+1031 log applier: failed to apply schema replication log. class: "%1$s", schema: "%2$s", server error: %3$d, %4$s.
+1032 log applier: failed to apply insert replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1033 log applier: failed to apply update replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1034 log applier: failed to apply delete replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
 1035 Applicateur du journal: taille de la mémoire(%1$d Mo) d'applicateur de journal est supérieure à la taille maximale de la mémoire (%2$d Mo) ou a été augmenter de plus de 2 fois (%3$d Mo). LSA nécessaire: %4$lld|%5$d. Dernière LSA enregistré: %6$lld|%7$d.
 1036 Applicateur du journal: applicateur du journal s'est arrêté par un signal.
 1037 Écrivain du journal: écrivain du journal s'est arrêté par un signal.
@@ -1199,6 +1199,17 @@ $ LOADDB
 1130 Transaction est abandonnée parce que nombre de verrous de la transaction dépasse %1$d.
 1131 Erreur interne: La page %1$d du volume "%2$s" peut être corrompue.\n%3$s
 1132 Encryption library failure: %s
+1133 Copylogdb for %1$s already exists.
+1134 Applylogdb for %1$s already exists.
+1135 A previous link of B+tree(%1$s) is corrupted.: vpid = (%2$d, %3$d)
+1136 A previous link of B+tree(%1$s) is repaired.: vpid = (%2$d, %3$d)
+1137 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
+1138 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
+1139 Handshake error (peer host %1$s): HA replication delayed.
+1140 Handshake error (peer host %1$s): replica-only client to non-replica server.
+1141 Handshake error (peer host %1$s): unidentified server version.
+1142 Handshake error (peer host %1$s): remote access to server not allowed.
+1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 Dernière erreur
 

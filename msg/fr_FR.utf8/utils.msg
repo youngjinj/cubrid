@@ -199,12 +199,13 @@ Commandes disponibles:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
     acl         <status|reload> [broker-name]\n\
-    getid       -b <broker-name> [-f] shard-key\n
+    getid       -b <broker-name> [-f] shard-key\n\
+    test        broker-name [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 utilitaire CUBRID, version %s\n\
 usage: %s manager <command>\n\
 \n\
@@ -634,7 +635,9 @@ options valids:\n\
   -C, --CS-mode                exécution en mode client-serveur\n\
   -r, --repair                 répare quand incohérence est trouvée\n\
   -i, --input-class-file=FICHIER  FICHIER d'entrée des noms de classe\n\
-                               par défaut: vérifier toutes les classes
+                               par défaut: vérifier toutes les classes\
+      --check-prev-link        check only previous links of indices\n\
+      --repair-prev-link       repair previous links of indices\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

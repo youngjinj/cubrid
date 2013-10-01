@@ -503,6 +503,7 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
 
   T_PROXY_INFO *proxy_info_p = NULL;
   T_SHARD_INFO *shard_info_p = NULL;
+  T_SHARD_CONN_INFO *shard_conn_info_p = NULL;
   short proxy_id, shard_id, shard_cas_id;
 
   shm_as_p =
@@ -557,6 +558,9 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
   shm_as_p->jdbc_cache_life_time = br_info_p->jdbc_cache_life_time;
 
   shm_as_p->connect_order = br_info_p->connect_order;
+  shm_as_p->replica_only_flag = br_info_p->replica_only_flag;
+
+  shm_as_p->cas_rctime = br_info_p->cas_rctime;
 
   strcpy (shm_as_p->preferred_hosts, br_info_p->preferred_hosts);
   strcpy (shm_as_p->error_log_file, br_info_p->error_log_file);
@@ -586,6 +590,8 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
 
   shm_as_p->proxy_log_max_size = br_info_p->proxy_log_max_size;
 
+  shard_shm_set_shard_conn_info (shm_as_p, shm_proxy_p);
+
   for (proxy_id = 0; proxy_id < shm_proxy_p->num_proxy; proxy_id++)
     {
       proxy_info_p = &shm_proxy_p->proxy_info[proxy_id];
@@ -593,6 +599,10 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
       for (shard_id = 0; shard_id < proxy_info_p->num_shard_conn; shard_id++)
 	{
 	  shard_info_p = &proxy_info_p->shard_info[shard_id];
+	  shard_conn_info_p = &shm_as_p->shard_conn_info[shard_id];
+
+	  proxy_info_p->fixed_conn_info =
+	    (shard_conn_info_p->db_user[0] != '\0') ? true : false;
 
 	  for (shard_cas_id = 0; shard_cas_id < shard_info_p->max_appl_server;
 	       shard_cas_id++)
@@ -604,6 +614,14 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
 	      as_info_p->proxy_id = proxy_id;
 	      as_info_p->shard_id = shard_id;
 	      as_info_p->shard_cas_id = shard_cas_id;
+	      as_info_p->fixed_conn_info = proxy_info_p->fixed_conn_info;
+	      if (proxy_info_p->fixed_conn_info == true)
+		{
+		  strcpy (as_info_p->database_user,
+			  shard_conn_info_p->db_user);
+		  strcpy (as_info_p->database_passwd,
+			  shard_conn_info_p->db_password);
+		}
 
 	      if (shard_cas_id < shard_info_p->min_appl_server)
 		{
@@ -613,11 +631,13 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
 		{
 		  as_info_p->advance_activate_flag = 0;
 		}
+
+	      as_info_p->proxy_conn_wait_timeout =
+		br_info_p->proxy_conn_wait_timeout;
+	      as_info_p->force_reconnect = false;
 	    }
 	}
     }
-
-  shard_shm_set_shard_conn_info (shm_as_p, shm_proxy_p);
 
   return shm_as_p;
 }
@@ -648,8 +668,12 @@ broker_shm_set_as_info (T_SHM_APPL_SERVER * shm_appl,
   as_info_p->auto_commit_mode = FALSE;
   as_info_p->database_name[0] = '\0';
   as_info_p->database_host[0] = '\0';
+  as_info_p->database_user[0] = '\0';
+  as_info_p->database_passwd[0] = '\0';
   as_info_p->last_connect_time = 0;
   as_info_p->num_holdable_results = 0;
+  as_info_p->cur_sql_log_mode = br_info_p->sql_log_mode;
+  as_info_p->cur_slow_log_mode = br_info_p->slow_log_mode;
 
   as_info_p->as_id = as_index;
   return;

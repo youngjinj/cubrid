@@ -1091,16 +1091,16 @@ $ LOADDB
 1022 តម្លៃមិនសុពល "%d" សម្រាប់ប្រវែង prefix នៃ index។
 1023 កូដerrorដែលបម្រុងសម្រាប់ HA។
 1024 កូដerrorដែលបម្រុងសម្រាប់ HA។
-1025 កូដerrorដែលបម្រុងសម្រាប់ HA។
-1026 កូដerrorដែលបម្រុងសម្រាប់ HA។
+1025 HA delay info: The replication delay (%1$d secs) has exceeded the limit (%2$d secs).
+1026 HA delay info: The replication delay (%1$d secs) is decreased below the acceptable level (%2$d secs).
 1027 log applier: បរាជ័យក្នុងការផ្លាស់ប្តូរ apply state ពី '%1$s' ទៅ '%2$s'។
 1028 log applier: ការថតចម្លងEOFដែលមិនរំពឹងទុក ​ក្នុងarchive log. LSA: %1$lld|%2$d។
 1029 log applier: replication log page/offsetដែលមិនសុពល។ page HDR: %1$1lld|%2$d, final: %3$lld|%4$d, append LSA: %5$lld|%6$d, EOF LSA: %7$lld|%8$d, ha file status: %9$d, is end-of-log: %10$d.
 1030 log applier: កាថតចម្លងreplicationមិនសុពល។ LSA: %1$lld|%2$d, forw LSA: %3$lld|%4$d, backw LSA: %5$lld|%6$d, Trid: %7$d, prev tran LSA: %8$lld|%9$d, type: %10$d.
-1031 log applier: បរាជ័យក្នុងការប្រតិបត្តិ schema replication log. class: "%1$s", schema: "%2$s", internal error: %3$d. 
-1032 log applier: បរាជ័យក្នុងការប្រតិបត្តិបញ្ជូល replication log. class: "%1$s", key: "%2$s", internal error: %3$d.  
-1033 log applier: បរាជ័យក្នុងការប្រតិបត្តិទំនើបកម្ម replication log. class: "%1$s", key: "%2$s", internal error: %3$d.  
-1034 log applier: បរាជ័យក្នុងការប្រតិបត្តិដកចេញ replication log. class: "%1$s", key: "%2$s", internal error: %3$d.  
+1031 log applier: failed to apply schema replication log. class: "%1$s", schema: "%2$s", server error: %3$d, %4$s. 
+1032 log applier: failed to apply insert replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1033 log applier: failed to apply update replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1034 log applier: failed to apply delete replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
 1035 log applier: ទំហំmem (%1$d MB) នៃ log applier ធំជាងទំហំ max mem (%2$d MB) ឬច្រើនជាងពីរដង (%3$d MB). required LSA: %4$lld|%5$d. last committed LSA: %6$lld|%7$d.
 1036 log applier: log applier បិទខ្លួនឯងដោយសញ្ញាណ។
 1037 log writer: log writer បិទខ្លួនឯងដោយសញ្ញាណ។
@@ -1199,6 +1199,17 @@ $ LOADDB
 1130 កិច្ចការត្រូវបោះបង់ដោយសារតែកិច្ចការនេះហួសកំណត់ ត្រូវចាក់សោរ %1$d.
 1131 កំហុសផ្ទៃក្នុងៈ ទំព័រនេះ: %1$d នៃ វ៉ូលូម "%2$s" ប្រហែលឯកសារខូច.\n%3$s
 1132 Encryption library failure: %s
+1133 Copylogdb for %1$s already exists.
+1134 Applylogdb for %1$s already exists.
+1135 A previous link of B+tree(%1$s) is corrupted.: vpid = (%2$d, %3$d)
+1136 A previous link of B+tree(%1$s) is repaired.: vpid = (%2$d, %3$d)
+1137 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
+1138 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
+1139 Handshake error (peer host %1$s): HA replication delayed.
+1140 Handshake error (peer host %1$s): replica-only client to non-replica server.
+1141 Handshake error (peer host %1$s): unidentified server version.
+1142 Handshake error (peer host %1$s): remote access to server not allowed.
+1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 Last Error
 

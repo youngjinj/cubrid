@@ -255,7 +255,7 @@ cas_oracle_connect_db (char *tns, char *db_user, char *db_pass,
 		  (text *) tns, strlen (tns));
   GOTO_ORA_ERROR (ret, oracle_connect_error);
 
-  set_db_connect_status (DB_CONNECTION_STATUS_CONNECTED);
+  cas_set_db_connect_status (DB_CONNECTION_STATUS_CONNECTED);
   return ret;
 
 oracle_connect_error:
@@ -327,12 +327,13 @@ ux_database_connect (char *db_alias, char *db_user, char *db_passwd,
 		     char **db_err_msg)
 {
   char tns[ORA_BUFSIZ];
-  const char *err_msg;
   int err_code = 0;
+
+  as_info->force_reconnect = false;
 
   if (ux_is_database_connected ())
     {
-      if (get_db_connect_status () != DB_CONNECTION_STATUS_CONNECTED
+      if (cas_get_db_connect_status () != DB_CONNECTION_STATUS_CONNECTED
 	  || strcmp (ORA_NAME, db_alias) != 0
 	  || strcmp (ORA_USER, db_user) != 0)
 	{
@@ -347,7 +348,7 @@ ux_database_connect (char *db_alias, char *db_user, char *db_passwd,
   err_code = cfg_get_dbinfo (db_alias, tns);
   if (err_code < 0)
     {
-      return ERROR_INFO_SET (CAS_ER_ARGS, CAS_ERROR_INDICATOR);
+      return err_code;
     }
 
   err_code = cas_oracle_connect_db (tns, db_user, db_passwd, db_err_msg);
@@ -383,7 +384,13 @@ ux_database_shutdown (void)
   ORA_USER[0] = 0;
   ORA_PASS[0] = 0;
 
-  set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
+  as_info->database_name[0] = '\0';
+  as_info->database_host[0] = '\0';
+  as_info->database_user[0] = '\0';
+  as_info->database_passwd[0] = '\0';
+  as_info->last_connect_time = 0;
+
+  cas_set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
 }
 
 int
@@ -423,7 +430,7 @@ ux_end_tran (int tran_type, bool reset_con_status)
       ret = cas_oracle_get_errno ();
     }
 
-  if (get_db_connect_status () == DB_CONNECTION_STATUS_RESET)
+  if (cas_get_db_connect_status () == DB_CONNECTION_STATUS_RESET)
     {
       as_info->reset_flag = TRUE;
     }
@@ -2622,18 +2629,18 @@ ux_auto_commit (T_NET_BUF * net_buf, T_REQ_INFO * req_info)
 }
 
 int
-get_db_connect_status (void)
+cas_get_db_connect_status (void)
 {
   if (!is_server_alive ())
     {
-      set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
+      cas_set_db_connect_status (DB_CONNECTION_STATUS_NOT_CONNECTED);
     }
 
   return oracle_connect_status;
 }
 
 void
-set_db_connect_status (int status)
+cas_set_db_connect_status (int status)
 {
   oracle_connect_status = status;
 }

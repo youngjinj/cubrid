@@ -199,12 +199,13 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          <ブローカー名>\n\
     off         <ブローカー名>\n\
     reset       <ブローカー名>\n\
     acl         <status|reload> [ブローカー名]\n\
-    getid       -b <ブローカー名> [-f] シャードキー\n
+    getid       -b <ブローカー名> [-f] シャードキー\n\
+    test        <ブローカー名> [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 cubridユーティリティー、バージョン %s\n\
 使い方: %s manager <コマンド>\n\
 \n\
@@ -631,7 +632,9 @@ checkdb: データベース一貫性をチェック\n\
   -C, --CS-mode                クライアントーサーバモードで実行\n\
   -r, --repair                 非一貫性を発見すると復旧する\n\
   -i, --input-class-file=FILE  クラスリストが入ってあるファイル名\n\
-                               デフォルト: すべてのクラスをチェック\n
+                               デフォルト: すべてのクラスをチェック\n\
+      --check-prev-link        check only previous links of indices\n\
+      --repair-prev-link       repair previous links of indices\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

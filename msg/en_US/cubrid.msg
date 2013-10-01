@@ -1091,16 +1091,16 @@ $ LOADDB
 1022 Invalid value "%d" for prefix length of the index.
 1023 Reserved error code for HA.
 1024 Reserved error code for HA.
-1025 Reserved error code for HA.
-1026 Reserved error code for HA.
+1025 HA delay info: The replication delay (%1$d secs) has exceeded the limit (%2$d secs).
+1026 HA delay info: The replication delay (%1$d secs) is decreased below the acceptable level (%2$d secs).
 1027 log applier: failed to change apply state from '%1$s' to '%2$s'.
 1028 log applier: unexpected EOF record in archive log. LSA: %1$lld|%2$d.
 1029 log applier: invalid replication log page/offset. page HDR: %1$1lld|%2$d, final: %3$lld|%4$d, append LSA: %5$lld|%6$d, EOF LSA: %7$lld|%8$d, ha file status: %9$d, is end-of-log: %10$d.
 1030 log applier: invalid replication record. LSA: %1$lld|%2$d, forw LSA: %3$lld|%4$d, backw LSA: %5$lld|%6$d, Trid: %7$d, prev tran LSA: %8$lld|%9$d, type: %10$d.
-1031 log applier: failed to apply schema replication log. class: "%1$s", schema: "%2$s", internal error: %3$d. 
-1032 log applier: failed to apply insert replication log. class: "%1$s", key: "%2$s", internal error: %3$d.  
-1033 log applier: failed to apply update replication log. class: "%1$s", key: "%2$s", internal error: %3$d.  
-1034 log applier: failed to apply delete replication log. class: "%1$s", key: "%2$s", internal error: %3$d.  
+1031 log applier: failed to apply schema replication log. class: "%1$s", schema: "%2$s", server error: %3$d, %4$s. 
+1032 log applier: failed to apply insert replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1033 log applier: failed to apply update replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1034 log applier: failed to apply delete replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
 1035 log applier: mem size(%1$d MB) of log applier is greater than max mem size (%2$d MB) or has been grow more than 2 times (%3$d MB). required LSA: %4$lld|%5$d. last committed LSA: %6$lld|%7$d.
 1036 log applier: log applier shut itself down by signal.
 1037 log writer: log writer shut itself down by signal.
@@ -1199,6 +1199,17 @@ $ LOADDB
 1130 Transaction is aborted because transaction lock counts exceeds %1$d.
 1131 Internal error: The page %1$d of volume "%2$s" may be corrupted.\n%3$s
 1132 Encryption library failure: %s
+1133 Copylogdb for %1$s already exists.
+1134 Applylogdb for %1$s already exists.
+1135 A previous link of B+tree(%1$s) is corrupted.: vpid = (%2$d, %3$d)
+1136 A previous link of B+tree(%1$s) is repaired.: vpid = (%2$d, %3$d)
+1137 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
+1138 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
+1139 Handshake error (peer host %1$s): HA replication delayed.
+1140 Handshake error (peer host %1$s): replica-only client to non-replica server.
+1141 Handshake error (peer host %1$s): unidentified server version.
+1142 Handshake error (peer host %1$s): remote access to server not allowed.
+1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 Last Error
 

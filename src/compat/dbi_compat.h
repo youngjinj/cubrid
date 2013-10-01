@@ -1276,9 +1276,10 @@
 
 #define ER_SM_INVALID_PREFIX_LENGTH                 -1022
 
-/* Please note that error codes from -1023 to -1026 are reserved for HA */
+/* Please note that error codes from -1023 to -1024 are reserved for HA */
 
-#define ER_HA_LA_FAILED_TO_CHANGE_STATE             -1027
+#define ER_HA_REPL_DELAY_DETECTED                   -1025
+#define ER_HA_REPL_DELAY_RESOLVED                   -1026
 #define ER_HA_LA_UNEXPECTED_EOF_IN_ARCHIVE_LOG      -1028
 #define ER_HA_LA_INVALID_REPL_LOG_PAGEID_OFFSET     -1029
 #define ER_HA_LA_INVALID_REPL_LOG_RECORD            -1030
@@ -1439,11 +1440,24 @@
 
 #define ER_ENCRYPTION_LIB_FAILED                    -1132
 
+#define ERR_CSS_COPYLOG_ALREADY_EXISTS              -1133
+#define ERR_CSS_APPLYLOG_ALREADY_EXISTS             -1134
+
+#define ER_BTREE_CORRUPT_PREV_LINK                  -1135
+#define ER_BTREE_REPAIR_PREV_LINK                   -1136
+
+#define ER_NET_HS_INCOMPAT_INTERRUPTIBILITY         -1137
+#define ER_NET_HS_INCOMPAT_RW_MODE                  -1138
+#define ER_NET_HS_HA_REPL_DELAY                     -1139
+#define ER_NET_HS_HA_REPLICA_ONLY                   -1140
+#define ER_NET_HS_REMOTE_DISABLED                   -1141
+#define ER_NET_HS_UNKNOWN_SERVER_REL                -1142
+
+#define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1143
+
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 
 #define ER_LAST_ERROR                               -2001
-
-
 
 #define DB_TRUE 1
 #define DB_FALSE 0

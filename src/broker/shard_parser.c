@@ -330,8 +330,10 @@ sp_make_int_sp_value_from_string (SP_VALUE * value_p, char *pos, int length)
   char tmp = pos[length];
   char *end;
   pos[length] = '\0';
-  value_p->integer = strtol (pos, &end, 10);
-  if (*end != '\0')
+
+  errno = 0;
+  value_p->integer = strtoll (pos, &end, 10);
+  if (errno == ERANGE || *end != '\0')
     {
       return ER_SP_INVALID_HINT;
     }
@@ -477,6 +479,12 @@ sp_parse_sql_internal (SP_PARSER_CTX * parser_p)
 	{
 	  sp_copy_cursor_to_prv (parser_p);
 	}
+    }
+
+  if (parser_p->cursor.token == TT_CSQL_COMMENT
+      || parser_p->cursor.token == TT_CPP_COMMENT)
+    {
+      parser_p->cursor.token = TT_NONE;
     }
 
   return NO_ERROR;

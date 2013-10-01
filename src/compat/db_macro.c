@@ -1653,12 +1653,9 @@ db_make_db_char (DB_VALUE * value, const INTL_CODESET codeset,
 	  value->domain.general_info.is_null = 1;
 	}
 
-      if (prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
+      if (size == 0 && prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
 	{
-	  if (size == 0)
-	    {
-	      value->domain.general_info.is_null = 1;
-	    }
+	  value->domain.general_info.is_null = 1;
 	}
 
       value->need_clear = false;
@@ -6590,4 +6587,16 @@ valcnv_convert_value_to_string (DB_VALUE * value_p)
     }
 
   return NO_ERROR;
+}
+
+int
+db_get_connect_status (void)
+{
+  return db_Connect_status;
+}
+
+void
+db_set_connect_status (int status)
+{
+  db_Connect_status = status;
 }

@@ -1403,9 +1403,9 @@ qo_add_node (PT_NODE * entity, QO_ENV * env)
 	  else
 	    {
 	      QO_NODE_NCARD (node) +=
-		QO_GET_CLASS_STATS (&info->info[i])->num_objects;
+		QO_GET_CLASS_STATS (&info->info[i])->heap_num_objects;
 	      QO_NODE_TCARD (node) +=
-		QO_GET_CLASS_STATS (&info->info[i])->heap_size;
+		QO_GET_CLASS_STATS (&info->info[i])->heap_num_pages;
 	    }
 	}			/* for (i = ... ) */
     }
@@ -5100,7 +5100,7 @@ grok_classes (QO_ENV * env, PT_NODE * p, QO_CLASS_INFO_ENTRY * info)
 	  info->stats->attr_stats = NULL;
 	  qo_estimate_statistics (info->mop, info->stats);
 	}
-      else if (smclass->stats->heap_size == 0)
+      else if (smclass->stats->heap_num_pages == 0)
 	{
 	  if (!info->normal_class
 	      || (((hfid = sm_get_heap (info->mop)) && !HFID_IS_NULL (hfid))))
@@ -5165,13 +5165,11 @@ qo_get_attr_info_func_index (QO_ENV * env, QO_SEGMENT * seg,
   cum_statsp = &attr_infop->cum_stats;
   cum_statsp->type = pt_type_enum_to_db (QO_SEG_PT_NODE (seg)->type_enum);
   cum_statsp->valid_limits = false;
-  OR_PUT_INT (&cum_statsp->min_value, 0);
-  OR_PUT_INT (&cum_statsp->max_value, 0);
   cum_statsp->is_indexed = true;
   cum_statsp->leafs = cum_statsp->pages = cum_statsp->height = 0;
   cum_statsp->keys = 0;
   cum_statsp->key_type = NULL;
-  cum_statsp->key_size = 0;
+  cum_statsp->pkeys_size = 0;
   cum_statsp->pkeys = NULL;
 
   /* set the statistics from the class information(QO_CLASS_INFO_ENTRY) */
@@ -5212,61 +5210,38 @@ qo_get_attr_info_func_index (QO_ENV * env, QO_SEGMENT * seg,
 		{
 		  /* first time */
 		  cum_statsp->valid_limits = true;
-
-		  if (DB_NUMERIC_TYPE (cum_statsp->type))
-		    {
-		      /* assign values, bitwise-copy of DB_DATA structure */
-		      cum_statsp->min_value = bstatsp->min_value.data;
-		      cum_statsp->max_value = bstatsp->max_value.data;
-		    }
-		}
-	      else
-		{
-		  if (DB_NUMERIC_TYPE (cum_statsp->type))
-		    {
-		      if (qo_data_compare (&bstatsp->min_value.data,
-					   &cum_statsp->min_value,
-					   cum_statsp->type) < 0)
-			{
-			  cum_statsp->min_value = bstatsp->min_value.data;
-			}
-		      if (qo_data_compare (&bstatsp->max_value.data,
-					   &cum_statsp->max_value,
-					   cum_statsp->type) > 0)
-			{
-			  cum_statsp->max_value = bstatsp->max_value.data;
-			}
-		    }
 		}
 
 	      cum_statsp->leafs += bstatsp->leafs;
 	      cum_statsp->pages += bstatsp->pages;
 	      cum_statsp->height = MAX (cum_statsp->height, bstatsp->height);
 
-	      if (cum_statsp->key_size == 0 ||	/* the first found */
+	      if (cum_statsp->pkeys_size == 0 ||	/* the first found */
 		  cum_statsp->keys < bstatsp->keys)
 		{
 		  cum_statsp->keys = bstatsp->keys;
 		  cum_statsp->key_type = bstatsp->key_type;
-		  cum_statsp->key_size = bstatsp->key_size;
+		  cum_statsp->pkeys_size = bstatsp->pkeys_size;
 		  /* alloc pkeys[] within the current optimizer environment */
 		  if (cum_statsp->pkeys)
 		    {
 		      free_and_init (cum_statsp->pkeys);
 		    }
 		  cum_statsp->pkeys = (int *)
-		    malloc (SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->
-							 key_size));
+		    malloc (SIZEOF_ATTR_CUM_STATS_PKEYS
+			    (cum_statsp->pkeys_size));
 		  if (cum_statsp->pkeys == NULL)
 		    {
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_OUT_OF_VIRTUAL_MEMORY, 1,
 			      SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->
-							   key_size));
+							   pkeys_size));
 		      qo_free_attr_info (env, attr_infop);
 		      return NULL;
 		    }
-		  for (i = 0; i < cum_statsp->key_size; i++)
+
+		  assert (cum_statsp->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+		  for (i = 0; i < cum_statsp->pkeys_size; i++)
 		    {
 		      cum_statsp->pkeys[i] = bstatsp->pkeys[i];
 		    }
@@ -5343,13 +5318,11 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
 	pt_Reserved_name_table[(QO_SEG_PT_NODE (seg))->info.name.reserved_id].
 	type;
       cum_statsp->valid_limits = false;
-      OR_PUT_INT (&cum_statsp->min_value, 0);
-      OR_PUT_INT (&cum_statsp->max_value, 0);
       cum_statsp->is_indexed = true;
       cum_statsp->leafs = cum_statsp->pages = cum_statsp->height = 0;
       cum_statsp->keys = 0;
       cum_statsp->key_type = NULL;
-      cum_statsp->key_size = 0;
+      cum_statsp->pkeys_size = 0;
       cum_statsp->pkeys = NULL;
 
       return attr_infop;
@@ -5358,13 +5331,11 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
   /* not a reserved name */
   cum_statsp->type = sm_att_type_id (class_info_entryp->mop, name);
   cum_statsp->valid_limits = false;
-  OR_PUT_INT (&cum_statsp->min_value, 0);
-  OR_PUT_INT (&cum_statsp->max_value, 0);
   cum_statsp->is_indexed = true;
   cum_statsp->leafs = cum_statsp->pages = cum_statsp->height = 0;
   cum_statsp->keys = 0;
   cum_statsp->key_type = NULL;
-  cum_statsp->key_size = 0;
+  cum_statsp->pkeys_size = 0;
   cum_statsp->pkeys = NULL;
 
   /* set the statistics from the class information(QO_CLASS_INFO_ENTRY) */
@@ -5417,41 +5388,6 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
 	  /* first time */
 	  cum_statsp->type = attr_statsp->type;
 	  cum_statsp->valid_limits = true;
-	  /* if the atrribute is numeric type so its min/max values are
-	     meaningful, keep the min/max existing values */
-	  if (DB_NUMERIC_TYPE (attr_statsp->type))
-	    {
-	      /* assign values, bitwise-copy of DB_DATA structure */
-	      cum_statsp->min_value = attr_statsp->min_value;
-	      cum_statsp->max_value = attr_statsp->max_value;
-	    }
-	}
-      else
-	{
-	  /* if the atrribute is numeric type so its min/max values are
-	     meaningful, keep the min/max existing values */
-	  if (DB_NUMERIC_TYPE (attr_statsp->type))
-	    {
-	      /* compare with previous values */
-	      if (qo_data_compare (&attr_statsp->min_value,
-				   &cum_statsp->min_value,
-				   cum_statsp->type) < 0)
-		{
-		  cum_statsp->min_value = attr_statsp->min_value;
-		}
-	      if (qo_data_compare (&attr_statsp->max_value,
-				   &cum_statsp->max_value,
-				   cum_statsp->type) > 0)
-		{
-		  cum_statsp->max_value = attr_statsp->max_value;
-		}
-	      /* 'qo_data_compare()' is a simplified function that works
-	         with DB_DATA instead of DB_VALUE. However, this way
-	         would be enough to get minimum/maximum existing value,
-	         because the values are meaningful only when their types
-	         are numeric and we are considering compatible indexes
-	         under class hierarchy. */
-	    }
 	}
 
       n_func_indexes = 0;
@@ -5512,7 +5448,7 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
 	      cum_statsp->height = bt_statsp->height;
 	      cum_statsp->keys = bt_statsp->keys;
 	      cum_statsp->key_type = bt_statsp->key_type;
-	      cum_statsp->key_size = bt_statsp->key_size;
+	      cum_statsp->pkeys_size = bt_statsp->pkeys_size;
 	      /* alloc pkeys[] within the current optimizer environment */
 	      if (cum_statsp->pkeys != NULL)
 		{
@@ -5520,16 +5456,19 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
 		}
 	      cum_statsp->pkeys =
 		(int *)
-		malloc (SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->key_size));
+		malloc (SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->pkeys_size));
 	      if (cum_statsp->pkeys == NULL)
 		{
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			  ER_OUT_OF_VIRTUAL_MEMORY, 1,
-			  SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->key_size));
+			  SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->
+						       pkeys_size));
 		  qo_free_attr_info (env, attr_infop);
 		  return NULL;
 		}
-	      for (j = 0; j < cum_statsp->key_size; j++)
+
+	      assert (cum_statsp->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	      for (j = 0; j < cum_statsp->pkeys_size; j++)
 		{
 		  cum_statsp->pkeys[j] = bt_statsp->pkeys[j];
 		}
@@ -5548,12 +5487,12 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
          This is probably not far from the truth; it is almost certainly
          a better guess than assuming that all key ranges are distinct. */
       cum_statsp->height = MAX (cum_statsp->height, bt_statsp->height);
-      if (cum_statsp->key_size == 0 ||	/* the first found */
+      if (cum_statsp->pkeys_size == 0 ||	/* the first found */
 	  cum_statsp->keys < bt_statsp->keys)
 	{
 	  cum_statsp->keys = bt_statsp->keys;
 	  cum_statsp->key_type = bt_statsp->key_type;
-	  cum_statsp->key_size = bt_statsp->key_size;
+	  cum_statsp->pkeys_size = bt_statsp->pkeys_size;
 	  /* alloc pkeys[] within the current optimizer environment */
 	  if (cum_statsp->pkeys)
 	    {
@@ -5561,16 +5500,18 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
 	    }
 	  cum_statsp->pkeys =
 	    (int *)
-	    malloc (SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->key_size));
+	    malloc (SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->pkeys_size));
 	  if (cum_statsp->pkeys == NULL)
 	    {
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_OUT_OF_VIRTUAL_MEMORY, 1,
-		      SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->key_size));
+		      SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->pkeys_size));
 	      qo_free_attr_info (env, attr_infop);
 	      return NULL;
 	    }
-	  for (j = 0; j < cum_statsp->key_size; j++)
+
+	  assert (cum_statsp->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	  for (j = 0; j < cum_statsp->pkeys_size; j++)
 	    {
 	      cum_statsp->pkeys[j] = bt_statsp->pkeys[j];
 	    }
@@ -5749,41 +5690,6 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 		  /* first time */
 		  cum_statsp->type = attr_statsp->type;
 		  cum_statsp->valid_limits = true;
-		  /* if the attribute is numeric type so its min/max values are
-		     meaningful, keep the min/max existing values */
-		  if (DB_NUMERIC_TYPE (attr_statsp->type))
-		    {
-		      /* assign values, bitwise-copy of DB_DATA structure */
-		      cum_statsp->min_value = attr_statsp->min_value;
-		      cum_statsp->max_value = attr_statsp->max_value;
-		    }
-		}
-	      else
-		{
-		  /* if the attribute is numeric type so its min/max values are
-		     meaningful, keep the min/max existing values */
-		  if (DB_NUMERIC_TYPE (attr_statsp->type))
-		    {
-		      /* compare with previous values */
-		      if (qo_data_compare (&attr_statsp->min_value,
-					   &cum_statsp->min_value,
-					   cum_statsp->type) < 0)
-			{
-			  cum_statsp->min_value = attr_statsp->min_value;
-			}
-		      if (qo_data_compare (&attr_statsp->max_value,
-					   &cum_statsp->max_value,
-					   cum_statsp->type) > 0)
-			{
-			  cum_statsp->max_value = attr_statsp->max_value;
-			}
-		      /* 'qo_data_compare()' is a simplified function that works
-		         with DB_DATA instead of DB_VALUE. However, this way
-		         would be enough to get minimum/maximum existing value,
-		         because the values are meaningful only when their types
-		         are numeric and we are considering compatible indexes
-		         under class hierarchy. */
-		    }
 		}
 
 	      /* find the index that we are interesting within BTREE_STATS[] array */
@@ -5856,7 +5762,7 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 		  cum_statsp->height = bt_statsp->height;
 		  cum_statsp->keys = bt_statsp->keys;
 		  cum_statsp->key_type = bt_statsp->key_type;
-		  cum_statsp->key_size = bt_statsp->key_size;
+		  cum_statsp->pkeys_size = bt_statsp->pkeys_size;
 		  /* alloc pkeys[] within the current optimizer environment */
 		  if (cum_statsp->pkeys)
 		    {
@@ -5865,16 +5771,18 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 		  cum_statsp->pkeys =
 		    (int *)
 		    malloc (SIZEOF_ATTR_CUM_STATS_PKEYS
-			    (cum_statsp->key_size));
+			    (cum_statsp->pkeys_size));
 		  if (cum_statsp->pkeys == NULL)
 		    {
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_OUT_OF_VIRTUAL_MEMORY, 1,
 			      SIZEOF_ATTR_CUM_STATS_PKEYS
-			      (cum_statsp->key_size));
+			      (cum_statsp->pkeys_size));
 		      return;	/* give up */
 		    }
-		  for (k = 0; k < cum_statsp->key_size; k++)
+
+		  assert (cum_statsp->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+		  for (k = 0; k < cum_statsp->pkeys_size; k++)
 		    {
 		      cum_statsp->pkeys[k] = bt_statsp->pkeys[k];
 		    }
@@ -5894,12 +5802,12 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 	     certainly a better guess than assuming that all key ranges
 	     are distinct. */
 	  cum_statsp->height = MAX (cum_statsp->height, bt_statsp->height);
-	  if (cum_statsp->key_size == 0 ||	/* the first found */
+	  if (cum_statsp->pkeys_size == 0 ||	/* the first found */
 	      cum_statsp->keys < bt_statsp->keys)
 	    {
 	      cum_statsp->keys = bt_statsp->keys;
 	      cum_statsp->key_type = bt_statsp->key_type;
-	      cum_statsp->key_size = bt_statsp->key_size;
+	      cum_statsp->pkeys_size = bt_statsp->pkeys_size;
 	      /* alloc pkeys[] within the current optimizer environment */
 	      if (cum_statsp->pkeys)
 		{
@@ -5907,15 +5815,18 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 		}
 	      cum_statsp->pkeys =
 		(int *)
-		malloc (SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->key_size));
+		malloc (SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->pkeys_size));
 	      if (cum_statsp->pkeys == NULL)
 		{
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			  ER_OUT_OF_VIRTUAL_MEMORY, 1,
-			  SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->key_size));
+			  SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->
+						       pkeys_size));
 		  return;	/* give up */
 		}
-	      for (k = 0; k < cum_statsp->key_size; k++)
+
+	      assert (cum_statsp->pkeys_size <= BTREE_STATS_PKEYS_NUM);
+	      for (k = 0; k < cum_statsp->pkeys_size; k++)
 		{
 		  cum_statsp->pkeys[k] = bt_statsp->pkeys[k];
 		}
@@ -5925,7 +5836,7 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
       /* if index skip scan is possible, check the statistics and confirm or
          infirm it's use */
       if (j == 1 && (ni_entryp->head->is_iss_candidate || is_iss_and_cover)
-	  && cum_statsp->key_size > 1 && cum_statsp->keys > 0)
+	  && cum_statsp->pkeys_size > 1 && cum_statsp->keys > 0)
 	{
 	  CLASS_STATS *stats = NULL;
 	  long long int first_pkey_card;
@@ -5936,10 +5847,10 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 	      stats = QO_GET_CLASS_STATS (class_info_entryp);
 	    }
 
-	  if (stats != NULL && stats->num_objects > 0)
+	  if (stats != NULL && stats->heap_num_objects > 0)
 	    {
 	      /* we have what seems like valid statistics; fetch row count */
-	      row_count = stats->num_objects;
+	      row_count = stats->heap_num_objects;
 	    }
 	  else
 	    {
@@ -5952,8 +5863,8 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 	  /* fetch the cardinality of the first partial key. NULL values are
 	     not counted when the index statistics are built, so a zero card
 	     pkey is possible; we must avoid this case */
-	  first_pkey_card = cum_statsp->pkeys[0];
-	  first_pkey_card = (first_pkey_card != 0 ? first_pkey_card : 1);
+	  assert (cum_statsp->pkeys[0] >= 0);
+	  first_pkey_card = MAX (cum_statsp->pkeys[0], 1);
 
 	  ni_entryp->head->is_iss_candidate =
 	    (row_count > first_pkey_card * INDEX_SKIP_SCAN_FACTOR);
@@ -6096,9 +6007,10 @@ qo_estimate_statistics (MOP class_mop, CLASS_STATS * statblock)
    * Really, the statistics manager ought to be doing this on its own.
    */
 
-  statblock->heap_size = NOMINAL_HEAP_SIZE (class_mop);
-  statblock->num_objects =
-    (statblock->heap_size * DB_PAGESIZE) / NOMINAL_OBJECT_SIZE (class_mop);
+  statblock->heap_num_pages = NOMINAL_HEAP_SIZE (class_mop);
+  statblock->heap_num_objects =
+    (statblock->heap_num_pages * DB_PAGESIZE) /
+    NOMINAL_OBJECT_SIZE (class_mop);
 
 }
 
@@ -6422,8 +6334,8 @@ qo_discover_edges (QO_ENV * env)
   for (i = 0, n = env->nedges; i < n; ++i)
     {
       edge = QO_ENV_TERM (env, i);
-      QO_ASSERT (env, QO_TERM_HEAD (edge) != NULL
-		 && QO_TERM_TAIL (edge) != NULL);
+      QO_ASSERT (env, QO_TERM_HEAD (edge) != NULL);
+      QO_ASSERT (env, QO_TERM_TAIL (edge) != NULL);
 
       if (QO_TERM_JOIN_TYPE (edge) != JOIN_INNER
 	  && QO_TERM_CLASS (edge) != QO_TC_JOIN)
@@ -8407,7 +8319,7 @@ qo_seg_free (QO_SEGMENT * seg)
 	{
 	  if (QO_SEG_NAME (seg))
 	    {
-	      free_and_init (seg->name);
+	      free_and_init (QO_SEG_NAME (seg));
 	    }
 	}
     }

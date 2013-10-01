@@ -625,20 +625,20 @@ net_server_init (void)
   req_p->name = "NET_SERVER_DISK_VLABEL";
 
   /* statistics */
-  req_p = &net_Requests[NET_SERVER_QST_SERVER_GET_STATISTICS];
+  req_p = &net_Requests[NET_SERVER_QST_GET_STATISTICS];
   req_p->action_attribute = IN_TRANSACTION;
   req_p->processing_function = sqst_server_get_statistics;
-  req_p->name = "NET_SERVER_QST_SERVER_GET_STATISTICS";
-
-  req_p = &net_Requests[NET_SERVER_QST_UPDATE_CLASS_STATISTICS];
-  req_p->action_attribute = (CHECK_DB_MODIFICATION | IN_TRANSACTION);
-  req_p->processing_function = sqst_update_class_statistics;
-  req_p->name = "NET_SERVER_QST_UPDATE_CLASS_STATISTICS";
+  req_p->name = "NET_SERVER_QST_GET_STATISTICS";
 
   req_p = &net_Requests[NET_SERVER_QST_UPDATE_STATISTICS];
   req_p->action_attribute = (CHECK_DB_MODIFICATION | IN_TRANSACTION);
   req_p->processing_function = sqst_update_statistics;
   req_p->name = "NET_SERVER_QST_UPDATE_STATISTICS";
+
+  req_p = &net_Requests[NET_SERVER_QST_UPDATE_ALL_STATISTICS];
+  req_p->action_attribute = (CHECK_DB_MODIFICATION | IN_TRANSACTION);
+  req_p->processing_function = sqst_update_all_statistics;
+  req_p->name = "NET_SERVER_QST_UPDATE_ALL_STATISTICS";
 
   /* query manager */
   req_p = &net_Requests[NET_SERVER_QM_QUERY_PREPARE];
@@ -1088,7 +1088,7 @@ net_server_request (THREAD_ENTRY * thread_p, unsigned int rid, int request,
 	}
       /* check if DB modification is allowed */
       client_type = logtb_find_client_type (thread_p->tran_index);
-      if (check && BOOT_NORMAL_CLIENT_TYPE (client_type))
+      if (check)
 	{
 	  CHECK_MODIFICATION_NO_RETURN (thread_p, error_code);
 	  if (error_code != NO_ERROR)

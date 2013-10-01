@@ -199,12 +199,13 @@ cubrid 管理工具，版本 %s\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
     acl         <status|reload> [broker-name]\n\
-    getid       -b <broker-name> [-f] shard-key\n
+    getid       -b <broker-name> [-f] shard-key\n\
+    test        broker-name [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 cubrid 应用工具, 版本 %s\n\
 用法: %s manager <命令>\n\
 \n\
@@ -631,7 +632,9 @@ checkdb: 监测数据库一致性.\n\
   -C, --CS-mode                客户端-服务器模式执行\n\
   -r, --repair                 修复找到的不一致性\n\
   -i, --input-class-file=FILE  输入包含表名的FILE\n\
-                               默认: 检查所有表\n
+                               默认: 检查所有表\n\
+      --check-prev-link        check only previous links of indices\n\
+      --repair-prev-link       repair previous links of indices\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

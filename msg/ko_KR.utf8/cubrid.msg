@@ -1091,16 +1091,16 @@ $ LOADDB
 1022 prefix length의 값(%d)이 유효하지 않습니다.
 1023 Reserved error code for HA.
 1024 Reserved error code for HA.
-1025 Reserved error code for HA.
-1026 Reserved error code for HA.
+1025 HA delay info: 복제 지연(%1$d 초)이 허용치(%2$d 초)를 초과하였습니다.
+1026 HA delay info: 복제 지연(%1$d 초)이 적정 수준(%2$d 초) 이하로 감소하였습니다.
 1027 log applier: '%1$s'에서 '%2$s'로 복제 반영 상태를 변경하지 못하였습니다.
 1028 log applier: Archive 로그에 예상치 못한 EOF 로그 레코드가 있습니다. LSA: %1$lld|%2$d.
 1029 log applier: 잘못된 로그 페이지/오프셋. page HDR: %1$1lld|%2$d, final: %3$lld|%4$d, append LSA: %5$lld|%6$d, EOF LSA: %7$lld|%8$d, ha file status: %9$d, is end-of-log: %10$d.
 1030 log applier: 잘못된 로그 레코드. LSA: %1$lld|%2$d, forw LSA: %3$lld|%4$d, backw LSA: %5$lld|%6$d, Trid: %7$d, prev tran LSA: %8$lld|%9$d, type: %10$d.
-1031 log applier: Schema 복제 로그 반영에 실패하였습니다. class: "%1$s", schema: "%2$s", internal error: %3$d.
-1032 log applier: Insert 복제 로그 반영에 실패하였습니다. class: "%1$s", key: "%2$s", internal error: %3$d.
-1033 log applier: Update 복제 로그 반영에 실패하였습니다. class: "%1$s", key: "%2$s", internal error: %3$d.
-1034 log applier: Delete 복제 로그 반영에 실패하였습니다. class: "%1$s", key: "%2$s", internal error: %3$d.
+1031 log applier: Schema 복제 로그 반영에 실패하였습니다. class: "%1$s", schema: "%2$s", server error: %3$d, ddl: %4$s.
+1032 log applier: Insert 복제 로그 반영에 실패하였습니다. class: "%1$s", key: "%2$s", server error: %3$d.
+1033 log applier: Update 복제 로그 반영에 실패하였습니다. class: "%1$s", key: "%2$s", server error: %3$d.
+1034 log applier: Delete 복제 로그 반영에 실패하였습니다. class: "%1$s", key: "%2$s", server error: %3$d.
 1035 log applier: log applier의 메모리 크기(%1$d MB)가 최대 메모리 크기(%2$d MB) 보다 크거나 시작 시 메모리 크기(%3$d MB) 보다 2배 이상 증가하였습니다. required LSA: %4$lld|%5$d. last committed LSA: %6$lld|%7$d.
 1036 log applier: log applier가 시그널에 의해 종료됩니다.
 1037 log writer: log writer가 시그널에 의해 종료됩니다.
@@ -1199,6 +1199,17 @@ $ LOADDB
 1130 락 횟수가 %1$d 를 초과하여 트랜잭션이 취소되었습니다.
 1131 내부 에러: The page %1$d of volume "%2$s" may be corrupted.\n%3$s
 1132 Encryption library failure: %s
+1133 Copylogdb for %1$s은 (는) 이미 존재합니다.
+1134 Applylogdb for %1$s은 (는) 이미 존재합니다.
+1135 B+tree(%1$s)의 프리비어스 링크에 오류가 있습니다.: vpid = (%2$d, %3$d)
+1136 B+tree(%1$s)의 프리비어스 링크을 복구합니다.: vpid = (%2$d, %3$d)
+1137 Handshake 에러 (peer host %1$s): 인터럽트 호환 불일치. (client: %2$s, server: %3$s)
+1138 Handshake 에러 (peer host %1$s): 읽기/쓰기 모드 불일치. (client: %2$s, server: %3$s)
+1139 Handshake 에러 (peer host %1$s): HA 복제 지연 발생.
+1140 Handshake 에러 (peer host %1$s): 레플리카 접속 정책 불일치.
+1141 Handshake 에러 (peer host %1$s): 알 수 없는 서버 버전.
+1142 Handshake 에러 (peer host %1$s): 원격 접속 불허.
+1143 %1$s로의 연결 시도 타임아웃 (timeout: %2$d 초)
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 마지막 에러
 

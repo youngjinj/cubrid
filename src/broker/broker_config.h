@@ -232,6 +232,9 @@ struct t_broker_info
   char reject_client_flag;	/* reject clients due to hanging cas/proxy */
 
   int connect_order;
+  int replica_only_flag;
+
+  int cas_rctime;		/* sec */
 
   char shard_flag;
   /*from here, these are used only in shard */
@@ -257,6 +260,7 @@ struct t_broker_info
 
   int proxy_log_max_size;
   int proxy_max_prepared_stmt_count;
+  int proxy_conn_wait_timeout;
 
   char ignore_shard_hint;
   int proxy_timeout;

@@ -2694,7 +2694,8 @@ parser_print_function_index_expr (PARSER_CONTEXT * parser,
 
   assert (expr && PT_IS_EXPR_NODE (expr));
 
-  parser->custom_print |= PT_FORCE_ORIGINAL_TABLE_NAME;
+  parser->custom_print |= PT_FORCE_ORIGINAL_TABLE_NAME
+    | PT_CHARSET_COLLATE_FULL;
   result = parser_print_tree_with_quotes (parser, expr);
   parser->custom_print = save_custom;
 
@@ -2780,7 +2781,8 @@ pt_print_query_spec_no_list (PARSER_CONTEXT * parser, const PT_NODE * node)
   unsigned int save_custom = parser->custom_print;
   char *result;
 
-  parser->custom_print |= PT_SUPPRESS_SELECT_LIST | PT_SUPPRESS_INTO;
+  parser->custom_print |= PT_SUPPRESS_SELECT_LIST | PT_SUPPRESS_INTO
+    | PT_CHARSET_COLLATE_FULL;
   result = parser_print_tree_with_quotes (parser, node);
   parser->custom_print = save_custom;
 
@@ -4452,13 +4454,19 @@ pt_select_list_to_one_col (PARSER_CONTEXT * parser, PT_NODE * node,
 	      for (spec->info.spec.as_attr_list = NULL, i = 1, col = list;
 		   col; i++, col = col->next)
 		{
+		  PT_NODE *att;
+
 		  sprintf (buf, "av_%d", i);
+
+		  att = pt_name (parser, pt_append_string (parser, NULL,
+							   buf));
+		  if (att)
+		    {
+		      PT_NAME_INFO_SET_FLAG (att,
+					     PT_NAME_GENERATED_DERIVED_SPEC);
+		    }
 		  spec->info.spec.as_attr_list =
-		    parser_append_node (pt_name (parser,
-						 pt_append_string (parser,
-								   NULL,
-								   buf)),
-					spec->info.spec.as_attr_list);
+		    parser_append_node (att, spec->info.spec.as_attr_list);
 		}
 
 	      node->info.query.q.select.list =
@@ -6513,6 +6521,7 @@ pt_print_attr_def (PARSER_CONTEXT * parser, PT_NODE * p)
 {
   PARSER_VARCHAR *q = 0, *r1;
   char s[PT_MEMB_BUF_SIZE];
+  unsigned int save_custom;
 
   if (!(parser->custom_print & PT_SUPPRESS_META_ATTR_CLASS)
       && p->info.attr_def.attr_type == PT_META_ATTR)
@@ -6613,8 +6622,11 @@ pt_print_attr_def (PARSER_CONTEXT * parser, PT_NODE * p)
       q = pt_append_nulstring (parser, q, "(");
       if (p->data_type != NULL)
 	{
+	  save_custom = parser->custom_print;
+	  parser->custom_print |= PT_SUPPRESS_COLLATE_PRINT;
 	  r1 = pt_print_bytes_l (parser,
 				 p->data_type->info.data_type.enumeration);
+	  parser->custom_print = save_custom;
 	}
       q = pt_append_varchar (parser, q, r1);
       q = pt_append_nulstring (parser, q, ")");
@@ -8432,6 +8444,7 @@ pt_print_datatype (PARSER_CONTEXT * parser, PT_NODE * p)
   PARSER_VARCHAR *q = 0, *r1;
   char buf[PT_MEMB_BUF_SIZE];
   bool show_collation = false;
+  unsigned int save_custom;
 
   switch (p->type_enum)
     {
@@ -8508,7 +8521,10 @@ pt_print_datatype (PARSER_CONTEXT * parser, PT_NODE * p)
     case PT_TYPE_ENUMERATION:
       q = pt_append_nulstring (parser, q, pt_show_type_enum (p->type_enum));
       q = pt_append_nulstring (parser, q, "(");
+      save_custom = parser->custom_print;
+      parser->custom_print |= PT_SUPPRESS_COLLATE_PRINT;
       r1 = pt_print_bytes_l (parser, p->info.data_type.enumeration);
+      parser->custom_print = save_custom;
       q = pt_append_varchar (parser, q, r1);
       q = pt_append_nulstring (parser, q, ")");
       show_collation = true;
@@ -9888,6 +9904,7 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
   int print_from = 0;
   PT_NODE *arg3;
   PT_NODE *between, *between_ge_lt;
+  unsigned int save_custom;
 
   assert_release (p != p->info.expr.arg1);
   assert_release (p != p->info.expr.arg2);
@@ -11330,16 +11347,45 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
 	{
 	  /* CAST op with this flag does not transform into T_CAST */
 	  char buf[PT_MEMB_BUF_SIZE];
+	  bool use_parentheses = false;
 
 	  sprintf (buf, " collate %s",
 		   lang_get_collation_name (PT_GET_COLLATION_MODIFIER (p)));
 
-	  if (p->info.expr.arg1->node_type != PT_NAME
-	      && p->info.expr.arg1->node_type != PT_DOT_
-	      && p->info.expr.arg1->node_type != PT_VALUE
-	      && p->info.expr.arg1->node_type != PT_HOST_VAR)
+	  if (p->info.expr.arg1->node_type == PT_VALUE)
 	    {
-	      /* put arg1 in paranthesys (if arg1 is an expression,
+	      PT_NODE *v = p->info.expr.arg1;
+	      int v_coll_id;
+
+	      v_coll_id = (v->data_type != NULL)
+		? (v->data_type->info.data_type.collation_id)
+		: LANG_SYS_COLLATION;
+
+	      /* if argument value was printed with 'collate', then use
+	       * parentheses */
+	      if (!(v->info.value.print_collation)
+		  || (parser->custom_print & PT_SUPPRESS_COLLATE_PRINT)
+		  || (v_coll_id == LANG_SYS_COLLATION
+		      && (parser->custom_print & PT_SUPPRESS_CHARSET_PRINT)))
+		{
+		  v_coll_id = -1;
+		}
+
+	      if (v_coll_id != -1)
+		{
+		  use_parentheses = true;
+		}
+	    }
+	  else if (p->info.expr.arg1->node_type != PT_NAME
+		   && p->info.expr.arg1->node_type != PT_DOT_
+		   && p->info.expr.arg1->node_type != PT_HOST_VAR)
+	    {
+	      use_parentheses = true;
+	    }
+
+	  if (use_parentheses)
+	    {
+	      /* put arg1 in parantheses (if arg1 is an expression,
 	       * COLLATE applies to last subexpression) */
 	      q = pt_append_nulstring (parser, NULL, "(");
 	      q = pt_append_varchar (parser, q, r1);
@@ -11917,6 +11963,18 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
       break;
     case PT_TRACE_STATS:
       q = pt_append_nulstring (parser, q, " trace_stats()");
+      break;
+    case PT_LIKE_ESCAPE:
+      r1 = pt_print_bytes (parser, p->info.expr.arg1);
+      save_custom = parser->custom_print;
+      parser->custom_print |= PT_SUPPRESS_COLLATE_PRINT;
+      r2 = pt_print_bytes (parser, p->info.expr.arg2);
+      parser->custom_print = save_custom;
+
+      q = pt_append_varchar (parser, q, r1);
+      q = pt_append_nulstring (parser, q,
+			       pt_show_binopcode (p->info.expr.op));
+      q = pt_append_varchar (parser, q, r2);
       break;
     }
 
@@ -15606,6 +15664,12 @@ pt_print_update_stats (PARSER_CONTEXT * parser, PT_NODE * p)
       b = pt_append_varchar (parser, b, r1);
     }
 
+  if (p->info.update_stats.with_fullscan > 0)
+    {
+      assert (p->info.update_stats.with_fullscan == 1);
+      b = pt_append_nulstring (parser, b, " with fullscan");
+    }
+
   return b;
 }
 
@@ -16008,7 +16072,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
       prt_coll_id = (p->data_type != NULL)
 	? (p->data_type->info.data_type.collation_id) : LANG_SYS_COLLATION;
 
-      if (!(p->info.value.print_collation)
+      if ((p->info.value.print_collation == false
+	   && !(parser->custom_print & PT_CHARSET_COLLATE_FULL))
 	  || (parser->custom_print & PT_SUPPRESS_COLLATE_PRINT)
 	  || (prt_coll_id == LANG_SYS_COLLATION
 	      && (parser->custom_print & PT_SUPPRESS_CHARSET_PRINT)))
@@ -16021,7 +16086,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 	: LANG_SYS_CODESET;
 
       /* do not print charset introducer for NCHAR and VARNCHAR */
-      if (!(p->info.value.print_charset)
+      if ((p->info.value.print_charset == false
+	   && !(parser->custom_print & PT_CHARSET_COLLATE_FULL))
 	  || (p->type_enum != PT_TYPE_CHAR && p->type_enum != PT_TYPE_VARCHAR)
 	  || (prt_cs == LANG_SYS_CODESET
 	      && (parser->custom_print & PT_SUPPRESS_CHARSET_PRINT)))
@@ -16164,7 +16230,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
     case PT_TYPE_CHAR:
     case PT_TYPE_NCHAR:
     case PT_TYPE_BIT:
-      if (p->info.value.text)
+      if (p->info.value.text
+	  && prt_cs == INTL_CODESET_NONE && prt_coll_id == -1)
 	{
 	  if (parser->dont_prt_long_string
 	      && (strlen (p->info.value.text) >= DONT_PRT_LONG_STRING_LENGTH))
@@ -16173,20 +16240,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 	      break;
 	    }
 
-	  if (prt_cs != INTL_CODESET_NONE)
-	    {
-	      q = pt_append_nulstring (parser, q,
-				       lang_charset_introducer (prt_cs));
-	    }
-
 	  q = pt_append_nulstring (parser, q, p->info.value.text);
 
-	  if (prt_coll_id != -1)
-	    {
-	      q = pt_append_nulstring (parser, q, " COLLATE ");
-	      q = pt_append_nulstring (parser, q,
-				       lang_get_collation_name (prt_coll_id));
-	    }
 	  break;
 	}
       r1 = p->info.value.data_value.str;
@@ -16229,7 +16284,7 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 	    q = pt_append_varchar (parser, q, tmp);
 	    if (prt_coll_id != -1)
 	      {
-		sprintf (s, " as %s(%d) COLLATE %s)",
+		sprintf (s, " as %s(%d) collate %s)",
 			 pt_show_type_enum (p->type_enum),
 			 dt->info.data_type.precision,
 			 lang_get_collation_name (prt_coll_id));
@@ -16247,7 +16302,7 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 
 	    if (prt_coll_id != -1)
 	      {
-		q = pt_append_nulstring (parser, q, " COLLATE ");
+		q = pt_append_nulstring (parser, q, " collate ");
 		q = pt_append_nulstring (parser, q, lang_get_collation_name
 					 (prt_coll_id));
 	      }
@@ -16258,7 +16313,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
     case PT_TYPE_VARCHAR:	/* have to check for embedded quotes */
     case PT_TYPE_VARNCHAR:
     case PT_TYPE_VARBIT:
-      if (p->info.value.text)
+      if (p->info.value.text
+	  && prt_cs == INTL_CODESET_NONE && prt_coll_id == -1)
 	{
 	  if (parser->dont_prt_long_string
 	      && (strlen (p->info.value.text) >= DONT_PRT_LONG_STRING_LENGTH))
@@ -16267,20 +16323,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 	      break;
 	    }
 
-
-	  if (prt_cs != INTL_CODESET_NONE)
-	    {
-	      q = pt_append_nulstring (parser, q,
-				       lang_charset_introducer (prt_cs));
-	    }
 	  q = pt_append_nulstring (parser, q, p->info.value.text);
 
-	  if (prt_coll_id != -1)
-	    {
-	      q = pt_append_nulstring (parser, q, " COLLATE ");
-	      q = pt_append_nulstring (parser, q,
-				       lang_get_collation_name (prt_coll_id));
-	    }
 	  break;
 	}
       r1 = p->info.value.data_value.str;
@@ -16310,7 +16354,7 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 
       if (prt_coll_id != -1)
 	{
-	  q = pt_append_nulstring (parser, q, " COLLATE ");
+	  q = pt_append_nulstring (parser, q, " collate ");
 	  q = pt_append_nulstring (parser, q,
 				   lang_get_collation_name (prt_coll_id));
 	}
@@ -16373,7 +16417,7 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 	     p->info.value.data_value.enumeration.str_val->length);
 	  if (prt_coll_id != -1)
 	    {
-	      q = pt_append_nulstring (parser, q, " COLLATE ");
+	      q = pt_append_nulstring (parser, q, " collate ");
 	      q = pt_append_nulstring (parser, q,
 				       lang_get_collation_name (prt_coll_id));
 	    }

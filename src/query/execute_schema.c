@@ -417,8 +417,10 @@ static int do_promote_partition_by_name (const char *class_name,
 					 const char *part_num,
 					 char **partition_name);
 static int do_promote_partition (SM_CLASS * class_);
+#if defined (ENABLE_UNUSED_FUNCTION)
 static int do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
 				 SM_PARTITION_ALTER_INFO * pinfo);
+#endif
 static int do_redistribute_partitions_data (const char *class_name,
 					    const char *keyname,
 					    char **promoted,
@@ -526,6 +528,7 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
   bool old_disable_stats = sm_Disable_updating_statistics;
   const PT_ALTER_CODE alter_code = alter->info.alter.code;
   SM_CONSTRAINT_FAMILY constraint_family;
+  unsigned int save_custom;
 
   entity_name = alter->info.alter.entity_name->info.name.original;
   if (entity_name == NULL)
@@ -601,9 +604,12 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 	{
 	  query_no = 1;
 	}
+      save_custom = parser->custom_print;
+      parser->custom_print |= PT_CHARSET_COLLATE_FULL;
       new_query = parser_print_tree_with_quotes (parser,
 						 alter->info.alter.
 						 alter_clause.query.query);
+      parser->custom_print = save_custom;
       error = dbt_change_query_spec (ctemplate, new_query, query_no);
       break;
 
@@ -1435,9 +1441,12 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 	{
 	  /* update statistics here */
 	  sm_Disable_updating_statistics = old_disable_stats;
-	  error = sm_update_class_statistics (pinfo.root_op, false);
+	  error =
+	    sm_update_statistics (pinfo.root_op, NULL, false,
+				  STATS_WITH_SAMPLING);
 	}
       break;
+
     default:
       break;
     }
@@ -2789,11 +2798,16 @@ create_or_drop_index_helper (PARSER_CONTEXT * parser,
 	  if (where_predicate)
 	    {
 	      PARSER_VARCHAR *filter_expr = NULL;
+	      unsigned int save_custom;
+
 	      /* free at parser_free_parser */
 	      /* make sure paren_type is 0 so parenthesis are not printed */
 	      where_predicate->info.expr.paren_type = 0;
+	      save_custom = parser->custom_print;
+	      parser->custom_print |= PT_CHARSET_COLLATE_FULL;
 	      filter_expr = pt_print_bytes ((PARSER_CONTEXT *) parser,
 					    (PT_NODE *) where_predicate);
+	      parser->custom_print = save_custom;
 	      if (filter_expr)
 		{
 		  pred_index_info.pred_string = (char *) filter_expr->bytes;
@@ -3371,12 +3385,17 @@ do_alter_index_rebuild (PARSER_CONTEXT * parser, const PT_NODE * statement)
 	  PT_NODE *spec = statement->info.index.indexed_class;
 	  PRED_EXPR_WITH_CONTEXT *filter_predicate = NULL;
 	  PARSER_VARCHAR *filter_expr = NULL;
+	  unsigned int save_custom;
 
 	  /* free at parser_free_parser */
 	  /* make sure paren_type is 0 so parenthesis are not printed */
 	  where_predicate->info.expr.paren_type = 0;
+	  save_custom = parser->custom_print;
+	  parser->custom_print |= PT_CHARSET_COLLATE_FULL;
 	  filter_expr = pt_print_bytes ((PARSER_CONTEXT *) parser,
 					(PT_NODE *) where_predicate);
+	  parser->custom_print = save_custom;
+
 	  if (filter_expr)
 	    {
 	      pred_index_info.pred_string = (char *) filter_expr->bytes;
@@ -3693,7 +3712,6 @@ do_alter_index_rename (PARSER_CONTEXT * parser, const PT_NODE * statement)
       ctemplate = NULL;
       goto error_exit;
     }
-
 
 end:
   /* roll back the state of sm_Disable_updating_statistics */
@@ -4346,8 +4364,13 @@ insert_partition_catalog (PARSER_CONTEXT * parser, DB_CTMPL * clstmpl,
 
   if (node->node_type == PT_PARTITION)
     {
+      unsigned int save_custom;
+
+      save_custom = parser->custom_print;
+      parser->custom_print |= PT_CHARSET_COLLATE_FULL;
       query = parser_print_tree_with_quotes (parser,
 					     node->info.partition.expr);
+      parser->custom_print = save_custom;
       if (query == NULL)
 	{
 	  goto fail_return;
@@ -6697,6 +6720,7 @@ do_reorganize_partition_post (PARSER_CONTEXT * parser, PT_NODE * alter,
   return NO_ERROR;
 }
 
+#if defined (ENABLE_UNUSED_FUNCTION)
 /*
  * do_analyze_partition () - update statistics on partitions
  * return : error code or NO_ERROR
@@ -6721,8 +6745,9 @@ do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
       while (name)
 	{
 	  assert (name->info.name.db_object != NULL);
-	  error = sm_update_class_statistics (name->info.name.db_object,
-					      false);
+	  error =
+	    sm_update_statistics (name->info.name.db_object, NULL, false,
+				  STATS_WITH_SAMPLING);
 	  if (error != NO_ERROR)
 	    {
 	      return error;
@@ -6741,7 +6766,9 @@ do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
 	{
 	  return error;
 	}
-      error = sm_update_class_statistics (pinfo->root_op, false);
+      error =
+	sm_update_statistics (pinfo->root_op, NULL, false,
+			      STATS_WITH_SAMPLING);
       if (error != NO_ERROR)
 	{
 	  return error;
@@ -6762,7 +6789,8 @@ do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
 	      continue;
 	    }
 
-	  error = sm_update_class_statistics (obj->op, false);
+	  error =
+	    sm_update_statistics (obj->op, NULL, false, STATS_WITH_SAMPLING);
 	  if (error != NO_ERROR)
 	    {
 	      return error;
@@ -6772,6 +6800,7 @@ do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
 
   return error;
 }
+#endif
 
 /*
  * do_promote_partition_list () -
@@ -8641,8 +8670,13 @@ add_query_to_virtual_class (PARSER_CONTEXT * parser,
 {
   const char *query;
   int error = NO_ERROR;
+  unsigned int save_custom;
+
+  save_custom = parser->custom_print;
+  parser->custom_print |= PT_CHARSET_COLLATE_FULL;
 
   query = parser_print_tree_with_quotes (parser, queries);
+  parser->custom_print = save_custom;
   error = dbt_add_query_spec (ctemplate, query);
 
   return (error);
@@ -13853,6 +13887,7 @@ pt_node_to_function_index (PARSER_CONTEXT * parser, PT_NODE * spec,
   PT_NODE *expr = NULL;
   char *expr_str = NULL;
   TP_DOMAIN *d = NULL;
+  unsigned int save_custom;
 
   if (node->node_type == PT_SORT_SPEC)
     {
@@ -13891,7 +13926,10 @@ pt_node_to_function_index (PARSER_CONTEXT * parser, PT_NODE * spec,
 
   assert (func_index_info->fi_domain != NULL);
 
+  save_custom = parser->custom_print;
+  parser->custom_print |= PT_CHARSET_COLLATE_FULL;
   expr_str = parser_print_tree_with_quotes (parser, expr);
+  parser->custom_print = save_custom;
   assert (expr_str != NULL);
 
   func_index_info->expr_str = strdup (expr_str);
@@ -14181,6 +14219,7 @@ do_recreate_filter_index_constr (PARSER_CONTEXT * parser,
   bool free_packing_buff = false;
   SM_PREDICATE_INFO new_pred = { NULL, NULL, 0, NULL, 0 };
   bool free_parser = false;
+  unsigned int save_custom;
 
   if (parser == NULL)
     {
@@ -14285,7 +14324,10 @@ do_recreate_filter_index_constr (PARSER_CONTEXT * parser,
 
   /* make sure paren_type is 0 so parenthesis are not printed */
   where_predicate->info.expr.paren_type = 0;
+  save_custom = parser->custom_print;
+  parser->custom_print |= PT_CHARSET_COLLATE_FULL;
   filter_expr = pt_print_bytes (parser, where_predicate);
+  parser->custom_print = save_custom;
   if (filter_expr)
     {
       pred_str = (char *) filter_expr->bytes;

@@ -63,13 +63,15 @@
 #define DEFAULT_SQL_LOG_MODE		"ALL"
 #define DEFAULT_KEEP_CONNECTION         "AUTO"
 #define DEFAULT_JDBC_CACHE_LIFE_TIME    1000
-#define DEFAULT_MAX_PREPARED_STMT_COUNT 2000
-#define DEFAULT_MONITOR_HANG_INTERVAL 60
-#define DEFAULT_HANG_TIMEOUT    60
+#define DEFAULT_MAX_PREPARED_STMT_COUNT 10000
+#define DEFAULT_MONITOR_HANG_INTERVAL   60
+#define DEFAULT_HANG_TIMEOUT            60
+#define DEFAULT_RECONNECT_TIME          "600s"
 
 #define DEFAULT_SHARD_PROXY_LOG_MODE		"ERROR"
-#define DEFAULT_SHARD_KEY_MODULAR	256
+#define DEFAULT_SHARD_KEY_MODULAR	        256
 #define DEFAULT_SHARD_PROXY_TIMEOUT 		"30s"
+#define DEFAULT_SHARD_PROXY_CONN_WAIT_TIMEOUT   "8h"
 
 #define	TRUE	1
 #define	FALSE	0
@@ -748,6 +750,16 @@ broker_config_read_internal (const char *conf_file,
 	  goto conf_error;
 	}
 
+      br_info[num_brs].replica_only_flag =
+	conf_get_value_table_on_off (ini_getstr
+				     (ini, sec_name, "REPLICA_ONLY", "OFF",
+				      &lineno));
+      if (br_info[num_brs].replica_only_flag < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
       strcpy (br_info[num_brs].preferred_hosts,
 	      ini_getstr (ini, sec_name, "PREFERRED_HOSTS",
 			  DEFAULT_EMPTY_STRING, &lineno));
@@ -757,6 +769,18 @@ broker_config_read_internal (const char *conf_file,
 						  "CONNECT_ORDER",
 						  "SEQ", &lineno));
       if (br_info[num_brs].connect_order < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "RECONNECT_TIME",
+			   DEFAULT_RECONNECT_TIME, &lineno),
+	       sizeof (time_str));
+      br_info[num_brs].cas_rctime =
+	(int) ut_time_string_to_sec (time_str, "sec");
+      if (br_info[num_brs].cas_rctime < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
 	  goto conf_error;
@@ -960,6 +984,24 @@ broker_config_read_internal (const char *conf_file,
 	  goto conf_error;
 	}
 
+      strncpy (time_str,
+	       ini_getstr (ini, sec_name, "SHARD_PROXY_CONN_WAIT_TIMEOUT",
+			   DEFAULT_SHARD_PROXY_CONN_WAIT_TIMEOUT, &lineno),
+	       sizeof (time_str));
+      br_info[num_brs].proxy_conn_wait_timeout =
+	(int) ut_time_string_to_sec (time_str, "sec");
+      if (br_info[num_brs].proxy_conn_wait_timeout < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+      else if (br_info[num_brs].proxy_conn_wait_timeout >
+	       MAX_PROXY_TIMEOUT_LIMIT)
+	{
+	  errcode = PARAM_BAD_RANGE;
+	  goto conf_error;
+	}
+
       num_brs++;
     }
 
@@ -1037,12 +1079,6 @@ broker_config_read_internal (const char *conf_file,
 	      if (br_info[i].shard_db_name[0] == '\0')
 		{
 		  PRINTERROR ("config error, %s, SHARD_DB_NAME\n",
-			      br_info[i].name);
-		  error_flag = TRUE;
-		}
-	      if (br_info[i].shard_db_user[0] == '\0')
-		{
-		  PRINTERROR ("config error, %s, SHARD_DB_USER\n",
 			      br_info[i].name);
 		  error_flag = TRUE;
 		}
@@ -1328,6 +1364,14 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 	{
 	  fprintf (fp, "CONNECT_ORDER\t\t=%s\n", tmp_str);
 	}
+      fprintf (fp, "RECONNECT_TIME\t\t=%d\n", br_info[i].cas_rctime);
+
+      tmp_str = get_conf_string (br_info[i].replica_only_flag, tbl_on_off);
+      if (tmp_str)
+	{
+	  fprintf (fp, "REPLICA_ONLY\t\t=%s\n", tmp_str);
+	}
+
       fprintf (fp, "MAX_QUERY_TIMEOUT\t=%d\n", br_info[i].query_timeout);
 
       tmp_str = get_conf_string (br_info[i].monitor_hang_flag, tbl_on_off);
@@ -1399,8 +1443,6 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 
       fprintf (fp, "SHARD_DB_NAME\t\t=%s\n", br_info[i].shard_db_name);
       fprintf (fp, "SHARD_DB_USER\t\t=%s\n", br_info[i].shard_db_user);
-      fprintf (fp, "SHARD_DB_PASSWORD\t\t=%s\n",
-	       br_info[i].shard_db_password);
 
       fprintf (fp, "SHARD_NUM_PROXY\t\t=%d\n", br_info[i].num_proxy);
       fprintf (fp, "SHARD_PROXY_LOG_DIR\t\t=%s\n", br_info[i].proxy_log_dir);

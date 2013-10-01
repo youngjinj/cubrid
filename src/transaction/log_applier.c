@@ -81,6 +81,11 @@
 
 #define LA_MAX_REPL_ITEMS                       1000
 
+/* for adaptive commit interval */
+#define LA_NUM_DELAY_HISTORY                    10
+#define LA_MAX_TOLERABLE_DELAY                  2
+#define LA_REINIT_COMMIT_INTERVAL               10
+
 #define LA_WS_CULL_MOPS_PER_APPLY 				(100000)
 #define LA_WS_CULL_MOPS_INTERVAL				(180)
 
@@ -292,6 +297,7 @@ struct la_info
   time_t log_commit_time;
   bool required_lsa_changed;
   int status;
+  bool is_apply_info_updated;	/* whether catalog is partially updated or not */
 
   int num_unflushed_insert;
 
@@ -417,6 +423,7 @@ static int la_find_log_pagesize (LA_ACT_LOG * act_log,
 static bool la_apply_pre (void);
 static int la_does_page_exist (LOG_PAGEID pageid);
 static int la_init_repl_lists (bool need_realloc);
+static bool la_is_repl_lists_empty ();
 static LA_APPLY *la_find_apply_list (int tranid);
 static void la_log_copy_fromlog (char *rec_type, char *area, int length,
 				 LOG_PAGEID log_pageid, PGLENGTH log_offset,
@@ -524,6 +531,10 @@ static bool la_restart_on_bulk_flush_error (int errid);
 static char *la_get_hostname_from_log_path (char *log_path);
 
 static void la_delay_replica (time_t eot_time);
+
+static float la_get_avg (int *array, int size);
+static void la_get_adaptive_time_commit_interval (int *time_commit_interval,
+						  int *delay_hist);
 
 /*
  * la_shutdown_by_signal() - When the process catches the SIGTERM signal,
@@ -1469,7 +1480,7 @@ la_find_required_lsa (LOG_LSA * required_lsa)
 
   if (LSA_ISNULL (&lowest_lsa))
     {
-      LSA_COPY (required_lsa, &la_Info.committed_lsa);
+      LSA_COPY (required_lsa, &la_Info.final_lsa);
     }
   else
     {
@@ -1914,6 +1925,8 @@ la_update_ha_apply_info_start_time (void)
 
   error = la_update_query_execute_with_values (query_buf, in_value_idx,
 					       &in_value[0], true);
+  la_Info.is_apply_info_updated = true;
+
   for (i = 0; i < in_value_idx; i++)
     {
       db_value_clear (&in_value[i]);
@@ -1921,6 +1934,58 @@ la_update_ha_apply_info_start_time (void)
 
   return error;
 
+#undef LA_IN_VALUE_COUNT
+}
+
+static int
+la_update_ha_apply_info_log_record_time (time_t new_time)
+{
+#define LA_IN_VALUE_COUNT       3
+  int error = NO_ERROR;
+  char query_buf[LA_QUERY_BUF_SIZE];
+  DB_VALUE in_value[LA_IN_VALUE_COUNT];
+  DB_DATETIME datetime;
+  int i, in_value_idx = 0;
+
+  er_clear ();
+
+  snprintf (query_buf, sizeof (query_buf), "UPDATE %s "	/* UPDATE */
+	    " SET "		/* SET */
+	    "   log_record_time = ?, "	/* 1 */
+	    "   last_access_time = SYS_DATETIME "	/* last_access_time */
+	    " WHERE db_name = ? AND copied_log_path = ? ;",	/* 2 ~ 3 */
+	    CT_HA_APPLY_INFO_NAME);
+
+  /* 1. log_record_time */
+  db_localdatetime (&new_time, &datetime);
+  db_make_datetime (&in_value[in_value_idx++], &datetime);
+
+  /* 2. db_name */
+  db_make_varchar (&in_value[in_value_idx++], 255,
+		   la_Info.act_log.log_hdr->prefix_name,
+		   strlen (la_Info.act_log.log_hdr->prefix_name),
+		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
+
+  /* 3. copied_log_path */
+  db_make_varchar (&in_value[in_value_idx++], 4096, la_Info.log_path,
+		   strlen (la_Info.log_path),
+		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  assert_release (in_value_idx == LA_IN_VALUE_COUNT);
+
+  error = la_update_query_execute_with_values (query_buf, in_value_idx,
+					       &in_value[0], true);
+  if (error >= 0)
+    {
+      la_Info.log_record_time = new_time;
+      la_Info.is_apply_info_updated = true;
+    }
+
+  for (i = 0; i < in_value_idx; i++)
+    {
+      db_value_clear (&in_value[i]);
+    }
+
+  return error;
 #undef LA_IN_VALUE_COUNT
 }
 
@@ -2709,6 +2774,26 @@ la_init_repl_lists (bool need_realloc)
 }
 
 /*
+ * la_is_repl_lists_empty() -
+ *
+ *   return: whether repl_lists is empty or not
+ */
+static bool
+la_is_repl_lists_empty ()
+{
+  int i;
+
+  for (i = 0; i < la_Info.cur_repl; i++)
+    {
+      if (la_Info.repl_lists[i]->num_items > 0)
+	{
+	  return false;
+	}
+    }
+  return true;
+}
+
+/*
  * la_find_apply_list() - return the apply list for the target
  *                             transaction id
  *   return: pointer to the target apply list
@@ -3346,6 +3431,7 @@ la_add_abort_log (int tranid, LOG_LSA * lsa)
 
   commit = la_Info.commit_tail;	/* last commit log */
   commit->type = LOG_ABORT;
+  commit->log_record_time = 0;
 
   return error;
 }
@@ -4499,28 +4585,25 @@ la_get_recdes (LOG_LSA * lsa, LOG_PAGE * pgptr,
   return error;
 }
 
-static int
+static struct log_ha_server_state *
 la_get_ha_server_state (LOG_PAGE * pgptr, LOG_LSA * lsa)
 {
+  struct log_ha_server_state *state = NULL;
   int error = NO_ERROR;
-  int state = HA_SERVER_STATE_NA;
   LOG_PAGEID pageid;
   PGLENGTH offset;
   int length;
   LOG_PAGE *pg;
-  struct log_ha_server_state *ha_server_state;
 
   pageid = lsa->pageid;
   offset = DB_SIZEOF (LOG_RECORD_HEADER) + lsa->offset;
   pg = pgptr;
 
   length = DB_SIZEOF (struct log_ha_server_state);
-  LA_LOG_READ_ADVANCE_WHEN_DOESNT_FIT (error, length, offset, pageid, pgptr);
+  LA_LOG_READ_ADVANCE_WHEN_DOESNT_FIT (error, length, offset, pageid, pg);
   if (error == NO_ERROR)
     {
-      ha_server_state =
-	(struct log_ha_server_state *) ((char *) pg->area + offset);
-      state = ha_server_state->state;
+      state = (struct log_ha_server_state *) ((char *) pg->area + offset);
     }
 
   return state;
@@ -5247,6 +5330,7 @@ la_apply_schema_log (LA_ITEM * item)
 {
   char *ddl;
   int error = NO_ERROR;
+  const char *error_msg = "";
   DB_OBJECT *user = NULL, *save_user = NULL;
   char buf[256];
   char sql_log_err[LINE_MAX];
@@ -5319,6 +5403,8 @@ la_apply_schema_log (LA_ITEM * item)
 		{
 		  error = er_errid ();
 		}
+
+	      error_msg = er_msg ();
 	      break;
 	    }
 
@@ -5358,6 +5444,7 @@ la_apply_schema_log (LA_ITEM * item)
       if (la_update_query_execute (ddl, false) != NO_ERROR)
 	{
 	  error = er_errid ();
+	  error_msg = er_msg ();
 	  if (error == ER_NET_CANT_CONNECT_SERVER
 	      || error == ER_OBJ_NO_CONNECT)
 	    {
@@ -5397,7 +5484,7 @@ la_apply_schema_log (LA_ITEM * item)
       er_stack_push ();
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 	      ER_HA_LA_FAILED_TO_APPLY_SCHEMA, 3, item->class_name, buf,
-	      error);
+	      error, error_msg);
       er_stack_pop ();
 
       la_Info.fail_counter++;
@@ -5648,7 +5735,10 @@ la_apply_commit_list (LOG_LSA * lsa, LOG_PAGEID final_pageid)
 
       LSA_COPY (lsa, &commit->log_lsa);
 
-      la_Info.log_record_time = commit->log_record_time;
+      if (commit->type == LOG_COMMIT)
+	{
+	  la_Info.log_record_time = commit->log_record_time;
+	}
 
       if (commit->next != NULL)
 	{
@@ -5825,7 +5915,7 @@ la_log_record_process (LOG_RECORD_HEADER * lrec,
   LOG_LSA required_lsa;
   LOG_PAGEID final_pageid;
   int commit_list_count;
-  int ha_server_state;
+  struct log_ha_server_state *ha_server_state;
   char buffer[256];
 
   if (lrec->trid == NULL_TRANID ||
@@ -6061,20 +6151,33 @@ la_log_record_process (LOG_RECORD_HEADER * lrec,
 
     case LOG_DUMMY_HA_SERVER_STATE:
       ha_server_state = la_get_ha_server_state (pg_ptr, final);
-      if (la_Info.db_lockf_vdes != NULL_VOLDES
-	  && ha_server_state != HA_SERVER_STATE_ACTIVE
-	  && ha_server_state != HA_SERVER_STATE_TO_BE_STANDBY)
+      if (ha_server_state == NULL)
 	{
-	  snprintf (buffer, sizeof (buffer),
-		    "the state of HA server (%s@%s) is changed to %s",
-		    la_slave_db_name, la_peer_host,
-		    css_ha_server_state_string (ha_server_state));
-	  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
-		  ER_HA_GENERIC_ERROR, 1, buffer);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_GENERIC_ERROR, 1,
+		  "failed to read LOG_DUMMY_HA_SERVER_STATE");
+	  break;
+	}
 
-	  la_Info.is_role_changed = true;
+      if (ha_server_state->state != HA_SERVER_STATE_ACTIVE
+	  && ha_server_state->state != HA_SERVER_STATE_TO_BE_STANDBY)
+	{
+	  if (la_Info.db_lockf_vdes != NULL_VOLDES)
+	    {
+	      snprintf (buffer, sizeof (buffer),
+			"the state of HA server (%s@%s) is changed to %s",
+			la_slave_db_name, la_peer_host,
+			css_ha_server_state_string (ha_server_state->state));
+	      er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
+		      ER_HA_GENERIC_ERROR, 1, buffer);
 
-	  return ER_INTERRUPTED;
+	      la_Info.is_role_changed = true;
+
+	      return ER_INTERRUPTED;
+	    }
+	}
+      else if (la_is_repl_lists_empty ())
+	{
+	  la_update_ha_apply_info_log_record_time (ha_server_state->at_time);
 	}
       break;
 
@@ -6483,6 +6586,7 @@ la_check_time_commit (struct timeval *time_commit, unsigned int threshold)
   int error = NO_ERROR;
   struct timeval curtime;
   int diff_msec;
+  bool need_commit = false;
 
   assert (time_commit);
 
@@ -6510,11 +6614,17 @@ la_check_time_commit (struct timeval *time_commit, unsigned int threshold)
       /* check for # of rows to commit */
       if (la_Info.prev_total_rows != la_Info.total_rows)
 	{
-	  error = la_log_commit (true);
+	  need_commit = true;
+	}
+
+      if (need_commit == true || la_Info.is_apply_info_updated == true)
+	{
+	  error = la_log_commit (need_commit);
 	  if (error == NO_ERROR)
 	    {
 	      /* sync with new one */
 	      la_Info.prev_total_rows = la_Info.total_rows;
+	      la_Info.is_apply_info_updated = false;
 	    }
 	}
       else
@@ -6684,6 +6794,7 @@ la_init (const char *log_path, const int max_mem_size)
   la_Info.last_deleted_archive_num = -1;
   la_Info.is_role_changed = false;
   la_Info.num_unflushed_insert = 0;
+  la_Info.is_apply_info_updated = false;
 
   la_Info.max_mem_size = max_mem_size;
   /* check vsize when it started */
@@ -7256,6 +7367,87 @@ la_find_last_deleted_arv_num (void)
   return arv_log_num;
 }
 
+static float
+la_get_avg (int *array, int size)
+{
+  int i, total = 0;
+
+  assert (size > 0);
+
+  for (i = 0; i < size; i++)
+    {
+      total += array[i];
+    }
+
+  return (float) total / size;
+}
+
+/*
+ * la_get_adaptive_time_commit_interval () - adjust commit interval
+ *                                      based on the replication delay
+ *   time_commit_interval(in/out): commit interval
+ *   delay_hist(in): delay history
+ *   return: none
+ */
+static void
+la_get_adaptive_time_commit_interval (int *time_commit_interval,
+				      int *delay_hist)
+{
+  int delay;
+  int max_commit_interval;
+  float avg_delay;
+  static int delay_hist_idx = 0;
+
+  if (la_Info.log_record_time != 0)
+    {
+      delay = time (NULL) - la_Info.log_record_time;
+    }
+  else
+    {
+      return;
+    }
+
+  max_commit_interval =
+    prm_get_integer_value (PRM_ID_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL_IN_MSECS);
+
+  if (delay > LA_MAX_TOLERABLE_DELAY)
+    {
+      *time_commit_interval = max_commit_interval;
+    }
+  else if (delay == 0)
+    {
+      *time_commit_interval /= 2;
+    }
+  /* check if delay history is filled up */
+  else if (delay_hist[delay_hist_idx] >= 0)
+    {
+      avg_delay = la_get_avg (delay_hist, LA_NUM_DELAY_HISTORY);
+
+      if (delay < avg_delay)
+	{
+	  *time_commit_interval /= 2;
+	}
+      else if (delay > avg_delay)
+	{
+	  *time_commit_interval *= 2;
+
+	  if (*time_commit_interval == 0)
+	    {
+	      *time_commit_interval = LA_REINIT_COMMIT_INTERVAL;
+	    }
+	  else if (*time_commit_interval > max_commit_interval)
+	    {
+	      *time_commit_interval = max_commit_interval;
+	    }
+	}
+    }
+
+  delay_hist[delay_hist_idx++] = delay;
+  delay_hist_idx %= LA_NUM_DELAY_HISTORY;
+
+  return;
+}
+
 /*
  * la_apply_log_file() - apply the transaction log to the slave
  *   return: int
@@ -7289,6 +7481,10 @@ la_apply_log_file (const char *database_name, const char *log_path,
   bool clear_owner;
   int now = 0, last_eof_time = 0;
   LOG_LSA last_eof_lsa;
+
+  int time_commit_interval;
+  int delay_hist[LA_NUM_DELAY_HISTORY];
+  int i;
 
   assert (database_name != NULL);
   assert (log_path != NULL);
@@ -7401,6 +7597,13 @@ la_apply_log_file (const char *database_name, const char *log_path,
       er_log_debug (ARG_FILE_LINE, "Cannot find last LSA from DB");
       return error;
     }
+
+  for (i = 0; i < LA_NUM_DELAY_HISTORY; i++)
+    {
+      delay_hist[i] = -1;
+    }
+  time_commit_interval =
+    prm_get_integer_value (PRM_ID_HA_APPLYLOGDB_MAX_COMMIT_INTERVAL_IN_MSECS);
 
   er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_LA_STARTED, 4,
 	  la_Info.required_lsa.pageid,
@@ -7800,7 +8003,11 @@ la_apply_log_file (const char *database_name, const char *log_path,
 	      LSA_COPY (&la_Info.final_lsa, &lrec->forw_lsa);
 	    }
 
-	  error = la_check_time_commit (&time_commit, 500 /* ms */ );
+	  /* commit */
+	  la_get_adaptive_time_commit_interval (&time_commit_interval,
+						delay_hist);
+
+	  error = la_check_time_commit (&time_commit, time_commit_interval);
 	  if (error != NO_ERROR)
 	    {
 	      /* check connection error */

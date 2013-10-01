@@ -79,6 +79,7 @@ EXPORTS
     db_change_query_spec
     db_check_authorization
     db_class_has_instance
+    db_clear_reconnect_reason
     db_close_session
     db_col_create
     db_col_domain
@@ -153,6 +154,7 @@ EXPORTS
     db_get_class_num_objs_and_pages
     db_get_class_privilege
     db_get_class_resolutions
+    db_get_connect_status    
     db_get_constraints
     db_get_currency_default
     db_get_database_name
@@ -198,6 +200,7 @@ EXPORTS
     db_get_type_name
     db_get_host_connected
     db_get_ha_server_state
+    db_get_need_reconnect
     db_grant
     db_identifier
     db_include_oid
@@ -285,6 +288,7 @@ EXPORTS
     db_get_session_id
     db_check_session
     db_end_session
+    db_set_connect_status
     db_set_server_session_key
     db_get_server_session_key
     db_get_row_count_cache
@@ -322,6 +326,7 @@ EXPORTS
     db_set_system_parameters
     db_set_preferred_hosts
     db_set_connect_order
+    db_set_reconnect_reason
     db_shutdown
     db_string_free
     db_synchronize_cache
@@ -343,6 +348,7 @@ EXPORTS
     db_trigger_priority
     db_trigger_status
     db_type_to_db_domain
+    db_unset_reconnect_reason
     db_validate
     db_validate_query_spec
     db_value_clear
@@ -552,6 +558,7 @@ EXPORTS
     db_check_authorization_and_grant_option
     db_chn
     db_clear_client_query_result
+    db_clear_host_connected
     db_col_add
     db_col_cardinality
     db_col_copy
@@ -879,3 +886,17 @@ EXPORTS
 	db_private_free_release
 	ws_mop
 	oid_compare
+;
+;   porting.h
+;
+	port_win_mutex_init_and_lock
+;
+; memory hash function
+;
+  mht_create
+  mht_destroy
+  mht_get
+  mht_put
+  mht_1strhash
+  mht_compare_strings_are_equal
+  mht_rem

@@ -67,6 +67,7 @@
 #endif /* WINDOWS */
 #include "connection_list_cl.h"
 #include "connection_cl.h"
+#include "master_util.h"
 
 #if defined(HPUX)
 /*
@@ -733,13 +734,21 @@ css_common_connect (const char *host_name, CSS_CONN_ENTRY * conn,
 	  return conn;
 	}
     }
+#if !defined (WINDOWS)
+  else if (errno == ETIMEDOUT)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ERR_CSS_TCP_CONNECT_TIMEDOUT, 2, host_name,
+			   timeout);
+    }
+#endif /* !WINDOWS */
   else
     {
       er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			   ERR_CSS_TCP_CANNOT_CONNECT_TO_MASTER, 1,
 			   host_name);
-
     }
+
   return NULL;
 }
 
@@ -895,8 +904,31 @@ css_connect_to_master_server (int master_port_id,
 		case SERVER_ALREADY_EXISTS:
 		  css_free_conn (conn);
 
-		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-			  ERR_CSS_SERVER_ALREADY_EXISTS, 1, server_name);
+#if defined(CS_MODE)
+		  if (IS_MASTER_CONN_NAME_HA_COPYLOG (server_name))
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ERR_CSS_COPYLOG_ALREADY_EXISTS, 1,
+			      GET_REAL_MASTER_CONN_NAME (server_name));
+		    }
+		  else if (IS_MASTER_CONN_NAME_HA_APPLYLOG (server_name))
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ERR_CSS_APPLYLOG_ALREADY_EXISTS, 1,
+			      GET_REAL_MASTER_CONN_NAME (server_name));
+		    }
+		  else if (IS_MASTER_CONN_NAME_HA_SERVER (server_name))
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ERR_CSS_SERVER_ALREADY_EXISTS, 1,
+			      GET_REAL_MASTER_CONN_NAME (server_name));
+		    }
+		  else
+#endif /* CS_MODE */
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ERR_CSS_SERVER_ALREADY_EXISTS, 1, server_name);
+		    }
 		  return NULL;
 
 		case SERVER_REQUEST_ACCEPTED_NEW:

@@ -199,12 +199,13 @@ Lệnh có thể dùng :\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
     on          tên-trung gian\n\
     off         tên-trung gian\n\
     reset       tên-trung gian\n\
     acl         <status|reload> [tên-trung gian]\n\
-    getid       -b <broker-name> [-f] shard-key\n
+    getid       -b <tên-trung gian> [-f] shard-key\n\
+    test        tên-trung gian [-D <database_name>] [-u <user_name>] [-p <user_password>] [-c <SQL_command>] [-i <input_file>] [-o <output_file>] [-v] [-s]\n
 27 tiện ích cubrid, phiên bản %s\n\
 cách sử dụng: %s manager <lệnh>\n\
 \n\
@@ -631,7 +632,9 @@ các tùy chọn hợp lệ:\n\
   -C, --CS-mode                thực thi chế độ client-server\n\
   -r, --repair                 sửa chữa khi tìm thấy sự không đồng nhất\n\
   -i, --input-class-file=FILE  tệp tin đầu vào của tên lớp\n\
-                               mặc định: kiểm tra tất cả các lớp\n
+                               mặc định: kiểm tra tất cả các lớp\n\
+      --check-prev-link        check only previous links of indices\n\
+      --repair-prev-link       repair previous links of indices\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB

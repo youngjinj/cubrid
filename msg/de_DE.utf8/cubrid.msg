@@ -1091,16 +1091,16 @@ $ LOADDB
 1022 Ungültiger Wert "%d" für Präfixlänge des Indexes.
 1023 Reservierter Fehlercode für HA.
 1024 Reservierter Fehlercode für HA.
-1025 Reservierter Fehlercode für HA.
-1026 Reservierter Fehlercode für HA.
+1025 HA delay info: The replication delay (%1$d secs) has exceeded the limit (%2$d secs).
+1026 HA delay info: The replication delay (%1$d secs) is decreased below the acceptable level (%2$d secs).
 1027 Log-Applier: Apply-Zustand konnte von '%1$s' auf '%2$s' nicht geändert werden.
 1028 Log-Applier: unerwarteter EOF Eintrag im Archivprotokoll. LSA: %1$lld|%2$d.
 1029 Log-Applier: ungültige Replikation-Protokollseite/-offset. Seite HDR: %1$1lld|%2$d, final: %3$lld|%4$d, append LSA: %5$lld|%6$d, EOF LSA: %7$lld|%8$d, ha Dateistatus: %9$d, its end-of-log: %10$d.
 1030 Log-Applier: ungültiger Replikationseintrag. LSA: %1$lld|%2$d, forw LSA: %3$lld|%4$d, backw LSA: %5$lld|%6$d, Trid: %7$d, prev tran LSA: %8$lld|%9$d, Typ: %10$d.
-1031 Log-Applier: Schema-Replikation-Log konnte nicht übernommen werden. Klasse: "%1$s", Schema: "%2$s", INTERNER FEHLER: %3$d. 
-1032 Log-Applier: Insert-Replikation-Log konnte nicht übernommen werden. Klasse: "%1$s", Schlüssel: "%2$s", INTERNER FEHLER: %3$d.  
-1033 Log-Applier: Update-Replikation-Log konnte nicht übernommen werden. Klasse: "%1$s", Schlüssel: "%2$s", INTERNER FEHLER: %3$d.  
-1034 Log-Applier: Löschen-Replikation-Log konnte nicht übernommen werden. Klasse: "%1$s", Schlüssel: "%2$s", INTERNER FEHLER: %3$d.  
+1031 log applier: failed to apply schema replication log. class: "%1$s", schema: "%2$s", server error: %3$d, %4$s. 
+1032 log applier: failed to apply insert replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1033 log applier: failed to apply update replication log. class: "%1$s", key: "%2$s", server error: %3$d.  
+1034 log applier: failed to apply delete replication log. class: "%1$s", key: "%2$s", server error: %3$d.
 1035 Log-Applier: Die Speichergrösse (%1$d MB) des Log-Appliers ist größer als der gesamte Speicher (%2$d MB) oder ist mehr als zweimal (%3$d MB) gewachsen. erforderlich LSA: %4$lld|%5$d. Letzter Mal LSA festgeschrieben: %6$lld|%7$d.
 1036 Log-Applier: Log-Applier hat sich selber heruntergefahren.
 1037 Log-Schreiber: Der Log-Schreiber hat sich selber heruntergefahren.
@@ -1199,6 +1199,17 @@ $ LOADDB
 1130 Transaktion wird abgebrochen, weil die Anzahl der Transaktionssperre %1$d überschreitet.
 1131 Interner Fehler: Die Seite %1$d des Volumen "%2$s" könnte beschädigt sein.\n%3$s
 1132 Encryption library failure: %s
+1133 Copylogdb for %1$s already exists.
+1134 Applylogdb for %1$s already exists.
+1135 A previous link of B+tree(%1$s) is corrupted.: vpid = (%2$d, %3$d)
+1136 A previous link of B+tree(%1$s) is repaired.: vpid = (%2$d, %3$d)
+1137 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
+1138 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
+1139 Handshake error (peer host %1$s): HA replication delayed.
+1140 Handshake error (peer host %1$s): replica-only client to non-replica server.
+1141 Handshake error (peer host %1$s): unidentified server version.
+1142 Handshake error (peer host %1$s): remote access to server not allowed.
+1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 Letzter Fehler
 

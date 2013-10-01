@@ -204,6 +204,16 @@ server_capabilities (void)
     {
       capabilities |= NET_CAP_REMOTE_DISABLED;
     }
+  if (css_is_ha_repl_delayed () == true)
+    {
+      capabilities |= NET_CAP_HA_REPL_DELAY;
+    }
+  if (prm_get_integer_value (PRM_ID_HA_MODE) == HA_MODE_REPLICA)
+    {
+      assert_release (css_ha_server_state () == HA_SERVER_STATE_STANDBY);
+      capabilities |= NET_CAP_HA_REPLICA;
+    }
+
   return capabilities;
 }
 
@@ -2742,7 +2752,7 @@ stran_server_commit (THREAD_ENTRY * thread_p, unsigned int rid,
 {
   TRAN_STATE state;
   int xretain_lock;
-  bool retain_lock, reset_on_commit;
+  bool retain_lock, reset_on_commit = false;
   OR_ALIGNED_BUF (OR_INT_SIZE + OR_INT_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
   char *ptr;
@@ -2787,22 +2797,38 @@ stran_server_commit (THREAD_ENTRY * thread_p, unsigned int rid,
 		    "(has_updated && to-be-standby && normal client) "
 		    "DB_CONNECTION_STATUS_RESET\n");
     }
-  else if (ha_state == HA_SERVER_STATE_STANDBY
-	   && thread_p->conn_entry->reset_on_commit == true
-	   && BOOT_CSQL_CLIENT_TYPE (client_type))
+  else if (ha_state == HA_SERVER_STATE_STANDBY)
     {
-      reset_on_commit = false;
-      thread_p->conn_entry->reset_on_commit = false;
-    }
-  else if (ha_state == HA_SERVER_STATE_STANDBY
-	   && thread_p->conn_entry->reset_on_commit == true
-	   && BOOT_NORMAL_CLIENT_TYPE (client_type))
-    {
-      reset_on_commit = true;
-      thread_p->conn_entry->reset_on_commit = false;
-      er_log_debug (ARG_FILE_LINE, "stran_server_commit: "
-		    "(standby && conn->reset_on_commit && normal client) "
-		    "DB_CONNECTION_STATUS_RESET\n");
+      if (BOOT_CSQL_CLIENT_TYPE (client_type))
+	{
+	  thread_p->conn_entry->reset_on_commit = false;
+	}
+      else if (BOOT_NORMAL_CLIENT_TYPE (client_type)
+	       && thread_p->conn_entry->reset_on_commit == true)
+	{
+	  reset_on_commit = true;
+	  thread_p->conn_entry->reset_on_commit = false;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_commit: "
+			"(standby && conn->reset_on_commit && normal client) "
+			"DB_CONNECTION_STATUS_RESET\n");
+	}
+      else if (BOOT_BROKER_AND_DEFAULT_CLIENT_TYPE (client_type)
+	       && css_is_ha_repl_delayed () == true)
+	{
+	  reset_on_commit = true;
+	  thread_p->conn_entry->reset_on_commit = false;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_commit: "
+			"(standby && replication delay "
+			"&& broker and default client) "
+			"DB_CONNECTION_STATUS_RESET\n");
+	}
+      else if (client_type == BOOT_CLIENT_BROKER)
+	{
+	  reset_on_commit = true;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_commit(): "
+			"(standby && read-write broker) "
+			"DB_CONNECTION_STATUS_RESET\n");
+	}
     }
   else if (ha_state == HA_SERVER_STATE_ACTIVE
 	   && client_type == BOOT_CLIENT_SLAVE_ONLY_BROKER)
@@ -2810,14 +2836,6 @@ stran_server_commit (THREAD_ENTRY * thread_p, unsigned int rid,
       reset_on_commit = true;
       er_log_debug (ARG_FILE_LINE, "stran_server_commit(): "
 		    "(active && slave only broker) "
-		    "DB_CONNECTION_STATUS_RESET\n");
-    }
-  else if (ha_state == HA_SERVER_STATE_STANDBY
-	   && client_type == BOOT_CLIENT_BROKER)
-    {
-      reset_on_commit = true;
-      er_log_debug (ARG_FILE_LINE, "stran_server_commit(): "
-		    "(standby && read-write broker) "
 		    "DB_CONNECTION_STATUS_RESET\n");
     }
   else if (ha_state == HA_SERVER_STATE_MAINTENANCE
@@ -2830,10 +2848,7 @@ stran_server_commit (THREAD_ENTRY * thread_p, unsigned int rid,
 		    "(maintenance && remote normal client type) "
 		    "DB_CONNECTION_STATUS_RESET\n");
     }
-  else
-    {
-      reset_on_commit = false;
-    }
+
   ptr = or_pack_int (ptr, (int) reset_on_commit);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
@@ -2892,22 +2907,39 @@ stran_server_abort (THREAD_ENTRY * thread_p, unsigned int rid,
 		    "(has_updated && to-be-standby && normal client) "
 		    "DB_CONNECTION_STATUS_RESET\n");
     }
-  else if (ha_state == HA_SERVER_STATE_STANDBY
-	   && thread_p->conn_entry->reset_on_commit == true
-	   && BOOT_CSQL_CLIENT_TYPE (client_type))
+  else if (ha_state == HA_SERVER_STATE_STANDBY)
     {
-      reset_on_commit = false;
-      thread_p->conn_entry->reset_on_commit = false;
-    }
-  else if (ha_state == HA_SERVER_STATE_STANDBY
-	   && thread_p->conn_entry->reset_on_commit == true
-	   && BOOT_NORMAL_CLIENT_TYPE (client_type))
-    {
-      reset_on_commit = true;
-      thread_p->conn_entry->reset_on_commit = false;
-      er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
-		    "(standby && conn->reset_on_commit && normal client) "
-		    "DB_CONNECTION_STATUS_RESET\n");
+      if (BOOT_CSQL_CLIENT_TYPE (client_type))
+	{
+	  thread_p->conn_entry->reset_on_commit = false;
+	}
+      else if (BOOT_NORMAL_CLIENT_TYPE (client_type)
+	       && thread_p->conn_entry->reset_on_commit == true)
+	{
+	  reset_on_commit = true;
+	  thread_p->conn_entry->reset_on_commit = false;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
+			"(standby && conn->reset_on_commit && normal client) "
+			"DB_CONNECTION_STATUS_RESET\n");
+
+	}
+      else if (BOOT_BROKER_AND_DEFAULT_CLIENT_TYPE (client_type)
+	       && css_is_ha_repl_delayed () == true)
+	{
+	  reset_on_commit = true;
+	  thread_p->conn_entry->reset_on_commit = false;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
+			"(standby && replication delay "
+			"&& default and broker client) "
+			"DB_CONNECTION_STATUS_RESET\n");
+	}
+      else if (client_type == BOOT_CLIENT_BROKER)
+	{
+	  reset_on_commit = true;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
+			"(standby && read-write broker) "
+			"DB_CONNECTION_STATUS_RESET\n");
+	}
     }
   else if (ha_state == HA_SERVER_STATE_ACTIVE
 	   && client_type == BOOT_CLIENT_SLAVE_ONLY_BROKER)
@@ -2915,14 +2947,6 @@ stran_server_abort (THREAD_ENTRY * thread_p, unsigned int rid,
       reset_on_commit = true;
       er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
 		    "(active && slave only broker) "
-		    "DB_CONNECTION_STATUS_RESET\n");
-    }
-  else if (ha_state == HA_SERVER_STATE_STANDBY
-	   && client_type == BOOT_CLIENT_BROKER)
-    {
-      reset_on_commit = true;
-      er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
-		    "(standby && read-write broker) "
 		    "DB_CONNECTION_STATUS_RESET\n");
     }
   else if (ha_state == HA_SERVER_STATE_MAINTENANCE
@@ -3919,7 +3943,17 @@ sboot_check_db_consistency (THREAD_ENTRY * thread_p, unsigned int rid,
     }
 
 function_exit:
+#if defined (CALLBACK_CONSOLE_PRINT)
+  /*
+   * To indicate results we really only need 2 ints, but the remote
+   * bo and callback routine was expecting to receive 3 ints.
+   */
+  ptr = or_pack_int (reply, (int) END_CALLBACK);
+  ptr = or_pack_int (ptr, success);
+  ptr = or_pack_int (ptr, 0xEEABCDFFL);	/* padding, not used */
+#else
   (void) or_pack_int (reply, success);
+#endif
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
 }
@@ -4571,7 +4605,7 @@ slargeobjmgr_length (THREAD_ENTRY * thread_p, unsigned int rid,
 }
 
 /*
- * sqst_update_class_statistics -
+ * sqst_update_statistics -
  *
  * return:
  *
@@ -4582,10 +4616,10 @@ slargeobjmgr_length (THREAD_ENTRY * thread_p, unsigned int rid,
  * NOTE:
  */
 void
-sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
-			      char *request, int reqlen)
+sqst_update_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
+			char *request, int reqlen)
 {
-  int error, do_now;
+  int error, do_now, with_fullscan;
   OID classoid;
   BTID btid;
   char *ptr;
@@ -4594,13 +4628,17 @@ sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 
   ptr = or_unpack_oid (request, &classoid);
   ptr = or_unpack_int (ptr, &do_now);
+  ptr = or_unpack_int (ptr, &with_fullscan);
   ptr = or_unpack_btid (ptr, &btid);
 
   if (do_now)
     {
       if (BTID_IS_NULL (&btid))
 	{
-	  error = xstats_update_class_statistics (thread_p, &classoid, NULL);
+	  error =
+	    xstats_update_statistics (thread_p, &classoid, NULL,
+				      (with_fullscan ? STATS_WITH_FULLSCAN :
+				       STATS_WITH_SAMPLING));
 	}
       else
 	{
@@ -4608,7 +4646,10 @@ sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 
 	  b.next = NULL;
 	  BTID_COPY (&b.btid, &btid);
-	  error = xstats_update_class_statistics (thread_p, &classoid, &b);
+	  error =
+	    xstats_update_statistics (thread_p, &classoid, &b,
+				      (with_fullscan ? STATS_WITH_FULLSCAN :
+				       STATS_WITH_SAMPLING));
 	}
       if (error != NO_ERROR)
 	{
@@ -4629,7 +4670,7 @@ sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 }
 
 /*
- * sqst_update_statistics -
+ * sqst_update_all_statistics -
  *
  * return:
  *
@@ -4640,14 +4681,20 @@ sqst_update_class_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
  * NOTE:
  */
 void
-sqst_update_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
-			char *request, int reqlen)
+sqst_update_all_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
+			    char *request, int reqlen)
 {
-  int error;
+  int error, with_fullscan;
+  char *ptr;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
 
-  error = xstats_update_statistics (thread_p);
+  ptr = or_unpack_int (request, &with_fullscan);
+
+  error =
+    xstats_update_all_statistics (thread_p,
+				  (with_fullscan ? STATS_WITH_FULLSCAN :
+				   STATS_WITH_SAMPLING));
   if (error != NO_ERROR)
     {
       return_error_to_client (thread_p, rid);
@@ -5775,6 +5822,11 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
       xmnt_server_start_stats (thread_p, false);
       xmnt_server_copy_stats (thread_p, &base_stats);
       gettimeofday (&start, NULL);
+
+      if (trace_slow_msec >= 0)
+	{
+	  thread_p->event_stats.trace_slow_query = true;
+	}
     }
 
   aligned_page_buf = PTR_ALIGN (page_buf, MAX_ALIGNMENT);
@@ -7951,6 +8003,51 @@ slogtb_dump_trantable (THREAD_ENTRY * thread_p, unsigned int rid,
 }
 
 /*
+ * xcallback_console_print -
+ *
+ * return:
+ *
+ *   print_str(in):
+ */
+int
+xcallback_console_print (THREAD_ENTRY * thread_p, char *print_str)
+{
+  OR_ALIGNED_BUF (OR_INT_SIZE * 3) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  unsigned int rid, rc;
+  int data_len, print_len;
+  char *ptr;
+  char *databuf;
+
+  rid = thread_get_comm_request_id (thread_p);
+  data_len = or_packed_string_length (print_str, &print_len);
+
+  ptr = or_pack_int (reply, (int) CONSOLE_OUTPUT);
+  ptr = or_pack_int (ptr, NO_ERROR);
+  ptr = or_pack_int (ptr, data_len);
+
+  databuf = (char *) db_private_alloc (thread_p, data_len);
+  if (databuf == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+	      1, data_len);
+      return ER_FAILED;
+    }
+  ptr = or_pack_string_with_length (databuf, print_str, print_len);
+  rc = css_send_reply_and_data_to_client (thread_p->conn_entry, rid, reply,
+					  OR_ALIGNED_BUF_SIZE (a_reply),
+					  databuf, data_len);
+  db_private_free_and_init (thread_p, databuf);
+
+  if (rc)
+    {
+      return ER_FAILED;
+    }
+
+  return NO_ERROR;
+}
+
+/*
  * xio_send_user_prompt_to_client -
  *
  * return:
@@ -8183,10 +8280,11 @@ sbtree_get_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_unpack_btid (request, &stat_info.btid);
   assert_release (!BTID_IS_NULL (&stat_info.btid));
 
-  stat_info.key_size = 0;	/* do not request pkeys info */
+  stat_info.keys = 0;
+  stat_info.pkeys_size = 0;	/* do not request pkeys info */
+  stat_info.pkeys = NULL;
 
-  success = (btree_get_stats (thread_p, &stat_info) == NO_ERROR)
-    ? NO_ERROR : ER_FAILED;
+  success = btree_get_stats (thread_p, &stat_info, STATS_WITH_FULLSCAN);
   if (success != NO_ERROR)
     {
       return_error_to_client (thread_p, rid);

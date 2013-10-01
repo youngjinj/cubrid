@@ -342,8 +342,15 @@ struct t_appl_server_info
   INT64 num_error_queries;
   INT64 num_interrupts;
   char auto_commit_mode;
+  bool fixed_conn_info;
   char database_name[MAX_HA_DBNAME_LENGTH];
+#if defined(AIX)
+  char database_host[MAXHOSTNAMELEN];
+#else
   char database_host[MAX_CONN_INFO_LENGTH];
+#endif
+  char database_user[SRV_CON_DBUSER_SIZE];
+  char database_passwd[SRV_CON_DBPASSWD_SIZE];
   char cci_default_autocommit;
   time_t last_connect_time;
   INT64 num_connect_requests;
@@ -365,6 +372,8 @@ struct t_appl_server_info
   short as_id;
 
   int advance_activate_flag;	/* it is used only in shard */
+  int proxy_conn_wait_timeout;	/* it is used only in shard */
+  bool force_reconnect;		/* it is used only in shard */
 };
 
 typedef struct t_client_info T_CLIENT_INFO;
@@ -474,6 +483,7 @@ struct t_proxy_info
   int proxy_access_log_reset;
 
   char port_name[SHM_PROXY_NAME_MAX];
+  bool fixed_conn_info;
 
   /* MOVE FROM T_BROKER_INFO */
   char access_log_file[CONF_LOG_FILE_LEN];
@@ -543,6 +553,7 @@ struct t_shm_appl_server
   bool access_control;
   int jdbc_cache_life_time;
   int connect_order;
+  int replica_only_flag;
 
 #if defined(WINDOWS)
   int as_port;
@@ -586,6 +597,7 @@ struct t_shm_appl_server
   int max_prepared_stmt_count;
   int num_access_info;
   int acl_chn;
+  int cas_rctime;		/* sec */
   bool monitor_hang_flag;
 #if !defined(WINDOWS)
   sem_t acl_sem;
