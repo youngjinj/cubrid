@@ -2319,17 +2319,6 @@ end:
       xmnt_server_start_stats (thread_p, false);
     }
 
-#if defined(MVCC_USE_COMMAND_ID)
-  if (error_flag == false)
-    {
-      logtb_inc_command_id (thread_p);
-    }
-  else
-    {
-      logtb_deactivate_command_id (thread_p);
-    }
-#endif
-
   if (mvcc_Enabled)
     {
       /* If error_flag is true, the command is canceled */
@@ -2714,17 +2703,6 @@ end:
     {
       xmnt_server_start_stats (thread_p, false);
     }
-
-#if defined(MVCC_USE_COMMAND_ID)
-  if (error_flag == false)
-    {
-      logtb_inc_command_id (thread_p);
-    }
-  else
-    {
-      logtb_deactivate_command_id (thread_p);
-    }
-#endif /* MVCC_USE_COMMAND_ID */
 
   if (mvcc_Enabled)
     {

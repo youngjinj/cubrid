@@ -2678,6 +2678,139 @@ eval_fnc (THREAD_ENTRY * thread_p, PRED_EXPR * pr, DB_TYPE * single_node_type)
 }
 
 /*
+ * update_logical_result () - checks DB_LOGICAL value and qualification 
+ *   return: new DB_LOGICAL value and qualification (if needed)
+ *   thread_p(in):
+ *   ev_res(in): logical value to be checked
+ *   qualification(in/out): a pointer to the qualification to be used in logical
+ *			    value check. This member can be modified.
+ *   key_filter(in): key filter info that will be used if ORACLE EMPTY STRING
+ *		     STYLE is activated
+ *   recdes(in): the record descriptor from wich values will be loaded into the
+ *		 key_filter attributes cache
+ *   oid(in): the OID of the current descriptor
+ */
+DB_LOGICAL
+update_logical_result (THREAD_ENTRY * thread_p, DB_LOGICAL ev_res,
+		       int *qualification, FILTER_INFO * key_filter,
+		       RECDES * recdes, OID * oid)
+{
+  int q;
+
+  if (ev_res == V_ERROR)
+    {
+      return ev_res;
+    }
+
+  if (qualification != NULL)
+    {
+      q = *qualification;
+      if (q == QPROC_QUALIFIED)
+	{
+	  if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
+	    {
+	      return V_FALSE;	/* not qualified, continue to the next tuple */
+	    }
+	}
+      else if (q == QPROC_NOT_QUALIFIED)
+	{
+	  if (ev_res != V_FALSE)	/* V_TRUE || V_UNKNOWN */
+	    {
+	      return V_FALSE;	/* qualified, continue to the next tuple */
+	    }
+	}
+      else if (q == QPROC_QUALIFIED_OR_NOT)
+	{
+	  if (ev_res == V_TRUE)
+	    {
+	      *qualification = QPROC_QUALIFIED;
+	    }
+	  else if (ev_res == V_FALSE)
+	    {
+	      *qualification = QPROC_NOT_QUALIFIED;
+	    }
+	  else			/* V_UNKNOWN */
+	    {
+	      /* nop */
+	      ;
+	    }
+	}
+      else
+	{			/* invalid value; the same as QPROC_QUALIFIED */
+	  if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
+	    {
+	      return V_FALSE;	/* not qualified, continue to the next tuple */
+	    }
+	}
+    }
+  if (key_filter != NULL
+      && prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
+    {
+      if (key_filter->num_vstr_ptr != NULL && *key_filter->num_vstr_ptr)
+	{
+	  int i;
+	  REGU_VARIABLE_LIST regup;
+	  DB_VALUE *dbvalp;
+
+	  /* read the key range the values from the heap into
+	   * the attribute cache */
+	  if (heap_attrinfo_read_dbvalues (thread_p,
+					   oid,
+					   recdes,
+					   key_filter->scan_attrs->
+					   attr_cache) != NO_ERROR)
+	    {
+	      return V_ERROR;
+	    }
+
+	  /* for all attributes specified in the key range,
+	   * apply special data filter; 'key range attr IS NOT NULL'
+	   */
+	  regup = key_filter->scan_pred->regu_list;
+	  for (i = 0; i < *key_filter->num_vstr_ptr && regup; i++)
+	    {
+	      if (key_filter->vstr_ids[i] == -1)
+		{
+		  continue;	/* skip and go ahead */
+		}
+
+	      if (fetch_peek_dbval (thread_p, &regup->value,
+				    key_filter->val_descr, NULL, NULL,
+				    NULL, &dbvalp) != NO_ERROR)
+		{
+		  return V_ERROR;	/* error */
+		}
+	      else if (DB_IS_NULL (dbvalp))
+		{
+		  return V_FALSE;	/* found Empty-string */
+		}
+
+	      regup = regup->next;
+	    }
+
+	  if (ev_res == V_TRUE && i < *key_filter->num_vstr_ptr)
+	    {
+	      /* must be impossible. unknown error */
+	      return V_ERROR;
+	    }
+	}
+    }
+  if (ev_res == V_ERROR)
+    {
+      return V_ERROR;
+    }
+  else
+    {
+      if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
+	{
+	  return V_FALSE;	/* not qualified, continue to the next tuple */
+	}
+    }
+
+  return V_TRUE;
+}
+
+/*
  * eval_data_filter () -
  *   return: DB_LOGICAL (V_TRUE, V_FALSE, V_UNKNOWN or V_ERROR)
  * 	 oid(in): pointer to OID

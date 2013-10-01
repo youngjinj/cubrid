@@ -747,5 +747,10 @@ extern DB_LOGICAL eval_data_filter (THREAD_ENTRY * thread_p, OID * oid,
 				    RECDES * recdes, FILTER_INFO * filter);
 extern DB_LOGICAL eval_key_filter (THREAD_ENTRY * thread_p, DB_VALUE * value,
 				   FILTER_INFO * filter);
+extern DB_LOGICAL update_logical_result (THREAD_ENTRY * thread_p,
+					 DB_LOGICAL ev_res,
+					 int *qualification,
+					 FILTER_INFO * key_filter,
+					 RECDES * recdes, OID * oid);
 
 #endif /* _QUERY_EVALUATOR_H_ */

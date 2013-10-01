@@ -1469,9 +1469,13 @@ typedef enum
   PT_SPEC_FLAG_KEY_INFO_SCAN = 0x80,	/* one of the spec's indexes will be
 					 * scanned for key information.
 					 */
-  PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN = 0x100	/* one of the spec's indexes will
+  PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN = 0x100,	/* one of the spec's indexes will
 						 * be scanned for b-tree node info
 						 */
+  PT_SPEC_FLAG_MVCC_COND_REEV = 0x200,	/* the spec is used in mvcc condition
+					 * reevaluation */
+  PT_SPEC_FLAG_MVCC_ASSIGN_REEV = 0x400	/* the spec is used in UPDATE
+					 * assignment reevaluation */
 } PT_SPEC_FLAG;
 
 typedef enum
@@ -2318,10 +2322,6 @@ typedef enum
   /* leave MVCC attributes at the end of record information */
   RESERVED_T_MVCC_INSID,
   RESERVED_T_MVCC_DELID,
-#if defined(MVCC_USE_COMMAND_ID)
-  RESERVED_T_MVCC_INS_CID,
-  RESERVED_T_MVCC_DEL_CID,
-#endif /* MVCC_USE_COMMAND_ID */
   RESERVED_T_MVCC_FLAGS,
   RESERVED_T_MVCC_NEXT_VERSION,
 
@@ -2637,8 +2637,11 @@ struct pt_select_info
 #define PT_SELECT_INFO_DUMMY		4	/* is dummy (i.e., 'SELECT * FROM x') ? */
 #define PT_SELECT_INFO_HAS_AGG		8	/* has any type of aggregation? */
 #define PT_SELECT_INFO_HAS_ANALYTIC	16	/* has analytic functions */
+#if 0
+/* disabled temporary in MVCC */
 #define PT_SELECT_INFO_MULTI_UPDATE_AGG	32	/* is query for multi-table update
 						 * using aggregate */
+#endif
 #define PT_SELECT_INFO_IDX_SCHEMA	64	/* is show index query */
 #define PT_SELECT_INFO_COLS_SCHEMA	128	/* is show columns query */
 #define PT_SELECT_FULL_INFO_COLS_SCHEMA	256	/* is show columns query */
@@ -2671,6 +2674,9 @@ struct pt_query_info
   char composite_locking;	/* 0 - off, 1 - on delete, 2 - on update */
   int upd_del_class_cnt;	/* number of classes affected by update or
 				 * delete in the generated SELECT statement */
+  int mvcc_reev_extra_cls_cnt;	/* number of extra OID - CLASS_OID pairs added
+				 * to the select list for condition and
+				 * assignment reevaluation in MVCC */
   unsigned has_outer_spec:1;	/* has outer join spec ? */
   unsigned is_sort_spec:1;	/* query is a sort spec expression */
   unsigned is_insert_select:1;	/* query is a sub-select for insert statement */

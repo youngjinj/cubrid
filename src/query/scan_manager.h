@@ -205,6 +205,8 @@ struct indx_scan_id
   SCAN_ATTRS key_attrs;		/* attr info from key filter */
   SCAN_PRED scan_pred;		/* scan predicates(filters) */
   SCAN_ATTRS pred_attrs;	/* attr info from predicates */
+  SCAN_PRED range_pred;		/* range predicates */
+  SCAN_ATTRS range_attrs;	/* attr info from range predicates */
   REGU_VARIABLE_LIST rest_regu_list;	/* regulator variable list */
   SCAN_ATTRS rest_attrs;	/* attr info from other than preds */
   KEY_VAL_RANGE *key_vals;	/* for eliminating duplicate ranges */
@@ -426,6 +428,8 @@ extern int scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				 REGU_VARIABLE_LIST regu_list_pred,
 				 PRED_EXPR * pr,
 				 REGU_VARIABLE_LIST regu_list_rest,
+				 PRED_EXPR * pr_range,
+				 REGU_VARIABLE_LIST regu_list_range,
 				 OUTPTR_LIST * output_val_list,
 				 REGU_VARIABLE_LIST regu_val_list,
 				 int num_attrs_key,
@@ -437,6 +441,9 @@ extern int scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				 int num_attrs_rest,
 				 ATTR_ID * attrids_rest,
 				 HEAP_CACHE_ATTRINFO * cache_rest,
+				 int num_attrs_range,
+				 ATTR_ID * attrids_range,
+				 HEAP_CACHE_ATTRINFO * cache_range,
 				 bool iscan_oid_order, QUERY_ID query_id);
 extern int scan_open_index_key_info_scan (THREAD_ENTRY * thread_p,
 					  SCAN_ID * scan_id,

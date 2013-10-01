@@ -34,6 +34,7 @@
 #include <assert.h>
 
 #include "storage_common.h"
+#include "mvcc.h"
 #include "log_comm.h"
 #include "recovery.h"
 #include "porting.h"
@@ -47,7 +48,6 @@
 #include "query_list.h"
 #include "lock_manager.h"
 #include "connection_globals.h"
-#include "mvcc.h"
 
 #if defined(SOLARIS)
 #include <netdb.h>		/* for MAXHOSTNAMELEN */
@@ -893,14 +893,6 @@ struct log_tdes
   /* bind values of executed queries in transaction */
   int num_exec_queries;
   DB_VALUE_ARRAY bind_history[MAX_NUM_EXEC_QUERY_HISTORY];
-
-#if defined(MVCC_USE_COMMAND_ID)
-  MVCC_COMMAND_ID mvcc_comm_id;	/* MVCC command id - increase with each
-				 * command that modified the data, 
-				 * inside transaction
-				 */
-  bool mvcc_comm_id_used;	/* true, if mvcc_comm_id is used */
-#endif				/* MVCC_USE_COMMAND_ID */
 
   LOG_INSERTED_DELETED log_ins_del;	/* Collects data about inserted/
 					 * deleted records during last
@@ -2203,21 +2195,13 @@ extern MVCCID logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes);
 extern MVCCID logtb_find_current_mvccid (THREAD_ENTRY * thread_p);
 extern MVCCID logtb_get_current_mvccid (THREAD_ENTRY * thread_p);
 
-#if defined(MVCC_USE_COMMAND_ID)
-extern MVCC_COMMAND_ID logtb_get_current_mvcc_command_id (THREAD_ENTRY *
-							  thread_p);
-extern int logtb_inc_command_id (THREAD_ENTRY * thread_p);
-extern void logtb_activate_command_id (THREAD_ENTRY * thread_p);
-extern void logtb_deactivate_command_id (THREAD_ENTRY * thread_p);
-#endif /* MVCC_USE_COMMAND_ID */
-
 extern bool logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);
 extern bool logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);
 extern bool logtb_is_mvccid_committed (THREAD_ENTRY * thread_p,
 				       MVCCID mvccid);
 extern MVCC_SNAPSHOT *logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p);
 extern void logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
-				 int status);
+				 bool committed);
 
 extern int logtb_update_command_inserted_deleted (THREAD_ENTRY * thread_p,
 						  const OID * class_oid,

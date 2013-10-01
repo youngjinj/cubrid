@@ -373,6 +373,8 @@ boot_initialize_client (BOOT_CLIENT_CREDENTIAL * client_credential,
 
   (void) db_set_page_size (db_desired_pagesize, db_desired_log_page_size);
 
+  or_init_header_size_and_offsets (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
+
   /* If db_path and/or log_path are NULL find the defaults */
 
   if (db_path_info->db_path == NULL)
@@ -1155,6 +1157,8 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
       error_code = er_errid ();
       goto error;
     }
+
+  or_init_header_size_and_offsets (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
 
   /* Reset the disk_level according to server.. */
   if (rel_disk_compatible () != boot_Server_credential.disk_compatibility)

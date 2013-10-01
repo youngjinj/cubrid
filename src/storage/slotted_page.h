@@ -124,12 +124,7 @@ struct spage_header
   int cont_free;		/* Contiguous free space on page */
   int offset_to_free_area;	/* Byte offset from the beginning of the page
 				   to the first free byte area on the page. */
-  int last_mvcc_id;		/* The ID of last modifying mvcc_id.
-				 * Only next scenarios are considered:
-				 * - an inserted record belonging to an aborted transaction
-				 * - a deleted record
-				 * - an updated record
-				 */
+  int reserved1;
   int flags;			/* Page flags */
   unsigned int is_saving:1;	/* True if saving is need for recovery (undo) */
   unsigned int need_update_best_hint:1;	/* True if we should update best pages hint
@@ -141,8 +136,7 @@ struct spage_header
    * affected by the compiler.
    */
   unsigned int reserved_bits:30;
-  int reserved1;
-  int reserved2;
+  MVCCID last_mvcc_id;
 };
 
 /* 4-byte disk storage slot design */
@@ -261,15 +255,14 @@ extern int spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 			      MVCCID lowest_active_mvccid,
 			      bool vacuum_page_only);
 extern int spage_execute_vacuum_page (THREAD_ENTRY * thread_p,
-				      PAGE_PTR page_p,
-				      VACUUM_PAGE_DATA vacuum_data);
+				      PAGE_PTR page_p, bool has_index,
+				      VACUUM_PAGE_DATA * vacuum_data_p);
 extern bool spage_should_vacuum_page (PAGE_PTR page_ptr,
 				      MVCCID oldest_active);
-extern void spage_finalize_vacuum_data (THREAD_ENTRY * thread_p,
-					VACUUM_PAGE_DATA * vacuum_data_p);
 extern void spage_mark_page_for_vacuum (THREAD_ENTRY * thread_p,
 					PAGE_PTR page_ptr, MVCCID mvcc_id);
 extern void spage_mark_page_as_vacuumed (THREAD_ENTRY * thread_p,
 					 PAGE_PTR page_ptr);
-
+extern int spage_mark_deleted_after_vacuum (THREAD_ENTRY * thread_p,
+					    PAGE_PTR page_p, PGSLOTID slotid);
 #endif /* _SLOTTED_PAGE_H_ */

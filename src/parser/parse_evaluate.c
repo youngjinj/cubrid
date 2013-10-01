@@ -682,14 +682,24 @@ pt_is_reference_to_reusable_oid (DB_VALUE * val)
 DB_VALUE *
 pt_find_value_of_label (const char *label)
 {
+  DB_VALUE *db_valp;
   if (!pt_Label_table || !label)
     {
       return NULL;
     }
   else
     {
-      return vid_flush_and_rehash_lbl ((DB_VALUE *)
-				       mht_get (pt_Label_table, label));
+      db_valp = (DB_VALUE *) mht_get (pt_Label_table, label);
+      if (db_valp != NULL && DB_VALUE_TYPE (db_valp) == DB_TYPE_OBJECT)
+	{
+	  db_valp = vid_flush_and_rehash_lbl (db_valp);
+
+	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	    {
+	      db_valp->data.op = ws_mvcc_get_last_version (db_valp->data.op);
+	    }
+	}
+      return db_valp;
     }
 }
 

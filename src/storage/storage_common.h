@@ -233,11 +233,7 @@ typedef char *PAGE_PTR;		/* Pointer to a page */
     / OR_OID_SIZE) \
    * OR_OID_SIZE)
 
-typedef unsigned int MVCCID;	/* MVCC ID */
-
-#if defined(MVCC_USE_COMMAND_ID)
-typedef unsigned int MVCC_COMMAND_ID;	/* Command identifier */
-#endif /* MVCC_USE_COMMAND_ID */
+typedef UINT64 MVCCID;		/* MVCC ID */
 
 /* TYPE DEFINITIONS RELATED TO KEY AND VALUES */
 
@@ -303,16 +299,15 @@ struct recdes
 typedef struct mvcc_rec_header MVCC_REC_HEADER;
 struct mvcc_rec_header
 {
-  int repid;			/* representation id */
-  int chn;			/* coherency number */
   MVCCID mvcc_ins_id;		/* mvcc insert id */
-  MVCCID mvcc_del_id;		/* mvcc delete id */
-#if defined(MVCC_USE_COMMAND_ID)
-  MVCC_COMMAND_ID mvcc_ins_cid;	/* mvcc command id */
-  MVCC_COMMAND_ID mvcc_del_cid;	/* mvcc command id */
-#endif				/* MVCC_USE_COMMAND_ID */
-  int mvcc_flags;		/* mvcc flags */
+  union
+  {
+    MVCCID mvcc_del_id;		/* mvcc delete id */
+    int chn;			/* cache coherency number */
+  };
   OID next_version;		/* next row version */
+  INT32 mvcc_flag:8;		/* mvcc flags */
+  INT32 repid:24;		/* representation id */
 };
 
 typedef struct lorecdes LORECDES;	/* Work area descriptor */
@@ -361,10 +356,6 @@ struct lorecdes
 /* Types ans defines of transaction managment */
 
 typedef int TRANID;		/* Transaction identifier      */
-
-#if defined(MVCC_USE_COMMAND_ID)
-#define MVCC_FIRST_COMMAND_ID  ((MVCC_COMMAND_ID) 0)
-#endif /* MVCC_USE_COMMAND_ID */
 
 #define NULL_TRANID     (-1)
 #define NULL_TRAN_INDEX (-1)
@@ -555,10 +546,6 @@ typedef enum
   HEAP_RECORD_INFO_T_CHN,
   HEAP_RECORD_INFO_T_MVCC_INSID,
   HEAP_RECORD_INFO_T_MVCC_DELID,
-#if defined(MVCC_USE_COMMAND_ID)
-  HEAP_RECORD_INFO_T_MVCC_INS_CID,
-  HEAP_RECORD_INFO_T_MVCC_DEL_CID,
-#endif /* MVCC_USE_COMMAND_ID */
   HEAP_RECORD_INFO_T_MVCC_FLAGS,
   HEAP_RECORD_INFO_T_MVCC_NEXT_VERSION,
 

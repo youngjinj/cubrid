@@ -64,6 +64,9 @@
 /* Is vpid NULL ? */
 #define VPID_ISNULL(vpid_ptr) ((vpid_ptr)->pageid == NULL_PAGEID)
 
+#define VPID_GET_FROM_OID(vpid_ptr, oid_ptr) \
+  VPID_SET (vpid_ptr, (oid_ptr)->volid, (oid_ptr)->pageid);
+
 #define pgbuf_unfix_and_init(thread_p, pgptr) \
   do { \
     pgbuf_unfix ((thread_p), (pgptr)); \

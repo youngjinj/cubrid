@@ -3126,6 +3126,8 @@ scan_open_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
  *   regu_list_pred(in):
  *   pr(in):
  *   regu_list_rest(in):
+ *   pr_range(in):
+ *   regu_list_range(in):
  *   num_attrs_key(in):
  *   attrids_key(in):
  *   num_attrs_pred(in):
@@ -3134,7 +3136,11 @@ scan_open_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
  *   num_attrs_rest(in):
  *   attrids_rest(in):
  *   cache_rest(in):
- *   keep_index_scan_order(in):
+ *   num_attrs_range(in):
+ *   attrids_range(in):
+ *   cache_range(in):
+ *   iscan_oid_order(in):
+ *   query_id(in):
  *
  * Note: If you feel the need
  */
@@ -3158,6 +3164,8 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 		      REGU_VARIABLE_LIST regu_list_pred,
 		      PRED_EXPR * pr,
 		      REGU_VARIABLE_LIST regu_list_rest,
+		      PRED_EXPR * pr_range,
+		      REGU_VARIABLE_LIST regu_list_range,
 		      OUTPTR_LIST * output_val_list,
 		      REGU_VARIABLE_LIST regu_val_list,
 		      int num_attrs_key,
@@ -3169,6 +3177,9 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 		      int num_attrs_rest,
 		      ATTR_ID * attrids_rest,
 		      HEAP_CACHE_ATTRINFO * cache_rest,
+		      int num_attrs_range,
+		      ATTR_ID * attrids_range,
+		      HEAP_CACHE_ATTRINFO * cache_range,
 		      bool iscan_oid_order, QUERY_ID query_id)
 {
   int ret = NO_ERROR;
@@ -3323,6 +3334,15 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   /* attribute information from predicates */
   scan_init_scan_attrs (&isidp->pred_attrs, num_attrs_pred, attrids_pred,
 			cache_pred);
+
+  /* scan range filter */
+  scan_init_scan_pred (&isidp->range_pred, regu_list_range, pr_range,
+		       ((pr_range) ? eval_fnc (thread_p, pr_range,
+					       &single_node_type) : NULL));
+
+  /* attribute information from range filter */
+  scan_init_scan_attrs (&isidp->range_attrs, num_attrs_range, attrids_range,
+			cache_range);
 
   /* regulator variable list for other than predicates */
   isidp->rest_regu_list = regu_list_rest;
@@ -4136,6 +4156,18 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       isidp->scancache_inited = true;
       if (isidp->caches_inited != true)
 	{
+	  if (isidp->range_pred.regu_list != NULL)
+	    {
+	      isidp->range_attrs.attr_cache->num_values = -1;
+	      ret = heap_attrinfo_start (thread_p, &isidp->cls_oid,
+					 isidp->range_attrs.num_attrs,
+					 isidp->range_attrs.attr_ids,
+					 isidp->range_attrs.attr_cache);
+	      if (ret != NO_ERROR)
+		{
+		  goto exit_on_error;
+		}
+	    }
 	  if (isidp->key_pred.regu_list != NULL)
 	    {
 	      isidp->key_attrs.attr_cache->num_values = -1;
@@ -4145,6 +4177,11 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 					 isidp->key_attrs.attr_cache);
 	      if (ret != NO_ERROR)
 		{
+		  if (isidp->range_pred.regu_list != NULL)
+		    {
+		      heap_attrinfo_end (thread_p,
+					 isidp->range_attrs.attr_cache);
+		    }
 		  goto exit_on_error;
 		}
 	    }
@@ -4155,6 +4192,10 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 				     isidp->pred_attrs.attr_cache);
 	  if (ret != NO_ERROR)
 	    {
+	      if (isidp->range_pred.regu_list != NULL)
+		{
+		  heap_attrinfo_end (thread_p, isidp->range_attrs.attr_cache);
+		}
 	      if (isidp->key_pred.regu_list != NULL)
 		{
 		  heap_attrinfo_end (thread_p, isidp->key_attrs.attr_cache);
@@ -4168,6 +4209,10 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 				     isidp->rest_attrs.attr_cache);
 	  if (ret != NO_ERROR)
 	    {
+	      if (isidp->range_pred.regu_list != NULL)
+		{
+		  heap_attrinfo_end (thread_p, isidp->range_attrs.attr_cache);
+		}
 	      if (isidp->key_pred.regu_list != NULL)
 		{
 		  heap_attrinfo_end (thread_p, isidp->key_attrs.attr_cache);
@@ -5006,8 +5051,17 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   RECDES recdes;
   SCAN_CODE sp_scan;
   DB_LOGICAL ev_res;
+  OID current_oid, *p_current_oid = NULL;
 
   hsidp = &scan_id->s.hsid;
+  if (mvcc_Enabled == true && scan_id->readonly_scan == false)
+    {
+      p_current_oid = &current_oid;
+    }
+  else
+    {
+      p_current_oid = &hsidp->curr_oid;
+    }
 
   /* set data filter information */
   scan_init_filter_info (&data_filter, &hsidp->scan_pred,
@@ -5039,6 +5093,29 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		    heap_next (thread_p, &hsidp->hfid, &hsidp->cls_oid,
 			       &hsidp->curr_oid, &recdes,
 			       &hsidp->scan_cache, scan_id->fixed);
+
+		  if (mvcc_Enabled == true && scan_id->readonly_scan == false
+		      && sp_scan == S_SUCCESS)
+		    {
+		      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+
+		      mvcc_reev_data.data_filter = &data_filter;
+		      mvcc_reev_data.key_filter = NULL;
+		      mvcc_reev_data.range_filter = NULL;
+		      mvcc_reev_data.qualification = &scan_id->qualification;
+		      COPY_OID (&current_oid, &hsidp->curr_oid);
+		      sp_scan =
+			heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
+						  &current_oid, &recdes,
+						  &hsidp->scan_cache,
+						  scan_id->fixed,
+						  &mvcc_reev_data);
+		      if (sp_scan == S_SUCCESS
+			  && mvcc_reev_data.filter_result == V_FALSE)
+			{
+			  continue;
+			}
+		    }
 		}
 	      else
 		{
@@ -5060,6 +5137,29 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		    heap_prev (thread_p, &hsidp->hfid, &hsidp->cls_oid,
 			       &hsidp->curr_oid, &recdes,
 			       &hsidp->scan_cache, scan_id->fixed);
+
+		  if (mvcc_Enabled == true && scan_id->readonly_scan == false
+		      && sp_scan == S_SUCCESS)
+		    {
+		      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+
+		      mvcc_reev_data.data_filter = &data_filter;
+		      mvcc_reev_data.key_filter = NULL;
+		      mvcc_reev_data.range_filter = NULL;
+		      mvcc_reev_data.qualification = &scan_id->qualification;
+		      COPY_OID (&current_oid, &hsidp->curr_oid);
+		      sp_scan =
+			heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
+						  &current_oid, &recdes,
+						  &hsidp->scan_cache,
+						  scan_id->fixed,
+						  &mvcc_reev_data);
+		      if (sp_scan == S_SUCCESS
+			  && mvcc_reev_data.filter_result == V_FALSE)
+			{
+			  continue;
+			}
+		    }
 		}
 	      else
 		{
@@ -5082,48 +5182,51 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
       /* evaluate the predicates to see if the object qualifies */
       scan_id->stats.read_rows++;
-      ev_res = eval_data_filter (thread_p, &hsidp->curr_oid, &recdes,
-				 &data_filter);
-      if (ev_res == V_ERROR)
+      if (mvcc_Enabled == false || scan_id->readonly_scan == true)
 	{
-	  return S_ERROR;
-	}
+	  ev_res = eval_data_filter (thread_p, p_current_oid, &recdes,
+				     &data_filter);
+	  if (ev_res == V_ERROR)
+	    {
+	      return S_ERROR;
+	    }
 
-      if (scan_id->qualification == QPROC_QUALIFIED)
-	{
-	  if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
+	  if (scan_id->qualification == QPROC_QUALIFIED)
 	    {
-	      continue;		/* not qualified, continue to the next tuple */
+	      if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
+		{
+		  continue;	/* not qualified, continue to the next tuple */
+		}
 	    }
-	}
-      else if (scan_id->qualification == QPROC_NOT_QUALIFIED)
-	{
-	  if (ev_res != V_FALSE)	/* V_TRUE || V_UNKNOWN */
+	  else if (scan_id->qualification == QPROC_NOT_QUALIFIED)
 	    {
-	      continue;		/* qualified, continue to the next tuple */
+	      if (ev_res != V_FALSE)	/* V_TRUE || V_UNKNOWN */
+		{
+		  continue;	/* qualified, continue to the next tuple */
+		}
 	    }
-	}
-      else if (scan_id->qualification == QPROC_QUALIFIED_OR_NOT)
-	{
-	  if (ev_res == V_TRUE)
+	  else if (scan_id->qualification == QPROC_QUALIFIED_OR_NOT)
 	    {
-	      scan_id->qualification = QPROC_QUALIFIED;
+	      if (ev_res == V_TRUE)
+		{
+		  scan_id->qualification = QPROC_QUALIFIED;
+		}
+	      else if (ev_res == V_FALSE)
+		{
+		  scan_id->qualification = QPROC_NOT_QUALIFIED;
+		}
+	      else		/* V_UNKNOWN */
+		{
+		  /* nop */
+		  ;
+		}
 	    }
-	  else if (ev_res == V_FALSE)
-	    {
-	      scan_id->qualification = QPROC_NOT_QUALIFIED;
-	    }
-	  else			/* V_UNKNOWN */
-	    {
-	      /* nop */
-	      ;
-	    }
-	}
-      else
-	{			/* invalid value; the same as QPROC_QUALIFIED */
-	  if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
-	    {
-	      continue;		/* not qualified, continue to the next tuple */
+	  else
+	    {			/* invalid value; the same as QPROC_QUALIFIED */
+	      if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
+		{
+		  continue;	/* not qualified, continue to the next tuple */
+		}
 	    }
 	}
 
@@ -5133,7 +5236,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	{
 	  /* read the rest of the values from the heap into the attribute
 	     cache */
-	  if (heap_attrinfo_read_dbvalues (thread_p, &hsidp->curr_oid,
+	  if (heap_attrinfo_read_dbvalues (thread_p, p_current_oid,
 					   &recdes,
 					   hsidp->rest_attrs.attr_cache)
 	      != NO_ERROR)
@@ -5146,7 +5249,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	    {
 	      if (fetch_val_list (thread_p, hsidp->rest_regu_list,
 				  scan_id->vd, &hsidp->cls_oid,
-				  &hsidp->curr_oid, NULL, PEEK) != NO_ERROR)
+				  p_current_oid, NULL, PEEK) != NO_ERROR)
 		{
 		  return S_ERROR;
 		}
@@ -5160,7 +5263,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	    {
 	      if (fetch_val_list (thread_p, hsidp->recordinfo_regu_list,
 				  scan_id->vd, &hsidp->cls_oid,
-				  &hsidp->curr_oid, NULL, PEEK) != NO_ERROR)
+				  p_current_oid, NULL, PEEK) != NO_ERROR)
 		{
 		  return S_ERROR;
 		}
@@ -5642,9 +5745,74 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      gettimeofday (&lookup_start, NULL);
 	    }
 
-	  sp_scan =
-	    heap_get (thread_p, isidp->curr_oidp, &recdes, &isidp->scan_cache,
-		      scan_id->fixed, NULL_CHN);
+	  if (mvcc_Enabled == false || scan_id->readonly_scan == true)
+	    {
+	      sp_scan =
+		heap_get (thread_p, isidp->curr_oidp, &recdes,
+			  &isidp->scan_cache, scan_id->fixed, NULL_CHN);
+	    }
+	  else
+	    {
+	      FILTER_INFO range_filter, key_filter;
+	      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+
+	      if (isidp->range_pred.regu_list != NULL)
+		{
+		  scan_init_filter_info (&range_filter, &isidp->range_pred,
+					 &isidp->range_attrs,
+					 scan_id->val_list, scan_id->vd,
+					 &isidp->cls_oid, 0, NULL,
+					 &isidp->num_vstr, isidp->vstr_ids);
+		  mvcc_reev_data.range_filter = &range_filter;
+		}
+	      else
+		{
+		  mvcc_reev_data.range_filter = NULL;
+		}
+	      if (isidp->key_pred.regu_list != NULL)
+		{
+		  scan_init_filter_info (&key_filter, &isidp->key_pred,
+					 &isidp->key_attrs, scan_id->val_list,
+					 scan_id->vd, &isidp->cls_oid,
+					 isidp->bt_num_attrs,
+					 isidp->bt_attr_ids, &isidp->num_vstr,
+					 isidp->vstr_ids);
+		  mvcc_reev_data.key_filter = &key_filter;
+		}
+	      else
+		{
+		  mvcc_reev_data.key_filter = NULL;
+		}
+	      if (data_filter.scan_pred->regu_list != NULL)
+		{
+		  mvcc_reev_data.data_filter = &data_filter;
+		}
+	      else
+		{
+		  mvcc_reev_data.data_filter = NULL;
+		}
+	      mvcc_reev_data.qualification = &scan_id->qualification;
+	      sp_scan = heap_mvcc_get_for_delete (thread_p,
+						  &isidp->hfid,
+						  isidp->curr_oidp,
+						  &recdes,
+						  &isidp->
+						  scan_cache,
+						  scan_id->fixed,
+						  &mvcc_reev_data);
+	      if (sp_scan == S_SUCCESS)
+		{
+		  switch (mvcc_reev_data.filter_result)
+		    {
+		    case V_ERROR:
+		      return S_ERROR;
+		    case V_FALSE:
+		      continue;
+		    default:
+		      break;
+		    }
+		}
+	    }
 
 	  if (sp_scan != S_SUCCESS && sp_scan != S_SNAPSHOT_NOT_SATISFIED)
 	    {
@@ -5758,119 +5926,35 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
 	      continue;		/* not qualified, continue to the next tuple */
 	    }
-	  else
+
+	  if (mvcc_Enabled == false || scan_id->readonly_scan == true)
 	    {
 	      /* evaluate the predicates to see if the object qualifies */
 	      ev_res =
 		eval_data_filter (thread_p, isidp->curr_oidp, &recdes,
 				  &data_filter);
-	    }
-	  if (ev_res == V_ERROR)
-	    {
-	      return S_ERROR;
-	    }
-
-	  if (scan_id->qualification == QPROC_QUALIFIED)
-	    {
-	      if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
+	      if (isidp->key_pred.regu_list != NULL)
 		{
-		  continue;	/* not qualified, continue to the next tuple */
+		  FILTER_INFO key_filter;
+
+		  scan_init_filter_info (&key_filter, &isidp->key_pred,
+					 &isidp->key_attrs, scan_id->val_list,
+					 scan_id->vd, &isidp->cls_oid,
+					 isidp->bt_num_attrs,
+					 isidp->bt_attr_ids, &isidp->num_vstr,
+					 isidp->vstr_ids);
+		  ev_res =
+		    update_logical_result (thread_p, ev_res,
+					   (int *) &scan_id->qualification,
+					   &key_filter, &recdes,
+					   isidp->curr_oidp);
 		}
-	    }
-	  else if (scan_id->qualification == QPROC_NOT_QUALIFIED)
-	    {
-	      if (ev_res != V_FALSE)	/* V_TRUE || V_UNKNOWN */
+	      else
 		{
-		  continue;	/* qualified, continue to the next tuple */
-		}
-	    }
-	  else if (scan_id->qualification == QPROC_QUALIFIED_OR_NOT)
-	    {
-	      if (ev_res == V_TRUE)
-		{
-		  scan_id->qualification = QPROC_QUALIFIED;
-		}
-	      else if (ev_res == V_FALSE)
-		{
-		  scan_id->qualification = QPROC_NOT_QUALIFIED;
-		}
-	      else		/* V_UNKNOWN */
-		{
-		  /* nop */
-		  ;
-		}
-	    }
-	  else
-	    {			/* invalid value; the same as QPROC_QUALIFIED */
-	      if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
-		{
-		  continue;	/* not qualified, continue to the next tuple */
-		}
-	    }
-
-	  if (prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
-	    {
-	      if (isidp->num_vstr)
-		{
-		  int i;
-		  REGU_VARIABLE_LIST regup;
-		  DB_VALUE *dbvalp;
-
-		  /* read the key range the values from the heap into
-		   * the attribute cache */
-		  if (heap_attrinfo_read_dbvalues (thread_p,
-						   isidp->curr_oidp,
-						   &recdes,
-						   isidp->key_attrs.
-						   attr_cache) != NO_ERROR)
-		    {
-		      return S_ERROR;
-		    }
-
-		  /* for all attributes specified in the key range,
-		   * apply special data filter; 'key range attr IS NOT NULL'
-		   */
-		  regup = isidp->key_pred.regu_list;
-		  for (i = 0; i < isidp->num_vstr && regup; i++)
-		    {
-		      if (isidp->vstr_ids[i] == -1)
-			{
-			  continue;	/* skip and go ahead */
-			}
-
-		      if (fetch_peek_dbval (thread_p, &regup->value,
-					    scan_id->vd, NULL, NULL,
-					    NULL, &dbvalp) != NO_ERROR)
-			{
-			  ev_res = V_ERROR;	/* error */
-			  break;
-			}
-		      else if (DB_IS_NULL (dbvalp))
-			{
-			  ev_res = V_FALSE;	/* found Empty-string */
-			  break;
-			}
-
-		      regup = regup->next;
-		    }
-
-		  if (ev_res == V_TRUE && i < isidp->num_vstr)
-		    {
-		      /* must be impossible. unknown error */
-		      ev_res = V_ERROR;
-		    }
-		}
-	    }
-
-	  if (ev_res == V_ERROR)
-	    {
-	      return S_ERROR;
-	    }
-	  else
-	    {
-	      if (ev_res != V_TRUE)	/* V_FALSE || V_UNKNOWN */
-		{
-		  continue;	/* not qualified, continue to the next tuple */
+		  ev_res =
+		    update_logical_result (thread_p, ev_res,
+					   (int *) &scan_id->qualification,
+					   NULL, NULL, NULL);
 		}
 	    }
 

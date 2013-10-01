@@ -832,22 +832,24 @@ tf_mem_to_disk (MOP classmop, MOBJ classobj,
       /* offset size */
       OR_SET_VAR_OFFSET_SIZE (repid_bits, offset_size);
 
-      or_put_int (buf, repid_bits);
-
       chn = WS_CHN (obj) + 1;
-      or_put_int (buf, chn);
 
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{
 	  /* default values for mvcc fields */
-	  or_put_int (buf, 0);	/* mvcc insert id */
-	  or_put_int (buf, 0);	/* mvcc delete id */
-#if defined(MVCC_USE_COMMAND_ID)
-	  or_put_int (buf, 0);	/* mvcc insert command id */
-	  or_put_int (buf, 0);	/* mvcc insert delete id */
-#endif /* MVCC_USE_COMMAND_ID */
-	  or_put_int (buf, 0);	/* mvcc flags */
+	  or_put_bigint (buf, 0);	/* mvcc insert id */
+	  /* For now put CHN instead of delete MVCCID. It will be replaced
+	   * later.
+	   */
+	  or_put_int (buf, chn);	/* CHN */
+	  or_put_int (buf, 0);	/* dummy */
 	  or_put_oid (buf, (OID *) & oid_Null_oid);	/* mvcc next version */
+	  or_put_int (buf, repid_bits);
+	}
+      else
+	{
+	  or_put_int (buf, repid_bits);
+	  or_put_int (buf, chn);
 	}
 
       /* variable info block */
@@ -1359,24 +1361,39 @@ tf_disk_to_mem (MOBJ classobj, RECDES * record, int *convertp)
       /* offset size */
       offset_size = OR_GET_OFFSET_SIZE (buf->ptr);
 
-      repid_bits = or_get_int (buf, &rc);
-      chn = or_get_int (buf, &rc);
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{
-	  /* skip mvcc fields */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert id */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc delete id */
-#if defined(MVCC_USE_COMMAND_ID)
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert command id */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert delete id */
-#endif /* MVCC_USE_COMMAND_ID */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc flags */
-	  or_advance (buf, OR_OID_SIZE);	/* mvcc next version */
-	}
+	  int repid_and_flag_bits;
+	  int chn;
+	  char mvcc_flags;
 
-      /* mask out the repid & bound bit flag  & offset size flag */
-      repid = repid_bits & ~OR_BOUND_BIT_FLAG & ~OR_OFFSET_SIZE_FLAG;
-      bound_bit_flag = repid_bits & OR_BOUND_BIT_FLAG;
+	  /* skip unnecessary mvcc fields */
+	  or_advance (buf, OR_INT64_SIZE);	/* mvcc insert id */
+	  chn = or_get_int (buf, &rc);	/* mvcc delete id or chn */
+	  or_advance (buf, OR_INT_SIZE);
+	  or_advance (buf, OR_OID_SIZE);	/* mvcc next version */
+	  repid_and_flag_bits = or_get_int (buf, &rc);	/* repid & flags */
+	  repid = repid_and_flag_bits & OR_MVCC_REPID_MASK;
+	  bound_bit_flag = repid_and_flag_bits & OR_BOUND_BIT_FLAG;
+
+	  mvcc_flags =
+	    (char) ((repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS)
+		    & OR_MVCC_FLAG_MASK);
+	  if ((mvcc_flags & OR_MVCC_FLAG_VALID_DELID) != 0)
+	    {
+	      /* CHN/Delete MVCCID is not used for CHN */
+	      chn = NULL_CHN;
+	    }
+	}
+      else
+	{
+	  repid_bits = or_get_int (buf, &rc);
+	  chn = or_get_int (buf, &rc);
+
+	  /* mask out the repid & bound bit flag  & offset size flag */
+	  repid = repid_bits & ~OR_BOUND_BIT_FLAG & ~OR_OFFSET_SIZE_FLAG;
+	  bound_bit_flag = repid_bits & OR_BOUND_BIT_FLAG;
+	}
 
       if (repid == class_->repid)
 	{
@@ -4343,22 +4360,24 @@ tf_disk_to_class (OID * oid, RECDES * record)
       /* offset size */
       assert (OR_GET_OFFSET_SIZE (buf->ptr) == BIG_VAR_OFFSET_SIZE);
 
-      repid = or_get_int (buf, &rc);
-      repid = repid & ~OR_OFFSET_SIZE_FLAG;
-
-      chn = or_get_int (buf, &rc);
-
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{
-	  /* skip mvcc fields */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert id */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc delete id */
-#if defined(MVCC_USE_COMMAND_ID)
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert command id */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc insert delete id */
-#endif /* MVCC_USE_COMMAND_ID */
-	  or_advance (buf, OR_INT_SIZE);	/* mvcc flags */
+	  int repid_and_flag_bits;
+
+	  /* skip unnecessary mvcc fields */
+	  or_advance (buf, OR_INT64_SIZE);	/* mvcc insert id */
+	  chn = or_get_int (buf, &rc);	/* mvcc delete id or chn */
+	  or_advance (buf, OR_INT_SIZE);
 	  or_advance (buf, OR_OID_SIZE);	/* mvcc next version */
+	  repid_and_flag_bits = or_get_int (buf, &rc);	/* repid & flags */
+	  repid = repid_and_flag_bits & OR_MVCC_REPID_MASK;
+	}
+      else
+	{
+	  repid = or_get_int (buf, &rc);
+	  repid = repid & ~OR_OFFSET_SIZE_FLAG;
+
+	  chn = or_get_int (buf, &rc);
 	}
 
       if (oid_is_root (oid))
@@ -4490,24 +4509,24 @@ tf_class_to_disk (MOBJ classobj, RECDES * record)
       /* representation id, offset size */
       repid = 0;
       OR_SET_VAR_OFFSET_SIZE (repid, BIG_VAR_OFFSET_SIZE);	/* 4byte */
-      or_put_int (buf, repid);
 
       /* chn - need to handle overflow */
       chn = class_->header.obj_header.chn + 1;
-      or_put_int (buf, chn);
       class_->header.obj_header.chn = chn;
 
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{
-	  /* set mvcc fields */
-	  or_put_int (buf, 0);	/* mvcc insert id */
-	  or_put_int (buf, 0);	/* mvcc delete id */
-#if defined(MVCC_USE_COMMAND_ID)
-	  or_put_int (buf, 0);	/* mvcc insert command id */
-	  or_put_int (buf, 0);	/* mvcc insert delete id */
-#endif /* MVCC_USE_COMMAND_ID */
-	  or_put_int (buf, 0);	/* mvcc flags */
+	  /* default values for mvcc fields */
+	  or_put_bigint (buf, 0);	/* mvcc insert id */
+	  or_put_int (buf, chn);	/* CHN */
+	  or_put_int (buf, 0);	/* dummy */
 	  or_put_oid (buf, (OID *) & oid_Null_oid);	/* mvcc next version */
+	  or_put_int (buf, repid);
+	}
+      else
+	{
+	  or_put_int (buf, repid);
+	  or_put_int (buf, chn);
 	}
 
       if (header->type == Meta_root)

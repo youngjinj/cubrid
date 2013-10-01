@@ -29,24 +29,99 @@
 #include "storage_common.h"
 #include "vacuum.h"
 
+#define MVCC_FLAG_VALID_DELID	OR_MVCC_FLAG_VALID_DELID
+#define MVCC_FLAG_ENABLED	OR_MVCC_FLAG_ENABLED
+
+/* MVCC Header Macros */
+#define MVCC_GET_INSID(header)   \
+  ((header)->mvcc_ins_id)
+
+#define MVCC_SET_INSID(header, mvcc_id)   \
+  ((header)->mvcc_ins_id = (mvcc_id))
+
+#define MVCC_GET_DELID(header)   \
+  ((header)->mvcc_del_id)
+
+#define MVCC_SET_DELID(header, mvcc_id)   \
+  ((header)->mvcc_del_id = (mvcc_id))
+
+#define MVCC_SET_NEXT_VERSION(header, next_oid_version)  \
+  ((header)->next_version = *(next_oid_version))
+
+#define MVCC_GET_NEXT_VERSION(header)  \
+  ((header)->next_version)
+
+#define MVCC_GET_REPID(header)	\
+  ((header)->repid)
+
+#define MVCC_SET_REPID(header, rep_id)	\
+  ((header)->repid = (rep_id))
+
+#define MVCC_GET_CHN(header)  \
+  ((header)->chn)
+
+#define MVCC_SET_CHN(header, chn_)  \
+  ((header)->chn = chn_)
+
+#define MVCC_GET_FLAG(header) \
+  ((header)->mvcc_flag)
+
+#define MVCC_SET_FLAG(header, flag) \
+  ((header)->mvcc_flag = flag)
+
+#define MVCC_IS_FLAG_SET(rec_header_p, flags) \
+  (((rec_header_p)->mvcc_flag & (flags)) == (flags))
+
+#define MVCC_SET_FLAG_BITS(rec_header_p, flag) \
+  ((rec_header_p)->mvcc_flag |= flag)
+
+#define MVCC_CLEAR_FLAG_BITS(rec_header_p, flag) \
+  ((rec_header_p)->mvcc_flag &= ~flag)
+
+/* MVCC Snapshot Macros */
 #define MVCC_SNAPSHOT_GET_LOWEST_ACTIVE_ID(snapshot) \
   ((snapshot)->lowest_active_mvccid)
 
 #define MVCC_SNAPSHOT_GET_HIGHEST_COMMITTED_ID(snapshot) \
   ((snapshot)->highest_completed_mvccid)
 
-#if defined(MVCC_USE_COMMAND_ID)
-#define MVCC_SNAPSHOT_GET_COMMAND_ID(snapshot) \
-  ((snapshot)->current_command_id)
-#endif /* MVCC_USE_COMMAND_ID */
+/* MVCC Record Macros */
+
+/* Check if record is inserted by current transaction */
+#define MVCC_IS_REC_INSERTED_BY_ME(thread_p, rec_header_p)	\
+  (logtb_is_current_mvccid (thread_p, (rec_header_p)->mvcc_ins_id))
+
+/* Check if record is deleted by current transaction */
+#define MVCC_IS_REC_DELETED_BY_ME(thread_p, rec_header_p)	\
+  (logtb_is_current_mvccid (thread_p, (rec_header_p)->mvcc_del_id))
+
+/* Check if record was inserted by the transaction identified by mvcc_id */
+#define MVCC_IS_REC_INSERTED_BY(rec_header_p, mvcc_id)	\
+  ((rec_header_p)->mvcc_ins_id == mvcc_id)
+
+/* Check if record was deleted by the transaction identified by mvcc_id */
+#define MVCC_IS_REC_DELETED_BY(rec_header_p, mvcc_id)	\
+  ((rec_header_p)->mvcc_del_id == mvcc_id)
+
+/* Check whether MVCC is disabled for this record */
+#define MVCC_IS_DISABLED(rec_header_p)	\
+  (((rec_header_p)->mvcc_flag & MVCC_FLAG_ENABLED) == 0)
+
+/* Check if record has a valid chn. This is true when:
+ *  1. MVCC is disabled for current record (and in-place update is used).
+ *  2. MVCC is inserted by current transaction (checking whether it was
+ *     deleted is not necessary. Other transactions cannot delete it, while
+ *     current transaction would remove it completely.
+ */
+#define MVCC_IS_REC_CHN_VALID(thread_p, rec_header_p)	    \
+  (MVCC_IS_DISABLED (rec_header_p)			    \
+    || MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header_p))
 
 typedef struct mvcc_snapshot MVCC_SNAPSHOT;
 
 typedef bool (*MVCC_SNAPSHOT_FUNC) (THREAD_ENTRY * thread_p,
 				    MVCC_REC_HEADER * rec_header,
-				    MVCC_SNAPSHOT * snapshot,
-				    PAGE_PTR page_ptr);
-
+				    MVCC_SNAPSHOT * snapshot);
 struct mvcc_snapshot
 {
   MVCC_SNAPSHOT_FUNC snapshot_fnc;
@@ -62,10 +137,6 @@ struct mvcc_snapshot
   MVCCID *active_child_ids;	/* active children */
 
   unsigned int cnt_active_child_ids;	/* count active child ids */
-
-#if defined(MVCC_USE_COMMAND_ID)
-  MVCC_COMMAND_ID current_command_id;	/* current command id */
-#endif				/* MVCC_USE_COMMAND_ID */
 };
 
 typedef enum mvcc_satisfies_delete_result MVCC_SATISFIES_DELETE_RESULT;
@@ -73,9 +144,6 @@ enum mvcc_satisfies_delete_result
 {
   DELETE_RECORD_INVISIBLE,	/* invisible - created after scan started */
   DELETE_RECORD_CAN_DELETE,	/* is visible and valid - can be deleted */
-#if defined(MVCC_USE_COMMAND_ID)
-  DELETE_RECORD_SELF_DELETED,	/* deleted by current transaction */
-#endif				/* MVCC_USE_COMMAND_ID */
   DELETE_RECORD_DELETED,	/* deleted by committed transaction */
   DELETE_RECORD_IN_PROGRESS	/* deleted by other in progress transaction */
 };				/* Heap record satisfies delete result */
@@ -97,14 +165,13 @@ enum mvcc_satisfies_vacuum_result
 
 extern bool mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
 				     MVCC_REC_HEADER * rec_header,
-				     MVCC_SNAPSHOT * snapshot, PAGE_PTR page);
+				     MVCC_SNAPSHOT * snapshot);
 extern MVCC_SATISFIES_VACUUM_RESULT mvcc_satisfies_vacuum (THREAD_ENTRY *
 							   thread_p,
 							   MVCC_REC_HEADER *
 							   rec_header,
 							   MVCCID
-							   oldest_mvccid,
-							   PAGE_PTR page_p);
+							   oldest_mvccid);
 extern int mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p,
 					PAGE_PTR * page_p, VPID page_vpid,
 					PGSLOTID slotid, bool reuse_oid,
@@ -114,18 +181,20 @@ extern int mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p,
 extern MVCC_SATISFIES_DELETE_RESULT mvcc_satisfies_delete (THREAD_ENTRY *
 							   thread_p,
 							   MVCC_REC_HEADER *
-							   rec_header,
-#if defined(MVCC_USE_COMMAND_ID)
-							   MVCC_COMMAND_ID
-							   mvcc_curr_cid,
-#endif				/* MVCC_USE_COMMAND_ID */
-							   PAGE_PTR page);
+							   rec_header);
 
-extern bool mvcc_satisfies_dirty (THREAD_ENTRY *
-				  thread_p,
-				  MVCC_REC_HEADER *
-				  rec_header,
-				  MVCC_SNAPSHOT * snapshot, PAGE_PTR page);
+extern bool mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
+				  MVCC_REC_HEADER * rec_header,
+				  MVCC_SNAPSHOT * snapshot);
 extern bool mvcc_id_precedes (MVCCID id1, MVCCID id2);
 extern bool mvcc_id_follow_or_equal (MVCCID id1, MVCCID id2);
+
+extern int mvcc_allocate_vacuum_data (THREAD_ENTRY * thread_p,
+				      VACUUM_PAGE_DATA * vacuum_data_p,
+				      int n_slots);
+extern void mvcc_init_vacuum_data (THREAD_ENTRY * thread_p,
+				   VACUUM_PAGE_DATA * vacuum_data_p,
+				   int n_slots);
+extern void mvcc_finalize_vacuum_data (THREAD_ENTRY * thread_p,
+				       VACUUM_PAGE_DATA * vacuum_data_p);
 #endif /* _MVCC_SNAPSHOT_H_ */

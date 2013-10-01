@@ -1450,7 +1450,7 @@ stx_restore_method_sig_list (THREAD_ENTRY * thread_p, char *ptr)
 static METHOD_SIG *
 stx_restore_method_sig (THREAD_ENTRY * thread_p, char *ptr, int count)
 {
-  METHOD_SIG *method_sig, *next;
+  METHOD_SIG *method_sig;
 
   if (ptr == NULL)
     {
@@ -2443,6 +2443,8 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
   ptr = or_unpack_int (ptr, &xasl->composite_locking);
 
   ptr = or_unpack_int (ptr, &xasl->upd_del_class_cnt);
+
+  ptr = or_unpack_int (ptr, &xasl->mvcc_reev_extra_cls_cnt);
 
   /*
    * Note that the composite lock block is strictly a server side block
@@ -3710,6 +3712,25 @@ stx_build_update_class_info (THREAD_ENTRY * thread_p, char *ptr,
   assert ((upd_cls->no_lob_attrs && upd_cls->lob_attr_ids)
 	  || (!upd_cls->no_lob_attrs && !upd_cls->lob_attr_ids));
 
+/* no_extra_assign_reev & mvcc_extra_assign_reev */
+  ptr = or_unpack_int (ptr, &upd_cls->no_extra_assign_reev);
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0 || upd_cls->no_extra_assign_reev == 0)
+    {
+      upd_cls->mvcc_extra_assign_reev = NULL;
+    }
+  else
+    {
+      upd_cls->mvcc_extra_assign_reev =
+	stx_restore_int_array (thread_p,
+			       &xasl_unpack_info->packed_xasl[offset],
+			       upd_cls->no_extra_assign_reev);
+      if (upd_cls->mvcc_extra_assign_reev == NULL)
+	{
+	  return NULL;
+	}
+    }
+
   return ptr;
 }
 
@@ -3982,6 +4003,26 @@ stx_build_update_proc (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &update_info->no_logging);
   ptr = or_unpack_int (ptr, &update_info->release_lock);
   ptr = or_unpack_int (ptr, &(update_info->no_orderby_keys));
+
+  /* restore MVCC condition reevaluation data */
+  ptr = or_unpack_int (ptr, &update_info->no_assign_reev_classes);
+  ptr = or_unpack_int (ptr, &update_info->no_reev_classes);
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0 || update_info->no_reev_classes == 0)
+    {
+      update_info->mvcc_reev_classes = NULL;
+    }
+  else
+    {
+      update_info->mvcc_reev_classes =
+	stx_restore_int_array (thread_p,
+			       &xasl_unpack_info->packed_xasl[offset],
+			       update_info->no_reev_classes);
+      if (update_info->mvcc_reev_classes == NULL)
+	{
+	  goto error;
+	}
+    }
 
   return ptr;
 
@@ -4707,6 +4748,22 @@ stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      access_spec->where_range = NULL;
+    }
+  else
+    {
+      access_spec->where_range =
+	stx_restore_pred_expr (thread_p,
+			       &xasl_unpack_info->packed_xasl[offset]);
+      if (access_spec->where_range == NULL)
+	{
+	  goto error;
+	}
+    }
+
   switch (access_spec->type)
     {
     case TARGET_CLASS:
@@ -5015,6 +5072,22 @@ stx_build_cls_spec_type (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
     {
+      cls_spec->cls_regu_list_range = NULL;
+    }
+  else
+    {
+      cls_spec->cls_regu_list_range =
+	stx_restore_regu_variable_list (thread_p, &xasl_unpack_info->
+					packed_xasl[offset]);
+      if (cls_spec->cls_regu_list_range == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
       cls_spec->cls_output_val_list = NULL;
     }
   else
@@ -5180,6 +5253,40 @@ stx_build_cls_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 	stx_restore_regu_variable_list (thread_p, &xasl_unpack_info->
 					packed_xasl[offset]);
       if (cls_spec->cls_regu_list_reserved == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &cls_spec->num_attrs_range);
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0 || cls_spec->num_attrs_range == 0)
+    {
+      cls_spec->attrids_range = NULL;
+    }
+  else
+    {
+      cls_spec->attrids_range =
+	stx_restore_int_array (thread_p,
+			       &xasl_unpack_info->packed_xasl[offset],
+			       cls_spec->num_attrs_range);
+      if (cls_spec->attrids_range == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      cls_spec->cache_range = NULL;
+    }
+  else
+    {
+      cls_spec->cache_range =
+	stx_restore_cache_attrinfo (thread_p,
+				    &xasl_unpack_info->packed_xasl[offset]);
+      if (cls_spec->cache_range == NULL)
 	{
 	  goto error;
 	}

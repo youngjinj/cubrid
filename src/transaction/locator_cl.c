@@ -394,6 +394,12 @@ locator_cache_lock (MOP mop, MOBJ ignore_notgiven_object, void *xcache_lock)
 	{
 	  lock = X_LOCK;
 	}
+
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && lock <= S_LOCK)
+	{
+	  /* MVCC does not use shared locks on instances */
+	  lock = NULL_LOCK;
+	}
     }
 
 
@@ -1383,6 +1389,18 @@ locator_get_rest_objects_classes (LC_LOCKSET * lockset,
 	  error_code = ER_FAILED;
 	  break;
 	}
+      if (fetch_ptr[idx] == NULL)
+	{
+	  /* FIXME: This loop should have the same lifespan as the loop in
+	   * slocator_fetch_lockset on server. Because that loop stops when
+	   * copy_area is NULL (fetch_ptr[idx] here), this loop should stop
+	   * too or the client will be stuck in this loop waiting for an
+	   * answer that will never come. This is a temporary fix until the
+	   * impact .
+	   * NOTE: No error is set on server, we will not set one here.
+	   */
+	  break;
+	}
 
       idx++;
     }
@@ -1731,6 +1749,11 @@ locator_lock_class_of_instance (MOP inst_mop, MOP * class_mop, LOCK lock)
   LC_COPYAREA *fetch_area;	/* Area where objects are received        */
   int error_code = NO_ERROR;
   OID tmp_oid;
+
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      inst_mop = ws_mvcc_get_last_version (inst_mop);
+    }
 
   inst_oid = ws_oid (inst_mop);
 
@@ -2234,6 +2257,11 @@ locator_get_cache_coherency_number (MOP mop)
       isclass = LC_INSTANCE;
     }
 
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      mop = ws_mvcc_get_last_version (mop);
+    }
+
   lock = locator_fetch_mode_to_lock (DB_FETCH_READ, isclass);
   if (locator_lock (mop, lock) != NO_ERROR)
     {
@@ -2292,6 +2320,11 @@ locator_fetch_object (MOP mop, DB_FETCH_MODE purpose)
   else
     {
       isclass = LC_INSTANCE;
+    }
+
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      mop = ws_mvcc_get_last_version (mop);
     }
 
   lock = locator_fetch_mode_to_lock (purpose, isclass);
@@ -2456,6 +2489,11 @@ locator_fetch_instance (MOP mop, DB_FETCH_MODE purpose)
     }
 #endif /* CUBRID_DEBUG */
 
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      mop = ws_mvcc_get_last_version (mop);
+    }
+
   inst = NULL;
   lock = locator_fetch_mode_to_lock (purpose, LC_INSTANCE);
   if (locator_lock (mop, lock) != NO_ERROR)
@@ -2616,6 +2654,11 @@ locator_fetch_nested (MOP mop, DB_FETCH_MODE purpose, int prune_level,
 	}
     }
 #endif /* CUBRID_DEBUG */
+
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      mop = ws_mvcc_get_last_version (mop);
+    }
 
   inst = NULL;
   lock = locator_fetch_mode_to_lock (purpose, LC_INSTANCE);
@@ -3273,6 +3316,11 @@ locator_does_exist_object (MOP mop, DB_FETCH_MODE purpose)
   LOCK lock;			/* Lock to acquire for the above purpose */
   LC_OBJTYPE isclass;
 
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      mop = ws_mvcc_get_last_version (mop);
+    }
+
   class_mop = ws_class_mop (mop);
   if (class_mop == NULL)
     {
@@ -3706,7 +3754,7 @@ locator_cache_have_object (MOP * mop_p, MOBJ * object_p, RECDES * recdes_p,
 	    }
 	  return error_code;
 	}
-      *mop_p = ws_mop (&obj->oid, class_mop);
+      *mop_p = ws_updated_mop (&obj->oid, &obj->updated_oid, class_mop);
       if (*mop_p == NULL)
 	{
 #if defined(CUBRID_DEBUG)
@@ -4897,14 +4945,10 @@ locator_mflush (MOP mop, void *mf)
       LC_ONEOBJ_SET_HAS_INDEX (mflush->obj);
     }
 
-  /* set is system class */
-  if (sm_is_system_class (class_mop) && class_mop != sm_Root_class_mop)
-    {
-      LC_ONEOBJ_SET_SYSTEM_CLASS_INSTANCE (mflush->obj);
-    }
   HFID_COPY (&mflush->obj->hfid, hfid);
   COPY_OID (&mflush->obj->class_oid, ws_oid (class_mop));
   COPY_OID (&mflush->obj->oid, oid);
+  OID_SET_NULL (&mflush->obj->updated_oid);
   if (operation == LC_FLUSH_DELETE)
     {
       mflush->obj->length = -1;
@@ -6576,6 +6620,11 @@ locator_check_object_and_get_class (MOP obj_mop, MOP * out_class_mop)
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
       error_code = ER_GENERIC_ERROR;
       goto error;
+    }
+
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      obj_mop = ws_mvcc_get_last_version (obj_mop);
     }
 
   class_mop = ws_class_mop (obj_mop);

@@ -2854,6 +2854,9 @@ thread_auto_vacuum_thread (void *arg_p)
     0, 0
   };
   int rv = 0;
+  int wakeup_time;
+  const int max_wakeup_time = 300;
+  bool auto_vacuum_enabled;
 
   tsd_ptr = (THREAD_ENTRY *) arg_p;
 
@@ -2865,7 +2868,6 @@ thread_auto_vacuum_thread (void *arg_p)
   tsd_ptr->type = TT_DAEMON;
   tsd_ptr->status = TS_RUN;	/* set thread stat as RUN */
   thread_Auto_vacuum_thread.is_valid = true;
-  thread_Auto_vacuum_thread.is_running = true;
 
   thread_set_current_tran_index (tsd_ptr, LOG_SYSTEM_TRAN_INDEX);
 
@@ -2874,24 +2876,41 @@ thread_auto_vacuum_thread (void *arg_p)
       er_clear ();
 
       gettimeofday (&timeout, NULL);
-      to.tv_sec = timeout.tv_sec + 60;
+
+      auto_vacuum_enabled = prm_get_bool_value (PRM_ID_AUTO_VACUUM_ENABLED);
+      if (auto_vacuum_enabled)
+	{
+	  wakeup_time = prm_get_integer_value (PRM_ID_AUTO_VACUUM_INTERVAL);
+	}
+      else
+	{
+	  wakeup_time = max_wakeup_time;
+	}
+      to.tv_sec = timeout.tv_sec + wakeup_time;
 
       rv = pthread_mutex_lock (&thread_Auto_vacuum_thread.lock);
+      thread_Auto_vacuum_thread.is_running = false;
       pthread_cond_timedwait (&thread_Auto_vacuum_thread.cond,
 			      &thread_Auto_vacuum_thread.lock, &to);
-      pthread_mutex_unlock (&thread_Auto_vacuum_thread.lock);
 
       if (tsd_ptr->shutdown)
 	{
+	  pthread_mutex_unlock (&thread_Auto_vacuum_thread.lock);
 	  break;
 	}
 
-      auto_vacuum_start ();
+      thread_Auto_vacuum_thread.is_running = true;
+      pthread_mutex_unlock (&thread_Auto_vacuum_thread.lock);
+
+      if (auto_vacuum_enabled)
+	{
+	  auto_vacuum_start ();
+	}
     }
-  rv = pthread_mutex_lock (&thread_Session_control_thread.lock);
-  thread_Session_control_thread.is_valid = false;
-  thread_Session_control_thread.is_running = false;
-  pthread_mutex_unlock (&thread_Session_control_thread.lock);
+
+  rv = pthread_mutex_lock (&thread_Auto_vacuum_thread.lock);
+  thread_Auto_vacuum_thread.is_valid = false;
+  pthread_mutex_unlock (&thread_Auto_vacuum_thread.lock);
 
   er_clear ();
   tsd_ptr->status = TS_DEAD;

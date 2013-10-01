@@ -755,10 +755,6 @@
 					>
 				</File>
 				<File
-					RelativePath="..\..\src\storage\file_mvcc_status.c"
-					>
-				</File>
-				<File
 					RelativePath="..\..\src\storage\heap_file.c"
 					>
 				</File>

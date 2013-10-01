@@ -505,6 +505,8 @@ assign_null_value (MOP op, SM_ATTRIBUTE * att, char *mem)
    * value if NULL is passed in
    */
 
+  WS_ASSERT_IS_MVCC_LAST_VERSION (op);
+
   if (mem == NULL)
     {
       pr_clear_value (&att->default_value.value);
@@ -680,6 +682,11 @@ obj_assign_value (MOP op, SM_ATTRIBUTE * att, char *mem, DB_VALUE * value)
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_OBJ_INVALID_ARGUMENTS,
 	      0);
       return ER_OBJ_INVALID_ARGUMENTS;
+    }
+
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      op = ws_mvcc_get_last_version (op);
     }
 
   if (DB_IS_NULL (value))
@@ -1092,6 +1099,8 @@ get_object_value (MOP op, SM_ATTRIBUTE * att, char *mem,
   MOBJ object;
   int rc = NO_ERROR;
 
+  WS_ASSERT_IS_MVCC_LAST_VERSION (op);
+
   /* use class/shared value if alternate source isn't provided */
   if (mem == NULL && source == NULL)
     {
@@ -1324,6 +1333,11 @@ obj_get_value (MOP op, SM_ATTRIBUTE * att, void *mem,
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_OBJ_INVALID_ARGUMENTS,
 	      0);
       return ER_OBJ_INVALID_ARGUMENTS;
+    }
+
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      op = ws_mvcc_get_last_version (op);
     }
 
   /* use class/shared value if alternate source isn't provided */

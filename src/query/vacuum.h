@@ -27,6 +27,7 @@
 #include "dbtype.h"
 #include "thread.h"
 #include "storage_common.h"
+#include "recovery.h"
 
 /* VACUUM_PAGE_DATA
  * Structures is used by VACUUM to collect data on a heap page. The cleaning
@@ -42,14 +43,18 @@ struct vacuum_page_data
 				 */
   VPID *ovfl_pages;		/* array of ids for overflow pages */
 
-  bool *visited;		/* Is set to true when a slot is handled.
-				 * Used to avoid re-verifying slots met in
-				 * an update chain.
+  int *visited;			/* Each slot entry is initialized as
+				 * NOT_VISITED and then replaced with
+				 * VISITED_DEAD or VISITED_ALIVE.
 				 */
 
   short n_dead;			/* number of dead slots */
   short n_ovfl_pages;		/* number of overflow pages */
   short n_relocations;		/* number of relocated slots */
+
+  short n_vacuumed_records;	/* number of records with vacuumed data during
+				 * current vacuum phase.
+				 */
 
   bool vacuum_needed;		/* Is set to true if any records are deleted
 				 * from current page and compacting would
@@ -61,13 +66,16 @@ struct vacuum_page_data
 				 */
 };
 
-extern int vacuum_stats_table_initialize (THREAD_ENTRY * thread_p);
-extern void vacuum_stats_table_finalize (THREAD_ENTRY * thread_p);
 extern int vacuum_stats_table_update_entry (THREAD_ENTRY * thread_p,
 					    const OID * class_oid,
 					    HFID * hfid, int n_inserted,
 					    int n_deleted);
 extern int vacuum_stats_table_remove_entry (OID * class_oid);
+extern int vacuum_initialize (THREAD_ENTRY * thread_p);
+extern void vacuum_finalize (THREAD_ENTRY * thread_p);
+
+extern int vacuum_rv_redo_remove_oids (THREAD_ENTRY * thread_p,
+				       LOG_RCV * rcv);
 
 extern int xvacuum (THREAD_ENTRY * thread_p, int num_classes,
 		    OID * class_oids);

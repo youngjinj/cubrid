@@ -70,7 +70,6 @@
 #endif /* SERVER_MODE */
 #include "rb_tree.h"
 #include "mvcc.h"
-#include "file_mvcc_status.h"
 #include "vacuum.h"
 
 
@@ -1117,9 +1116,6 @@ logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes)
   tdes->mvcc_snapshot.highest_completed_mvccid = 0;
   tdes->mvcc_snapshot.cnt_active_ids = 0;
   tdes->mvcc_snapshot.cnt_active_child_ids = 0;
-#if defined(MVCC_USE_COMMAND_ID)
-  tdes->mvcc_snapshot.current_command_id = 0;
-#endif /* MVCC_USE_COMMAND_ID */
 }
 
 /*
@@ -1141,9 +1137,6 @@ logtb_init_mvcc_snapshot_data (LOG_TDES * tdes)
   tdes->mvcc_snapshot.cnt_active_ids = 0;
   tdes->mvcc_snapshot.active_child_ids = NULL;
   tdes->mvcc_snapshot.cnt_active_child_ids = 0;
-#if defined(MVCC_USE_COMMAND_ID)
-  tdes->mvcc_snapshot.current_command_id = 0;
-#endif /* MVCC_USE_COMMAND_ID */
 }
 
 /*
@@ -1726,6 +1719,7 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   logtb_clear_log_ins_del (&tdes->log_ins_del);
 
   tdes->mvcc_id = MVCCID_NULL;
+  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
 
   if (BOOT_WRITE_ON_STANDY_CLIENT_TYPE (tdes->client.client_type))
     {
@@ -1838,20 +1832,13 @@ logtb_get_new_tran_id (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 
   logtb_clear_tdes (thread_p, tdes);
 
-  /* reset mvcc id only inside transaction table critical section */
-  tdes->mvcc_id = MVCCID_NULL;
-  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
-  /* TO DO update vacuum flags, subtransactions */
-  tdes->mvcc_id = MVCCID_NULL;
-  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
-
   tdes->trid = log_Gl.hdr.next_trid++;
   /* check overflow */
   if (tdes->trid < 0)
     {
       tdes->trid = LOG_SYSTEM_TRANID + 1;
       /* set mvcc next id to null */
-      log_Gl.hdr.mvcc_next_id = MVCCID_NULL;
+      log_Gl.hdr.next_trid = tdes->trid + 1;
     }
 
   TR_TABLE_CS_EXIT (thread_p);
@@ -3514,6 +3501,13 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
   MVCCID_FORWARD (highest_completed_mvccid);
   lowest_active_mvccid = highest_completed_mvccid;
 
+  if (csect_enter_as_reader (thread_p, CSECT_MVCCID_GENERATOR, INF_WAIT) !=
+      NO_ERROR)
+    {
+      TR_TABLE_CS_EXIT (thread_p);
+      return ER_FAILED;
+    }
+
   for (i = 0, num_tran = 0; i < log_Gl.trantable.num_total_indices,
        num_tran < log_Gl.trantable.num_assigned_indices; i++)
     {
@@ -3556,12 +3550,14 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 	      continue;
 	    }
 
-	  snapshot->active_ids[cnt_active_trans++] = tdes->trid;
+	  snapshot->active_ids[cnt_active_trans++] = tdes->mvcc_id;
 
 	  /* TODO sub-transactions */
 	  num_tran++;
 	}
     }
+
+  csect_exit (thread_p, CSECT_MVCCID_GENERATOR);
 
   TR_TABLE_CS_EXIT (thread_p);
 
@@ -3570,7 +3566,7 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 
   snapshot->lowest_active_mvccid = lowest_active_mvccid;
   snapshot->highest_completed_mvccid = highest_completed_mvccid;
-  snapshot->cnt_active_child_ids = cnt_active_trans;
+  snapshot->cnt_active_ids = cnt_active_trans;
 
   return NO_ERROR;
 }
@@ -3633,16 +3629,17 @@ logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   /* acquire trans table critical section in order to prevent others commit
    * while current assign mvcc id
    */
-  TR_TABLE_CS_ENTER (thread_p);
+  if (csect_enter (thread_p, CSECT_MVCCID_GENERATOR, INF_WAIT) != NO_ERROR)
+    {
+      return MVCCID_NULL;
+    }
 
-  /* TO DO - extend clog, subtrans */
   mvcc_id = log_Gl.hdr.mvcc_next_id;
   MVCCID_FORWARD (log_Gl.hdr.mvcc_next_id);
 
-  /* TO DO subtransactions */
   tdes->mvcc_id = mvcc_id;
 
-  TR_TABLE_CS_EXIT (thread_p);
+  csect_exit (thread_p, CSECT_MVCCID_GENERATOR);
 
   return mvcc_id;
 }
@@ -3689,98 +3686,6 @@ logtb_get_current_mvccid (THREAD_ENTRY * thread_p)
   return tdes->mvcc_id;
 }
 
-#if defined(MVCC_USE_COMMAND_ID)
-/*
- * logtb_get_current_mvcc_command_id - return current mvcc command id. 
- *
- * return: current mvcc command id
- *
- *   thread_p(in):
- */
-MVCC_COMMAND_ID
-logtb_get_current_mvcc_command_id (THREAD_ENTRY * thread_p)
-{
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  assert (tdes != NULL);
-
-  return tdes->mvcc_comm_id;
-}
-
-/*
- * logtb_inc_command_id - increment command id. 
- *
- * return: error code
- *
- *   thread_p(in):
- */
-int
-logtb_inc_command_id (THREAD_ENTRY * thread_p)
-{
-  int error_code = NO_ERROR;
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  assert (tdes != NULL);
-
-  if (!mvcc_Enabled)
-    {
-      /* this is an MVCC feature */
-      return NO_ERROR;
-    }
-
-  if (tdes->mvcc_comm_id_used == true)
-    {
-      (tdes->mvcc_comm_id)++;
-      if (tdes->mvcc_comm_id == MVCC_FIRST_COMMAND_ID)
-	{
-	  tdes->mvcc_comm_id--;
-	  /* TO DO - set new error code */
-	  error_code = ER_FAILED;
-	}
-
-      tdes->mvcc_comm_id_used = false;
-
-      /* update snapshot command id */
-      tdes->mvcc_snapshot.current_command_id = tdes->mvcc_comm_id;
-    }
-
-  return error_code;
-}
-
-/*
- * logtb_activate_command_id - activate command id. 
- *
- * return: 
- *
- *   thread_p(in):
- */
-void
-logtb_activate_command_id (THREAD_ENTRY * thread_p)
-{
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  assert (tdes != NULL);
-
-  /* activate command id only if MVCC is enabled */
-  assert (mvcc_Enabled);
-
-  tdes->mvcc_comm_id_used = true;
-}
-
-/*
- * logtb_deactivate_command_id - deactivate command id. 
- *
- * return: 
- *
- *   thread_p(in):
- */
-void
-logtb_deactivate_command_id (THREAD_ENTRY * thread_p)
-{
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  assert (tdes != NULL);
-
-  tdes->mvcc_comm_id_used = false;
-}
-#endif /* MVCC_USE_COMMAND_ID */
-
 /*
  * logtb_is_current_mvccid - check whether given mvccid is current mvccid
  *
@@ -3819,7 +3724,6 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
   LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
   int i, num_tran;
   MVCCID tran_mvccid;
-  MVCC_STATUS mvcc_status;
 
   assert (tdes != NULL);
   if (mvcc_id_precedes (mvccid, tdes->recent_snapshot_lowest_active_mvccid))
@@ -3882,38 +3786,6 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 
   TR_TABLE_CS_EXIT (thread_p);
 
-  (void) file_mvcc_get_id_status (thread_p, mvccid, &mvcc_status);
-  if (mvcc_status == MVCC_STATUS_ABORTED)
-    {
-      return false;
-    }
-
-  /* TO Do - check if mvccid is subtransaction of an active transaction */
-
-  return false;
-}
-
-/*
- * logtb_is_mvccid_committed - check whether given mvccid was committed
- *
- * return: bool
- *
- *   thread_p(in): thread entry
- *   mvccid(in): mvcc id
- */
-bool
-logtb_is_mvccid_committed (THREAD_ENTRY * thread_p, MVCCID mvccid)
-{
-  MVCC_STATUS mvcc_status;
-  /* TO do check frozen transaction id */
-  (void) file_mvcc_get_id_status (thread_p, mvccid, &mvcc_status);
-  if (mvcc_status == MVCC_STATUS_COMMITTED)
-    {
-      return true;
-    }
-
-  /* TO DO : check subcommitted transactions */
-
   return false;
 }
 
@@ -3945,41 +3817,50 @@ logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p)
  * logtb_complete_mvcc () - Called at commit or rollback, completes mvcc info
  *			    for current transaction.
  *
- * return	 : Void. 
- * thread_p (in) : Thread entry.
- * tdes (in)	 : Transaction descriptor.
- * status (in)	 : MVCC Status: MVCC_STATUS_COMMITTED or MVCC_STATUS_ABORTED.
+ * return	  : Void. 
+ * thread_p (in)  : Thread entry.
+ * tdes (in)	  : Transaction descriptor.
+ * committed (in) : True if transaction was committed false if it was aborted.
  */
 void
-logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, int status)
+logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 {
   LOG_INS_DEL_ENTRY *entry = NULL;
   HFID hfid;
-  bool aborted;
-  int n_inserted, n_deleted;
 
   assert (tdes != NULL);
-  assert (status == MVCC_STATUS_COMMITTED || status == MVCC_STATUS_ABORTED);
 
-  if (!mvcc_Enabled || tdes->mvcc_id == MVCCID_NULL)
+  assert (mvcc_Enabled == true);
+
+  if (MVCCID_IS_VALID (tdes->mvcc_id))
     {
-      /* nothing to do here */
+      /* lock CSECT_TRAN_TABLE while clearing mvccid
+       * and updating highest_completed_mvccid in order to not remove this
+       * mvccid from set of "running" mvccids while other concurrent
+       * transaction is taking a snapshot.
+       */
+      TR_TABLE_CS_ENTER (thread_p);
+      /* update highest completed mvccid */
+      if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, tdes->mvcc_id))
+	{
+	  log_Gl.highest_completed_mvccid = tdes->mvcc_id;
+	}
+      tdes->mvcc_id = MVCCID_NULL;
+      tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+      TR_TABLE_CS_EXIT (thread_p);
+    }
+  else
+    {
+      tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+    }
+
+  if (!committed)
+    {
+      /* Stop here */
       return;
     }
 
-  TR_TABLE_CS_ENTER (thread_p);
-
-  /* update transaction MVCC status */
-  (void) file_mvcc_set_id_status (thread_p, tdes->mvcc_id, status);
-
-  /* update highest completed mvccid */
-  if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, tdes->mvcc_id))
-    {
-      log_Gl.highest_completed_mvccid = tdes->mvcc_id;
-    }
-
-  aborted = (status == MVCC_STATUS_ABORTED);
-
+  /* Save dead/total record count for vacuum statistics */
   for (entry = tdes->log_ins_del.crt_tran_entries; entry != NULL;
        entry = entry->next)
     {
@@ -3994,20 +3875,11 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, int status)
 	  /* An error occurred, just stop */
 	  break;
 	}
-
-      n_inserted = entry->n_inserted;
-
-      /* If aborted, all deleted records are revived, all inserted records are
-       * deleted.
-       * Also all records inserted in canceled commands are dead.
-       */
-      n_deleted = (aborted ? entry->n_inserted : entry->n_deleted);
       (void) vacuum_stats_table_update_entry (thread_p, &entry->class_oid,
-					      &hfid, n_inserted, n_deleted);
+					      &hfid, entry->n_inserted,
+					      entry->n_deleted);
     }
   logtb_clear_log_ins_del (&tdes->log_ins_del);
-
-  TR_TABLE_CS_EXIT (thread_p);
 }
 
 #if defined(ENABLE_UNUSED_FUNCTION)

@@ -200,6 +200,7 @@ static int ws_check_hash_link (int slot);
 static void ws_insert_mop_on_hash_link (MOP mop, int slot);
 static void ws_insert_mop_on_hash_link_with_position (MOP mop, int slot,
 						      MOP prev);
+static MOP ws_mop_if_exists (OID * oid);
 
 /*
  * MEMORY CRISES
@@ -259,6 +260,7 @@ ws_make_mop (OID * oid)
       op->class_link = NULL;
       op->dirty_link = NULL;
       op->updated_obj = NULL;
+      op->mvcc_next_version = NULL;
       op->dirty = 0;
       op->deleted = 0;
       op->pinned = 0;
@@ -742,6 +744,148 @@ ws_insert_mop_on_hash_link_with_position (MOP mop, int slot, MOP prev)
 }
 
 /*
+ * ws_mvcc_get_last_version () - Used with MVCC, it will go through the update
+ *				 chain until the last version of the object.
+ *
+ * return   : Updated MOP.
+ * mop (in) : Current MOP.
+ */
+MOP
+ws_mvcc_get_last_version (MOP mop)
+{
+  MOP mvcc_last_version;
+  if (mop->mvcc_next_version != NULL)
+    {
+      /* Has a next version, recursive call until the last version is found */
+      mvcc_last_version = ws_mvcc_get_last_version (mop->mvcc_next_version);
+      if (mvcc_last_version->deleted)
+	{
+	  /* This is deleted too */
+	  mop->deleted = 1;
+	}
+      /* Redo link to the last version of the object */
+      mop->mvcc_next_version = mvcc_last_version;
+      /* Return last version */
+      return mvcc_last_version;
+    }
+  /* No next version, return current object */
+  return mop;
+}
+
+/*
+ * ws_updated_mop () - It is a replacement for ws_mop in the context of MVCC.
+ *		       After an object is fetched from server, it may have
+ *		       been updated, and the updated data may be found on
+ *		       a different OID. If this is the case, return/create
+ *		       MOP for the updated version, discard old MOP object and
+ *		       save link to the new mop.
+ *
+ * return	  : MOP for updated version of the object.
+ * oid (in)	  : Initial object identifier.
+ * new_oid (in)	  : Updated object identifier (null OID if it not the case)
+ * class_mop (in) : Class MOP.
+ */
+MOP
+ws_updated_mop (OID * oid, OID * new_oid, MOP class_mop)
+{
+  MOP mop = NULL;
+  MOP mvcc_next_version = NULL;
+
+  if (!OID_ISNULL (new_oid))
+    {
+      /* OID has changed */
+
+      /* Find/create mop for the new version */
+      mvcc_next_version = ws_mop (new_oid, class_mop);
+
+      if (!OID_ISNULL (oid))
+	{
+	  /* Find MOP for old version */
+	  mop = ws_mop_if_exists (oid);
+	  if (mop != NULL)
+	    {
+	      /* Found mop, discard it */
+	      ws_decache (mop);
+	      /* Create a link to the new object version */
+	      mop->mvcc_next_version = mvcc_next_version;
+	    }
+	}
+      /* Return MOP for new version */
+      return mvcc_next_version;
+    }
+  else
+    {
+      /* No new version, just find/create MOP for object */
+      return ws_mop (oid, class_mop);
+    }
+}
+
+/*
+ * ws_mop_if_exists () - Get object mop if it exists in mop table.
+ *
+ * return	  : MOP or NULL if not found.
+ * oid (in)	  : Object identifier.
+ */
+static MOP
+ws_mop_if_exists (OID * oid)
+{
+  MOP mop = NULL;
+  unsigned int slot;
+  int c;
+
+  if (OID_ISNULL (oid))
+    {
+      return NULL;
+    }
+
+  /* look for existing entry */
+  slot = OID_PSEUDO_KEY (oid);
+  if (slot >= ws_Mop_table_size)
+    {
+      slot = slot % ws_Mop_table_size;
+    }
+
+  /* compare with the last mop */
+  mop = ws_Mop_table[slot].tail;
+  if (mop)
+    {
+      c = oid_compare (oid, WS_OID (mop));
+      if (c > 0)
+	{
+	  /* 'oid' is greater than the tail,
+	   * which means 'oid' does not exist in the list
+	   *
+	   * NO need to traverse the list!
+	   */
+	  return NULL;
+	}
+      else
+	{
+	  /* c <= 0 */
+
+	  /* Unfortunately, we have to navigate the list when c == 0 */
+	  /* See the comment of ws_insert_mop_on_hash_link() */
+
+	  for (mop = ws_Mop_table[slot].head; mop != NULL;
+	       mop = mop->hash_link)
+	    {
+	      c = oid_compare (oid, WS_OID (mop));
+	      if (c == 0)
+		{
+		  return mop;
+		}
+	      else if (c < 0)
+		{
+		  return NULL;
+		}
+	    }
+	}
+    }
+
+  return NULL;
+}
+
+/*
  * ws_mop - given a oid, find or create the corresponding MOP and add it to
  * the workspace object table.
  *    return: MOP
@@ -829,6 +973,10 @@ ws_mop (OID * oid, MOP class_mop)
 			    }
 			}
 		      mop->decached = 0;
+		    }
+		  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+		    {
+		      mop = ws_mvcc_get_last_version (mop);
 		    }
 		  return mop;
 		}
@@ -3523,6 +3671,11 @@ ws_find (MOP mop, MOBJ * obj)
   *obj = NULL;
   if (mop && !mop->deleted)
     {
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
+	  && mop->mvcc_next_version != NULL)
+	{
+	  return ws_find (mop->mvcc_next_version, obj);
+	}
       *obj = (MOBJ) mop->object;
     }
   else

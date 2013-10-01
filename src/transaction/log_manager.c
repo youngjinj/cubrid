@@ -75,7 +75,6 @@
 #include "es.h"
 #include "memory_hash.h"
 #include "partition.h"
-#include "file_mvcc_status.h"
 
 #if !defined(SERVER_MODE)
 
@@ -1096,7 +1095,7 @@ log_initialize (THREAD_ENTRY * thread_p, const char *db_fullname,
 				  false);
 
   log_No_logging = prm_get_bool_value (PRM_ID_LOG_NO_LOGGING);
-  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);;
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
 #if !defined(NDEBUG)
   if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG) && log_No_logging)
     {
@@ -5912,8 +5911,6 @@ RB_GENERATE_STATIC (lob_rb_root, lob_locator_entry, head, lob_locator_cmp);
 TRAN_STATE
 log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 {
-  logtb_complete_mvcc (thread_p, tdes, MVCC_STATUS_COMMITTED);
-
   qmgr_clear_trans_wakeup (thread_p, tdes->tran_index, false, false);
 
   if (!LSA_ISNULL (&tdes->tail_lsa))
@@ -5966,6 +5963,12 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 	  log_append_repl_info_and_unlock_log (thread_p, tdes);
 	}
 
+      /* clear mvccid before releasing the locks */
+      if (mvcc_Enabled == true)
+	{
+	  logtb_complete_mvcc (thread_p, tdes, true);
+	}
+
       if (retain_lock != true)
 	{
 	  lock_unlock_all (thread_p);
@@ -6009,6 +6012,12 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 	  (void) file_new_declare_as_old (thread_p, NULL);
 	}
       assert (tdes->num_new_files == 0);
+
+      /* clear mvccid before releasing the locks */
+      if (mvcc_Enabled == true)
+	{
+	  logtb_complete_mvcc (thread_p, tdes, true);
+	}
 
       if (retain_lock != true)
 	{
@@ -6057,8 +6066,6 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 TRAN_STATE
 log_abort_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 {
-  logtb_complete_mvcc (thread_p, tdes, MVCC_STATUS_ABORTED);
-
   qmgr_clear_trans_wakeup (thread_p, tdes->tran_index, false, true);
 
   tdes->state = TRAN_UNACTIVE_ABORTED;
@@ -6093,6 +6100,13 @@ log_abort_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 	  spage_free_saved_spaces (thread_p, tdes->first_save_entry);
 	  tdes->first_save_entry = NULL;
 	}
+
+      /* clear mvccid before releasing the locks */
+      if (mvcc_Enabled == true)
+	{
+	  logtb_complete_mvcc (thread_p, tdes, false);
+	}
+
       lock_unlock_all (thread_p);
 
       /* Are there any loose ends to be done in the client ? */
@@ -6120,6 +6134,12 @@ log_abort_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 	{
 	  spage_free_saved_spaces (thread_p, tdes->first_save_entry);
 	  tdes->first_save_entry = NULL;
+	}
+
+      /* clear mvccid before releasing the locks */
+      if (mvcc_Enabled == true)
+	{
+	  logtb_complete_mvcc (thread_p, tdes, false);
 	}
 
       lock_unlock_all (thread_p);
@@ -6718,9 +6738,7 @@ log_complete (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 
 		LOG_SET_CURRENT_TRAN_INDEX (thread_p, tdes->tran_index);
 
-		TR_TABLE_CS_ENTER (thread_p);
 		(void) logtb_get_new_tran_id (thread_p, tdes);
-		TR_TABLE_CS_EXIT (thread_p);
 	      }
 
 	    if (LOG_ISCHECKPOINT_TIME ())
@@ -6808,9 +6826,7 @@ log_complete (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 	{
 	  if (get_newtrid == LOG_NEED_NEWTRID)
 	    {
-	      TR_TABLE_CS_ENTER (thread_p);
 	      (void) logtb_get_new_tran_id (thread_p, tdes);
-	      TR_TABLE_CS_EXIT (thread_p);
 	    }
 	}
       else

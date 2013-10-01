@@ -529,6 +529,10 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_AUTO_VACUUM_THRESHOLD "auto_vacuum_default_threshold"
 #define PRM_NAME_AUTO_VACUUM_RATIO "auto_vacuum_default_ratio"
 
+#define PRM_NAME_OBJECT_PRINT_FORMAT_OID "print_object_as_oid"
+
+#define PRM_NAME_SCAN_HEAP_PAGE_VACUUM_ENABLED "scan_heap_page_vacuum_enabled"
+
 /*
  * Note about ERROR_LIST and INTEGER_LIST type
  * ERROR_LIST type is an array of bool type with the size of -(ER_LAST_ERROR)
@@ -1687,6 +1691,14 @@ static float prm_auto_vacuum_ratio_default = 0.1f;
 static float prm_auto_vacuum_ratio_lower = 0.05f;
 static float prm_auto_vacuum_ratio_upper = 0.8f;
 static unsigned int prm_auto_vacuum_ratio_flag = 0;
+
+bool PRM_SCAN_HEAP_PAGE_VACUUM_ENABLED = true;
+static bool prm_scan_heap_page_vacuum_enabled_default = true;
+static unsigned int prm_scan_heap_page_vacuum_enabled_flag = 0;
+
+bool PRM_OBJECT_PRINT_FORMAT_OID = false;
+static bool prm_object_print_format_oid_default = false;
+static unsigned int prm_object_print_format_oid_flag = 0;
 
 typedef int (*DUP_PRM_FUNC) (void *, SYSPRM_DATATYPE, void *,
 			     SYSPRM_DATATYPE);
@@ -3985,6 +3997,28 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &PRM_AUTO_VACUUM_RATIO,
    (void *) &prm_auto_vacuum_ratio_upper,
    (void *) &prm_auto_vacuum_ratio_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_SCAN_HEAP_PAGE_VACUUM_ENABLED,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_scan_heap_page_vacuum_enabled_flag,
+   (void *) &prm_scan_heap_page_vacuum_enabled_default,
+   (void *) &PRM_SCAN_HEAP_PAGE_VACUUM_ENABLED,
+   (void *) NULL,
+   (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OBJECT_PRINT_FORMAT_OID,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_object_print_format_oid_flag,
+   (void *) &prm_object_print_format_oid_default,
+   (void *) &PRM_OBJECT_PRINT_FORMAT_OID,
+   (void *) NULL,
+   (void *) NULL,
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL}

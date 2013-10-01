@@ -103,15 +103,9 @@ PT_RESERVED_NAME pt_Reserved_name_table[] = {
   ,
   {"t_chn", RESERVED_T_CHN, DB_TYPE_INTEGER}
   ,
-  {"t_insid", RESERVED_T_MVCC_INSID, DB_TYPE_INTEGER}
+  {"t_insid", RESERVED_T_MVCC_INSID, DB_TYPE_BIGINT}
   ,
-  {"t_delid", RESERVED_T_MVCC_DELID, DB_TYPE_INTEGER}
-#if defined(MVCC_USE_COMMAND_ID)
-  ,
-  {"t_ins_cid", RESERVED_T_MVCC_INS_CID, DB_TYPE_INTEGER}
-  ,
-  {"t_del_cid", RESERVED_T_MVCC_DEL_CID, DB_TYPE_INTEGER}
-#endif /* MVCC_USE_COMMAND_ID */
+  {"t_delid", RESERVED_T_MVCC_DELID, DB_TYPE_BIGINT}
   ,
   {"t_flags", RESERVED_T_MVCC_FLAGS, DB_TYPE_INTEGER}
   ,

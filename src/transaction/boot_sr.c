@@ -92,7 +92,6 @@
 #include "session.h"
 #include "partition.h"
 #include "event_log.h"
-#include "file_mvcc_status.h"
 
 #if defined(WINDOWS)
 #include "wintcp.h"
@@ -2701,6 +2700,9 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
   sysprm_load_and_init (boot_Db_full_name, NULL);
 #endif /* SERVER_MODE */
 
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+  or_init_header_size_and_offsets (mvcc_Enabled);
+
   /* If the server is already restarted, shutdown the server */
   if (BO_IS_SERVER_RESTARTED ())
     {
@@ -3325,6 +3327,9 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       db_charset_db_header = INTL_CODESET_NONE;
     }
 
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+  or_init_header_size_and_offsets (mvcc_Enabled);
+
   /* Initialize the transaction table */
   logtb_define_trantable (thread_p, -1, -1);
 
@@ -3342,7 +3347,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
     }
 
   /* Initialize the vacuum statistics table */
-  error_code = vacuum_stats_table_initialize (thread_p);
+  error_code = vacuum_initialize (thread_p);
   if (error_code != NO_ERROR)
     {
       cfg_free_directory (dir);
@@ -3427,6 +3432,10 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
     }
 
   oid_set_root (&boot_Db_parm->rootclass_oid);
+  if (mvcc_Enabled)
+    {
+      serial_set_class_oid (thread_p);
+    }
   error_code = file_tracker_cache_vfid (&boot_Db_parm->trk_vfid);
   if (error_code != NO_ERROR)
     {
@@ -3434,7 +3443,6 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       goto error;
     }
 
-  file_mvcc_status_cache_vfid (&boot_Db_parm->mvccid_status_vfid);
   catalog_initialize (&boot_Db_parm->ctid);
 
   (void) qexec_initialize_xasl_cache (thread_p);
@@ -3841,7 +3849,7 @@ xboot_shutdown_server (THREAD_ENTRY * thread_p, bool is_er_final)
       (void) qexec_finalize_filter_pred_cache (thread_p);
       session_states_finalize (thread_p);
 
-      vacuum_stats_table_finalize (thread_p);
+      vacuum_finalize (thread_p);
 
       (void) boot_remove_all_temp_volumes (thread_p);
       log_final (thread_p);
@@ -5669,17 +5677,12 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
       || xheap_create (thread_p, &boot_Db_parm->hfid, NULL, false) < 0
       || xheap_create (thread_p, &boot_Db_parm->rootclass_hfid, NULL,
 		       false) < 0
-      || (mvcc_Enabled
-	  && (file_mvcc_status_create (thread_p,
-				       &boot_Db_parm->mvccid_status_vfid)
-	      == NULL))
       || heap_assign_address (thread_p, &boot_Db_parm->rootclass_hfid,
 			      &boot_Db_parm->rootclass_oid, 0) != NO_ERROR)
     {
       goto error;
     }
 
-  file_mvcc_status_cache_vfid (&boot_Db_parm->mvccid_status_vfid);
   oid_set_root (&boot_Db_parm->rootclass_oid);
 
   if (xehash_create (thread_p, &boot_Db_parm->classname_table, DB_TYPE_STRING,
@@ -5827,6 +5830,9 @@ boot_remove_all_volumes (THREAD_ENTRY * thread_p, const char *db_fullname,
 
   if (!BO_IS_SERVER_RESTARTED ())
     {
+      mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+      or_init_header_size_and_offsets (mvcc_Enabled);
+
       /* System is not restarted. Read the system parameters */
       if (msgcat_init () != NO_ERROR)
 	{
@@ -6089,6 +6095,9 @@ xboot_emergency_patch (THREAD_ENTRY * thread_p, const char *db_name,
 	  return ER_FAILED;
 	}
     }
+
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+  or_init_header_size_and_offsets (mvcc_Enabled);
 
   /* Initialize the transaction table */
   logtb_define_trantable (thread_p, -1, -1);

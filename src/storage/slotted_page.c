@@ -39,6 +39,7 @@
 #include "page_buffer.h"
 #include "log_manager.h"
 #include "critical_section.h"
+#include "mvcc.h"
 #if defined(SERVER_MODE)
 #include "thread.h"
 #include "connection_error.h"
@@ -193,10 +194,10 @@ static int spage_put_helper (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
 static void spage_add_contiguous_free_space (PAGE_PTR pgptr, int space);
 static void spage_reduce_contiguous_free_space (PAGE_PTR pgptr, int space);
 static void spage_verify_header (PAGE_PTR page_p);
-
-static int spage_init_vacuum_data (THREAD_ENTRY * thread_p,
-				   VACUUM_PAGE_DATA * vacuum_data_p,
-				   int n_slots);
+static int spage_mark_delete_after_vacuum_internal (THREAD_ENTRY * thread_p,
+						    PAGE_PTR page_p,
+						    SPAGE_SLOT * slot_p,
+						    INT16 anchor_type);
 
 /*
  * spage_verify_header () -
@@ -1085,7 +1086,6 @@ spage_initialize (THREAD_ENTRY * thread_p, PAGE_PTR page_p, INT16 slot_type,
   page_header_p->need_update_best_hint = 0;
   page_header_p->reserved_bits = 0;
   page_header_p->reserved1 = 0;
-  page_header_p->reserved2 = 0;
 
   page_header_p->anchor_type = slot_type;
   page_header_p->total_free = DB_ALIGN (DB_PAGESIZE - sizeof (SPAGE_HEADER),
@@ -4010,7 +4010,7 @@ spage_get_record_mvcc_data (PAGE_PTR page_p, SPAGE_SLOT * slot_p,
     {
       /* copy the record */
       if (record_descriptor_p->area_size < 0
-	  || record_descriptor_p->area_size < sizeof (MVCC_REC_HEADER))
+	  || record_descriptor_p->area_size < OR_HEADER_SIZE)
 	{
 	  /*
 	   * DOES NOT FIT
@@ -4018,11 +4018,11 @@ spage_get_record_mvcc_data (PAGE_PTR page_p, SPAGE_SLOT * slot_p,
 	   * negative value
 	   */
 	  /* do not use unary minus because slot_p->record_length is unsigned */
-	  record_descriptor_p->length = -((int) sizeof (MVCC_REC_HEADER));
+	  record_descriptor_p->length = -OR_HEADER_SIZE;
 	  return S_DOESNT_FIT;
 	}
 
-      if (slot_p->offset_to_record + sizeof (MVCC_REC_HEADER) >
+      if (slot_p->offset_to_record + OR_HEADER_SIZE >
 	  (unsigned int) DB_PAGESIZE)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
@@ -4030,11 +4030,10 @@ spage_get_record_mvcc_data (PAGE_PTR page_p, SPAGE_SLOT * slot_p,
 	  return SP_ERROR;
 	}
       memcpy (record_descriptor_p->data,
-	      (char *) page_p + slot_p->offset_to_record,
-	      sizeof (MVCC_REC_HEADER));
+	      (char *) page_p + slot_p->offset_to_record, OR_HEADER_SIZE);
     }
 
-  record_descriptor_p->length = sizeof (MVCC_REC_HEADER);
+  record_descriptor_p->length = OR_HEADER_SIZE;
   record_descriptor_p->type = slot_p->record_type;
 
   return S_SUCCESS;
@@ -4894,8 +4893,8 @@ spage_get_page_header_info (PAGE_PTR page_p, DB_VALUE ** page_header_info)
 	       page_header_p->cont_free);
   DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA],
 	       page_header_p->offset_to_free_area);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_LAST_MVCCID],
-	       page_header_p->last_mvcc_id);
+  DB_MAKE_BIGINT (page_header_info[HEAP_PAGE_INFO_LAST_MVCCID],
+		  page_header_p->last_mvcc_id);
   DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_IS_SAVING],
 	       page_header_p->is_saving);
   DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_UPDATE_BEST],
@@ -4958,85 +4957,6 @@ spage_get_slot (PAGE_PTR page_p, PGSLOTID slot_id)
 }
 
 /*
- * spage_init_vacuum_data () - Prepare a SPAGE_CLEAN_PAGE structure to handle
- *			      n_slots in a page.
- *
- * return	      : NO_ERROR or ER_OUT_OF_VIRTUAL_MEMORY
- * thread_p (in)      : Thread entry.
- * vacuum_data_p (in) : Pointer to VACUUM_PAGE_DATA.
- * int n_slots (in)   : Number of slots in page.
- */
-static int
-spage_init_vacuum_data (THREAD_ENTRY * thread_p,
-			VACUUM_PAGE_DATA * vacuum_data_p, int n_slots)
-{
-  vacuum_data_p->n_dead = 0;
-  vacuum_data_p->n_ovfl_pages = 0;
-  vacuum_data_p->n_relocations = 0;
-  vacuum_data_p->vacuum_needed = false;
-  vacuum_data_p->all_visible = true;
-
-  vacuum_data_p->dead_slots =
-    (PGSLOTID *) db_private_alloc (thread_p, n_slots * sizeof (PGSLOTID));
-  vacuum_data_p->ovfl_pages =
-    (VPID *) db_private_alloc (thread_p, n_slots * sizeof (VPID));
-  vacuum_data_p->relocated_slots =
-    (PGSLOTID *) db_private_alloc (thread_p, n_slots * sizeof (PGSLOTID));
-  vacuum_data_p->relocations =
-    (OID *) db_private_alloc (thread_p, n_slots * sizeof (OID));
-  vacuum_data_p->visited =
-    (bool *) db_private_alloc (thread_p, n_slots * sizeof (bool));
-
-  if (vacuum_data_p->dead_slots == NULL
-      || vacuum_data_p->ovfl_pages == NULL
-      || vacuum_data_p->relocated_slots == NULL
-      || vacuum_data_p->relocations == NULL || vacuum_data_p->visited == NULL)
-    {
-      spage_finalize_vacuum_data (thread_p, vacuum_data_p);
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
-	      n_slots * (sizeof (PGSLOTID) * 2 + sizeof (VPID) +
-			 sizeof (OID)));
-      return ER_OUT_OF_VIRTUAL_MEMORY;
-    }
-
-  memset (vacuum_data_p->visited, 0, n_slots * sizeof (bool));
-  return NO_ERROR;
-}
-
-/*
- * spage_finalize_vacuum_data () - Frees the content of a VACUUM_PAGE_DATA.
- *
- * return	      : Void.
- * thread_p (in)      : Thread entry.
- * vacuum_data_p (in) : Pointer to VACUUM_PAGE_DATA.
- */
-void
-spage_finalize_vacuum_data (THREAD_ENTRY * thread_p,
-			    VACUUM_PAGE_DATA * vacuum_data_p)
-{
-  if (vacuum_data_p->dead_slots != NULL)
-    {
-      db_private_free_and_init (thread_p, vacuum_data_p->dead_slots);
-    }
-  if (vacuum_data_p->ovfl_pages != NULL)
-    {
-      db_private_free_and_init (thread_p, vacuum_data_p->ovfl_pages);
-    }
-  if (vacuum_data_p->relocated_slots != NULL)
-    {
-      db_private_free_and_init (thread_p, vacuum_data_p->relocated_slots);
-    }
-  if (vacuum_data_p->relocations != NULL)
-    {
-      db_private_free_and_init (thread_p, vacuum_data_p->relocations);
-    }
-  if (vacuum_data_p->visited != NULL)
-    {
-      db_private_free_and_init (thread_p, vacuum_data_p->visited);
-    }
-}
-
-/*
  * spage_vacuum_page () - Collects clean page information: dead records,
  *                        relocated records and overflow pages.
  *
@@ -5083,11 +5003,8 @@ spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p, VPID page_vpid,
   reuse_oid = (page_header_p->anchor_type != ANCHORED_DONT_REUSE_SLOTS);
 
   /* Initialize clean data */
-  error = spage_init_vacuum_data (thread_p, vacuum_data_p, nslots);
-  if (error != NO_ERROR)
-    {
-      return error;
-    }
+  mvcc_init_vacuum_data (thread_p, vacuum_data_p, nslots);
+
   if (vacuum_page_only)
     {
       /* Dead records are not removed from indexes */
@@ -5102,7 +5019,7 @@ spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p, VPID page_vpid,
 				     vacuum_data_p, lowest_active_mvccid);
       if (error != NO_ERROR)
 	{
-	  spage_finalize_vacuum_data (thread_p, vacuum_data_p);
+	  mvcc_finalize_vacuum_data (thread_p, vacuum_data_p);
 	  return error;
 	}
     }
@@ -5113,14 +5030,15 @@ spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p, VPID page_vpid,
 /*
  * spage_execute_vacuum_page () - Executes page cleaning.
  *
- * return	   : Error code.
- * thread_p (in)   : Thread entry.
- * page_p (in)	   : Heap page pointer.
- * vacuum_data (in) : Clean data.
+ * return	      : Error code.
+ * thread_p (in)      : Thread entry.
+ * page_p (in)	      : Heap page pointer.
+ * has_index (in)     : True if class has at least one index.
+ * vacuum_data_p (in) : Vacuum data.
  */
 int
 spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
-			   VACUUM_PAGE_DATA vacuum_data)
+			   bool has_index, VACUUM_PAGE_DATA * vacuum_data_p)
 {
   SPAGE_HEADER *page_header_p = NULL;
   SPAGE_SLOT *slot_p = NULL;
@@ -5130,17 +5048,17 @@ spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
   page_header_p = (SPAGE_HEADER *) page_p;
   SPAGE_VERIFY_HEADER (page_header_p);
 
-  if (!vacuum_data.vacuum_needed)
+  if (!vacuum_data_p->vacuum_needed)
     {
       /* Don't do anything */
       return NO_ERROR;
     }
 
   /* Mark dead records */
-  for (i = 0; i < vacuum_data.n_dead; i++)
+  for (i = 0; i < vacuum_data_p->n_dead; i++)
     {
       slot_p =
-	spage_find_slot (page_p, page_header_p, vacuum_data.dead_slots[i],
+	spage_find_slot (page_p, page_header_p, vacuum_data_p->dead_slots[i],
 			 false);
       if (slot_p == NULL)
 	{
@@ -5151,16 +5069,37 @@ spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 	  /* Already vacuumed */
 	  continue;
 	}
-      spage_set_slot (slot_p, SPAGE_EMPTY_OFFSET, 0, REC_DEAD);
-      page_header_p->num_records--;
+      if (slot_p->record_type == REC_HOME || slot_p->record_type == REC_BIGONE
+	  || slot_p->record_type == REC_RELOCATION)
+	{
+	  if (has_index)
+	    {
+	      spage_set_slot (slot_p, SPAGE_EMPTY_OFFSET, 0, REC_DEAD);
+	    }
+	  else
+	    {
+	      spage_mark_delete_after_vacuum_internal (thread_p, page_p,
+						       slot_p,
+						       page_header_p->
+						       anchor_type);
+	      vacuum_data_p->n_vacuumed_records++;
+	    }
+	  page_header_p->num_records--;
+	}
+      else
+	{
+	  /* Shouldn't be here */
+	  assert (0);
+	  break;
+	}
     }
 
   /* Relocated records */
-  for (i = 0; i < vacuum_data.n_relocations; i++)
+  for (i = 0; i < vacuum_data_p->n_relocations; i++)
     {
       slot_p =
 	spage_find_slot (page_p, page_header_p,
-			 vacuum_data.relocated_slots[i], false);
+			 vacuum_data_p->relocated_slots[i], false);
       if (slot_p == NULL)
 	{
 	  return ER_FAILED;
@@ -5169,14 +5108,18 @@ spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 	{
 	  return ER_FAILED;
 	}
-      COPY_OID ((OID *) recdes.data, &vacuum_data.relocations[i]);
+      if (slot_p->record_type == REC_HOME
+	  || slot_p->record_type == REC_BIGONE)
+	{
+	  vacuum_data_p->n_vacuumed_records++;
+	}
+      COPY_OID ((OID *) recdes.data, &vacuum_data_p->relocations[i]);
       spage_set_slot (slot_p, slot_p->offset_to_record, OR_OID_SIZE,
 		      REC_RELOCATION);
     }
 
   /* Set all visible flag */
-  assert ((page_header_p->flags & SPAGE_HEADER_FLAG_ALL_VISIBLE) == 0);
-  if (vacuum_data.all_visible)
+  if (vacuum_data_p->all_visible)
     {
       page_header_p->flags |= SPAGE_HEADER_FLAG_ALL_VISIBLE;
     }
@@ -5196,9 +5139,80 @@ spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 }
 
 /*
+ * spage_mark_delete_after_vacuum_internal () - After records are removed from
+ *						all indexes, it is safe to
+ *						mark them as deleted.
+ *
+ * return	    : Error code.
+ * thread_p (in)    : Thread entry.
+ * page_p (in)	    : Page pointer.
+ * slot_p (in)	    : Page slot.
+ * anchor_type (in) : Page anchor type.
+ */
+static int
+spage_mark_delete_after_vacuum_internal (THREAD_ENTRY * thread_p,
+					 PAGE_PTR page_p, SPAGE_SLOT * slot_p,
+					 INT16 anchor_type)
+{
+  switch (anchor_type)
+    {
+    case ANCHORED:
+      slot_p->offset_to_record = SPAGE_EMPTY_OFFSET;
+      slot_p->record_type = REC_DELETED_WILL_REUSE;
+      break;
+    case ANCHORED_DONT_REUSE_SLOTS:
+      slot_p->offset_to_record = SPAGE_EMPTY_OFFSET;
+      slot_p->record_type = REC_MARKDELETED;
+      break;
+    case UNANCHORED_ANY_SEQUENCE:
+    case UNANCHORED_KEEP_SEQUENCE:
+    default:
+      assert (false);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+      return ER_FAILED;
+    }
+  return NO_ERROR;
+}
+
+/*
+ * spage_mark_deleted_after_vacuum () - Used by vacuum to mark records as
+ *					deleted after they have been
+ *					completely removed from indexes.
+ *
+ * return	 : Error code.
+ * thread_p (in) : Thread entry.
+ * page_p (in)	 : Page pointer.
+ * slotid (in)	 : Record slot id.
+ */
+int
+spage_mark_deleted_after_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+				 PGSLOTID slotid)
+{
+  SPAGE_HEADER *page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_SLOT *slot_p = NULL;
+
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  assert (spage_is_valid_anchor_type (page_header_p->anchor_type));
+
+  slot_p = spage_find_slot (page_p, page_header_p, slotid, false);
+  if (slot_p->record_type != REC_DEAD)
+    {
+      /* TODO: Handle REC_RELOCATION case... We must find a new type which
+       *       will continue to point to other oid, but is not considered
+       *       next time for removal from index.
+       */
+      return NO_ERROR;
+    }
+
+  return spage_mark_delete_after_vacuum_internal (thread_p, page_p, slot_p,
+						  page_header_p->anchor_type);
+}
+
+/*
  * spage_should_vacuum_page () - Check if page has records that may be cleaned
- *				and if the last change was done before oldest
- *				active transaction.
+ *				 and if the last change was done before oldest
+ *				 active transaction.
  *
  * return	      : True if page should be cleaned, false otherwise.
  * page_ptr (in)      : Heap page pointer.
@@ -5259,6 +5273,8 @@ spage_mark_page_as_vacuumed (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr)
  *		   the last transaction which deleted records in this page.
  *		   Storing the MVCCID helps to avoid doing too many cleans
  *		   while this transaction is still active.
+ *
+ * NOTE: Page must be set as dirty outside this function call.
  */
 void
 spage_mark_page_for_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr,
@@ -5276,6 +5292,5 @@ spage_mark_page_for_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr,
       || mvcc_id_precedes (page_header_p->last_mvcc_id, mvcc_id))
     {
       page_header_p->last_mvcc_id = mvcc_id;
-      pgbuf_set_dirty (thread_p, page_ptr, DONT_FREE);
     }
 }

@@ -101,6 +101,9 @@ struct db_object
 					 * classes, this member points to the newly
 					 * inserted object in the case of a
 					 * partition change */
+  struct db_object *mvcc_next_version;	/* Used with MVCC when the object has
+					 * been updated to a new version.
+					 */
   void *version;		/* versioning information */
   LOCK lock;			/* object lock */
 
@@ -385,6 +388,9 @@ typedef struct mop_iterator
   (((mop == NULL) || WS_ISMARK_DELETED(mop) ||                       \
     (OID_ISNULL(&(mop)->oid_info.oid) && !(mop)->is_vid)) ? 1 : 0)
 
+#define WS_ASSERT_IS_MVCC_LAST_VERSION(mop) \
+  assert (mop->mvcc_next_version == NULL)
+
 /*
  * WS_MOP_GET_COMPOSITION_FETCH
  * WS_MOP_SET_COMPOSITION_FETCH
@@ -487,6 +493,7 @@ extern void ws_area_init (void);
 
 /* MOP allocation functions */
 extern MOP ws_mop (OID * oid, MOP class_mop);
+extern MOP ws_updated_mop (OID * oid, OID * new_oid, MOP class_mop);
 extern MOP ws_vmop (MOP class_mop, int flags, DB_VALUE * keys);
 extern bool ws_rehash_vmop (MOP mop, MOBJ class_obj, DB_VALUE * newkey);
 #if defined (ENABLE_UNUSED_FUNCTION)
@@ -497,6 +504,7 @@ extern int ws_perm_oid_and_class (MOP mop, OID * new_oid,
 				  OID * new_class_oid);
 extern int ws_update_oid_and_class (MOP mop, OID * new_oid, OID * new_class);
 extern DB_VALUE *ws_keys (MOP vid, unsigned int *flags);
+extern MOP ws_mvcc_get_last_version (MOP mop);
 
 /* Reference mops */
 

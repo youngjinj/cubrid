@@ -3045,6 +3045,8 @@ xts_process_xasl_node (char *ptr, const XASL_NODE * xasl)
 
   ptr = or_pack_int (ptr, xasl->upd_del_class_cnt);
 
+  ptr = or_pack_int (ptr, xasl->mvcc_reev_extra_cls_cnt);
+
   /*
    * NOTE that the composite lock block is strictly a server side block
    * and is not packed.
@@ -3668,6 +3670,19 @@ xts_save_upddel_class_info (char *ptr, const UPDDEL_CLASS_INFO * upd_cls)
       ptr = or_pack_int (ptr, 0);
     }
 
+  /* no of indexes in mvcc assignments extra classes */
+  ptr = or_pack_int (ptr, upd_cls->no_extra_assign_reev);
+
+  /* mvcc assignments extra classes */
+  offset =
+    xts_save_int_array (upd_cls->mvcc_extra_assign_reev,
+			upd_cls->no_extra_assign_reev);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
   return ptr;
 }
 
@@ -3942,6 +3957,27 @@ xts_process_update_proc (char *ptr, const UPDATE_PROC_NODE * update_info)
 
   /* no_orderby_keys */
   ptr = or_pack_int (ptr, update_info->no_orderby_keys);
+
+  /* no_assign_reev_classes */
+  ptr = or_pack_int (ptr, update_info->no_assign_reev_classes);
+
+  /* mvcc condition reevaluation data */
+  ptr = or_pack_int (ptr, update_info->no_reev_classes);
+  if (update_info->no_reev_classes)
+    {
+      offset =
+	xts_save_int_array (update_info->mvcc_reev_classes,
+			    update_info->no_reev_classes);
+      if (offset == ER_FAILED)
+	{
+	  return NULL;
+	}
+    }
+  else
+    {
+      offset = 0;
+    }
+  ptr = or_pack_int (ptr, offset);
 
   return ptr;
 }
@@ -4364,6 +4400,13 @@ xts_process_access_spec_type (char *ptr, const ACCESS_SPEC_TYPE * access_spec)
     }
   ptr = or_pack_int (ptr, offset);
 
+  offset = xts_save_pred_expr (access_spec->where_range);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
   switch (access_spec->type)
     {
     case TARGET_CLASS:
@@ -4579,6 +4622,13 @@ xts_process_cls_spec_type (char *ptr, const CLS_SPEC_TYPE * cls_spec)
     }
   ptr = or_pack_int (ptr, offset);
 
+  offset = xts_save_regu_variable_list (cls_spec->cls_regu_list_range);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
   offset = xts_save_outptr_list (cls_spec->cls_output_val_list);
   if (offset == ER_FAILED)
     {
@@ -4658,6 +4708,23 @@ xts_process_cls_spec_type (char *ptr, const CLS_SPEC_TYPE * cls_spec)
   ptr = or_pack_int (ptr, offset);
 
   offset = xts_save_regu_variable_list (cls_spec->cls_regu_list_reserved);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  ptr = or_pack_int (ptr, cls_spec->num_attrs_range);
+
+  offset = xts_save_int_array (cls_spec->attrids_range,
+			       cls_spec->num_attrs_range);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  offset = xts_save_cache_attrinfo (cls_spec->cache_range);
   if (offset == ER_FAILED)
     {
       return NULL;
@@ -5520,7 +5587,8 @@ xts_sizeof_xasl_node (const XASL_NODE * xasl)
     OR_INT_SIZE +		/* next_scan_block_on */
     OR_INT_SIZE +		/* cat_fetched */
     OR_INT_SIZE +		/* composite_locking */
-    OR_INT_SIZE;		/* upd_del_class_cnt */
+    OR_INT_SIZE +		/* upd_del_class_cnt */
+    OR_INT_SIZE;		/* mvcc_reev_extra_cls_cnt */
 
   size += OR_INT_SIZE;		/* number of access specs in spec_list */
   for (access_spec = xasl->spec_list; access_spec;
@@ -5869,7 +5937,9 @@ xts_sizeof_upddel_class_info (const UPDDEL_CLASS_INFO * upd_cls)
     OR_INT_SIZE +		/* needs pruning */
     OR_INT_SIZE +		/* has_uniques */
     PTR_SIZE +			/* no_lob_attrs */
-    PTR_SIZE;			/* lob_attr_ids */
+    PTR_SIZE +			/* lob_attr_ids */
+    OR_INT_SIZE +		/* no_extra_assign_reev */
+    PTR_SIZE;			/* mvcc_extra_assign_reev */
 
   return size;
 }
@@ -5924,7 +5994,10 @@ xts_sizeof_update_proc (const UPDATE_PROC_NODE * update_info)
     OR_INT_SIZE +		/* wait_msecs */
     OR_INT_SIZE +		/* no_logging */
     OR_INT_SIZE +		/* release_lock */
-    OR_INT_SIZE;		/* no_orderby_keys */
+    OR_INT_SIZE +		/* no_orderby_keys */
+    OR_INT_SIZE +		/* no_assign_reev_classes */
+    OR_INT_SIZE +		/* no_cond_reev_classes */
+    PTR_SIZE;			/* mvcc_cond_reev_classes */
 
   return size;
 }
@@ -6252,7 +6325,8 @@ xts_sizeof_access_spec_type (const ACCESS_SPEC_TYPE * access_spec)
     OR_INT_SIZE +		/* lock_hint */
     PTR_SIZE +			/* index_ptr */
     PTR_SIZE +			/* where_key */
-    PTR_SIZE;			/* where_pred */
+    PTR_SIZE +			/* where_pred */
+    PTR_SIZE;			/* where_range */
 
   switch (access_spec->type)
     {
@@ -6429,6 +6503,7 @@ xts_sizeof_cls_spec_type (const CLS_SPEC_TYPE * cls_spec)
   size += PTR_SIZE +		/* cls_regu_list_key */
     PTR_SIZE +			/* cls_regu_list_pred */
     PTR_SIZE +			/* cls_regu_list_rest */
+    PTR_SIZE +			/* cls_regu_list_range */
     PTR_SIZE +			/* cls_output_val_list  */
     PTR_SIZE +			/* regu_val_list     */
     OR_HFID_SIZE +		/* hfid */
@@ -6443,8 +6518,12 @@ xts_sizeof_cls_spec_type (const CLS_SPEC_TYPE * cls_spec)
     PTR_SIZE +			/* attrids_rest */
     PTR_SIZE +			/* cache_rest */
     OR_INT_SIZE +		/* schema_type */
+    OR_INT_SIZE +		/* num_attrs_reserved */
     PTR_SIZE +			/* cache_reserved */
-    PTR_SIZE;			/* cls_regu_list_reserved */
+    PTR_SIZE +			/* cls_regu_list_reserved */
+    PTR_SIZE +			/* atrtrids_range */
+    PTR_SIZE +			/* cache_range */
+    OR_INT_SIZE;		/* num_attrs_range */
 
   return size;
 }

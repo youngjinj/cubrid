@@ -35,6 +35,7 @@
 #include "slotted_page.h"
 #include "log_manager.h"
 #include "overflow_file.h"
+#include "heap_file.h"
 
 #define OVERFLOW_ALLOCVPID_ARRAY_SIZE 64
 
@@ -939,9 +940,10 @@ overflow_get_nbytes (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
   first_part = (OVERFLOW_FIRST_PART *) pgptr;
   if (mvcc_snapshot != NULL)
     {
-      if (mvcc_snapshot->snapshot_fnc (thread_p,
-				       (MVCC_REC_HEADER *) first_part->data,
-				       mvcc_snapshot, pgptr) != true)
+      MVCC_REC_HEADER mvcc_header;
+      heap_get_mvcc_rec_header_from_overflow (pgptr, &mvcc_header);
+      if (mvcc_snapshot->snapshot_fnc (thread_p, &mvcc_header,
+				       mvcc_snapshot) != true)
 	{
 	  pgbuf_unfix_and_init (thread_p, pgptr);
 	  return S_SNAPSHOT_NOT_SATISFIED;

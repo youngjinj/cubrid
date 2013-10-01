@@ -39,7 +39,6 @@
 #include "large_object_directory.h"
 #include "large_object.h"
 #include "overflow_file.h"
-#include "file_mvcc_status.h"
 
 /*
  *
@@ -767,22 +766,22 @@ struct rvfun RV_fun[] = {
    heap_rv_mvcc_redo_update,
    NULL,
    NULL},
-  {RVHF_MVCC_CLEAN_HEAP_PAGE,
-   "RVHF_MVCC_CLEAN_HEAP_PAGE",
+  {RVHF_MVCC_VACUUM_HEAP_PAGE,
+   "RVHF_MVCC_VACUUM_HEAP_PAGE",
    NULL,
    heap_rv_redo_vacuum_page,
    NULL,
    NULL},
-  {RVBF_NEWPAGE_RESET,
-   "RVBF_NEWPAGE_RESET",
+  {RVHF_MVCC_VACUUM_REMOVE_OIDS,
+   "RVHF_MVCC_VACUUM_REMOVE_OIDS",
    NULL,
-   file_mvcc_rv_newpage_reset,
+   vacuum_rv_redo_remove_oids,
    NULL,
    NULL},
-  {RVBF_MVCC_SET_STATUS,
-   "RVBF_MVCC_SET_STATUS",
-   file_mvcc_rv_undo_id_status,
-   file_mvcc_rv_redo_id_status,
+  {RVHF_MVCC_UPDATE_ROW_VERSION,
+   "RVHF_MVCC_UPDATE_ROW_VERSION",
+   heap_rv_mvcc_undo_delete,
+   heap_rv_mvcc_redo_update_row_version,
    NULL,
    NULL}
 };

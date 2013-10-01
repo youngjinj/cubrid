@@ -23,12 +23,39 @@
 
 #ident "$Id$"
 
-#include "heap_file.h"
-#include "file_mvcc_status.h"
 #include "mvcc.h"
-#include "page_buffer.h"
 #include "dbtype.h"
+#include "heap_file.h"
+#include "page_buffer.h"
 #include "overflow_file.h"
+
+#define MVCC_IS_REC_INSERTER_ACTIVE(thread_p, rec_header_p) \
+  (logtb_is_active_mvccid (thread_p, (rec_header_p)->mvcc_ins_id))
+
+#define MVCC_IS_REC_DELETER_ACTIVE(thread_p, rec_header_p) \
+  (logtb_is_active_mvccid (thread_p, (rec_header_p)->mvcc_del_id))
+
+#define MVCC_IS_REC_INSERTER_IN_SNAPSHOT(thread_p, rec_header_p, snapshot) \
+  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->mvcc_ins_id, snapshot))
+
+#define MVCC_IS_REC_DELETER_IN_SNAPSHOT(thread_p, rec_header_p, snapshot) \
+  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->mvcc_del_id, snapshot))
+
+#define MVCC_IS_REC_INSERTED_SINCE_MVCCID(rec_header_p, mvcc_id) \
+  (!mvcc_id_precedes ((rec_header_p)->mvcc_ins_id, mvcc_id))
+
+#define MVCC_IS_REC_DELETED_SINCE_MVCCID(rec_header_p, mvcc_id) \
+  (!mvcc_id_precedes ((rec_header_p)->mvcc_del_id, mvcc_id))
+
+
+/* Used by mvcc_chain_satisfies_vacuum to avoid handling the same OID twice */
+enum
+{
+  /* Any positive value should be an index in relocated slots array */
+  NOT_VISITED = -1,
+  VISITED_DEAD = -2,
+  VISITED_ALIVE = -3
+};
 
 /* the lowest active mvcc id computed for last */
 /* MVCCID recent_snapshot_lowest_active_mvccid = MVCCID_NULL; */
@@ -66,7 +93,7 @@ mvcc_is_id_in_snapshot (THREAD_ENTRY * thread_p, MVCCID mvcc_id,
   /* TO DO - handle subtransactions */
   for (i = 0; i < snapshot->cnt_active_ids; i++)
     {
-      if (MVCCID_IS_EQUAL (mvcc_id, snapshot->active_child_ids[i]))
+      if (MVCCID_IS_EQUAL (mvcc_id, snapshot->active_ids[i]))
 	{
 	  return true;
 	}
@@ -87,163 +114,66 @@ mvcc_is_id_in_snapshot (THREAD_ENTRY * thread_p, MVCCID mvcc_id,
 bool
 mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
 			 MVCC_REC_HEADER * rec_header,
-			 MVCC_SNAPSHOT * snapshot, PAGE_PTR page)
+			 MVCC_SNAPSHOT * snapshot)
 {
-  assert (rec_header != NULL && snapshot != NULL && page != NULL);
+  assert (rec_header != NULL && snapshot != NULL);
 
-  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DISABLED)
+  if (MVCC_IS_DISABLED (rec_header))
     {
+      /* MVCC is disabled for this record so it is visible to everyone */
       return true;
     }
 
-  if (!(rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_COMMITTED))
+  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
     {
-      if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_INVALID)
+      /* The record is not deleted */
+      if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
 	{
-	  /* mvcc insert id invalid/aborted */
-	  return false;
+	  /* Record was inserted by current transaction and is visible */
+	  return true;
 	}
-
-      if (logtb_is_current_mvccid (thread_p,
-				   HEAP_GET_MVCC_INS_ID (rec_header)))
+      else if (MVCC_IS_REC_INSERTER_IN_SNAPSHOT (thread_p, rec_header,
+						 snapshot))
 	{
-#if defined(MVCC_USE_COMMAND_ID)
-	  if (HEAP_GET_MVCC_INS_COMM_ID (rec_header) >=
-	      MVCC_SNAPSHOT_GET_COMMAND_ID (snapshot))
-	    {
-	      /* inserted after scan started */
-	      return false;
-	    }
-#endif /* MVCC_USE_COMMAND_ID */
-
-	  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
-	    {
-	      /* mvcc delete id invald/aborted */
-	      return true;
-	    }
-
-	  /* TO DO - locked ? */
-
-	  if (!logtb_is_current_mvccid (thread_p,
-					HEAP_GET_MVCC_DEL_ID (rec_header)))
-	    {
-	      heap_set_record_header_flag (thread_p, rec_header, page,
-					   HEAP_MVCC_FLAG_DELID_INVALID,
-					   MVCCID_NULL);
-	      return true;
-	    }
-
-#if defined(MVCC_USE_COMMAND_ID)
-	  if (HEAP_GET_MVCC_DEL_COMM_ID (rec_header) >=
-	      MVCC_SNAPSHOT_GET_COMMAND_ID (snapshot))
-	    {
-	      /* deleted after scan start */
-	      return true;
-	    }
-	  else
-	    {
-	      /* deleted before scan start */
-	      return false;
-	    }
-#else /* !MVCC_USE_COMMAND_ID */
+	  /* Record was inserted by an active transaction or by a transaction
+	   * that has committed after snapshot was obtained.
+	   */
 	  return false;
-#endif /* !MVCC_USE_COMMAND_ID */
-	}
-      else if (logtb_is_active_mvccid (thread_p,
-				       HEAP_GET_MVCC_INS_ID (rec_header)))
-	{
-	  /* record insertion not committed yet */
-	  return false;
-	}
-      else if (logtb_is_mvccid_committed (thread_p,
-					  HEAP_GET_MVCC_INS_ID (rec_header)))
-	{
-	  /* record insertion committed - set flag */
-	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_INSID_COMMITTED,
-				       HEAP_GET_MVCC_INS_ID (rec_header));
 	}
       else
 	{
-	  /* record insertion aborted - set flag */
-	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_INSID_INVALID,
-				       MVCCID_NULL);
-	  return false;
-	}
-
-    }
-
-  /* record insertion already committed, need to check when was committed */
-  if (mvcc_is_id_in_snapshot (thread_p, HEAP_GET_MVCC_INS_ID (rec_header),
-			      snapshot))
-    {
-      /* insert mvcc id is active from snapshot point of view */
-      return false;
-    }
-
-  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
-    {
-      /* not deleted or aborted */
-      return true;
-    }
-
-  /* TO DO - locked ? */
-
-  if (!(rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_COMMITTED))
-    {
-      if (logtb_is_current_mvccid (thread_p,
-				   HEAP_GET_MVCC_DEL_ID (rec_header)))
-	{
-#if defined(MVCC_USE_COMMAND_ID)
-	  if (HEAP_GET_MVCC_DEL_COMM_ID (rec_header) >=
-	      MVCC_SNAPSHOT_GET_COMMAND_ID (snapshot))
-	    {
-	      /* delete after scan start */
-	      return true;
-	    }
-	  else
-	    {
-	      /* already deleted - before scan start */
-	      return false;
-	    }
-#else /* !MVCC_USE_COMMAND_ID */
-	  return false;
-#endif /* !MVCC_USE_COMMAND_ID */
-	}
-
-      if (logtb_is_active_mvccid (thread_p,
-				  HEAP_GET_MVCC_DEL_ID (rec_header)))
-	{
-	  /* record deletion not committed yet */
+	  /* The inserter transaction has committed and the record is visible
+	   * to current transaction.
+	   */
 	  return true;
 	}
-
-      if (!logtb_is_mvccid_committed (thread_p,
-				      HEAP_GET_MVCC_DEL_ID (rec_header)))
+    }
+  else
+    {
+      /* The record is deleted */
+      if (MVCC_IS_REC_DELETED_BY_ME (thread_p, rec_header))
 	{
-	  /* record deletion aborted */
-	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_DELID_INVALID,
-				       MVCCID_NULL);
-
+	  /* The record was deleted by current transaction and it is not
+	   * visible anymore.
+	   */
+	  return false;
+	}
+      else if (MVCC_IS_REC_DELETER_IN_SNAPSHOT (thread_p, rec_header,
+						snapshot))
+	{
+	  /* The record was deleted by an active transaction or by a
+	   * transaction that has committed after snapshot was obtained.
+	   */
 	  return true;
 	}
-
-      heap_set_record_header_flag (thread_p, rec_header, page,
-				   HEAP_MVCC_FLAG_DELID_COMMITTED,
-				   HEAP_GET_MVCC_DEL_ID (rec_header));
+      else
+	{
+	  /* The deleter transaction has committed and the record is not
+	   * visible to current transaction.
+	   */
+	  return false;
+	}
     }
-
-  /* record deletion already committed, need to check when was committed */
-  if (mvcc_is_id_in_snapshot (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header),
-			      snapshot))
-    {
-      /* delete mvcc id is active from snapshot point of view */
-      return true;
-    }
-
-  return false;
 }
 
 /*
@@ -254,118 +184,53 @@ mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
  * rec_header (in)    : MVCC record header.
  * oldest_mvccid (in) : MVCCID for oldest active transaction.
  * page_p (in)	      : Heap page pointer.
- *
- * NOTE: The condition for a record to be dead is:
- *	 (!HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_INSID_COMMITTED)
- *	      --> inserted record is not committed
- *	  && HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_INSID_INVALID))
- *	      -->  and insert was aborted
- *	 || (HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_DELID_COMMITTED)
- *	     && !mvcc_id_precedes (HEAP_GET_MVCC_DEL_ID (rec_header), oldest))
- *	      --> records was deleted and committed and is no longer
- *	      visible for any active transaction
  */
 MVCC_SATISFIES_VACUUM_RESULT
 mvcc_satisfies_vacuum (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
-		       MVCCID oldest_mvccid, PAGE_PTR page_p)
+		       MVCCID oldest_mvccid)
 {
-  if (HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_DISABLED))
+  if (MVCC_IS_DISABLED (rec_header))
     {
       /* do not vacuum this record ever */
       return VACUUM_RECORD_ALIVE;
     }
 
-  if (!HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_INSID_COMMITTED))
+  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
     {
-      /* The insert commit flag is not set */
-      if (HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_INSID_INVALID))
+      /* The record was not deleted */
+      if (MVCC_IS_REC_INSERTED_SINCE_MVCCID (rec_header, oldest_mvccid))
 	{
-	  /* The inserting transaction was aborted */
-	  return VACUUM_RECORD_DEAD;
-	}
-      else if (!mvcc_id_precedes (HEAP_GET_MVCC_INS_ID (rec_header),
-				  oldest_mvccid))
-	{
-	  /* The record was recently inserted */
-	  if (HEAP_MVCC_IS_FLAG_SET
-	      (rec_header, HEAP_MVCC_FLAG_DELID_INVALID))
-	    {
-	      /* The record is not deleted */
-	      return VACUUM_RECORD_RECENTLY_INSERTED;
-	    }
-	  /* The record was also deleted */
-	  return VACUUM_RECORD_RECENTLY_DELETED;
-	}
-      else if (logtb_is_mvccid_committed
-	       (thread_p, HEAP_GET_MVCC_INS_ID (rec_header)))
-	{
-	  /* The inserting transaction did commit and the flag is outdated */
-	  heap_set_record_header_flag (thread_p, rec_header, page_p,
-				       HEAP_MVCC_FLAG_INSID_COMMITTED,
-				       HEAP_GET_MVCC_INS_ID (rec_header));
-	}
-      else
-	{
-	  /* The inserting transaction did not commit and it is not active,
-	   * it must have been aborted, but the flag is outdated.
+	  /* Record was recently inserted and may be still invisible to some
+	   * active transactions.
 	   */
-	  heap_set_record_header_flag (thread_p, rec_header, page_p,
-				       HEAP_MVCC_FLAG_INSID_INVALID,
-				       HEAP_GET_MVCC_INS_ID (rec_header));
-	  return VACUUM_RECORD_DEAD;
-	}
-    }
-
-  /* the inserter committed */
-
-  if (HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_DELID_INVALID))
-    {
-      /* the record was never deleted */
-      return VACUUM_RECORD_ALIVE;
-    }
-
-  if (!HEAP_MVCC_IS_FLAG_SET (rec_header, HEAP_MVCC_FLAG_DELID_COMMITTED))
-    {
-      /* the delete commit flag is not set */
-      if (!mvcc_id_precedes (HEAP_GET_MVCC_DEL_ID (rec_header),
-			     oldest_mvccid))
-	{
-	  /* the record was recently deleted */
-	  return VACUUM_RECORD_RECENTLY_DELETED;
-	}
-      else if (logtb_is_mvccid_committed
-	       (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header)))
-	{
-	  /* the deleter committed, update flag */
-	  heap_set_record_header_flag (thread_p, rec_header, page_p,
-				       HEAP_MVCC_FLAG_DELID_COMMITTED,
-				       HEAP_GET_MVCC_DEL_ID (rec_header));
+	  return VACUUM_RECORD_RECENTLY_INSERTED;
 	}
       else
 	{
-	  /* either aborted or crashed */
-	  heap_set_record_header_flag (thread_p, rec_header, page_p,
-				       HEAP_MVCC_FLAG_DELID_INVALID,
-				       HEAP_GET_MVCC_DEL_ID (rec_header));
+	  /* The inserter transaction has committed and the record is visible
+	   * to all running transactions.
+	   */
 	  return VACUUM_RECORD_ALIVE;
 	}
     }
-
-  /* the deleter committed */
-
-  if (!mvcc_id_precedes (HEAP_GET_MVCC_DEL_ID (rec_header), oldest_mvccid))
+  else
     {
-      /* recently dead, the record may still be visible to some active
-       * transactions.
-       */
-      return VACUUM_RECORD_RECENTLY_DELETED;
+      /* The record was deleted */
+      if (MVCC_IS_REC_DELETED_SINCE_MVCCID (rec_header, oldest_mvccid))
+	{
+	  /* Record was recently deleted and may still be visible to some
+	   * active transactions.
+	   */
+	  return VACUUM_RECORD_RECENTLY_DELETED;
+	}
+      else
+	{
+	  /* The deleter transaction has committed and the record is not
+	   * visible to any running transactions.
+	   */
+	  return VACUUM_RECORD_DEAD;
+	}
     }
-
-  /* the record was deleted, the deleter committed and no active transactions
-   * can see this record.
-   * safe to remove.
-   */
-  return VACUUM_RECORD_DEAD;
 }
 
 /*
@@ -373,17 +238,17 @@ mvcc_satisfies_vacuum (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
  *				    and decides what to do with the chain
  *				    (kill or relocate).
  *
- * return		 : Error code.
- * thread_p (in)	 : Thread entry.
- * page_p (in/out)	 : Page pointer to the first object page. May change
- *			  if the chain exits the page.
- * page_vpid (in/out)	 : VPID for fist page (that is vacuumed).
- * slotid (in)		 : Slot identifier for the first object.
- * reuse_oid (in)	 : Reusable OIDs.
- * vacuum_page_only (in) : Stay on page if true (when the chain exists the
- *			   page stop following it).
- * vacuum_data_p (in)	 : Clean data collector.
- * oldest_active (in)	 : MVCCID for oldest active transaction.
+ * return		     : Error code.
+ * thread_p (in)	     : Thread entry.
+ * page_p (in/out)	     : Page pointer to the first object page. May
+ *			       change if the chain exits the page.
+ * vacuum_page_vpid (in/out) : VPID for fist page (that is vacuumed).
+ * slotid (in)		     : Slot identifier for the first object.
+ * reuse_oid (in)	     : Reusable OIDs.
+ * vacuum_page_only (in)     : Stay on page if true (when the chain exists the
+ *			       page stop following it).
+ * vacuum_data_p (in)	     : Clean data collector.
+ * oldest_active (in)	     : MVCCID for oldest active transaction.
  *
  * NOTE: When records are updated in MVCC, the old record is just marked for
  *	 deletion, a new record is created and a link between the two is set.
@@ -409,7 +274,7 @@ mvcc_satisfies_vacuum (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
  */
 int
 mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
-			     VPID page_vpid, PGSLOTID slotid,
+			     VPID vacuum_page_vpid, PGSLOTID slotid,
 			     bool reuse_oid, bool vacuum_page_only,
 			     VACUUM_PAGE_DATA * vacuum_data_p,
 			     MVCCID oldest_active)
@@ -421,10 +286,11 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
   SPAGE_SLOT *slotp = NULL;
   PAGE_PTR ovf_page_p = NULL;
   VPID fixed_vpid, ovf_vpid;
-  OID forward_oid, current_oid;
-  MVCC_REC_HEADER *mvcc_header = NULL;
+  OID forward_oid, current_oid, relocation_dest;
+  MVCC_REC_HEADER mvcc_header;
   MVCC_SATISFIES_VACUUM_RESULT satisfies_vacuum;
-  bool is_dead = false, end_chain = false;
+  bool is_dead = false, break_loop = false, is_on_vacuum_page = false;
+  int visited_status;
 
   PGSLOTID static_chain[DEFAULT_CHAIN_SIZE];
   PGSLOTID *chain = NULL, *new_chain = NULL;
@@ -433,45 +299,118 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 
   int error = NO_ERROR;
 
-  if (vacuum_data_p->visited[slotid])
+#if !defined(NDEBUG)
+  int nslots;
+#endif
+
+  if (vacuum_data_p->visited[slotid] != NOT_VISITED)
     {
       /* Current object was already handled */
       return NO_ERROR;
     }
 
   /* Initialize current_oid to point to first object */
-  current_oid.pageid = page_vpid.pageid;
-  current_oid.volid = page_vpid.volid;
+  current_oid.pageid = vacuum_page_vpid.pageid;
+  current_oid.volid = vacuum_page_vpid.volid;
   current_oid.slotid = slotid;
 
-  /* Make sure the first page is fixed */
+  /* Initialize fixed_vpid */
   assert (page_p != NULL);
   if (*page_p != NULL)
     {
       pgbuf_get_vpid (*page_p, &fixed_vpid);
-      if (!VPID_EQ (&page_vpid, &fixed_vpid))
-	{
-	  pgbuf_unfix (thread_p, *page_p);
-	  *page_p =
-	    pgbuf_fix (thread_p, &page_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-		       PGBUF_UNCONDITIONAL_LATCH);
-	}
     }
   else
     {
-      *page_p =
-	pgbuf_fix (thread_p, &page_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-		   PGBUF_UNCONDITIONAL_LATCH);
+      VPID_SET_NULL (&fixed_vpid);
     }
   assert (*page_p != NULL);
+
+#ifndef NDEBUG
+  if (!VPID_EQ (&fixed_vpid, &vacuum_page_vpid))
+    {
+      if (*page_p != NULL)
+	{
+	  pgbuf_unfix_and_init (thread_p, *page_p);
+	}
+      *page_p =
+	pgbuf_fix (thread_p, &vacuum_page_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+		   PGBUF_UNCONDITIONAL_LATCH);
+    }
+  nslots = spage_number_of_slots (*page_p);
+#endif /* !NDEBUG */
 
   /* Initialize chain array */
   n_chain_entries = 0;
   chain = static_chain;
 
   /* Start looking for an end of the chain (first visible record) */
+  /* After this loop, the built update chain will be handled */
   do
     {
+      /* Make sure the page with current oid is fixed */
+      if (fixed_vpid.volid != current_oid.volid
+	  || fixed_vpid.pageid != current_oid.pageid)
+	{
+	  /* Unfix old page and fix new page */
+	  if (*page_p != NULL)
+	    {
+	      pgbuf_unfix_and_init (thread_p, *page_p);
+	    }
+
+	  fixed_vpid.volid = current_oid.volid;
+	  fixed_vpid.pageid = current_oid.pageid;
+	  *page_p =
+	    pgbuf_fix (thread_p, &fixed_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+		       PGBUF_UNCONDITIONAL_LATCH);
+	  if (*page_p == NULL)
+	    {
+	      goto error;
+	    }
+	}
+
+      is_on_vacuum_page = VPID_EQ (&fixed_vpid, &vacuum_page_vpid);
+
+      if (is_on_vacuum_page)
+	{
+	  /* Check if the current element in chain was already handled */
+	  visited_status = vacuum_data_p->visited[current_oid.slotid];
+
+	  if (visited_status == VISITED_DEAD)
+	    {
+	      /* The entire chain must die */
+	      is_dead = true;
+	      /* Break loop */
+	      break;
+	    }
+	  else if (visited_status == VISITED_ALIVE)
+	    {
+	      /* The entire chain will be relocated to current object */
+	      COPY_OID (&relocation_dest, &current_oid);
+	      /* Break loop */
+	      break;
+	    }
+	  else if (visited_status >= 0)
+	    {
+	      /* Visited_status is a relocation index for current object */
+	      assert (visited_status < vacuum_data_p->n_relocations);
+	      /* The entire chain will be relocated to the same destination
+	       * as the current object.
+	       */
+	      COPY_OID (&relocation_dest,
+			&vacuum_data_p->relocations[visited_status]);
+	      /* Break loop */
+	      break;
+	    }
+	  else
+	    {
+	      /* Not visited */
+	      /* Safety check */
+	      assert (visited_status == NOT_VISITED);
+	    }
+	}
+
+      /* Handle current object */
       /* Get current record type */
       slotp = spage_get_slot (*page_p, current_oid.slotid);
       if (slotp == NULL)
@@ -481,11 +420,32 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	}
       rec_type = slotp->record_type;
 
-      if (rec_type == REC_DEAD)
+      /* The chain must be stopped if the current object is alive (visible)
+       * or if it dead/deleted and it doesn't have any next version.
+       * After these checks, current oid is added to chain. To avoid that
+       * just break loop before.
+       */
+      if (rec_type == REC_DEAD || rec_type == REC_DELETED_WILL_REUSE
+	  || rec_type == REC_MARKDELETED)
 	{
-	  /* The chain ends in a dead record */
+	  /* The chain ends in a dead/removed record */
 	  is_dead = true;
-	  end_chain = true;
+
+	  if (rec_type != REC_DEAD)
+	    {
+	      /* Force exit to avoid adding this element to chain */
+	      break;
+	    }
+	}
+      else if (rec_type == REC_ASSIGN_ADDRESS)
+	{
+	  /* Stop here */
+	  COPY_OID (&relocation_dest, &current_oid);
+	  if (is_on_vacuum_page)
+	    {
+	      /* Mark as visited */
+	      vacuum_data_p->visited[current_oid.slotid] = VISITED_ALIVE;
+	    }
 	}
       else if (rec_type == REC_RELOCATION)
 	{
@@ -509,21 +469,6 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	      goto error;
 	    }
 	}
-      else if (rec_type == REC_DELETED_WILL_REUSE
-	       || rec_type == REC_MARKDELETED)
-	{
-	  /* The rest of the chain was already handled, records have been
-	   * killed and deleted.
-	   */
-	  is_dead = true;
-	  end_chain = true;
-
-	  /* This can happen only if the chain lipped on another page
-	   * The chain on the current page can only end in a REC_DEAD record
-	   * if it was already handled.
-	   */
-	  assert (!VPID_EQ (&fixed_vpid, &page_vpid));
-	}
       else
 	{
 	  /* Must be a HOME/BIG_ONE record */
@@ -543,24 +488,15 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 		  assert (0);
 		  goto error;
 		}
-	      /* Try to get overflow page without releasing current page */
 	      ovf_vpid.pageid = forward_oid.pageid;
 	      ovf_vpid.volid = forward_oid.volid;
 	      ovf_page_p =
 		pgbuf_fix (thread_p, &ovf_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-			   PGBUF_CONDITIONAL_LATCH);
+			   PGBUF_UNCONDITIONAL_LATCH);
 	      if (ovf_page_p == NULL)
 		{
-		  /* Release latch on first page */
-		  pgbuf_unfix_and_init (thread_p, *page_p);
-		  ovf_page_p =
-		    pgbuf_fix (thread_p, &ovf_vpid, OLD_PAGE,
-			       PGBUF_LATCH_READ, PGBUF_UNCONDITIONAL_LATCH);
-		  if (ovf_page_p == NULL)
-		    {
-		      assert (0);
-		      goto error;
-		    }
+		  assert (0);
+		  goto error;
 		}
 	      recdes.data = overflow_get_first_page_data (ovf_page_p);
 	    }
@@ -575,26 +511,33 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	    }
 
 	  /* Get MVCC header from records data */
-	  mvcc_header = (MVCC_REC_HEADER *) recdes.data;
+	  or_mvcc_get_header (&recdes, &mvcc_header);
+
+	  /* Overflow page is not needed anymore */
+	  if (ovf_page_p != NULL)
+	    {
+	      /* Overflow page is not needed anymore */
+	      pgbuf_unfix_and_init (thread_p, ovf_page_p);
+	    }
+
 	  /* Check satisfies vacuum */
 	  satisfies_vacuum =
-	    mvcc_satisfies_vacuum (thread_p, mvcc_header, oldest_active,
-				   *page_p);
+	    mvcc_satisfies_vacuum (thread_p, &mvcc_header, oldest_active);
 
-	  switch (satisfies_vacuum)
+	  if (satisfies_vacuum == VACUUM_RECORD_DEAD)
 	    {
-	    case VACUUM_RECORD_DEAD:
-	      /* Record was deleted and the deleting transaction committed */
-	      if (OID_ISNULL (&mvcc_header->next_version))
+	      /* Record was deleted, the deleting transaction committed and
+	       * the old version is not visible to any active transactions.
+	       */
+	      if (OID_ISNULL (&mvcc_header.next_version))
 		{
 		  /* This is last in chain */
 		  is_dead = true;
-		  end_chain = true;
 		}
 	      else
 		{
 		  /* Must advance in update chain */
-		  COPY_OID (&forward_oid, &mvcc_header->next_version);
+		  COPY_OID (&forward_oid, &mvcc_header.next_version);
 		}
 	      if (rec_type == REC_BIGONE)
 		{
@@ -604,53 +547,52 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 			     &ovf_vpid);
 		  vacuum_data_p->n_ovfl_pages++;
 		}
-	      break;
+	    }
+	  else if (satisfies_vacuum == VACUUM_RECORD_ALIVE
+		   /* Record is deleted. However it may be still visible to
+		    * running transactions.
+		    */
+		   || satisfies_vacuum == VACUUM_RECORD_RECENTLY_DELETED
+		   /* Record was recently inserted. The inserter is still
+		    * active or has recently committed. The record is visible
+		    * at least to the inserter, yet may be invisible to other
+		    * active transactions.
+		    */
+		   || satisfies_vacuum == VACUUM_RECORD_RECENTLY_INSERTED)
+	    {
+	      /* The chain is still alive and all entries must be relocated
+	       * to this object
+	       */
+	      COPY_OID (&relocation_dest, &current_oid);
 
-	    case VACUUM_RECORD_RECENTLY_DELETED:
-	      /* Record is deleted. However it may be still visible to running
-	       * transactions.
-	       */
-	      /* Fall through */
-	    case VACUUM_RECORD_RECENTLY_INSERTED:
-	      /* Record was recently inserted. The inserter is still active
-	       * or has recently committed. The record is visible at least to
-	       * the inserter, yet may be invisible to other active
-	       * transactions.
-	       */
-	      if (VPID_EQ (&page_vpid, &fixed_vpid))
+	      if (is_on_vacuum_page)
 		{
-		  /* A record is recently deleted or recently inserted */
-		  /* This page will not be all visible after vacuum */
-		  vacuum_data_p->all_visible = false;
-		}
-	    case VACUUM_RECORD_ALIVE:
-	      end_chain = true;
-	      break;
+		  /* Mark this object as visited */
+		  vacuum_data_p->visited[current_oid.slotid] = VISITED_ALIVE;
 
-	    default:
-	      /* Unknown or not handled */
-	      assert (0);
+		  if (satisfies_vacuum != VACUUM_RECORD_ALIVE)
+		    {
+		      /* Recently inserted/deleted which means that it may not
+		       * be visible to all active transactions.
+		       */
+		      vacuum_data_p->all_visible = false;
+		    }
+		}
+
+	      /* Stop looking */
 	      break;
 	    }
-	}
-
-      if (ovf_page_p != NULL)
-	{
-	  /* Overflow page is not needed anymore */
-	  pgbuf_unfix_and_init (thread_p, ovf_page_p);
-	}
-
-      /* Advance to forward_oid */
-      if (end_chain && !is_dead)
-	{
-	  /* Do not add last entry to chain if it is alive */
-	  break;
+	  else
+	    {
+	      /* Unhandled case */
+	      assert (0);
+	    }
 	}
 
       /* Add entry to chain if it belongs to the first page (which is currently
        * vacuumed).
        */
-      if (VPID_EQ (&fixed_vpid, &page_vpid))
+      if (is_on_vacuum_page)
 	{
 	  if (n_chain_entries >= chain_size)
 	    {
@@ -678,6 +620,9 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 			  new_chain_size * sizeof (PGSLOTID));
 		  goto error;
 		}
+	      /* Copy old chain data */
+	      memcpy (new_chain, chain, chain_size * sizeof (PGSLOTID));
+
 	      /* Update chain pointer and size */
 	      chain = new_chain;
 	      chain_size = new_chain_size;
@@ -685,41 +630,24 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	  chain[n_chain_entries++] = current_oid.slotid;
 	}
 
-      if (end_chain || reuse_oid)
+      if (reuse_oid || is_dead)
 	{
 	  /* Stop search */
 	  break;
 	}
 
-      /* Update current oid */
+      /* Advance to forward oid */
       COPY_OID (&current_oid, &forward_oid);
-      if (fixed_vpid.pageid != current_oid.pageid
-	  || fixed_vpid.volid != current_oid.volid)
+
+      if (vacuum_page_only && (fixed_vpid.pageid != current_oid.pageid
+			       || fixed_vpid.volid != current_oid.volid))
 	{
-	  if (vacuum_page_only)
-	    {
-	      /* We don't want to follow up the entire chain, stop when it exits
-	       * the first page.
-	       */
-	      break;
-	    }
-
-	  /* Update the page in use */
-	  fixed_vpid.pageid = current_oid.pageid;
-	  fixed_vpid.volid = current_oid.volid;
-
-	  /* Unfix old page */
-	  pgbuf_unfix (thread_p, *page_p);
-
-	  /* Fix new page */
-	  *page_p =
-	    pgbuf_fix (thread_p, &fixed_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-		       PGBUF_UNCONDITIONAL_LATCH);
-	  if (*page_p == NULL)
-	    {
-	      assert (0);
-	      goto error;
-	    }
+	  /* We don't want to follow up the entire chain, stop when it exits
+	   * the first page.
+	   */
+	  /* Relocate the chain to this object */
+	  COPY_OID (&relocation_dest, &current_oid);
+	  break;
 	}
     }
   while (true);
@@ -727,11 +655,14 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
   /* Should be at the end of the chain, handle all intermediate entries */
   if (n_chain_entries == 0)
     {
-      /* No intermediate entries, just the root record which is still alive */
-      vacuum_data_p->visited[slotid] = true;
+      /* Nothing to do, fall through */
     }
   else
     {
+      /* All chain entries must either all "die" or all be relocated.
+       * If the chain is dead or if OID's are reusable, kill the entire chain.
+       * Otherwise, all object will point to relocated_dest
+       */
       if (is_dead || reuse_oid)
 	{
 	  /* All chain entries are dead */
@@ -740,23 +671,34 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	      vacuum_data_p->dead_slots[vacuum_data_p->n_dead++] = chain[i];
 
 	      /* Mark as visited */
-	      vacuum_data_p->visited[chain[i]] = true;
+	      vacuum_data_p->visited[chain[i]] = VISITED_DEAD;
+
+#ifndef NDEBUG
+	      assert (chain[i] >= 0 && chain[i] < nslots);
+	      assert (vacuum_data_p->n_dead <= nslots);
+#endif /* !NDEBUG */
 	    }
 	}
       else
 	{
-	  /* Relocate all chain entries to the end of the chain */
+	  /* Relocate all chain entries to relocation_dest */
+	  assert (!OID_ISNULL (&relocation_dest));
 	  for (i = 0; i < n_chain_entries; i++)
 	    {
 	      vacuum_data_p->relocated_slots[vacuum_data_p->n_relocations] =
 		chain[i];
 	      COPY_OID (&vacuum_data_p->
 			relocations[vacuum_data_p->n_relocations],
-			&current_oid);
+			&relocation_dest);
+	      /* Mark as visited and save the index in relocations arrays */
+	      vacuum_data_p->visited[chain[i]] = vacuum_data_p->n_relocations;
+	      /* Advance in relocations arrays */
 	      vacuum_data_p->n_relocations++;
 
-	      /* Mark as visited */
-	      vacuum_data_p->visited[chain[i]] = true;
+#ifndef NDEBUG
+	      assert (chain[i] >= 0 && chain[i] < nslots);
+	      assert (vacuum_data_p->n_relocations <= nslots);
+#endif /* !NDEBUG */
 	    }
 	}
       vacuum_data_p->vacuum_needed = true;
@@ -789,144 +731,65 @@ error:
  *	    needs to know not only if the row is visible or not
  */
 MVCC_SATISFIES_DELETE_RESULT
-mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
-#if defined(MVCC_USE_COMMAND_ID)
-		       MVCC_COMMAND_ID mvcc_curr_cid,
-#endif				/* MVCC_USE_COMMAND_ID */
-		       PAGE_PTR page)
+mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header)
 {
+  assert (rec_header != NULL);
 
-  assert (rec_header != NULL && page != NULL);
-
-  if (!(rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_COMMITTED))
+  if (MVCC_IS_DISABLED (rec_header))
     {
-      if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_INVALID)
-	{
-	  /* mvcc insert id invalid/aborted */
-	  return DELETE_RECORD_INVISIBLE;
-	}
-
-      if (logtb_is_current_mvccid (thread_p,
-				   HEAP_GET_MVCC_INS_ID (rec_header)))
-	{
-#if defined(MVCC_USE_COMMAND_ID)
-	  if (HEAP_GET_MVCC_INS_COMM_ID (rec_header) >= mvcc_curr_cid)
-	    {
-	      /* inserted after scan started */
-	      return DELETE_RECORD_INVISIBLE;
-	    }
-#endif /* MVCC_USE_COMMAND_ID */
-
-	  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
-	    {
-	      /* mvcc delete id invald/aborted */
-	      return DELETE_RECORD_CAN_DELETE;
-	    }
-
-	  if (!logtb_is_current_mvccid (thread_p,
-					HEAP_GET_MVCC_DEL_ID (rec_header)))
-	    {
-	      /* delete subtransaction aborted */
-	      heap_set_record_header_flag (thread_p, rec_header, page,
-					   HEAP_MVCC_FLAG_DELID_INVALID,
-					   MVCCID_NULL);
-	      return DELETE_RECORD_CAN_DELETE;
-	    }
-
-#if defined(MVCC_USE_COMMAND_ID)
-	  if (HEAP_GET_MVCC_DEL_COMM_ID (rec_header) >= mvcc_curr_cid)
-	    {
-	      /* deleted after scan start */
-	      return DELETE_RECORD_SELF_DELETED;
-	    }
-	  else
-	    {
-	      /* deleted before scan start */
-	      return DELETE_RECORD_INVISIBLE;
-	    }
-#else /* !MVCC_USE_COMMAND_ID */
-	  return DELETE_RECORD_INVISIBLE;
-#endif /* !MVCC_USE_COMMAND_ID */
-	}
-      else if (logtb_is_active_mvccid (thread_p,
-				       HEAP_GET_MVCC_INS_ID (rec_header)))
-	{
-	  /* record insertion not committed yet */
-	  return DELETE_RECORD_INVISIBLE;
-	}
-      else if (logtb_is_mvccid_committed (thread_p,
-					  HEAP_GET_MVCC_INS_ID (rec_header)))
-	{
-	  /* record insertion committed - set flag */
-	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_INSID_COMMITTED,
-				       HEAP_GET_MVCC_INS_ID (rec_header));
-	}
-      else
-	{
-	  /* record insertion aborted - set flag */
-	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_INSID_INVALID,
-				       HEAP_GET_MVCC_INS_ID (rec_header));
-	  return DELETE_RECORD_INVISIBLE;
-	}
-
-    }
-
-  /* record insertion already committed, need to check when was committed */
-  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
-    {
-      /* not deleted or aborted */
       return DELETE_RECORD_CAN_DELETE;
     }
 
-  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_COMMITTED)
+  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
     {
-      /* deleted by other committed transaction */
-      return DELETE_RECORD_DELETED;
-    }
-
-  if (logtb_is_current_mvccid (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header)))
-    {
-#if defined(MVCC_USE_COMMAND_ID)
-      if (HEAP_GET_MVCC_DEL_COMM_ID (rec_header) >= mvcc_curr_cid)
+      /* Record was not deleted */
+      if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
 	{
-	  /* deleted after scan start */
-	  return DELETE_RECORD_SELF_DELETED;
+	  /* Record is only visible to current transaction and can be safely
+	   * deleted.
+	   */
+	  return DELETE_RECORD_CAN_DELETE;
+	}
+      else if (MVCC_IS_REC_INSERTER_ACTIVE (thread_p, rec_header))
+	{
+	  /* Record is inserted by an active transaction and is not visible to
+	   * current transaction.
+	   */
+	  return DELETE_RECORD_INVISIBLE;
 	}
       else
 	{
-	  /* deleted before scan start */
+	  /* The inserter transaction has committed and the record can be
+	   * deleted by current transaction.
+	   */
+	  return DELETE_RECORD_CAN_DELETE;
+	}
+    }
+  else
+    {
+      /* Record was already deleted */
+      if (MVCC_IS_REC_DELETED_BY_ME (thread_p, rec_header))
+	{
+	  /* Record was already deleted by me... This case should be filtered
+	   * by scan phase and it should never get here. Be conservative.
+	   */
 	  return DELETE_RECORD_INVISIBLE;
 	}
-#else /* !MVCC_USE_COMMAND_ID */
-      return DELETE_RECORD_INVISIBLE;
-#endif /* !MVCC_USE_COMMAND_ID */
+      else if (MVCC_IS_REC_DELETER_ACTIVE (thread_p, rec_header))
+	{
+	  /* Record was deleted by an active transaction. Current transaction
+	   * must wait until the deleter completes.
+	   */
+	  return DELETE_RECORD_IN_PROGRESS;
+	}
+      else
+	{
+	  /* Record was already deleted and the deleter has committed. Cannot
+	   * be updated by current transaction.
+	   */
+	  return DELETE_RECORD_DELETED;
+	}
     }
-
-  if (logtb_is_active_mvccid (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header)))
-    {
-      /* record deletion not committed yet */
-      return DELETE_RECORD_IN_PROGRESS;
-    }
-
-
-  if (!logtb_is_mvccid_committed (thread_p,
-				  HEAP_GET_MVCC_DEL_ID (rec_header)))
-    {
-      /* record deletion aborted */
-      heap_set_record_header_flag (thread_p, rec_header, page,
-				   HEAP_MVCC_FLAG_DELID_INVALID, MVCCID_NULL);
-
-      return DELETE_RECORD_CAN_DELETE;
-    }
-
-  heap_set_record_header_flag (thread_p, rec_header, page,
-			       HEAP_MVCC_FLAG_DELID_COMMITTED,
-			       HEAP_GET_MVCC_DEL_ID (rec_header));
-
-  /* deleted by other committed transaction */
-  return DELETE_RECORD_DELETED;
 }
 
 /*
@@ -948,108 +811,58 @@ mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
  */
 bool
 mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
-		      MVCC_REC_HEADER * rec_header,
-		      MVCC_SNAPSHOT * snapshot, PAGE_PTR page)
+		      MVCC_REC_HEADER * rec_header, MVCC_SNAPSHOT * snapshot)
 {
-  assert (rec_header != NULL && snapshot != NULL && page != NULL);
+  assert (rec_header != NULL && snapshot != NULL);
 
   snapshot->lowest_active_mvccid = snapshot->highest_completed_mvccid =
     MVCCID_NULL;
 
-  if (!(rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_COMMITTED))
+  if (MVCC_IS_DISABLED (rec_header))
     {
-      if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_INSID_INVALID)
-	{
-	  /* mvcc insert id invalid/aborted */
-	  return false;
-	}
+      return true;
+    }
 
-      if (logtb_is_current_mvccid (thread_p,
-				   HEAP_GET_MVCC_INS_ID (rec_header)))
+  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
+    {
+      /* Record was not deleted */
+      if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
 	{
-	  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
-	    {
-	      /* mvcc delete id invald/aborted */
-	      return true;
-	    }
-
-	  if (!logtb_is_current_mvccid (thread_p,
-					HEAP_GET_MVCC_DEL_ID (rec_header)))
-	    {
-	      heap_set_record_header_flag (thread_p, rec_header, page,
-					   HEAP_MVCC_FLAG_DELID_INVALID,
-					   MVCCID_NULL);
-	      return true;
-	    }
-
-	  return false;
-	}
-      else if (logtb_is_active_mvccid (thread_p,
-				       HEAP_GET_MVCC_INS_ID (rec_header)))
-	{
-	  snapshot->lowest_active_mvccid = HEAP_GET_MVCC_INS_ID (rec_header);
-	  /* inserted by other, satisfies dirty */
+	  /* Record was inserted by current transaction and is visible */
 	  return true;
 	}
-      else if (logtb_is_mvccid_committed (thread_p,
-					  HEAP_GET_MVCC_INS_ID (rec_header)))
+      else if (MVCC_IS_REC_INSERTER_ACTIVE (thread_p, rec_header))
 	{
-	  /* record insertion committed - set flag */
-	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_INSID_COMMITTED,
-				       HEAP_GET_MVCC_INS_ID (rec_header));
+	  /* Record is inserted by an active transaction and is visible */
+	  snapshot->lowest_active_mvccid = MVCC_GET_INSID (rec_header);
+	  return true;
 	}
       else
 	{
-	  /* record insertion aborted - set flag */
-	  heap_set_record_header_flag (thread_p, rec_header, page,
-				       HEAP_MVCC_FLAG_INSID_INVALID,
-				       MVCCID_NULL);
+	  /* Record is inserted by committed transaction. */
+	  return true;
+	}
+    }
+  else
+    {
+      /* Record was already deleted */
+      if (MVCC_IS_REC_DELETED_BY_ME (thread_p, rec_header))
+	{
+	  /* Record was deleted by current transaction and is not visible */
 	  return false;
 	}
-
+      else if (MVCC_IS_REC_DELETER_ACTIVE (thread_p, rec_header))
+	{
+	  /* Record was deleted by an active transaction and is still visible
+	   */
+	  return true;
+	}
+      else
+	{
+	  /* Record was already deleted and the deleter has committed. */
+	  return false;
+	}
     }
-
-  /* record insertion already committed, need to check when was committed */
-  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_INVALID)
-    {
-      /* not deleted or aborted */
-      return true;
-    }
-
-  if (rec_header->mvcc_flags & HEAP_MVCC_FLAG_DELID_COMMITTED)
-    {
-      /* delete by other - does not satisfies dirty */
-      return false;
-    }
-
-  if (logtb_is_current_mvccid (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header)))
-    {
-      return false;
-    }
-
-  if (logtb_is_active_mvccid (thread_p, HEAP_GET_MVCC_DEL_ID (rec_header)))
-    {
-      snapshot->highest_completed_mvccid = HEAP_GET_MVCC_DEL_ID (rec_header);
-      /* record deletion not committed yet */
-      return true;
-    }
-
-  if (!logtb_is_mvccid_committed (thread_p,
-				  HEAP_GET_MVCC_DEL_ID (rec_header)))
-    {
-      /* record deletion aborted */
-      heap_set_record_header_flag (thread_p, rec_header, page,
-				   HEAP_MVCC_FLAG_DELID_INVALID, MVCCID_NULL);
-
-      return true;
-    }
-
-  heap_set_record_header_flag (thread_p, rec_header, page,
-			       HEAP_MVCC_FLAG_DELID_COMMITTED,
-			       HEAP_GET_MVCC_DEL_ID (rec_header));
-
-  return false;
 }
 
 /*
@@ -1096,4 +909,104 @@ mvcc_id_follow_or_equal (MVCCID id1, MVCCID id2)
 
   difference = (int) (id1 - id2);
   return (difference >= 0);
+}
+
+/*
+ * mvcc_allocate_vacuum_data () - Allocate data in vacuum page data to handle
+ *				  up to n_slots entries.
+ *
+ * return		  : Error code.
+ * thread_p (in)	  : Thread entry.
+ * vacuum_data_p (in/out) : Pointer to vacuum page data.
+ * int n_slots (in)	  : Number of slots.
+ */
+int
+mvcc_allocate_vacuum_data (THREAD_ENTRY * thread_p,
+			   VACUUM_PAGE_DATA * vacuum_data_p, int n_slots)
+{
+  vacuum_data_p->dead_slots =
+    (PGSLOTID *) db_private_alloc (thread_p, n_slots * sizeof (PGSLOTID));
+  vacuum_data_p->ovfl_pages =
+    (VPID *) db_private_alloc (thread_p, n_slots * sizeof (VPID));
+  vacuum_data_p->relocated_slots =
+    (PGSLOTID *) db_private_alloc (thread_p, n_slots * sizeof (PGSLOTID));
+  vacuum_data_p->relocations =
+    (OID *) db_private_alloc (thread_p, n_slots * sizeof (OID));
+  vacuum_data_p->visited =
+    (int *) db_private_alloc (thread_p, n_slots * OR_INT_SIZE);
+
+  if (vacuum_data_p->dead_slots == NULL
+      || vacuum_data_p->ovfl_pages == NULL
+      || vacuum_data_p->relocated_slots == NULL
+      || vacuum_data_p->relocations == NULL || vacuum_data_p->visited == NULL)
+    {
+      mvcc_finalize_vacuum_data (thread_p, vacuum_data_p);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      n_slots * (sizeof (PGSLOTID) * 2 + sizeof (VPID) +
+			 sizeof (OID) + OR_INT_SIZE));
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+  return NO_ERROR;
+}
+
+/*
+ * mvcc_init_vacuum_data () - Prepare a SPAGE_CLEAN_PAGE structure to handle
+ *			      n_slots in a page.
+ *
+ * return	      : NO_ERROR or ER_OUT_OF_VIRTUAL_MEMORY
+ * thread_p (in)      : Thread entry.
+ * vacuum_data_p (in) : Pointer to VACUUM_PAGE_DATA.
+ * int n_slots (in)   : Number of slots in page.
+ */
+void
+mvcc_init_vacuum_data (THREAD_ENTRY * thread_p,
+		       VACUUM_PAGE_DATA * vacuum_data_p, int n_slots)
+{
+  int i;
+
+  vacuum_data_p->n_dead = 0;
+  vacuum_data_p->n_ovfl_pages = 0;
+  vacuum_data_p->n_relocations = 0;
+  vacuum_data_p->n_vacuumed_records = 0;
+  vacuum_data_p->vacuum_needed = false;
+  vacuum_data_p->all_visible = true;
+
+  /* Initialize all visited entries to NOT_VISITED */
+  for (i = 0; i < n_slots; i++)
+    {
+      vacuum_data_p->visited[i] = NOT_VISITED;
+    }
+}
+
+/*
+ * mvcc_finalize_vacuum_data () - Frees the content of a VACUUM_PAGE_DATA.
+ *
+ * return	      : Void.
+ * thread_p (in)      : Thread entry.
+ * vacuum_data_p (in) : Pointer to VACUUM_PAGE_DATA.
+ */
+void
+mvcc_finalize_vacuum_data (THREAD_ENTRY * thread_p,
+			   VACUUM_PAGE_DATA * vacuum_data_p)
+{
+  if (vacuum_data_p->dead_slots != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->dead_slots);
+    }
+  if (vacuum_data_p->ovfl_pages != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->ovfl_pages);
+    }
+  if (vacuum_data_p->relocated_slots != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->relocated_slots);
+    }
+  if (vacuum_data_p->relocations != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->relocations);
+    }
+  if (vacuum_data_p->visited != NULL)
+    {
+      db_private_free_and_init (thread_p, vacuum_data_p->visited);
+    }
 }

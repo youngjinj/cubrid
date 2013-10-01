@@ -868,7 +868,7 @@ serial_update_serial_object (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
    * by this top operation log record.
    *
    * If lock_mode is X_LOCK
-   * means we created or altered the serial obj in an uncommited trans
+   * means we created or altered the serial obj in an uncommitted trans
    * For this case, topop and flush mark are not used,
    * since these may cause problem with replication log.
    */
@@ -1429,4 +1429,43 @@ serial_alloc_cache_area (int num)
   tmp_area->obj_area[i].next = NULL;
 
   return tmp_area;
+}
+
+/*
+ * serial_get_class_oid () - get serial class OID
+ * return: error code
+ * thread_p(in) : thread entry
+ * serial_class_oid(out): serial class OID
+ */
+int
+serial_get_class_oid (THREAD_ENTRY * thread_p, OID * serial_class_oid)
+{
+  COPY_OID (serial_class_oid, &serial_Cache_pool.db_serial_class_oid);
+  return NO_ERROR;
+}
+
+/*
+ * serial_set_class_oid () - set serial class OID if not already set
+ * return: error code
+ * thread_p(in) : thread entry
+ * Note: This function must be called when server is started
+ */
+int
+serial_set_class_oid (THREAD_ENTRY * thread_p)
+{
+  LC_FIND_CLASSNAME status;
+
+  if (OID_ISNULL (&serial_Cache_pool.db_serial_class_oid))
+    {
+      status =
+	xlocator_find_class_oid (thread_p, CT_SERIAL_NAME,
+				 &serial_Cache_pool.db_serial_class_oid,
+				 NULL_LOCK);
+      if (status == LC_CLASSNAME_ERROR)
+	{
+	  return ER_FAILED;
+	}
+    }
+
+  return NO_ERROR;
 }

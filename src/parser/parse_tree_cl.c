@@ -1317,38 +1317,35 @@ parser_copy_tree_list (PARSER_CONTEXT * parser, PT_NODE * tree)
 }
 
 /*
- * parser_copy_tree_diff  () - copy the difference tree1 minus tree2
- *			      (make a copy of the nodes that are only in
- *			       tree1 and not in tree2)
- *   return:
- *   tree1(in): the first tree list
- *   tree2(in): the second tree list
+ * parser_get_tree_list_diff  () - get the difference list1 minus list2
+ *   return: a PT_POINTER list to the nodes in difference
+ *   list1(in): the first tree list
+ *   list2(in): the second tree list
  */
-
 PT_NODE *
-parser_copy_tree_diff (PARSER_CONTEXT * parser, PT_NODE * tree1,
-		       PT_NODE * tree2)
+parser_get_tree_list_diff (PARSER_CONTEXT * parser, PT_NODE * list1,
+			   PT_NODE * list2)
 {
   PT_NODE *res_list, *save_node1, *save_node2, *node1, *node2;
 
-  if (tree1 == NULL)
+  if (list1 == NULL)
     {
       return NULL;
     }
 
-  if (tree2 == NULL)
+  if (list2 == NULL)
     {
-      return parser_copy_tree_list (parser, tree1);
+      return pt_point (parser, list1);
     }
 
   res_list = NULL;
-  for (node1 = tree1; node1; node1 = node1->next)
+  for (node1 = list1; node1; node1 = node1->next)
     {
       save_node1 = node1;
 
       CAST_POINTER_TO_NODE (node1);
 
-      for (node2 = tree2; node2; node2 = node2->next)
+      for (node2 = list2; node2; node2 = node2->next)
 	{
 	  save_node2 = node2;
 
@@ -1365,12 +1362,7 @@ parser_copy_tree_diff (PARSER_CONTEXT * parser, PT_NODE * tree1,
 
       if (node2 == NULL)
 	{
-	  save_node2 = node1->next;
-	  node1->next = NULL;
-	  res_list =
-	    parser_append_node (parser_copy_tree (parser, save_node1),
-				res_list);
-	  node1->next = save_node2;
+	  res_list = parser_append_node (pt_point (parser, node1), res_list);
 	}
 
       node1 = save_node1;
@@ -14104,6 +14096,7 @@ pt_init_select (PT_NODE * p)
   p->info.query.hint = PT_HINT_NONE;
   p->info.query.qcache_hint = NULL;
   p->info.query.upd_del_class_cnt = 0;
+  p->info.query.mvcc_reev_extra_cls_cnt = 0;
   p->info.query.is_order_dependent = false;
   return p;
 }

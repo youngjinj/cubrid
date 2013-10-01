@@ -543,4 +543,7 @@ extern DB_VALUE *btree_perform_insert (THREAD_ENTRY * thread_p, BTID * btid,
 				       OID * cls_oid, OID * oid, int op_type,
 				       BTREE_UNIQUE_STATS * unique_stat_info,
 				       int *unique, bool use_mvcc);
+
+extern int btree_vacuum (THREAD_ENTRY * thread_p, BTID * btid,
+			 OID * remove_oids, int n_remove_oids);
 #endif /* _BTREE_H_ */
