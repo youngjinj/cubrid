@@ -551,6 +551,8 @@ logtb_initialize_system_tdes (THREAD_ENTRY * thread_p)
   tdes->tran_index = LOG_SYSTEM_TRAN_INDEX;
   tdes->trid = LOG_SYSTEM_TRANID;
   tdes->mvcc_id = MVCCID_NULL;
+  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
+  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
   tdes->isloose_end = true;
   tdes->wait_msecs = TRAN_LOCK_INFINITE_WAIT;
   tdes->isolation = TRAN_DEFAULT_ISOLATION;
@@ -1718,7 +1720,11 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   logtb_clear_mvcc_snapshot_data (tdes);
   logtb_clear_log_ins_del (&tdes->log_ins_del);
 
+  /* safeguard code - mvccid should be already clean */
+  TR_TABLE_CS_ENTER (thread_p);
   tdes->mvcc_id = MVCCID_NULL;
+  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;  
+  TR_TABLE_CS_EXIT (thread_p);
   tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
 
   if (BOOT_WRITE_ON_STANDY_CLIENT_TYPE (tdes->client.client_type))
@@ -1813,6 +1819,9 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
     }
 
   logtb_init_mvcc_snapshot_data (tdes);
+  tdes->mvcc_id = MVCCID_NULL;
+  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
+  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
 
   tdes->log_ins_del.crt_tran_entries = NULL;
   tdes->log_ins_del.free_entries = NULL;
@@ -3444,6 +3453,22 @@ logtb_update_transaction_inserted_deleted (THREAD_ENTRY * thread_p,
  *   thread_p(in): thread entry
  *   largest(in/out): largest active log page
  *
+ * Note:  Allow other transactions to get snapshots, do not allow to any
+ *	      transaction with an MVCCID assigned to end while we build
+ *	      snapshot. This will prevent inconsistencies like in the
+ *	      following example:
+ *		- T1 transaction gets new MVCCID (>= highest_completed_mvccid)
+ *	      update row1->row2 and T2 transaction is blocked by T1 when
+ *	      trying to update row2->row3
+ *		- T1 is doing commit while T3 gets a snapshot
+ *		- T2 commit and complete soon after T1 release locks
+ *	      T3 sees T1 as active (T1 MVCCID >= highest_completed_mvccid)
+ *	      and T2 committed. T3 sees two row versions : row1 deleted
+ *	      by T1 and row3 inserted by T2 => Inconsistence.
+ *	      By taking CSECT_TRAN_TABLE in read mode in
+ *	      logtb_get_mvcc_snapshot_data and in exclusive mode in
+ *	      logtb_complete_mvcc the inconsistency is avoided :
+ *	      T1 and T2 will be seen as active.
  */
 int
 logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
@@ -3492,21 +3517,12 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 	}
     }
 
-  /* allow other transactions to get snapshot 
-   * do not allow any transaction to finish
-   */
+  /* Start building the snapshot. See the note. */
   TR_TABLE_CS_ENTER_READ_MODE (thread_p);
 
   highest_completed_mvccid = log_Gl.highest_completed_mvccid;
   MVCCID_FORWARD (highest_completed_mvccid);
   lowest_active_mvccid = highest_completed_mvccid;
-
-  if (csect_enter_as_reader (thread_p, CSECT_MVCCID_GENERATOR, INF_WAIT) !=
-      NO_ERROR)
-    {
-      TR_TABLE_CS_EXIT (thread_p);
-      return ER_FAILED;
-    }
 
   for (i = 0, num_tran = 0; i < log_Gl.trantable.num_total_indices,
        num_tran < log_Gl.trantable.num_assigned_indices; i++)
@@ -3531,7 +3547,7 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 					  highest_completed_mvccid))
 	    {
 	      /* skip since these transactions are considered as
-	       * running anyway
+	       * active anyway
 	       */
 	      num_tran++;
 	      continue;
@@ -3552,18 +3568,24 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 
 	  snapshot->active_ids[cnt_active_trans++] = tdes->mvcc_id;
 
-	  /* TODO sub-transactions */
 	  num_tran++;
 	}
     }
 
-  csect_exit (thread_p, CSECT_MVCCID_GENERATOR);
+  /* set the lowest active mvcc id when we start the current transaction
+   * if was not already set to not null value
+   */
+  if (!MVCCID_IS_VALID (tdes->transaction_lowest_active_mvccid))
+    {
+      tdes->transaction_lowest_active_mvccid = lowest_active_mvccid;
+    }
 
   TR_TABLE_CS_EXIT (thread_p);
 
-  /* update global variable */
+  /* update lowest active mvccid computed for the most recent snapshot */
   tdes->recent_snapshot_lowest_active_mvccid = lowest_active_mvccid;
 
+  /* update snapshot data */
   snapshot->lowest_active_mvccid = lowest_active_mvccid;
   snapshot->highest_completed_mvccid = highest_completed_mvccid;
   snapshot->cnt_active_ids = cnt_active_trans;
@@ -3572,11 +3594,18 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
 }
 
 /*
- * logtb_get_lowest_active_mvccid () - Get MVCCID for oldest active
- *				       transaction.
+ * logtb_get_lowest_active_mvccid () - Get oldest MVCCID that was running
+ *				       when any active transaction started.
  *
  * return	 : MVCCID for oldest active transaction.
  * thread_p (in) : Thread entry.
+ *
+ * Note:  The returned MVCCID is used as threshold by vacuum. The rows deleted
+ *	      by transaction having MVCCIDs >= logtb_get_lowest_active_mvccid
+ *	      will not be physical removed by vacuum. That's because that rows
+ *	      may still be visible to active transactions, even if deleting
+ *	      transaction has commit meanwhile. If there is no active
+ *	      transaction, this function return highest_completed_mvccid + 1.
  */
 MVCCID
 logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
@@ -3585,9 +3614,11 @@ logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
   int i;
   LOG_TDES *tdes = NULL;
 
-  MVCCID_FORWARD (lowest_active_mvccid);
-
   TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+
+  /* init lowest_active_mvccid */
+  lowest_active_mvccid = log_Gl.highest_completed_mvccid;
+  MVCCID_FORWARD (lowest_active_mvccid);
 
   for (i = 0; i < log_Gl.trantable.num_total_indices; i++)
     {
@@ -3595,15 +3626,28 @@ logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
 	{
 	  continue;
 	}
+
       tdes = LOG_FIND_TDES (i);
       if (tdes == NULL || tdes->trid == NULL_TRANID)
 	{
 	  continue;
 	}
+
+      /* check lowest_active_mvccid against mvccid and
+       * transaction_lowest_active_mvccid since a transaction can have
+       * only one of this fields set
+       */
       if (MVCCID_IS_NORMAL (tdes->mvcc_id)
 	  && mvcc_id_precedes (tdes->mvcc_id, lowest_active_mvccid))
 	{
 	  lowest_active_mvccid = tdes->mvcc_id;
+	}
+
+      if (MVCCID_IS_NORMAL (tdes->transaction_lowest_active_mvccid)
+	  && mvcc_id_precedes (tdes->transaction_lowest_active_mvccid,
+			       lowest_active_mvccid))
+	{
+	  lowest_active_mvccid = tdes->transaction_lowest_active_mvccid;
 	}
     }
 
@@ -3620,26 +3664,43 @@ logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
  *  thread_p(in):
  *  tdes(in): transaction descriptor
  *
+ *  Note: By keeping mvccid into tdes before releasing CSECT_TRAN_TABLE,
+ *	    we are sure that all MVCCIDs <= highest_completed_mvccid are
+ *	    either present in the transaction table or not running anymore.
+ *	    If the current transaction will set its MVCCID after releasing
+ *	    CSECT_TRAN_TABLE, other transaction can generate and commit a
+ *	    later MVCCID (causing highest_completed_mvccid > current mvccid), 
+ *	    before current transaction MVCCID to be stored in tran table.
+ *	    This would break logtb_get_lowest_active_mvccid() that may
+ *	    return a bigger value than the real one. Thus, this function
+ *	    can consider that there is no active transaction and return
+ *	    highest_completed_mvccid + 1, when, in fact, the only active
+ *	    transaction MVCCID has not been stored yet in transaction table.
+ *	  An alternative to partially set MVCCID issue may be to consider
+ *	    mvccid set/get atomic in 64 bit systems, and to call functions
+ *	    that provide atomic operations in 32 bit systems. In this case
+ *	    MVCCID must be set/fetch using volatile pointers. The advantage
+ *	    of this approach would be that in logtb_get_new_mvccid we may
+ *	    replace CSECT_TRAN_TABLE with other new critical section. This
+ *	    means logtb_get_new_mvccid and logtb_get_mvcc_snapshot_data can
+ *	    be parallelize. However, since logtb_get_new_mvccid is called
+ *	    rare and its code is simply, CSECT_TRAN_TABLE is used currently.
  */
 MVCCID
 logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 {
   MVCCID mvcc_id;
 
-  /* acquire trans table critical section in order to prevent others commit
-   * while current assign mvcc id
+  /* Protect log_Gl.hdr.mvcc_next_id by concurrent modifications.
+   * Protect tdes->mvcc_id against partially-set. See the note, too.
    */
-  if (csect_enter (thread_p, CSECT_MVCCID_GENERATOR, INF_WAIT) != NO_ERROR)
-    {
-      return MVCCID_NULL;
-    }
+  TR_TABLE_CS_ENTER (thread_p);
 
   mvcc_id = log_Gl.hdr.mvcc_next_id;
   MVCCID_FORWARD (log_Gl.hdr.mvcc_next_id);
-
   tdes->mvcc_id = mvcc_id;
 
-  csect_exit (thread_p, CSECT_MVCCID_GENERATOR);
+  TR_TABLE_CS_EXIT (thread_p);
 
   return mvcc_id;
 }
@@ -3731,22 +3792,17 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
       return false;
     }
 
-  /* TO DO - check the status of transaction - completed or not */
-
   if (logtb_is_current_mvccid (thread_p, mvccid))
     {
       return true;
     }
 
-  /* TO DO - check latest completed id */
-
   TR_TABLE_CS_ENTER_READ_MODE (thread_p);
-
-  /*if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, mvccid))
-     {
-     TR_TABLE_CS_EXIT (thread_p);
-     return true;
-     } */
+  if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, mvccid))
+    {
+      TR_TABLE_CS_EXIT (thread_p);
+      return true;
+    }
 
   for (i = 0, num_tran = 0; i < log_Gl.trantable.num_total_indices,
        num_tran < log_Gl.trantable.num_assigned_indices; i++)
@@ -3774,16 +3830,9 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 	      return true;
 	    }
 
-	  if (mvcc_id_precedes (mvccid, tran_mvccid))
-	    {
-	      num_tran++;
-	      continue;
-	    }
-
-	  /* TO DO - check children */
+	  num_tran++;
 	}
     }
-
   TR_TABLE_CS_EXIT (thread_p);
 
   return false;
@@ -3846,13 +3895,15 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 	  log_Gl.highest_completed_mvccid = tdes->mvcc_id;
 	}
       tdes->mvcc_id = MVCCID_NULL;
-      tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+      tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
       TR_TABLE_CS_EXIT (thread_p);
     }
   else
     {
-      tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+      tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
     }
+
+  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
 
   if (!committed)
     {

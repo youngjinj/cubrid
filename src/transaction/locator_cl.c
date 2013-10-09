@@ -1750,11 +1750,6 @@ locator_lock_class_of_instance (MOP inst_mop, MOP * class_mop, LOCK lock)
   int error_code = NO_ERROR;
   OID tmp_oid;
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      inst_mop = ws_mvcc_get_last_version (inst_mop);
-    }
-
   inst_oid = ws_oid (inst_mop);
 
   /* Find the class mop */
@@ -2257,11 +2252,6 @@ locator_get_cache_coherency_number (MOP mop)
       isclass = LC_INSTANCE;
     }
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      mop = ws_mvcc_get_last_version (mop);
-    }
-
   lock = locator_fetch_mode_to_lock (DB_FETCH_READ, isclass);
   if (locator_lock (mop, lock) != NO_ERROR)
     {
@@ -2320,11 +2310,6 @@ locator_fetch_object (MOP mop, DB_FETCH_MODE purpose)
   else
     {
       isclass = LC_INSTANCE;
-    }
-
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      mop = ws_mvcc_get_last_version (mop);
     }
 
   lock = locator_fetch_mode_to_lock (purpose, isclass);
@@ -2489,11 +2474,6 @@ locator_fetch_instance (MOP mop, DB_FETCH_MODE purpose)
     }
 #endif /* CUBRID_DEBUG */
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      mop = ws_mvcc_get_last_version (mop);
-    }
-
   inst = NULL;
   lock = locator_fetch_mode_to_lock (purpose, LC_INSTANCE);
   if (locator_lock (mop, lock) != NO_ERROR)
@@ -2654,11 +2634,6 @@ locator_fetch_nested (MOP mop, DB_FETCH_MODE purpose, int prune_level,
 	}
     }
 #endif /* CUBRID_DEBUG */
-
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      mop = ws_mvcc_get_last_version (mop);
-    }
 
   inst = NULL;
   lock = locator_fetch_mode_to_lock (purpose, LC_INSTANCE);
@@ -3315,11 +3290,6 @@ locator_does_exist_object (MOP mop, DB_FETCH_MODE purpose)
   MOP class_mop;		/* Class Mop of the desired object       */
   LOCK lock;			/* Lock to acquire for the above purpose */
   LC_OBJTYPE isclass;
-
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      mop = ws_mvcc_get_last_version (mop);
-    }
 
   class_mop = ws_class_mop (mop);
   if (class_mop == NULL)
@@ -4201,7 +4171,7 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 		}
 	      else if (!OID_ISNULL (&obj->oid) && !(OID_ISTEMP (&obj->oid)))
 		{
-		  ws_perm_oid_and_class (mop_toid->mop, &obj->oid,
+		  ws_update_oid_and_class (mop_toid->mop, &obj->oid,
 					 &obj->class_oid);
 		}
 	    }
@@ -4227,16 +4197,45 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 	    {
 	      obj = LC_FIND_ONEOBJ_PTR_IN_COPYAREA (mflush->mobjs,
 						    mop_toid->obj);
-	      if (!OID_ISNULL (&obj->oid)
-		  && (error_code != ER_LC_PARTIALLY_FAILED_TO_FLUSH
-		      || obj->error_code == NO_ERROR)
-		  && !OID_EQ (WS_OID (mop_toid->mop->class_mop),
-			      &obj->class_oid))
+	      /* There are two cases when OID can change after update:
+	       * 1. when operation is LC_FLUSH_UPDATE_PRUNE.
+	       * 2. MVCC implementation of LC_FLUSH_UPDATE.
+	      /* TODO: Must investigate what happens with MVCC and pruning */
+	      if (error_code != ER_LC_PARTIALLY_FAILED_TO_FLUSH
+		  || obj->error_code == NO_ERROR)
 		{
-		  assert (obj->operation == LC_FLUSH_UPDATE_PRUNE);
-		  error_code =
-		    ws_update_oid_and_class (mop_toid->mop, &obj->oid,
-					     &obj->class_oid);
+		  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+		    {
+		      assert (obj->operation == LC_FLUSH_UPDATE
+			      || obj->operation == LC_FLUSH_UPDATE_PRUNE);
+		      /* Check if object OID has changed */
+		      if (!OID_ISNULL (&obj->updated_oid)
+			  && !OID_EQ (WS_OID (mop_toid->mop),
+				      &obj->updated_oid))
+			{
+			  error_code =
+			    ws_update_oid_and_class (mop_toid->mop,
+						   &obj->updated_oid,
+						   &obj->class_oid);
+			}
+		    }
+		  else if (obj->operation == LC_FLUSH_UPDATE_PRUNE)
+		    {
+		      /* Check if class OID has changed */
+		      if (!OID_ISNULL (&obj->oid)
+			  && !OID_EQ (WS_OID (mop_toid->mop->class_mop),
+				      &obj->class_oid))
+			{
+			  error_code =
+			    ws_update_oid_and_class (mop_toid->mop, &obj->oid,
+						   &obj->class_oid);
+			}
+		    }
+		  else
+		    {
+		      /* Unexpected case */
+		      assert (false);
+		    }
 		  /* Do not return in case of error. Allow the allocated
 		   * memory to be freed first */
 		}
@@ -4889,13 +4888,19 @@ locator_mflush (MOP mop, void *mf)
 	  oid = ws_oid (mop);
 	}
     }
-  else if (operation == LC_FLUSH_UPDATE_PRUNE)
+  else if (operation == LC_FLUSH_UPDATE_PRUNE
+	   || (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
+	       && operation == LC_FLUSH_UPDATE
+	       && mop->class_mop != sm_Root_class_mop))
     {
       /* We have to keep track of updated objects from partitioned classes.
        * If this object will be moved in another partition we have to mark it
        * like this (a delete/insert operation). This means that the current
        * mop will be deleted and the partition that received this object will
        * have a new mop in its obj list.
+       */
+      /* Another case when OID can change is MVCC update on instances (MVCC is
+       * disabled for classes.
        */
       LOCATOR_MFLUSH_TEMP_OID *mop_uoid;
 
@@ -6164,7 +6169,7 @@ locator_assign_permanent_oid (MOP mop)
     }
 
   /* Reset the OID of the mop */
-  ws_perm_oid (mop, &perm_oid);
+  ws_update_oid (mop, &perm_oid);
 
   return ws_oid (mop);
 }
@@ -6622,11 +6627,6 @@ locator_check_object_and_get_class (MOP obj_mop, MOP * out_class_mop)
       goto error;
     }
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      obj_mop = ws_mvcc_get_last_version (obj_mop);
-    }
-
   class_mop = ws_class_mop (obj_mop);
   if (class_mop == NULL || class_mop->object == NULL)
     {
@@ -6765,7 +6765,7 @@ locator_assign_oidset (LC_OIDSET * oidset, LC_OIDMAP_CALLBACK callback)
 		{
 		  if (oid->mop != NULL)
 		    {
-		      ws_perm_oid ((MOP) oid->mop, &oid->oid);
+		      ws_update_oid ((MOP) oid->mop, &oid->oid);
 		    }
 
 		  /* let the callback function do further processing if

@@ -485,7 +485,6 @@ extern int btree_rv_nop (THREAD_ENTRY * thread_p, LOG_RCV * recv);
 #include "scan_manager.h"
 
 extern int btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
-				int readonly_purpose,
 				SCAN_OPERATION_TYPE scan_op_type,
 				BTREE_SCAN * BTS,
 				KEY_VAL_RANGE * key_val_range,
@@ -494,7 +493,6 @@ extern int btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
 				FILTER_INFO * filter, INDX_SCAN_ID * isidp,
 				bool is_all_class_srch);
 extern int btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
-			       int readonly_purpose,
 			       SCAN_OPERATION_TYPE scan_op_type,
 			       int lock_hint,
 			       BTREE_SCAN * BTS,

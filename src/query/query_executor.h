@@ -445,8 +445,8 @@ struct update_assignment
 };
 
 /* data for MVCC condition reevaluation */
-typedef struct mvcc_reev_data MVCC_REEV_DATA;
-struct mvcc_reev_data
+typedef struct mvcc_update_reev_data MVCC_UPDDEL_REEV_DATA;
+struct mvcc_update_reev_data
 {
   UPDDEL_MVCC_COND_REEVAL *mvcc_cond_reev_list;	/* list of classes that are
 						 * referenced in condition */
@@ -465,15 +465,15 @@ struct mvcc_reev_data
 typedef struct mvcc_select_reev_data MVCC_SELECT_REEV_DATA;
 struct mvcc_select_reev_data
 {
-  FILTER_INFO *range_filter;	/* filter for range predicate. Used only at index
-				 * scan */
+  FILTER_INFO *range_filter;	/* filter for range predicate. Used only at
+				 *  index scan
+				 */
   FILTER_INFO *key_filter;	/* key filter */
   FILTER_INFO *data_filter;	/* data filter */
 
   QPROC_QUALIFICATION *qualification;	/* address of a variable that contains
 					 * qualification value */
-  DB_LOGICAL filter_result;	/* the result of reevaluation if
-				 * successful*/
+  DB_LOGICAL filter_result;	/* the result of reevaluation if successful */
 };
 
 /*update/delete class info structure */
@@ -754,7 +754,7 @@ struct xasl_node
 				 * much of the xasl tree to clean up.
 				 */
 
-  int composite_locking;
+  SCAN_OPERATION_TYPE scan_op_type;	/* scan type */
   int upd_del_class_cnt;	/* number of classes affected by update or
 				 * delete (used only in case of UPDATE or
 				 * DELETE in the generated SELECT statement)
@@ -827,6 +827,7 @@ struct func_pred
 #if 0				/* not used anymore */
 #define XASL_QEXEC_MODE_ASYNC    128	/* query exec mode (async) */
 #endif
+#define XASL_MULTI_UPDATE_AGG	 256	/* is for multi-update with aggregate */
 #define XASL_IGNORE_CYCLES	 512	/* is for LEVEL usage in connect by
 					 * clause... sometimes cycles may be
 					 * ignored
@@ -835,6 +836,7 @@ struct func_pred
 #define XASL_IS_MERGE_QUERY	      2048	/* query belongs to a merge statement */
 #define XASL_USES_MRO	      4096	/* query uses multi range optimization */
 #define XASL_KEEP_DBVAL	      8192	/* do not clear db_value */
+#define XASL_SELECT_MVCC_LOCK_NEEDED      16384	/* lock returned rows */
 
 #define XASL_IS_FLAGED(x, f)        ((x)->flag & (int) (f))
 #define XASL_SET_FLAG(x, f)         (x)->flag |= (int) (f)

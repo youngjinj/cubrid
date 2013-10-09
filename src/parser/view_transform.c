@@ -11828,7 +11828,7 @@ mq_rewrite_order_dependent_query (PARSER_CONTEXT * parser, PT_NODE * select,
   /* new SELECT will query a derived table */
   parent->info.query.q.select.from = dt;
   parent->info.query.correlation_level = select->info.query.correlation_level;
-  parent->info.query.composite_locking = select->info.query.composite_locking;
+  parent->info.query.scan_op_type = select->info.query.scan_op_type;
   parent->info.query.oids_included = select->info.query.oids_included;
 
   /*

@@ -693,11 +693,6 @@ pt_find_value_of_label (const char *label)
       if (db_valp != NULL && DB_VALUE_TYPE (db_valp) == DB_TYPE_OBJECT)
 	{
 	  db_valp = vid_flush_and_rehash_lbl (db_valp);
-
-	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-	    {
-	      db_valp->data.op = ws_mvcc_get_last_version (db_valp->data.op);
-	    }
 	}
       return db_valp;
     }

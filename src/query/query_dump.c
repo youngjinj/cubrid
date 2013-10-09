@@ -516,6 +516,12 @@ qdump_print_access_spec (ACCESS_SPEC_TYPE * spec_list_p)
       qdump_print_predicate (spec_list_p->where_pred);
     }
 
+  if (spec_list_p->where_range)
+    {
+      fprintf (foutput, "\n      access range:");
+      qdump_print_predicate (spec_list_p->where_range);
+    }
+
   fprintf (foutput, "\n  grouped scan=%d", spec_list_p->grouped_scan);
   fprintf (foutput, ",fixed scan=%d", spec_list_p->fixed_scan);
   fprintf (foutput, ",qualified block=%d", spec_list_p->qualified_block);

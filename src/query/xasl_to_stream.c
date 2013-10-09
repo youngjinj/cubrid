@@ -3041,7 +3041,7 @@ xts_process_xasl_node (char *ptr, const XASL_NODE * xasl)
 
   ptr = or_pack_int (ptr, xasl->cat_fetched);
 
-  ptr = or_pack_int (ptr, xasl->composite_locking);
+  ptr = or_pack_int (ptr, xasl->scan_op_type);
 
   ptr = or_pack_int (ptr, xasl->upd_del_class_cnt);
 
@@ -5586,7 +5586,7 @@ xts_sizeof_xasl_node (const XASL_NODE * xasl)
     OR_INT_SIZE +		/* next_scan_on */
     OR_INT_SIZE +		/* next_scan_block_on */
     OR_INT_SIZE +		/* cat_fetched */
-    OR_INT_SIZE +		/* composite_locking */
+    OR_INT_SIZE +		/* scan_op_type */
     OR_INT_SIZE +		/* upd_del_class_cnt */
     OR_INT_SIZE;		/* mvcc_reev_extra_cls_cnt */
 

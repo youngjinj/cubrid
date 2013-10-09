@@ -89,21 +89,27 @@ struct db_object
 {
 
   VID_OID oid_info;		/* local copy of the OID or VID pointer */
-  struct db_object *class_mop;	/* pointer to class */
+  struct db_object *class_mop;	/* pointer to class mop */
+				/* Do not ever set this to NULL without
+				 * removing object from class link.
+				 */
   void *object;			/* pointer to attribute values */
 
   struct db_object *class_link;	/* link for class instances list */
+				/* Careful whenever looping through object
+				 * using class_link to save it and
+				 * advance using this saved class link if
+				 * the current mop can be removed from class.
+				 */
   struct db_object *dirty_link;	/* link for dirty list */
   struct db_object *hash_link;	/* link for workspace hash table */
+				/* Careful whenever looping through objects
+				 * using hash_link to save it and advance
+				 * using this saved hash link if the current
+				 * mop can be removed or relocated in hash
+				 * table.
+				 */
   struct db_object *commit_link;	/* link for obj to be reset at commit/abort */
-  struct db_object *updated_obj;	/* link to the updated object after a flush
-					 * operation. In the case of partitioned
-					 * classes, this member points to the newly
-					 * inserted object in the case of a
-					 * partition change */
-  struct db_object *mvcc_next_version;	/* Used with MVCC when the object has
-					 * been updated to a new version.
-					 */
   void *version;		/* versioning information */
   LOCK lock;			/* object lock */
 
@@ -388,9 +394,6 @@ typedef struct mop_iterator
   (((mop == NULL) || WS_ISMARK_DELETED(mop) ||                       \
     (OID_ISNULL(&(mop)->oid_info.oid) && !(mop)->is_vid)) ? 1 : 0)
 
-#define WS_ASSERT_IS_MVCC_LAST_VERSION(mop) \
-  assert (mop->mvcc_next_version == NULL)
-
 /*
  * WS_MOP_GET_COMPOSITION_FETCH
  * WS_MOP_SET_COMPOSITION_FETCH
@@ -499,12 +502,10 @@ extern bool ws_rehash_vmop (MOP mop, MOBJ class_obj, DB_VALUE * newkey);
 #if defined (ENABLE_UNUSED_FUNCTION)
 extern MOP ws_new_mop (OID * oid, MOP class_mop);
 #endif
-extern void ws_perm_oid (MOP mop, OID * newoid);
-extern int ws_perm_oid_and_class (MOP mop, OID * new_oid,
+extern void ws_update_oid (MOP mop, OID * newoid);
+extern int ws_update_oid_and_class (MOP mop, OID * new_oid,
 				  OID * new_class_oid);
-extern int ws_update_oid_and_class (MOP mop, OID * new_oid, OID * new_class);
 extern DB_VALUE *ws_keys (MOP vid, unsigned int *flags);
-extern MOP ws_mvcc_get_last_version (MOP mop);
 
 /* Reference mops */
 

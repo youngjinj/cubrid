@@ -5165,21 +5165,6 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
     {
       assert (class_ != NULL);
 
-      /* need to lock class for read
-       * We may have already locked it for write, but that is ok, isn't it? */
-      if (spec->lock_hint == LOCKHINT_NONE)
-	{
-	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true)
-	    {
-	      if (!sm_is_system_class (class_))
-		{
-		  /* no need to acquire any instance/key locks
-		   * when scanning tables in mvcc
-		   */
-		  spec->lock_hint = LOCKHINT_READ_UNCOMMITTED;
-		}
-	    }
-	}
       if (locator_fetch_class (class_, DB_FETCH_CLREAD_INSTREAD) == NULL)
 	{
 	  PT_ERRORc (parser, flat, er_msg ());
@@ -16061,15 +16046,11 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
       buildlist->push_list_id = select_node->info.query.q.select.push_list;
     }
 
-#if 0
-/* disabled temporrary in MVCC */
-
   /* set flag for multi-update subquery */
   if (PT_SELECT_INFO_IS_FLAGED (select_node, PT_SELECT_INFO_MULTI_UPDATE_AGG))
     {
       XASL_SET_FLAG (xasl, XASL_MULTI_UPDATE_AGG);
     }
-#endif
 
   /* set flag for merge query */
   if (PT_SELECT_INFO_IS_FLAGED (select_node, PT_SELECT_INFO_IS_MERGE_QUERY))
@@ -16858,8 +16839,8 @@ parser_generate_xasl_proc (PARSER_CONTEXT * parser, PT_NODE * node,
 
       /* Check to see if composite locking needs to be turned on.
        * We do not do composite locking from proxies. */
-      if (node->node_type == PT_SELECT
-	  && node->info.query.xasl && node->info.query.composite_locking)
+      if (node->node_type == PT_SELECT && node->info.query.xasl
+	  && !READONLY_SCAN (node->info.query.scan_op_type))
 	{
 	  spec = node->info.query.q.select.from;
 	  while (spec)
@@ -16911,9 +16892,8 @@ parser_generate_xasl_proc (PARSER_CONTEXT * parser, PT_NODE * node,
 					  (OID_EQ (&ACCESS_SPEC_CLS_OID (cs),
 						   WS_REAL_OID (mop))))
 					{
-					  scan->composite_locking =
-					    node->info.query.
-					    composite_locking;
+					  scan->scan_op_type =
+					    node->info.query.scan_op_type;
 					  break;
 					}
 				    }
@@ -16926,8 +16906,7 @@ parser_generate_xasl_proc (PARSER_CONTEXT * parser, PT_NODE * node,
 			}
 		      else
 			{
-			  xasl->composite_locking =
-			    node->info.query.composite_locking;
+			  xasl->scan_op_type = node->info.query.scan_op_type;
 			  break;
 			}
 		    }
@@ -16939,6 +16918,12 @@ parser_generate_xasl_proc (PARSER_CONTEXT * parser, PT_NODE * node,
 	  xasl->upd_del_class_cnt = node->info.query.upd_del_class_cnt;
 	  xasl->mvcc_reev_extra_cls_cnt =
 	    node->info.query.mvcc_reev_extra_cls_cnt;
+
+	  if (PT_SELECT_INFO_IS_FLAGED
+	      (node, PT_SELECT_INFO_MVCC_LOCK_NEEDED))
+	    {
+	      XASL_SET_FLAG (xasl, XASL_SELECT_MVCC_LOCK_NEEDED);
+	    }
 	}
 
       /* set as zero correlation-level; this uncorrelated subquery need to
@@ -18837,7 +18822,7 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 		     PT_NODE * from, PT_NODE * class_specs,
 		     PT_NODE * where, PT_NODE * using_index,
 		     PT_NODE * order_by, PT_NODE * orderby_for, int server_op,
-		     PT_COMPOSITE_LOCKING composite_locking)
+		     SCAN_OPERATION_TYPE scan_op_type)
 {
   PT_NODE *statement = NULL, *from_temp = NULL, *node = NULL;
   PT_NODE *save_next = NULL, *spec = NULL;
@@ -18863,7 +18848,7 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
       statement->info.query.q.select.where =
 	parser_copy_tree_list (parser, where);
 
-      if (composite_locking == PT_COMPOSITE_LOCKING_UPDATE
+      if (scan_op_type == S_UPDATE
 	  && statement->info.query.q.select.from->next != NULL)
 	{
 	  /* this is a multi-table update statement */
@@ -19076,9 +19061,7 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 	}
       statement->info.query.q.select.from = from_temp;
 
-#if 0
-/* disabled temporary in MVCC */
-      if (composite_locking == PT_COMPOSITE_LOCKING_UPDATE
+      if (scan_op_type == S_UPDATE
 	  && statement->info.query.upd_del_class_cnt == 1
 	  && statement->info.query.q.select.from->next != NULL
 	  && !pt_has_analytic (parser, statement))
@@ -19111,8 +19094,14 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 	  statement->info.query.q.select.group_by = group_by;
 	  PT_SELECT_INFO_SET_FLAG (statement,
 				   PT_SELECT_INFO_MULTI_UPDATE_AGG);
+	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	    {
+	      /* The locking at update/delete stage does not work with GROUP BY,
+	       * so, we will lock at SELECT stage. */
+	      PT_SELECT_INFO_SET_FLAG (statement,
+				       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
+	    }
 	}
-#endif
 
       /* don't allow orderby_for without order_by */
       assert (!((orderby_for != NULL) && (order_by == NULL)));
@@ -19137,11 +19126,18 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 
       if (statement)
 	{
-	  statement->info.query.composite_locking = composite_locking;
+	  statement->info.query.scan_op_type = scan_op_type;
 
 	  /* no strict oid checking for generated subquery */
 	  PT_SELECT_INFO_SET_FLAG (statement,
 				   PT_SELECT_INFO_NO_STRICT_OID_CHECK);
+	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && !server_op)
+	    {
+	      /* When UPDATE/DELETE statement is broker-side executed we must
+	       * perform locking at SELECT stage */
+	      PT_SELECT_INFO_SET_FLAG (statement,
+				       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
+	    }
 	}
     }
 
@@ -19229,8 +19225,7 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
       if (((aptr_statement = pt_to_upd_del_query (parser, NULL, select_list,
 						  from, class_specs,
 						  where, using_index,
-						  NULL, NULL, 1,
-						  PT_COMPOSITE_LOCKING_DELETE))
+						  NULL, NULL, 1, S_DELETE))
 	   == NULL)
 	  || pt_copy_upddel_hints_to_select (parser, statement,
 					     aptr_statement) != NO_ERROR
@@ -19584,6 +19579,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   OID *oid = NULL;
   float hint_wait_secs;
   int *mvcc_assign_extra_classes = NULL;
+  bool mvcc_enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
 
 
   assert (parser != NULL && statement != NULL);
@@ -19621,7 +19617,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       goto cleanup;
     }
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+  if (mvcc_enabled)
     {
       /* Flag specs that are referenced in conditions and assignments */
 
@@ -19654,7 +19650,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   aptr_statement =
     pt_to_upd_del_query (parser, select_names, select_values, from,
 			 class_specs, where, using_index, order_by,
-			 orderby_for, 1, PT_COMPOSITE_LOCKING_UPDATE);
+			 orderby_for, 1, S_UPDATE);
   /* restore assignment list here because we need to iterate through
    * assignments later*/
   pt_restore_assignment_links (statement->info.update.assignment, links, -1);
@@ -19668,6 +19664,23 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
 	}
       goto cleanup;
+    }
+
+  /* remove reevaluation flags if we have GROUP BY because the locking will be
+   * made at SELECT stage */
+  if (aptr_statement->info.query.q.select.group_by != NULL)
+    {
+      for (p = aptr_statement->info.query.q.select.from; p != NULL;
+	   p = p->next)
+	{
+	  p->info.spec.flag &=
+	    ~(PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV);
+	}
+      for (p = from; p != NULL; p = p->next)
+	{
+	  p->info.spec.flag &=
+	    ~(PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV);
+	}
     }
 
   error = pt_copy_upddel_hints_to_select (parser, statement, aptr_statement);
@@ -19688,7 +19701,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       goto cleanup;
     }
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+  if (mvcc_enabled)
     {
       /* Prepare generated SELECT statement for mvcc reevaluation */
       aptr_statement =
@@ -20117,14 +20130,14 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   for (cl_name_node = aptr_statement->info.query.q.select.list, cls_idx = cl =
        0;
        cl_name_node != NULL
-       && cl <
+       && cls_idx <
        aptr_statement->info.query.upd_del_class_cnt +
        aptr_statement->info.query.mvcc_reev_extra_cls_cnt;
        cl_name_node = cl_name_node->next->next, cls_idx++)
     {
       int idx;
 
-      /* Find spec associated with current OI - CLASS OID pair */
+      /* Find spec associated with current OID - CLASS OID pair */
       for (p = aptr_statement->info.query.q.select.from, idx = 0; p != NULL;
 	   p = p->next, idx++)
 	{
@@ -20133,9 +20146,10 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	      break;
 	    }
 	}
-      if (p->info.spec.
-	  flag & (PT_SPEC_FLAG_MVCC_COND_REEV |
-		  PT_SPEC_FLAG_MVCC_ASSIGN_REEV))
+      assert (p != NULL);
+      if (PT_IS_SPEC_FLAG_SET (p,
+			       PT_SPEC_FLAG_MVCC_COND_REEV
+			       | PT_SPEC_FLAG_MVCC_ASSIGN_REEV))
 	{
 	  /* Change index in FROM list with index in SELECT list for classes that
 	   * appear in right side of assignements but not in condition
@@ -23485,11 +23499,7 @@ PT_NODE *
 pt_to_merge_update_query (PARSER_CONTEXT * parser, PT_NODE * select_list,
 			  PT_MERGE_INFO * info)
 {
-  PT_NODE *statement, *where;
-#if 0
-/* disabled temporary in MVCC */
   PT_NODE *statement, *where, *group_by, *oid, *save_next, *save_list, *from;
-#endif
 
   statement = parser_new_node (parser, PT_SELECT);
   if (!statement)
@@ -23594,8 +23604,6 @@ pt_to_merge_update_query (PARSER_CONTEXT * parser, PT_NODE * select_list,
     }
   statement->info.query.q.select.where = where;
 
-#if 0
-/* disabled temporary in MVCC */
   /* add group by */
   group_by = parser_new_node (parser, PT_SORT_SPEC);
   if (group_by)
@@ -23610,21 +23618,18 @@ pt_to_merge_update_query (PARSER_CONTEXT * parser, PT_NODE * select_list,
       group_by->info.sort_spec.pos_descr.pos_no = 1;
       oid->next = save_next;
       statement->info.query.q.select.group_by = group_by;
+      PT_SELECT_INFO_SET_FLAG (statement, PT_SELECT_INFO_MVCC_LOCK_NEEDED);
     }
   else
     {
       PT_INTERNAL_ERROR (parser, "allocate new node");
       return NULL;
     }
-#endif
 
   statement->info.query.upd_del_class_cnt = 1;
-  statement->info.query.composite_locking = PT_COMPOSITE_LOCKING_UPDATE;
+  statement->info.query.scan_op_type = S_UPDATE;
   PT_SELECT_INFO_SET_FLAG (statement, PT_SELECT_INFO_IS_MERGE_QUERY);
-#if 0
-/* disabled temporary in MVCC */
   PT_SELECT_INFO_SET_FLAG (statement, PT_SELECT_INFO_MULTI_UPDATE_AGG);
-#endif
 
   /* no strict oid checking for generated subquery */
   PT_SELECT_INFO_SET_FLAG (statement, PT_SELECT_INFO_NO_STRICT_OID_CHECK);

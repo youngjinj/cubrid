@@ -222,11 +222,8 @@ struct groupby_state
   int g_dim_levels;		/* dimentions size */
 
   SORT_CMP_FUNC *cmp_fn;
-#if 0
-/* disabled temporary in MVCC */
   LK_COMPOSITE_LOCK *composite_lock;
   int upd_del_class_cnt;
-#endif
 };
 
 typedef struct analytic_state ANALYTIC_STATE;
@@ -869,10 +866,10 @@ static int qexec_merge_listfiles (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 				  XASL_STATE * xasl_state);
 static int qexec_open_scan (THREAD_ENTRY * thread_p,
 			    ACCESS_SPEC_TYPE * curr_spec, VAL_LIST * val_list,
-			    VAL_DESCR * vd, int readonly_scan, int fixed,
-			    int grouped, bool iscan_oid_order,
+			    VAL_DESCR * vd, bool mvcc_select_lock_needed,
+			    int fixed, int grouped, bool iscan_oid_order,
 			    SCAN_ID * s_id, QUERY_ID query_id,
-			    int composite_locking);
+			    SCAN_OPERATION_TYPE scan_op_type);
 static void qexec_close_scan (THREAD_ENTRY * thread_p,
 			      ACCESS_SPEC_TYPE * curr_spec);
 static void qexec_end_scan (THREAD_ENTRY * thread_p,
@@ -974,7 +971,8 @@ static int qexec_update_btree_unique_stats_info (THREAD_ENTRY * thread_p,
 						 BTREE_UNIQUE_STATS_UPDATE_INFO
 						 * info);
 static int qexec_prune_spec (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec,
-			     VAL_DESCR * vd, int composite_locking);
+			     VAL_DESCR * vd,
+			     SCAN_OPERATION_TYPE scan_op_type);
 static int qexec_process_partition_unique_stats (THREAD_ENTRY * thread_p,
 						 PRUNING_CONTEXT * pcontext);
 static int qexec_process_unique_stats (THREAD_ENTRY * thread_p,
@@ -1164,7 +1162,8 @@ static int prepare_mvcc_reev_data (THREAD_ENTRY * thread_p, XASL_NODE * aptr,
 				   XASL_STATE * xasl_state,
 				   int no_reev_classes,
 				   int *cond_reev_indexes,
-				   MVCC_REEV_DATA * reev_data, int no_classes,
+				   MVCC_UPDDEL_REEV_DATA * reev_data,
+				   int no_classes,
 				   UPDDEL_CLASS_INFO * classes,
 				   UPDDEL_CLASS_INFO_INTERNAL *
 				   internal_classes, int no_assigns,
@@ -1680,45 +1679,41 @@ qexec_end_one_iteration (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   OID *class_oid = NULL;
   int ret = NO_ERROR;
 
-  if (xasl->composite_locking || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
-#if 0
-/* disabled temporary in MVCC */
-    if ((xasl->composite_locking || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
-	&& !XASL_IS_FLAGED (xasl, XASL_MULTI_UPDATE_AGG))
-#endif
-      {
-	/* Remove OIDs already processed */
-	ret =
-	  qexec_upddel_add_unique_oid_to_ehid (thread_p, xasl, xasl_state);
-	if (ret < 0)
-	  {
-	    GOTO_EXIT_ON_ERROR;
-	  }
-	if (ret == xasl->upd_del_class_cnt)
-	  {
-	    return NO_ERROR;
-	  }
+  if ((COMPOSITE_LOCK (xasl->scan_op_type)
+       || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
+      && !XASL_IS_FLAGED (xasl, XASL_MULTI_UPDATE_AGG))
+    {
+      /* Remove OIDs already processed */
+      ret = qexec_upddel_add_unique_oid_to_ehid (thread_p, xasl, xasl_state);
+      if (ret < 0)
+	{
+	  GOTO_EXIT_ON_ERROR;
+	}
+      if (ret == xasl->upd_del_class_cnt)
+	{
+	  return NO_ERROR;
+	}
 
-	if (xasl->aptr_list && xasl->aptr_list->type == BUILDLIST_PROC
-	    && xasl->aptr_list->proc.buildlist.push_list_id)
-	  {
-	    class_oid = &ACCESS_SPEC_CLS_OID (xasl->aptr_list->spec_list);
-	  }
+      /* add composite locks if mvcc is disabled */
+      if (mvcc_Enabled == false)
+	{
+	  if (xasl->aptr_list && xasl->aptr_list->type == BUILDLIST_PROC
+	      && xasl->aptr_list->proc.buildlist.push_list_id)
+	    {
+	      class_oid = &ACCESS_SPEC_CLS_OID (xasl->aptr_list->spec_list);
+	    }
 
-	/* add composite locks if mvcc is disabled */
-	if (mvcc_Enabled == false)
-	  {
-	    ret =
-	      qexec_add_composite_lock (thread_p, xasl->outptr_list->valptrp,
-					xasl_state,
-					&xasl->composite_lock,
-					xasl->upd_del_class_cnt, class_oid);
-	    if (ret != NO_ERROR)
-	      {
-		GOTO_EXIT_ON_ERROR;
-	      }
-	  }
-      }
+	  ret =
+	    qexec_add_composite_lock (thread_p, xasl->outptr_list->valptrp,
+				      xasl_state,
+				      &xasl->composite_lock,
+				      xasl->upd_del_class_cnt, class_oid);
+	  if (ret != NO_ERROR)
+	    {
+	      GOTO_EXIT_ON_ERROR;
+	    }
+	}
+    }
 
   if (xasl->type == BUILDLIST_PROC || xasl->type == BUILD_SCHEMA_PROC)
     {
@@ -2229,6 +2224,7 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
       pr_clear_value (p->s_dbval);
       pg_cnt += qexec_clear_pred (xasl_p, p->where_pred, final);
       pg_cnt += qexec_clear_pred (xasl_p, p->where_key, final);
+      pg_cnt += qexec_clear_pred (xasl_p, p->where_range, final);
       pr_clear_value (p->s_id.join_dbval);
       switch (p->s_id.type)
 	{
@@ -3915,11 +3911,8 @@ qexec_initialize_groupby_state (GROUPBY_STATE * gbstate,
       return NULL;
     }
 
-#if 0
-/* disabled temporary in MVCC */
   gbstate->composite_lock = NULL;
   gbstate->upd_del_class_cnt = 0;
-#endif
 
   return gbstate;
 }
@@ -3985,14 +3978,11 @@ qexec_clear_groupby_state (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate)
   /* destroy aggregates lists */
   qexec_gby_clear_group_dim (thread_p, gbstate);
 
-#if 0
-/* disabled temporary in MVCC */
   if (gbstate->composite_lock)
     {
       /* TODO - return error handling */
       (void) lock_finalize_composite_lock (thread_p, gbstate->composite_lock);
     }
-#endif
 }
 
 /*
@@ -4414,8 +4404,6 @@ qexec_groupby (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		    ? &qfile_compare_partial_sort_record
 		    : &qfile_compare_all_sort_record);
 
-#if 0
-/* disabled temporary in MVCC */
   if (XASL_IS_FLAGED (xasl, XASL_MULTI_UPDATE_AGG))
     {
       gbstate.composite_lock = &xasl->composite_lock;
@@ -4426,7 +4414,6 @@ qexec_groupby (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       gbstate.composite_lock = NULL;
       gbstate.upd_del_class_cnt = 0;
     }
-#endif
 
   if (sort_listfile (thread_p, NULL_VOLID,
 		     qfile_get_estimated_pages_for_sorting (list_id,
@@ -6259,14 +6246,15 @@ qexec_merge_listfiles (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       outer_spec = xasl->proc.mergelist.outer_spec_list;
       inner_spec = xasl->proc.mergelist.inner_spec_list;
 
+      assert (xasl->scan_op_type == S_SELECT);
       if (qexec_open_scan (thread_p, outer_spec,
 			   xasl->proc.mergelist.outer_val_list,
 			   &xasl_state->vd,
-			   true,
+			   false,
 			   outer_spec->fixed_scan,
 			   outer_spec->grouped_scan,
 			   true, &outer_spec->s_id, xasl_state->query_id,
-			   xasl->composite_locking) != NO_ERROR)
+			   S_SELECT) != NO_ERROR)
 	{
 	  GOTO_EXIT_ON_ERROR;
 	}
@@ -6274,11 +6262,11 @@ qexec_merge_listfiles (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       if (qexec_open_scan (thread_p, inner_spec,
 			   xasl->proc.mergelist.inner_val_list,
 			   &xasl_state->vd,
-			   true,
+			   false,
 			   inner_spec->fixed_scan,
 			   inner_spec->grouped_scan,
 			   true, &inner_spec->s_id, xasl_state->query_id,
-			   xasl->composite_locking) != NO_ERROR)
+			   S_SELECT) != NO_ERROR)
 	{
 	  GOTO_EXIT_ON_ERROR;
 	}
@@ -6332,7 +6320,7 @@ exit_on_error:
  *   curr_spec(in)      : Access Specification Node
  *   val_list(in)       : Value list pointer
  *   vd(in)     : Value descriptor
- *   readonly_scan(in)  :
+ *   mvcc_select_lock_needed(in)  :
  *   fixed(in)  : Fixed scan flag
  *   grouped(in)        : Grouped scan flag
  *   iscan_oid_order(in)       :
@@ -6343,16 +6331,17 @@ exit_on_error:
  */
 static int
 qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
-		 VAL_LIST * val_list, VAL_DESCR * vd, int readonly_scan,
-		 int fixed, int grouped, bool iscan_oid_order, SCAN_ID * s_id,
-		 QUERY_ID query_id, int composite_locking)
+		 VAL_LIST * val_list, VAL_DESCR * vd,
+		 bool mvcc_select_lock_needed, int fixed, int grouped,
+		 bool iscan_oid_order, SCAN_ID * s_id, QUERY_ID query_id,
+		 SCAN_OPERATION_TYPE scan_op_type)
 {
   SCAN_TYPE scan_type;
   INDX_INFO *indx_info;
 
   if (curr_spec->pruning_type == DB_PARTITIONED_CLASS && !curr_spec->pruned)
     {
-      if (qexec_prune_spec (thread_p, curr_spec, vd, composite_locking) !=
+      if (qexec_prune_spec (thread_p, curr_spec, vd, scan_op_type) !=
 	  NO_ERROR)
 	{
 	  goto exit_on_error;
@@ -6404,10 +6393,9 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 	}			/* if */
       if (scan_type == S_HEAP_SCAN || scan_type == S_HEAP_SCAN_RECORD_INFO)
 	{
-	  assert (composite_locking >= 0 && composite_locking <= 2);
 	  if (scan_open_heap_scan (thread_p, s_id,
-				   readonly_scan,
-				   (SCAN_OPERATION_TYPE) composite_locking,
+				   mvcc_select_lock_needed,
+				   scan_op_type,
 				   fixed,
 				   curr_spec->lock_hint,
 				   grouped,
@@ -6487,10 +6475,9 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 	}
       else			/* S_INDX_SCAN */
 	{
-	  assert (composite_locking >= 0 && composite_locking <= 2);
 	  if (scan_open_index_scan (thread_p, s_id,
-				    readonly_scan,
-				    (SCAN_OPERATION_TYPE) composite_locking,
+				    mvcc_select_lock_needed,
+				    scan_op_type,
 				    fixed,
 				    curr_spec->lock_hint,
 				    grouped,
@@ -7370,11 +7357,11 @@ qexec_reset_regu_variable (REGU_VARIABLE * var)
  * thread_p (in) :
  * spec (in) :
  * vd (in) :
- * composite_locking (in) :
+ * scan_op_type (in) :
  */
 static int
 qexec_prune_spec (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec,
-		  VAL_DESCR * vd, int composite_locking)
+		  VAL_DESCR * vd, SCAN_OPERATION_TYPE scan_op_type)
 {
   PARTITION_SPEC_TYPE *partition_spec = NULL;
   LOCK lock = NULL_LOCK;
@@ -7397,7 +7384,7 @@ qexec_prune_spec (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec,
       return error;
     }
 
-  if (composite_locking == 0)
+  if (!COMPOSITE_LOCK (scan_op_type))
     {
       lock = IS_LOCK;
     }
@@ -7448,7 +7435,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
   SCAN_CODE scode = S_END;
   int error = NO_ERROR;
   SCAN_OPERATION_TYPE scan_op_type = spec->s_id.scan_op_type;
-  int readonly_scan = spec->s_id.readonly_scan;
+  int mvcc_select_lock_needed = spec->s_id.mvcc_select_lock_needed;
   int fixed = spec->s_id.fixed;
   int grouped = spec->s_id.grouped;
   QPROC_SINGLE_FETCH single_fetch = spec->s_id.single_fetch;
@@ -7541,7 +7528,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
       hsidp->scancache_inited = false;
 
       error =
-	scan_open_heap_scan (thread_p, &spec->s_id, readonly_scan,
+	scan_open_heap_scan (thread_p, &spec->s_id, mvcc_select_lock_needed,
 			     scan_op_type, fixed, spec->lock_hint, grouped,
 			     single_fetch, spec->s_dbval, val_list, vd,
 			     &class_oid, &class_hfid,
@@ -7600,7 +7587,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
       spec->s_id.s.isid.caches_inited = false;
 
       error =
-	scan_open_index_scan (thread_p, &spec->s_id, readonly_scan,
+	scan_open_index_scan (thread_p, &spec->s_id, mvcc_select_lock_needed,
 			      scan_op_type, fixed, spec->lock_hint, grouped,
 			      single_fetch, spec->s_dbval, val_list, vd,
 			      idxptr, &class_oid, &class_hfid,
@@ -8518,8 +8505,9 @@ qexec_mvcc_cond_reev_set_scan_order (XASL_NODE * aptr,
 static int
 prepare_mvcc_reev_data (THREAD_ENTRY * thread_p, XASL_NODE * aptr,
 			XASL_STATE * xasl_state, int no_reev_classes,
-			int *mvcc_reev_indexes, MVCC_REEV_DATA * reev_data,
-			int no_classes, UPDDEL_CLASS_INFO * classes,
+			int *mvcc_reev_indexes,
+			MVCC_UPDDEL_REEV_DATA * reev_data, int no_classes,
+			UPDDEL_CLASS_INFO * classes,
 			UPDDEL_CLASS_INFO_INTERNAL * internal_classes,
 			int no_assigns, UPDATE_ASSIGNMENT * assigns,
 			PRED_EXPR * cons_pred,
@@ -8539,7 +8527,7 @@ prepare_mvcc_reev_data (THREAD_ENTRY * thread_p, XASL_NODE * aptr,
     }
 
   /* Make sure reev data is initialized, or else it will crash later */
-  memset (reev_data, 0, sizeof (MVCC_REEV_DATA));
+  memset (reev_data, 0, sizeof (MVCC_UPDDEL_REEV_DATA));
 
   if (no_reev_classes == 0)
     {
@@ -8689,7 +8677,7 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   PRUNING_CONTEXT *pcontext = NULL;
   DEL_LOB_INFO *del_lob_info_list = NULL;
   RECDES recdes;
-  MVCC_REEV_DATA mvcc_reev_data;
+  MVCC_UPDDEL_REEV_DATA mvcc_reev_data;
   UPDDEL_MVCC_COND_REEVAL *mvcc_reev_classes = NULL, *mvcc_reev_class = NULL;
   UPDATE_MVCC_REEV_ASSIGNMENT *mvcc_reev_assigns = NULL;
 
@@ -8774,11 +8762,12 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   savepoint_used = 1;
 
   specp = xasl->spec_list;
-  /* readonly_scan = true */
-  if (qexec_open_scan (thread_p, specp, xasl->val_list, &xasl_state->vd, true,
-		       specp->fixed_scan, specp->grouped_scan, true,
-		       &specp->s_id, xasl_state->query_id,
-		       xasl->composite_locking) != NO_ERROR)
+  /* mvcc_select_lock_needed = false */
+  assert (xasl->scan_op_type == S_SELECT);
+  if (qexec_open_scan
+      (thread_p, specp, xasl->val_list, &xasl_state->vd, false,
+       specp->fixed_scan, specp->grouped_scan, true, &specp->s_id,
+       xasl_state->query_id, S_SELECT) != NO_ERROR)
     {
       if (savepoint_used)
 	{
@@ -9721,13 +9710,13 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   savepoint_used = 1;
 
   specp = xasl->spec_list;
-  /* readonly_scan = true */
+  assert (xasl->scan_op_type == S_SELECT);
+  /* mvcc_select_lock_needed = false */
   if (qexec_open_scan (thread_p, specp, xasl->val_list,
-		       &xasl_state->vd, true,
+		       &xasl_state->vd, false,
 		       specp->fixed_scan,
 		       specp->grouped_scan, true, &specp->s_id,
-		       xasl_state->query_id,
-		       xasl->composite_locking) != NO_ERROR)
+		       xasl_state->query_id, S_SELECT) != NO_ERROR)
     {
       GOTO_EXIT_ON_ERROR;
     }
@@ -10285,7 +10274,7 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 	    }
 	}
 
-      if (xbtree_find_unique (thread_p, &btid, false, S_DELETE,
+      if (xbtree_find_unique (thread_p, &btid, S_DELETE,
 			      key_dbvalue, &pruned_oid, &unique_oid,
 			      is_global_index) == BTREE_KEY_FOUND)
 	{
@@ -10514,7 +10503,7 @@ qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
 	    }
 	}
 
-      if (xbtree_find_unique (thread_p, &btid, false, S_UPDATE,
+      if (xbtree_find_unique (thread_p, &btid, S_UPDATE,
 			      key_dbvalue, &class_oid, &unique_oid,
 			      is_global_index) == BTREE_KEY_FOUND)
 	{
@@ -10987,13 +10976,14 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	}
       scan_cache_inited = true;
 
-      /* readonly_scan = true */
+      assert (xasl->scan_op_type == S_SELECT);
+      /* mvcc_select_lock_needed = false */
       if (qexec_open_scan (thread_p, specp, xasl->val_list,
-			   &xasl_state->vd, true,
+			   &xasl_state->vd, false,
 			   specp->fixed_scan,
 			   specp->grouped_scan, true,
 			   &specp->s_id, xasl_state->query_id,
-			   xasl->composite_locking) != NO_ERROR)
+			   S_SELECT) != NO_ERROR)
 	{
 	  if (savepoint_used)
 	    {
@@ -12189,7 +12179,7 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 			  /* perform pruning */
 			  err = qexec_prune_spec (thread_p, specp,
 						  &xasl_state->vd,
-						  xasl->composite_locking);
+						  xasl->scan_op_type);
 			  if (err != NO_ERROR)
 			    {
 			      goto exit_on_error;
@@ -12503,23 +12493,18 @@ qexec_start_mainblock_iterations (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 
 	/* Initialize extendible hash files for SELECT statement generated for
 	   multi UPDATE/DELETE */
-#if 0
-/* disabled temporary in MVCC */
 	if (QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl)
 	    && !XASL_IS_FLAGED (xasl, XASL_MULTI_UPDATE_AGG))
-#endif
-	  if (QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
-
-	    {
-	      if (qexec_init_upddel_ehash_files (thread_p, xasl) != NO_ERROR)
-		{
-		  GOTO_EXIT_ON_ERROR;
-		}
-	    }
-	  else
-	    {
-	      buildlist->upddel_oid_locator_ehids = NULL;
-	    }
+	  {
+	    if (qexec_init_upddel_ehash_files (thread_p, xasl) != NO_ERROR)
+	      {
+		GOTO_EXIT_ON_ERROR;
+	      }
+	  }
+	else
+	  {
+	    buildlist->upddel_oid_locator_ehids = NULL;
+	  }
 
 	/* initialize groupby_num() value for BUILDLIST_PROC */
 	if (buildlist->g_grbynum_val)
@@ -12920,19 +12905,16 @@ qexec_end_mainblock_iterations (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   distinct_needed = (xasl->option == Q_DISTINCT) ? true : false;
 
   /* Acquire the lockset if composite locking is enabled. */
-#if 0
-/* disabled temporary in MVCC */
-  if ((xasl->composite_locking || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
+  if ((COMPOSITE_LOCK (xasl->scan_op_type)
+       || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
       && (!XASL_IS_FLAGED (xasl, XASL_MULTI_UPDATE_AGG)))
-#endif
-    if (xasl->composite_locking || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
-      {
-	if (lock_finalize_composite_lock (thread_p, &xasl->composite_lock) !=
-	    LK_GRANTED)
-	  {
-	    return ER_FAILED;
-	  }
-      }
+    {
+      if (lock_finalize_composite_lock (thread_p, &xasl->composite_lock) !=
+	  LK_GRANTED)
+	{
+	  return ER_FAILED;
+	}
+    }
 
   switch (xasl->type)
     {
@@ -13154,11 +13136,11 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   ACCESS_SPEC_TYPE *spec_ptr[2];
   ACCESS_SPEC_TYPE *specp;
   XASL_SCAN_FNC_PTR func_vector = (XASL_SCAN_FNC_PTR) NULL;
-  int readonly_scan = true, readonly_scan2, multi_readonly_scan = false;
+  int multi_upddel = false;
   int fixed_scan_flag;
   QFILE_LIST_MERGE_INFO *merge_infop;
   XASL_NODE *outer_xasl = NULL, *inner_xasl = NULL;
-  bool iscan_oid_order;
+  bool iscan_oid_order, mvcc_select_lock_needed = false;
   int old_wait_msecs, wait_msecs;
   int error;
 
@@ -13168,6 +13150,10 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
    * Pre_processing
    */
 
+  if (mvcc_Enabled && XASL_IS_FLAGED (xasl, XASL_SELECT_MVCC_LOCK_NEEDED))
+    {
+      mvcc_select_lock_needed = true;
+    }
   if (xasl->limit_row_count)
     {
       DB_LOGICAL l;
@@ -13355,10 +13341,9 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	    }
 	}
 
-      multi_readonly_scan = QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl);
-      if (xasl->composite_locking || multi_readonly_scan)
+      multi_upddel = QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl);
+      if (COMPOSITE_LOCK (xasl->scan_op_type) || multi_upddel)
 	{
-	  readonly_scan = false;
 	  if (lock_initialize_composite_lock (thread_p, &xasl->composite_lock)
 	      != NO_ERROR)
 	    {
@@ -13472,7 +13457,7 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       if (xasl->spec_list)
 	{
 	  /* do locking on each instance instead of composite locking */
-	  if (xasl->composite_locking)
+	  if (COMPOSITE_LOCK (xasl->scan_op_type))
 	    {
 	      fixed_scan_flag = false;
 	    }
@@ -13594,13 +13579,14 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 #endif
 			  if (qexec_open_scan (thread_p, specp,
 					       xptr->merge_val_list,
-					       &xasl_state->vd, readonly_scan,
+					       &xasl_state->vd,
+					       mvcc_select_lock_needed,
 					       specp->fixed_scan,
 					       specp->grouped_scan,
 					       iscan_oid_order,
 					       &specp->s_id,
 					       xasl_state->query_id,
-					       xasl->composite_locking) !=
+					       xasl->scan_op_type) !=
 			      NO_ERROR)
 			    {
 			      qexec_clear_mainblock_iterations (thread_p,
@@ -13628,32 +13614,17 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					     xasl->sql_hash_text, "", 0);
 #endif
 #endif
-			  if (multi_readonly_scan)
-			    {
-			      if (xptr->composite_locking)
-				{
-				  readonly_scan2 = false;
-				}
-			      else
-				{
-				  readonly_scan2 = true;
-				}
-			    }
-			  else
-			    {
-			      readonly_scan2 = readonly_scan;
-			    }
 
 			  if (qexec_open_scan (thread_p, specp,
 					       xptr->val_list,
 					       &xasl_state->vd,
-					       readonly_scan2,
+					       mvcc_select_lock_needed,
 					       specp->fixed_scan,
 					       specp->grouped_scan,
 					       iscan_oid_order,
 					       &specp->s_id,
 					       xasl_state->query_id,
-					       xptr->composite_locking) !=
+					       xptr->scan_op_type) !=
 			      NO_ERROR)
 			    {
 			      qexec_clear_mainblock_iterations (thread_p,
@@ -13911,9 +13882,7 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	    }
 	}
 
-#if 0
-/* disabled temporary in MVCC */
-      if ((xasl->composite_locking
+      if ((COMPOSITE_LOCK (xasl->scan_op_type)
 	   || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
 	  && XASL_IS_FLAGED (xasl, XASL_MULTI_UPDATE_AGG))
 	{
@@ -13923,7 +13892,6 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      GOTO_EXIT_ON_ERROR;
 	    }
 	}
-#endif
 
 #if 0				/* DO NOT DELETE ME !!! - yaw: for future work */
       if (xasl->list_id->tuple_cnt == 0)
@@ -16966,12 +16934,13 @@ qexec_execute_connect_by (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	  /* start the scanner on "input" */
 	  if (connect_by->single_table_opt)
 	    {
+	      assert (xasl->scan_op_type == S_SELECT);
 	      /* heap/index scan for single table query optimization */
 	      if (qexec_open_scan (thread_p, xasl->spec_list, xasl->val_list,
-				   &xasl_state->vd, true, true, false, false,
+				   &xasl_state->vd, false, true, false, false,
 				   &xasl->spec_list->s_id,
 				   xasl_state->query_id,
-				   xasl->composite_locking) != NO_ERROR)
+				   S_SELECT) != NO_ERROR)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
@@ -19380,8 +19349,6 @@ qexec_gby_finalize_group (THREAD_ENTRY * thread_p,
       goto wrapup;
     }
 
-#if 0
-/* disabled temporary in MVCC */
   if (N == 0)
     {
       if (gbstate->composite_lock != NULL)
@@ -19398,7 +19365,6 @@ qexec_gby_finalize_group (THREAD_ENTRY * thread_p,
 	    }
 	}
     }
-#endif
 
   assert (ev_res == V_TRUE);
 

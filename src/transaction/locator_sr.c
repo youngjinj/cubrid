@@ -203,7 +203,7 @@ static int locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid,
 				 PRUNING_CONTEXT * pcontext,
 				 FUNC_PRED_UNPACK_INFO * func_preds);
 static int locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid,
-				 OID * class_oid, OID * oid,
+				 OID * class_oid, OID * oid, OID * new_oid_p,
 				 BTID * search_btid,
 				 bool search_btid_duplicate_key_locked,
 				 RECDES * ikdrecdes, RECDES * recdes,
@@ -4091,7 +4091,7 @@ locator_check_foreign_key (THREAD_ENTRY * thread_p, HFID * hfid,
       if (!is_null)
 	{
 	  if (xbtree_find_unique (thread_p, &index->fk->ref_class_pk_btid,
-				  true, S_SELECT, key_dbvalue,
+				  S_SELECT, key_dbvalue,
 				  &index->fk->ref_class_oid, &unique_oid,
 				  true) != BTREE_KEY_FOUND)
 	    {
@@ -4277,7 +4277,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 
 	      BTREE_INIT_SCAN (&bt_scan);
 	      oid_cnt = btree_range_search (thread_p, &fkref->self_btid,
-					    false, S_DELETE, LOCKHINT_NONE,
+					    S_DELETE, LOCKHINT_NONE,
 					    &bt_scan,
 					    &key_val_range,
 					    1, &fkref->self_oid,
@@ -4584,7 +4584,7 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
 
       do
 	{
-	  oid_cnt = btree_range_search (thread_p, &fkref->self_btid, false,
+	  oid_cnt = btree_range_search (thread_p, &fkref->self_btid,
 					S_UPDATE, LOCKHINT_NONE, &bt_scan,
 					&key_val_range,
 					1,
@@ -4837,7 +4837,7 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 	    {
 	      BTREE_INIT_SCAN (&bt_scan);
 	      oid_cnt = btree_range_search (thread_p, &fkref->self_btid,
-					    false, S_UPDATE, LOCKHINT_NONE,
+					    S_UPDATE, LOCKHINT_NONE,
 					    &bt_scan,
 					    &key_val_range,
 					    1, &fkref->self_oid,
@@ -5434,6 +5434,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
  *   hfid(in): Heap where the object is going to be inserted
  *   class_oid(in):
  *   oid(in): The object identifier
+ *   new_oid_p(out): In MVCC context, if not null, it will store updated oid.
  *   search_btid(in): The BTID of the tree where oid was found
  *   search_btid_duplicate_key_locked(in): true, if duplicate key has been
  *					   locked when searching in
@@ -5459,7 +5460,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
  */
 static int
 locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
-		      OID * oid, BTID * search_btid,
+		      OID * oid, OID * new_oid_p, BTID * search_btid,
 		      bool search_btid_duplicate_key_locked,
 		      RECDES * oldrecdes, RECDES * recdes,
 		      int has_index, ATTR_ID * att_id, int n_att_id,
@@ -5482,6 +5483,11 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
   int error_code = NO_ERROR;
   HEAP_SCANCACHE *local_scan_cache;
   OID new_oid;
+
+  if (new_oid_p == NULL)
+    {
+      new_oid_p = &new_oid;
+    }
 
   assert (class_oid != NULL && !OID_ISNULL (class_oid));
 
@@ -5752,7 +5758,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	{
 	  /* in mvcc update heap and then indexes */
 	  if (heap_perform_update
-	      (thread_p, hfid, class_oid, oid, recdes, &new_oid,
+	      (thread_p, hfid, class_oid, oid, recdes, new_oid_p,
 	       &isold_object, local_scan_cache, mvcc_data) == NULL)
 	    {
 	      /*
@@ -5774,11 +5780,11 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	{
 	  if (scan == S_SUCCESS)
 	    {
-	      if (mvcc_Enabled && !OID_ISNULL (&new_oid))
+	      if (mvcc_Enabled && !OID_ISNULL (new_oid_p))
 		{
 		  error_code =
 		    locator_update_index (thread_p, recdes, oldrecdes,
-					  att_id, n_att_id, &new_oid,
+					  att_id, n_att_id, new_oid_p,
 					  class_oid, NULL, false, op_type,
 					  local_scan_cache, true, true,
 					  repl_info);
@@ -6380,11 +6386,11 @@ locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 
 	  error_code =
 	    locator_update_force (thread_p, &obj->hfid, &obj->class_oid,
-				  &obj->oid, NULL, false, NULL, &recdes,
-				  has_index, NULL, 0, MULTI_ROW_UPDATE,
-				  &scan_cache, &force_count, false,
-				  repl_info, DB_NOT_PARTITIONED_CLASS, NULL,
-				  NULL);
+				  &obj->oid, &obj->updated_oid, NULL, false,
+				  NULL, &recdes, has_index, NULL, 0,
+				  MULTI_ROW_UPDATE, &scan_cache, &force_count,
+				  false, repl_info, DB_NOT_PARTITIONED_CLASS,
+				  NULL, NULL);
 	  if (error_code != NO_ERROR)
 	    {
 	      /*
@@ -6637,9 +6643,10 @@ xlocator_force (THREAD_ENTRY * thread_p, LC_COPYAREA * force_area,
 	  pruning_type = locator_area_op_to_pruning_type (obj->operation);
 	  error_code =
 	    locator_update_force (thread_p, &obj->hfid, &obj->class_oid,
-				  &obj->oid, NULL, false, NULL, &recdes,
-				  has_index, NULL, 0, SINGLE_ROW_UPDATE,
-				  force_scancache, &force_count, false,
+				  &obj->oid, &obj->updated_oid, NULL, false,
+				  NULL, &recdes, has_index, NULL, 0,
+				  SINGLE_ROW_UPDATE, force_scancache,
+				  &force_count, false,
 				  REPL_INFO_TYPE_STMT_NORMAL, pruning_type,
 				  NULL, NULL);
 
@@ -7045,7 +7052,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 	   */
 	  error_code =
 	    locator_update_force (thread_p, &class_hfid, &class_oid, oid,
-				  search_btid,
+				  NULL, search_btid,
 				  search_btid_duplicate_key_locked,
 				  old_recdes, &new_recdes, true, att_id,
 				  n_att_id, op_type, scan_cache, force_count,
@@ -8980,7 +8987,7 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
   do
     {
       /* search index */
-      oid_cnt = btree_range_search (thread_p, btid, true, S_SELECT,
+      oid_cnt = btree_range_search (thread_p, btid, S_SELECT,
 				    LOCKHINT_NONE,
 				    &bt_scan, &key_val_range,
 				    1, class_oid,
@@ -9388,7 +9395,7 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
   do
     {
       /* search index */
-      oid_cnt = btree_range_search (thread_p, btid, true, S_SELECT,
+      oid_cnt = btree_range_search (thread_p, btid, S_SELECT,
 				    LOCKHINT_NONE, &bt_scan, &key_val_range,
 				    0, (OID *) NULL, isid.oid_list.oidp,
 				    ISCAN_OID_BUFFER_SIZE,

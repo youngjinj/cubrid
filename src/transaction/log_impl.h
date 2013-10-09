@@ -776,14 +776,20 @@ struct log_tdes
   int tran_index;		/* Index onto transaction table          */
   TRANID trid;			/* Transaction identifier                */
   MVCCID mvcc_id;		/* MVCC ID - increase with each transaction
-				   that modified data
+				 * that modified data
 				 */
+  /* transaction_lowest_active_mvccid - the lowest active mvcc id when we
+   * start the current transaction
+   */
+  MVCCID transaction_lowest_active_mvccid;
 
-  /* the lowest active mvcc id computed for the most recent snapshot of
-   * current transaction. This field help to know faster whether an mvcc id is
-   * active or not. Thus, mvccid older than this field are not active anymore
+  /* recent_snapshot_lowest_active_mvccid - the lowest active mvcc id computed
+   * for the most recent snapshot of current transaction. This field help to
+   * know faster whether an mvcc id is active or not. Thus, mvccid older than
+   * this field are not active anymore
    */
   MVCCID recent_snapshot_lowest_active_mvccid;
+
   int isloose_end;
   TRAN_STATE state;		/* Transaction state (e.g., Active,
 				   aborted)

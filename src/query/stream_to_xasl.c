@@ -2440,7 +2440,7 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
 
   ptr = or_unpack_int (ptr, &xasl->cat_fetched);
 
-  ptr = or_unpack_int (ptr, &xasl->composite_locking);
+  ptr = or_unpack_int (ptr, (int *) &xasl->scan_op_type);
 
   ptr = or_unpack_int (ptr, &xasl->upd_del_class_cnt);
 

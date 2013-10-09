@@ -6471,7 +6471,7 @@ get_select_list_to_update (PARSER_CONTEXT * parser, PT_NODE * from,
 	pt_to_upd_del_query (parser, column_names, column_values, from,
 			     class_specs, where, using_index, order_by,
 			     orderby_for, 0 /* not server update */ ,
-			     PT_COMPOSITE_LOCKING_UPDATE)) != NULL))
+			     S_UPDATE)) != NULL))
     {
       err = pt_copy_upddel_hints_to_select (parser, update_stmt, statement);
       if (err != NO_ERROR)
@@ -8729,7 +8729,7 @@ do_prepare_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 				 statement->info.update.using_index,
 				 statement->info.update.order_by,
 				 statement->info.update.orderby_for, 0,
-				 PT_COMPOSITE_LOCKING_UPDATE);
+				 S_UPDATE);
 
 	  /* restore tree structure; pt_get_assignment_lists() */
 	  pt_restore_assignment_links (statement->info.update.assignment,
@@ -9116,7 +9116,7 @@ select_delete_list (PARSER_CONTEXT * parser, QFILE_LIST_ID ** result_p,
 			 delete_stmt->info.delete_.search_cond,
 			 delete_stmt->info.delete_.using_index, NULL, NULL,
 			 0 /* not server update */ ,
-			 PT_COMPOSITE_LOCKING_DELETE);
+			 S_DELETE);
   if (statement != NULL)
     {
       ret = pt_copy_upddel_hints_to_select (parser, delete_stmt, statement);
@@ -9990,8 +9990,7 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
 						  delete_info->class_specs,
 						  delete_info->search_cond,
 						  delete_info->using_index,
-						  NULL, NULL, 0,
-						  PT_COMPOSITE_LOCKING_DELETE);
+						  NULL, NULL, 0, S_DELETE);
 	  err = pt_copy_upddel_hints_to_select (parser, statement,
 						select_statement);
 	  if (err != NO_ERROR)

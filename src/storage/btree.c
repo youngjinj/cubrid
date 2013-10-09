@@ -729,7 +729,6 @@ static BTREE_SEARCH btree_key_find_visible_row (THREAD_ENTRY * thread_p,
 						int *visible_row_position);
 static BTREE_SEARCH xbtree_non_mvcc_find_unique (THREAD_ENTRY * thread_p,
 						 BTID * btid,
-						 int readonly_purpose,
 						 SCAN_OPERATION_TYPE
 						 scan_op_type,
 						 DB_VALUE * key,
@@ -737,7 +736,6 @@ static BTREE_SEARCH xbtree_non_mvcc_find_unique (THREAD_ENTRY * thread_p,
 						 bool is_all_class_srch);
 static BTREE_SEARCH xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p,
 					     BTID * btid,
-					     int readonly_purpose,
 					     SCAN_OPERATION_TYPE scan_op_type,
 					     DB_VALUE * key, OID * class_oid,
 					     OID * oid,
@@ -3297,7 +3295,7 @@ xbtree_delete_with_unique_key (THREAD_ENTRY * thread_p, BTID * btid,
   OID unique_oid;
   HEAP_SCANCACHE scan_cache;
 
-  if (xbtree_find_unique (thread_p, btid, false, S_DELETE, key_value,
+  if (xbtree_find_unique (thread_p, btid, S_DELETE, key_value,
 			  class_oid, &unique_oid, true) == BTREE_KEY_FOUND)
     {
       HFID hfid;
@@ -3351,7 +3349,6 @@ xbtree_delete_with_unique_key (THREAD_ENTRY * thread_p, BTID * btid,
  * xbtree_non_mvcc_find_unique () - non mvcc find unique key in btree
  *   return:
  *   btid(in):
- *   readonly_purpose(in):
  *   key(in):
  *   class_oid(in):
  *   oid(in):
@@ -3362,7 +3359,6 @@ xbtree_delete_with_unique_key (THREAD_ENTRY * thread_p, BTID * btid,
  */
 static BTREE_SEARCH
 xbtree_non_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
-			     int readonly_purpose,
 			     SCAN_OPERATION_TYPE scan_op_type,
 			     DB_VALUE * key, OID * class_oid,
 			     OID * oid, bool is_all_class_srch)
@@ -3395,7 +3391,7 @@ xbtree_non_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
 
       /* TODO: unique with prefix length */
       oid_cnt =
-	btree_keyval_search (thread_p, btid, readonly_purpose, scan_op_type,
+	btree_keyval_search (thread_p, btid, scan_op_type,
 			     &btree_scan, &key_val_range, class_oid,
 			     index_scan_id.oid_list.oidp,
 			     2 * sizeof (OID), NULL, &index_scan_id,
@@ -3515,7 +3511,7 @@ xbtree_find_multi_uniques (THREAD_ENTRY * thread_p, OID * class_oid,
 	    }
 	}
 
-      result = xbtree_find_unique (thread_p, &pruned_btid, 0, op_type,
+      result = xbtree_find_unique (thread_p, &pruned_btid, op_type,
 				   &values[i], &pruned_class_oid,
 				   &found_oids[idx], is_global_index);
       if (result == BTREE_KEY_FOUND)
@@ -3632,7 +3628,7 @@ btree_find_foreign_key (THREAD_ENTRY * thread_p, BTID * btid,
   key_val_range.num_index_term = 0;
 
   oid_cnt =
-    btree_keyval_search (thread_p, btid, true, S_SELECT, &btree_scan,
+    btree_keyval_search (thread_p, btid, S_SELECT, &btree_scan,
 			 &key_val_range, class_oid,
 			 index_scan_id.oid_list.oidp, 2 * sizeof (OID), NULL,
 			 &index_scan_id, false);
@@ -5544,7 +5540,7 @@ btree_keyoid_checkscan_check (THREAD_ENTRY * thread_p,
   do
     {
       /* search index */
-      btscan->oid_cnt = btree_keyval_search (thread_p, &btscan->btid, true,
+      btscan->oid_cnt = btree_keyval_search (thread_p, &btscan->btid,
 					     S_SELECT,
 					     &btscan->btree_scan,
 					     &key_val_range,
@@ -9765,7 +9761,7 @@ btree_root_merge_and_advance (THREAD_ENTRY * thread_p, BTID_INT * btid_int,
 	}
 
       /* Unfix root page */
-      pgbuf_unfix (thread_p, *p_page_ptr);
+      pgbuf_unfix_and_init (thread_p, *p_page_ptr);
 
       if (c < 0)
 	{
@@ -9934,6 +9930,7 @@ btree_node_merge_and_advance (THREAD_ENTRY * thread_p, BTID_INT * btid_int,
 		      goto end;
 		    }
 		  *p_page_ptr = q_page;
+		  q_page = NULL;
 		  VPID_COPY (p_vpid, &q_vpid);
 		}
 	      else		/* VPID_EQ (&child_vpid, &right_vpid) */
@@ -9948,6 +9945,7 @@ btree_node_merge_and_advance (THREAD_ENTRY * thread_p, BTID_INT * btid_int,
 		      goto end;
 		    }
 		  *p_page_ptr = right_page;
+		  right_page = NULL;
 		  VPID_COPY (p_vpid, &right_vpid);
 		}
 	    }
@@ -10054,6 +10052,7 @@ btree_node_merge_and_advance (THREAD_ENTRY * thread_p, BTID_INT * btid_int,
 		      goto end;
 		    }
 		  *p_page_ptr = q_page;
+		  q_page = NULL;
 		  VPID_COPY (p_vpid, &q_vpid);
 		}
 	      else		/* VPID_EQ (&child_vpid, left_vpid) */
@@ -10068,6 +10067,7 @@ btree_node_merge_and_advance (THREAD_ENTRY * thread_p, BTID_INT * btid_int,
 		      goto end;
 		    }
 		  *p_page_ptr = left_page;
+		  left_page = NULL;
 		  VPID_COPY (p_vpid, &left_vpid);
 		}
 	    }
@@ -10164,7 +10164,10 @@ btree_merge_with_key (THREAD_ENTRY * thread_p, BTID_INT * btid_int,
       return ER_FAILED;
     }
 
-  pgbuf_unfix (thread_p, page_p);
+  if (page_p != NULL)
+    {
+      pgbuf_unfix (thread_p, page_p);
+    }
   return NO_ERROR;
 }
 
@@ -15046,7 +15049,6 @@ error:
  *           remember the old search position.
  *   btid(in):
  *      btid: B+tree index identifier
- *   readonly_purpose(in):
  *   scan_op_type(in):
  *   BTS(in/out): Btree range search scan structure
  *   key(in): Key to be searched for its object identifier set
@@ -15070,7 +15072,6 @@ error:
  */
 int
 btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
-		     int readonly_purpose,
 		     SCAN_OPERATION_TYPE scan_op_type,
 		     BTREE_SCAN * BTS,
 		     KEY_VAL_RANGE * key_val_range, OID * class_oid,
@@ -15095,10 +15096,10 @@ btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
   /* check if the search is based on all classes contained in the class hierarchy. */
   num_classes = (is_all_class_srch) ? 0 : 1;
 
-  rc = btree_range_search (thread_p, btid, readonly_purpose, scan_op_type,
-			   LOCKHINT_NONE, BTS, key_val_range,
-			   num_classes, class_oid, oids_ptr, oids_size,
-			   filter, isidp, true, false, NULL, NULL, false);
+  rc = btree_range_search (thread_p, btid, scan_op_type, LOCKHINT_NONE, BTS,
+			   key_val_range, num_classes, class_oid, oids_ptr,
+			   oids_size, filter, isidp, true, false, NULL, NULL,
+			   false);
 
   lock_unlock_scan (thread_p, class_oid, scanid_bit, END_SCAN);
 
@@ -21508,7 +21509,6 @@ error:
  * btree_range_search () -
  *   return: OIDs count
  *   btid(in): B+-tree identifier
- *   readonly_purpose(in):
  *   lock_hint(in):
  *   bts(in): B+-tree scan structure
  *   key1(in): the lower bound key value of key range
@@ -21528,9 +21528,8 @@ error:
  */
 int
 btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
-		    int readonly_purpose, SCAN_OPERATION_TYPE scan_op_type,
-		    int lock_hint, BTREE_SCAN * bts,
-		    KEY_VAL_RANGE * key_val_range,
+		    SCAN_OPERATION_TYPE scan_op_type, int lock_hint,
+		    BTREE_SCAN * bts, KEY_VAL_RANGE * key_val_range,
 		    int num_classes, OID * class_oids_ptr, OID * oids_ptr,
 		    int oids_size, FILTER_INFO * filter,
 		    INDX_SCAN_ID * index_scan_id_p,
@@ -21542,6 +21541,7 @@ btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
   OID temp_oid;
   int which_action;
   BTREE_RANGE_SEARCH_HELPER btrs_helper;
+  int readonly_purpose = false;
 
 #if defined(SERVER_MODE)
   int tran_index;
@@ -21606,6 +21606,16 @@ btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BTREE_INVALID_RANGE,
 		  0);
 	  return -1;
+	}
+
+      if (mvcc_Enabled)
+	{
+	  /* do not acquire any lock during btree scan */
+	  readonly_purpose = true;
+	}
+      else
+	{
+	  readonly_purpose = (int) READONLY_SCAN (scan_op_type);
 	}
 
       /* initialize the bts */
@@ -25141,7 +25151,7 @@ error:
 }
 
 /*
- * btree_key_find_first_visible_row () - mvcc find first visibile row
+ * btree_key_find_first_visible_row () - mvcc find first visible row
  *   return: whether the visible row has been found
  *   btid(in): B+tree index identifier
  *   key_recdes(in): Key record descriptor
@@ -25162,12 +25172,14 @@ btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
   SCAN_CODE scan_code;
   MVCC_SNAPSHOT mvcc_snapshot_dirty;
   RECDES temp_recdes;
-  int oid_pos;
+  int oid_pos, oid_size_in_buffer;
   BTREE_SEARCH result = BTREE_KEY_NOTFOUND;
   bool ignore_record = false;
 
   assert (btid_int != NULL && key_recdes != NULL && key_recdes->data != NULL
 	  && visible_row_position && oid != NULL && class_oid != NULL);
+  assert (BTREE_IS_UNIQUE (btid_int));
+  oid_size_in_buffer = 2 * OR_OID_SIZE;	  /* OID + class OID */
 
   OID_SET_NULL (oid);
   OID_SET_NULL (class_oid);
@@ -25213,7 +25225,7 @@ btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
 
   oids_cnt =
     btree_leaf_get_num_oids (key_recdes, offset, BTREE_LEAF_NODE,
-			     OR_OID_SIZE);
+			     oid_size_in_buffer);
   rec_oid_ptr = key_recdes->data + offset;
   for (oid_pos = *visible_row_position; oid_pos < oids_cnt; oid_pos++)
     {
@@ -25262,7 +25274,7 @@ btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
 	    }
 	}
 
-      rec_oid_ptr += (2 * OR_OID_SIZE);
+      rec_oid_ptr += oid_size_in_buffer;
     }
 
   if (oid_pos < oids_cnt)
@@ -25435,7 +25447,6 @@ error:
  * xbtree_mvcc_find_unique () - mvcc find unique key in btree
  *   return: search result
  *   btid(in): B+tree index identifier
- *   readonly_purpose(in): true, if read only purpose
  *   scan_op_type(in): scan operation type
  *   key(in): key to find
  *   class_oid(in): class oid
@@ -25448,7 +25459,6 @@ error:
  */
 static BTREE_SEARCH
 xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
-			 int readonly_purpose,
 			 SCAN_OPERATION_TYPE scan_op_type, DB_VALUE * key,
 			 OID * class_oid, OID * oid, bool is_all_class_srch)
 {
@@ -25492,9 +25502,9 @@ xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
       do
 	{
 	  oid_cnt =
-	    btree_keyval_search (thread_p, btid, readonly_purpose,
-				 scan_op_type, &btree_scan, &key_val_range,
-				 class_oid, oid_ptr, ISCAN_OID_BUFFER_SIZE,
+	    btree_keyval_search (thread_p, btid, scan_op_type, &btree_scan,
+				 &key_val_range, class_oid, oid_ptr,
+				 ISCAN_OID_BUFFER_SIZE,
 				 NULL, &index_scan_id, is_all_class_srch);
 	  oid_ptr = index_scan_id.oid_list.oidp;
 	  if (DB_VALUE_DOMAIN_TYPE (key) == DB_TYPE_MIDXKEY &&
@@ -25547,7 +25557,6 @@ xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
  * xbtree_find_unique () - find unique key in btree
  *   return:
  *   btid(in): B+tree index identifier
- *   readonly_purpose(in): true, if read only purpose
  *   scan_op_type(in): scan operation type
  *   key(in): key to find
  *   class_oid(in): class oid
@@ -25559,21 +25568,19 @@ xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
  */
 BTREE_SEARCH
 xbtree_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
-		    int readonly_purpose, SCAN_OPERATION_TYPE scan_op_type,
+		    SCAN_OPERATION_TYPE scan_op_type,
 		    DB_VALUE * key, OID * class_oid, OID * oid,
 		    bool is_all_class_srch)
 {
   if (mvcc_Enabled)
     {
-      return xbtree_mvcc_find_unique (thread_p, btid, readonly_purpose,
-				      scan_op_type, key, class_oid, oid,
-				      is_all_class_srch);
+      return xbtree_mvcc_find_unique (thread_p, btid, scan_op_type, key,
+				      class_oid, oid, is_all_class_srch);
     }
   else
     {
-      return xbtree_non_mvcc_find_unique (thread_p, btid, readonly_purpose,
-					  scan_op_type, key, class_oid, oid,
-					  is_all_class_srch);
+      return xbtree_non_mvcc_find_unique (thread_p, btid, scan_op_type, key,
+					  class_oid, oid, is_all_class_srch);
     }
 }
 

@@ -22,6 +22,7 @@
  *
  */
 #include "vacuum.h"
+#include "thread.h"
 #include "mvcc.h"
 #include "page_buffer.h"
 #include "heap_file.h"
@@ -123,6 +124,9 @@ RUNNING_VACUUM *running_vacuum_pool;
 /* Mutex to synchronize access in the list of currently running vacuums */
 pthread_mutex_t running_vacuums_mutex;
 
+/* Blocks/allows a new vacuum to start */
+bool is_vacuum_allowed = false;
+
 static void db_private_free_class_oid_list (THREAD_ENTRY * thread_p,
 					    CLASS_OID_LIST * cls_oid_list);
 
@@ -140,8 +144,11 @@ static int vacuum_stats_table_initialize (THREAD_ENTRY * thread_p);
 static void vacuum_stats_table_finalize (THREAD_ENTRY * thread_p);
 static void vacuum_running_vacuums_initialize (THREAD_ENTRY * thread_p);
 static void vacuum_running_vacuums_finalize (THREAD_ENTRY * thread_p);
+static void vacuum_running_vacuums_abort_all (THREAD_ENTRY * thread_p);
 static RUNNING_VACUUM *vacuum_running_vacuums_allocate_entry (THREAD_ENTRY *
-							      thread_p);
+							      thread_p,
+							      OID *
+							      class_oid);
 static void vacuum_running_vacuum_free_entry (THREAD_ENTRY * thread_p,
 					      RUNNING_VACUUM * entry);
 static bool vacuum_is_class_vacuumed (THREAD_ENTRY * thread_p,
@@ -205,7 +212,6 @@ vacuum_class (THREAD_ENTRY * thread_p, OID * class_oid,
   VPID vpid, next_vpid;
   PAGE_PTR page_p = NULL;
   HFID hfid;
-  int error;
   VACUUM_STATISTICS *vacuum_stats_entry = NULL;
   VACUUM_PAGE_DATA vacuum_page_data;
   RUNNING_VACUUM *running_vacuum_entry = NULL;
@@ -220,26 +226,29 @@ vacuum_class (THREAD_ENTRY * thread_p, OID * class_oid,
 
   /* Check if vacuum already runs on current class */
   pthread_mutex_lock (&running_vacuums_mutex);
+  if (!is_vacuum_allowed)
+    {
+      /* Database is shutting down */
+      return NO_ERROR;
+    }
   if (vacuum_is_class_vacuumed (thread_p, class_oid))
     {
       /* TODO: add new error message */
+      pthread_mutex_unlock (&running_vacuums_mutex);
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
       return ER_GENERIC_ERROR;
     }
 
   /* Create a new entry for current running vacuum */
-  running_vacuum_entry = vacuum_running_vacuums_allocate_entry (thread_p);
-  pthread_mutex_lock (&running_vacuum_entry->mutex);
-  /* Save class OID */
-  COPY_OID (&running_vacuum_entry->class_oid, class_oid);
+  running_vacuum_entry =
+    vacuum_running_vacuums_allocate_entry (thread_p, class_oid);
   pthread_mutex_unlock (&running_vacuums_mutex);
-  pthread_mutex_unlock (&running_vacuum_entry->mutex);
 
   /* Get heap file identifier for this class */
-  error = heap_get_hfid_from_class_oid (thread_p, class_oid, &hfid);
-  if (error != NO_ERROR)
+  error_code = heap_get_hfid_from_class_oid (thread_p, class_oid, &hfid);
+  if (error_code != NO_ERROR)
     {
-      return error;
+      goto end;
     }
 
   /* Get class representation - information about indexes is required */
@@ -297,6 +306,7 @@ vacuum_class (THREAD_ENTRY * thread_p, OID * class_oid,
 	{
 	  /* TODO: Implement an interrupt/resume system */
 	}
+      pthread_mutex_unlock (&running_vacuum_entry->mutex);
 
       /* Get an IX_LOCK on class so no one can alter the class while the page
        * is vacuumed.
@@ -306,12 +316,10 @@ vacuum_class (THREAD_ENTRY * thread_p, OID * class_oid,
 		     LK_UNCOND_LOCK);
       if (lock_result != LK_GRANTED)
 	{
-	  error = er_errid ();
-	  pthread_mutex_unlock (&running_vacuum_entry->mutex);
+	  error_code = er_errid ();
 	  goto end;
 	}
       has_lock_on_class = true;
-      pthread_mutex_unlock (&running_vacuum_entry->mutex);
 
       /* TODO: check page visibility */
 
@@ -393,7 +401,7 @@ vacuum_class (THREAD_ENTRY * thread_p, OID * class_oid,
 		     LK_UNCOND_LOCK);
       if (lock_result != LK_GRANTED)
 	{
-	  error_code = ER_FAILED;
+	  error_code = er_errid ();
 	  goto end;
 	}
       has_lock_on_class = true;
@@ -432,6 +440,11 @@ end:
 
   /* Clean vacuum data */
   mvcc_finalize_vacuum_data (thread_p, &vacuum_page_data);
+
+  /* Free running vacuum entry */
+  pthread_mutex_lock (&running_vacuums_mutex);
+  vacuum_running_vacuum_free_entry (thread_p, running_vacuum_entry);
+  pthread_mutex_unlock (&running_vacuums_mutex);
 
   return error_code;
 }
@@ -633,6 +646,7 @@ auto_vacuum_start (void)
 {
   THREAD_ENTRY *thread_p = thread_get_thread_entry_info ();
   CLASS_OID_LIST *cls_oid_list = NULL, *entry = NULL;
+  MVCCID lowest_active_mvccid;
 
   if (csect_enter_as_reader (thread_p, CSECT_VACUUM_STATS, INF_WAIT)
       != NO_ERROR)
@@ -649,8 +663,8 @@ auto_vacuum_start (void)
   /* Run vacuum on each class in cls_oid_list */
   for (entry = cls_oid_list; entry != NULL; entry = entry->next)
     {
-      (void) vacuum_class (thread_p, &entry->class_oid,
-			   logtb_get_lowest_active_mvccid (thread_p));
+      lowest_active_mvccid = logtb_get_lowest_active_mvccid (thread_p);
+      (void) vacuum_class (thread_p, &entry->class_oid, lowest_active_mvccid);
     }
 
   /* Free cls_oid_list */
@@ -1112,6 +1126,7 @@ vacuum_running_vacuums_initialize (THREAD_ENTRY * thread_p)
 {
   current_running_vacuums = NULL;
   running_vacuum_pool = NULL;
+  is_vacuum_allowed = true;
   pthread_mutex_init (&running_vacuums_mutex, NULL);
 }
 
@@ -1126,21 +1141,66 @@ vacuum_running_vacuums_finalize (THREAD_ENTRY * thread_p)
 {
   RUNNING_VACUUM *entry = NULL, *save_next = NULL;
 
-  for (entry = current_running_vacuums; entry != NULL; entry = save_next)
-    {
-      save_next = entry->next;
-      free_and_init (entry);
-    }
-  current_running_vacuums = NULL;
+  pthread_mutex_lock (&running_vacuums_mutex);
+
+  /* Block any newly starting vacuums */
+  is_vacuum_allowed = false;
+
+  /* Abort running vacuums */
+  vacuum_running_vacuums_abort_all (thread_p);
+  assert (current_running_vacuums == NULL);
 
   for (entry = running_vacuum_pool; entry != NULL; entry = save_next)
     {
       save_next = entry->next;
+      pthread_mutex_destroy (&entry->mutex);
       free_and_init (entry);
     }
   running_vacuum_pool = NULL;
 
+  pthread_mutex_unlock (&running_vacuums_mutex);
   pthread_mutex_destroy (&running_vacuums_mutex);
+}
+
+/*
+ * vacuum_running_vacuums_abort_all () - Notify all running vacuums to abort
+ *					 and wait until they are all aborted.
+ *
+ * return	 : Void.
+ * thread_p (in) : Thread entry.
+ */
+static void
+vacuum_running_vacuums_abort_all (THREAD_ENTRY * thread_p)
+{
+#if defined (SERVER_MODE)
+  RUNNING_VACUUM *entry = NULL;
+
+  /* Lock mutex to access current_running_vacuums */
+  pthread_mutex_lock (&running_vacuums_mutex);
+  for (entry = current_running_vacuums; entry != NULL; entry = entry->next)
+    {
+      /* Lock mutex on running vacuum entry */
+      pthread_mutex_lock (&entry->mutex);
+      /* Notify to abort */
+      entry->abort = true;
+      /* Unlock mutex on running vacuum entry */
+      pthread_mutex_unlock (&entry->mutex);
+    }
+
+  /* Now wait for all running vacuums to abort. When all are aborted,
+   * current_running_vacuums should be NULL.
+   */
+  while (current_running_vacuums != NULL)
+    {
+      /* There are still running vacuums */
+      pthread_mutex_unlock (&running_vacuums_mutex);
+      thread_sleep (50);
+      pthread_mutex_lock (&running_vacuums_mutex);
+    }
+
+  /* All vacuums have been aborted */
+  pthread_mutex_unlock (&running_vacuums_mutex);
+#endif /* SERVER_MODE */
 }
 
 /*
@@ -1153,7 +1213,8 @@ vacuum_running_vacuums_finalize (THREAD_ENTRY * thread_p)
  * NOTE: First will try to find a free entry in the running vacuum pool.
  */
 static RUNNING_VACUUM *
-vacuum_running_vacuums_allocate_entry (THREAD_ENTRY * thread_p)
+vacuum_running_vacuums_allocate_entry (THREAD_ENTRY * thread_p,
+				       OID * class_oid)
 {
   RUNNING_VACUUM *new_entry = NULL;
 
@@ -1165,31 +1226,68 @@ vacuum_running_vacuums_allocate_entry (THREAD_ENTRY * thread_p)
   else
     {
       new_entry = (RUNNING_VACUUM *) malloc (sizeof (RUNNING_VACUUM));
+      /* This entry will be used for the first time, must initialize mutex */
+      pthread_mutex_init (&new_entry->mutex, NULL);
     }
 
-  OID_SET_NULL (&new_entry->class_oid);
+  /* Initialize entry */
+  COPY_OID (&new_entry->class_oid, class_oid);
   new_entry->interrupt = false;
   new_entry->abort = false;
-  pthread_mutex_init (&new_entry->mutex, NULL);
-  new_entry->next = NULL;
+
+  /* Link entry to current running vacuums */
+  new_entry->next = current_running_vacuums;
+  current_running_vacuums = new_entry;
 
   return new_entry;
 }
 
 /*
  * vacuum_running_vacuum_free_entry () - Frees a running vacuum entry when
- *					 a vacuum is finished.
+ *					 a vacuum is finished. The entry is
+ *					 removed from current_running_vacuums
+ *					 and added to running_vacuum_pool.
  *
  * return	 : Void.
  * thread_p (in) : Thread entry.
  * entry (in)	 : Running vacuum entry.
+ *
+ * NOTE: Make sure lock on entry is not held when calling free.
  */
 static void
 vacuum_running_vacuum_free_entry (THREAD_ENTRY * thread_p,
 				  RUNNING_VACUUM * entry)
 {
+  RUNNING_VACUUM *prev_entry = NULL, *crt_entry = NULL, *save_next = NULL;
+
+  for (crt_entry = current_running_vacuums; crt_entry != NULL;
+       crt_entry = crt_entry->next)
+    {
+      if (crt_entry != NULL)
+	{
+	  break;
+	}
+      prev_entry = crt_entry;
+    }
+  if (crt_entry == NULL)
+    {
+      assert (false);
+      return;
+    }
+
+  pthread_mutex_lock (&entry->mutex);
+  if (prev_entry == NULL)
+    {
+      current_running_vacuums = entry->next;
+    }
+  else
+    {
+      prev_entry->next = entry->next;
+    }
   entry->next = running_vacuum_pool;
   running_vacuum_pool = entry;
+
+  pthread_mutex_unlock (&entry->mutex);
 }
 
 /*

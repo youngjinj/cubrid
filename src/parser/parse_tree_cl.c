@@ -8829,6 +8829,7 @@ pt_init_difference (PT_NODE * p)
   p->info.query.qcache_hint = NULL;
   p->info.query.q.union_.select_list = 0;
   p->info.query.is_order_dependent = false;
+  p->info.query.scan_op_type = S_SELECT;
   return p;
 }
 
@@ -12883,6 +12884,7 @@ pt_init_intersection (PT_NODE * p)
   p->info.query.qcache_hint = NULL;
   p->info.query.q.union_.select_list = 0;
   p->info.query.is_order_dependent = false;
+  p->info.query.scan_op_type = S_SELECT;
   return p;
 }
 
@@ -14098,6 +14100,7 @@ pt_init_select (PT_NODE * p)
   p->info.query.upd_del_class_cnt = 0;
   p->info.query.mvcc_reev_extra_cls_cnt = 0;
   p->info.query.is_order_dependent = false;
+  p->info.query.scan_op_type = S_SELECT;
   return p;
 }
 
@@ -15281,6 +15284,7 @@ pt_init_union_stmt (PT_NODE * p)
   p->info.query.qcache_hint = NULL;
   p->info.query.q.union_.select_list = 0;
   p->info.query.is_order_dependent = false;
+  p->info.query.scan_op_type = S_SELECT;
   return p;
 }
 

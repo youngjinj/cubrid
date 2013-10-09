@@ -287,7 +287,6 @@ extern BTID *xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid,
 				int func_col_id, int func_attr_index_start);
 extern int xbtree_delete_index (THREAD_ENTRY * thread_p, BTID * btid);
 extern BTREE_SEARCH xbtree_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
-					int readonly_purpose,
 					SCAN_OPERATION_TYPE scan_op_type,
 					DB_VALUE * key,
 					OID * class_oid, OID * oid,

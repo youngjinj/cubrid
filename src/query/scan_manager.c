@@ -187,7 +187,8 @@ static int scan_regu_key_to_index_key (THREAD_ENTRY * thread_p,
 static int scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 				  DB_BIGINT * key_limit_upper,
 				  DB_BIGINT * key_limit_lower);
-static void scan_init_scan_id (SCAN_ID * scan_id, int readonly_scan,
+static void scan_init_scan_id (SCAN_ID * scan_id,
+			       bool mvcc_select_lock_needed,
 			       SCAN_OPERATION_TYPE scan_op_type, int fixed,
 			       int grouped, QPROC_SINGLE_FETCH single_fetch,
 			       DB_VALUE * join_dbval, VAL_LIST * val_list,
@@ -2406,7 +2407,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
       key_vals[0].range = GE_LE;
       n = btree_range_search (thread_p,
 			      &indx_infop->indx_id.i.btid,
-			      s_id->readonly_scan,
 			      s_id->scan_op_type,
 			      iscan_id->lock_hint,
 			      BTS,
@@ -2500,7 +2500,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
       key_vals[0].range = range;
       n = btree_range_search (thread_p,
 			      &indx_infop->indx_id.i.btid,
-			      s_id->readonly_scan,
 			      s_id->scan_op_type,
 			      iscan_id->lock_hint,
 			      BTS,
@@ -2572,7 +2571,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 
 	  n = btree_range_search (thread_p,
 				  &indx_infop->indx_id.i.btid,
-				  s_id->readonly_scan,
 				  s_id->scan_op_type,
 				  iscan_id->lock_hint,
 				  BTS,
@@ -2707,7 +2705,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	  key_vals[iscan_id->curr_keyno].range = range;
 	  n = btree_range_search (thread_p,
 				  &indx_infop->indx_id.i.btid,
-				  s_id->readonly_scan,
 				  s_id->scan_op_type,
 				  iscan_id->lock_hint,
 				  BTS,
@@ -2821,7 +2818,7 @@ exit_on_error:
  * scan_init_scan_id () -
  *   return:
  *   scan_id(out): Scan identifier
- *   readonly_scan(in):
+ *   mvcc_select_lock_needed(in):
  *   scan_op_type(in): scan operation type
  *   fixed(in):
  *   grouped(in):
@@ -2833,7 +2830,7 @@ exit_on_error:
  * Note: If you feel the need
  */
 static void
-scan_init_scan_id (SCAN_ID * scan_id, int readonly_scan,
+scan_init_scan_id (SCAN_ID * scan_id, bool mvcc_select_lock_needed,
 		   SCAN_OPERATION_TYPE scan_op_type, int fixed,
 		   int grouped, QPROC_SINGLE_FETCH single_fetch,
 		   DB_VALUE * join_dbval, VAL_LIST * val_list, VAL_DESCR * vd)
@@ -2842,7 +2839,7 @@ scan_init_scan_id (SCAN_ID * scan_id, int readonly_scan,
   scan_id->position = S_BEFORE;
   scan_id->direction = S_FORWARD;
 
-  scan_id->readonly_scan = readonly_scan;
+  scan_id->mvcc_select_lock_needed = mvcc_select_lock_needed;
   scan_id->scan_op_type = scan_op_type;
   scan_id->fixed = fixed;
 
@@ -2870,7 +2867,7 @@ scan_init_scan_id (SCAN_ID * scan_id, int readonly_scan,
  * scan_open_heap_scan () -
  *   return: NO_ERROR
  *   scan_id(out): Scan identifier
- *   readonly_scan(in):
+ *   mvcc_select_lock_needed(in):
  *   scan_op_type(in): scan operation type
  *   fixed(in):
  *   lock_hint(in):
@@ -2898,7 +2895,7 @@ scan_init_scan_id (SCAN_ID * scan_id, int readonly_scan,
 int
 scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 		     /* fields of SCAN_ID */
-		     int readonly_scan,
+		     bool mvcc_select_lock_needed,
 		     SCAN_OPERATION_TYPE scan_op_type,
 		     int fixed,
 		     int lock_hint,
@@ -2929,8 +2926,8 @@ scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_id->type = scan_type;
 
   /* initialize SCAN_ID structure */
-  scan_init_scan_id (scan_id, readonly_scan, scan_op_type, fixed, grouped,
-		     single_fetch, join_dbval, val_list, vd);
+  scan_init_scan_id (scan_id, mvcc_select_lock_needed, scan_op_type, fixed,
+		     grouped, single_fetch, join_dbval, val_list, vd);
 
   /* initialize HEAP_SCAN_ID structure */
   hsidp = &scan_id->s.hsid;
@@ -3071,8 +3068,8 @@ scan_open_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_id->type = S_CLASS_ATTR_SCAN;
 
   /* initialize SCAN_ID structure */
-  /* readonly_scan = true, fixed = true */
-  scan_init_scan_id (scan_id, true, S_SELECT, true, grouped, single_fetch,
+  /* mvcc_select_lock_needed = false, fixed = true */
+  scan_init_scan_id (scan_id, false, S_SELECT, true, grouped, single_fetch,
 		     join_dbval, val_list, vd);
 
   /* initialize HEAP_SCAN_ID structure */
@@ -3110,7 +3107,7 @@ scan_open_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
  * scan_open_index_scan () -
  *   return: NO_ERROR, or ER_code
  *   scan_id(out): Scan identifier
- *   readonly_scan(in):
+ *   mvcc_select_lock_needed(in):
  *   fixed(in):
  *   lock_hint(in):
  *   grouped(in):
@@ -3147,7 +3144,7 @@ scan_open_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 int
 scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 		      /* fields of SCAN_ID */
-		      int readonly_scan,
+		      bool mvcc_select_lock_needed,
 		      SCAN_OPERATION_TYPE scan_op_type,
 		      int fixed,
 		      int lock_hint,
@@ -3198,8 +3195,8 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_id->type = S_INDX_SCAN;
 
   /* initialize SCAN_ID structure */
-  scan_init_scan_id (scan_id, readonly_scan, scan_op_type, fixed, grouped,
-		     single_fetch, join_dbval, val_list, vd);
+  scan_init_scan_id (scan_id, mvcc_select_lock_needed, scan_op_type, fixed,
+		     grouped, single_fetch, join_dbval, val_list, vd);
 
   /* read Root page header info */
   btid = &indx_info->indx_id.i.btid;
@@ -3869,8 +3866,8 @@ scan_open_list_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_id->type = S_LIST_SCAN;
 
   /* initialize SCAN_ID structure */
-  /* readonly_scan = true, fixed = true */
-  scan_init_scan_id (scan_id, true, S_SELECT, true, grouped, single_fetch,
+  /* mvcc_select_lock_needed = false, fixed = true */
+  scan_init_scan_id (scan_id, false, S_SELECT, true, grouped, single_fetch,
 		     join_dbval, val_list, vd);
 
   /* initialize LLIST_SCAN_ID structure */
@@ -3918,8 +3915,8 @@ scan_open_values_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_id->type = S_VALUES_SCAN;
 
   /* initialize SCAN_ID structure */
-  /* readonly_scan = true, fixed = true */
-  scan_init_scan_id (scan_id, true, S_SELECT, true, grouped, single_fetch,
+  /* mvcc_select_lock_needed = false, fixed = true */
+  scan_init_scan_id (scan_id, false, S_SELECT, true, grouped, single_fetch,
 		     join_dbval, val_list, vd);
 
   rvsidp = &scan_id->s.rvsid;
@@ -3960,8 +3957,8 @@ scan_open_set_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_id->type = S_SET_SCAN;
 
   /* initialize SCAN_ID structure */
-  /* readonly_scan = true, fixed = true */
-  scan_init_scan_id (scan_id, true, S_SELECT, true, grouped, single_fetch,
+  /* mvcc_select_lock_needed = false, fixed = true */
+  scan_init_scan_id (scan_id, false, S_SELECT, true, grouped, single_fetch,
 		     join_dbval, val_list, vd);
 
   /* initialize SET_SCAN_ID structure */
@@ -4006,8 +4003,8 @@ scan_open_method_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   scan_id->type = S_METHOD_SCAN;
 
   /* initialize SCAN_ID structure */
-  /* readonly_scan = true, fixed = true */
-  scan_init_scan_id (scan_id, true, S_SELECT, true, grouped, single_fetch,
+  /* mvcc_select_lock_needed = false, fixed = true */
+  scan_init_scan_id (scan_id, false, S_SELECT, true, grouped, single_fetch,
 		     join_dbval, val_list, vd);
 
   return method_open_scan (thread_p, &scan_id->s.vaid.scan_buf, list_id,
@@ -5054,7 +5051,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   OID current_oid, *p_current_oid = NULL;
 
   hsidp = &scan_id->s.hsid;
-  if (mvcc_Enabled == true && scan_id->readonly_scan == false)
+  if (mvcc_Enabled == true && scan_id->mvcc_select_lock_needed)
     {
       p_current_oid = &current_oid;
     }
@@ -5076,6 +5073,29 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  /* grouped, fixed scan */
 	  sp_scan = heap_scanrange_next (thread_p, &hsidp->curr_oid,
 					 &recdes, &hsidp->scan_range, PEEK);
+
+	  if (mvcc_Enabled == true && scan_id->mvcc_select_lock_needed
+	      && sp_scan == S_SUCCESS)
+	    {
+	      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+
+	      mvcc_reev_data.data_filter = &data_filter;
+	      mvcc_reev_data.key_filter = NULL;
+	      mvcc_reev_data.range_filter = NULL;
+	      mvcc_reev_data.qualification = &scan_id->qualification;
+	      COPY_OID (&current_oid, &hsidp->curr_oid);
+	      sp_scan =
+		heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
+					  &current_oid, &recdes,
+					  &hsidp->scan_range.scan_cache,
+					  scan_id->fixed, &mvcc_reev_data);
+	      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
+		  || (sp_scan == S_SUCCESS
+		      && mvcc_reev_data.filter_result == V_FALSE))
+		{
+		  continue;
+		}
+	    }
 	}
       else
 	{
@@ -5094,7 +5114,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 			       &hsidp->curr_oid, &recdes,
 			       &hsidp->scan_cache, scan_id->fixed);
 
-		  if (mvcc_Enabled == true && scan_id->readonly_scan == false
+		  if (mvcc_Enabled == true && scan_id->mvcc_select_lock_needed
 		      && sp_scan == S_SUCCESS)
 		    {
 		      MVCC_SELECT_REEV_DATA mvcc_reev_data;
@@ -5110,8 +5130,9 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 						  &hsidp->scan_cache,
 						  scan_id->fixed,
 						  &mvcc_reev_data);
-		      if (sp_scan == S_SUCCESS
-			  && mvcc_reev_data.filter_result == V_FALSE)
+		      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
+			  || (sp_scan == S_SUCCESS
+			      && mvcc_reev_data.filter_result == V_FALSE))
 			{
 			  continue;
 			}
@@ -5138,7 +5159,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 			       &hsidp->curr_oid, &recdes,
 			       &hsidp->scan_cache, scan_id->fixed);
 
-		  if (mvcc_Enabled == true && scan_id->readonly_scan == false
+		  if (mvcc_Enabled == true && scan_id->mvcc_select_lock_needed
 		      && sp_scan == S_SUCCESS)
 		    {
 		      MVCC_SELECT_REEV_DATA mvcc_reev_data;
@@ -5154,8 +5175,9 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 						  &hsidp->scan_cache,
 						  scan_id->fixed,
 						  &mvcc_reev_data);
-		      if (sp_scan == S_SUCCESS
-			  && mvcc_reev_data.filter_result == V_FALSE)
+		      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
+			  || (sp_scan == S_SUCCESS
+			      && mvcc_reev_data.filter_result == V_FALSE))
 			{
 			  continue;
 			}
@@ -5182,7 +5204,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
       /* evaluate the predicates to see if the object qualifies */
       scan_id->stats.read_rows++;
-      if (mvcc_Enabled == false || scan_id->readonly_scan == true)
+      if (mvcc_Enabled == false || !scan_id->mvcc_select_lock_needed)
 	{
 	  ev_res = eval_data_filter (thread_p, p_current_oid, &recdes,
 				     &data_filter);
@@ -5745,7 +5767,7 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      gettimeofday (&lookup_start, NULL);
 	    }
 
-	  if (mvcc_Enabled == false || scan_id->readonly_scan == true)
+	  if (mvcc_Enabled == false || !scan_id->mvcc_select_lock_needed)
 	    {
 	      sp_scan =
 		heap_get (thread_p, isidp->curr_oidp, &recdes,
@@ -5908,7 +5930,7 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
 	  if (sp_scan == S_SNAPSHOT_NOT_SATISFIED)
 	    {
-	      ev_res = false;
+	      ev_res = V_FALSE;
 
 	      if (SCAN_IS_INDEX_COVERED (isidp) && mvcc_Enabled == true)
 		{
@@ -5927,7 +5949,7 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      continue;		/* not qualified, continue to the next tuple */
 	    }
 
-	  if (mvcc_Enabled == false || scan_id->readonly_scan == true)
+	  if (mvcc_Enabled == false || !scan_id->mvcc_select_lock_needed)
 	    {
 	      /* evaluate the predicates to see if the object qualifies */
 	      ev_res =
@@ -5955,6 +5977,14 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		    update_logical_result (thread_p, ev_res,
 					   (int *) &scan_id->qualification,
 					   NULL, NULL, NULL);
+		}
+	      if (ev_res == V_ERROR)
+		{
+		  return S_ERROR;
+		}
+	      if (ev_res != V_TRUE)
+		{
+		  continue;
 		}
 	    }
 

@@ -694,7 +694,7 @@ catcls_find_oid_by_class_name (THREAD_ENTRY * thread_p, const char *name_p,
     }
 
   error =
-    xbtree_find_unique (thread_p, &catcls_Btid, true, S_SELECT, &key_val,
+    xbtree_find_unique (thread_p, &catcls_Btid, S_SELECT, &key_val,
 			&ct_Class.classoid, oid_p, false);
   if (error == BTREE_ERROR_OCCURRED)
     {
@@ -4315,6 +4315,13 @@ catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 
   if (catcls_find_oid_by_class_name (thread_p, name_p, &oid) != NO_ERROR)
     {
+      goto error;
+    }
+
+  if (OID_ISNULL (&oid))
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME,
+	      1, name_p);
       goto error;
     }
 

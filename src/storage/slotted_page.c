@@ -4988,6 +4988,10 @@ spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p, VPID page_vpid,
 
   SPAGE_VERIFY_HEADER (page_header_p);
 
+  /* Initialize clean data */
+  nslots = page_header_p->num_slots;
+  mvcc_init_vacuum_data (thread_p, vacuum_data_p, nslots);
+
   if ((page_header_p->flags & SPAGE_HEADER_FLAG_ALL_VISIBLE) != 0)
     {
       /* TODO: Some cleaning may be still required. A simplified vacuum
@@ -4999,11 +5003,7 @@ spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p, VPID page_vpid,
       return NO_ERROR;
     }
 
-  nslots = page_header_p->num_slots;
   reuse_oid = (page_header_p->anchor_type != ANCHORED_DONT_REUSE_SLOTS);
-
-  /* Initialize clean data */
-  mvcc_init_vacuum_data (thread_p, vacuum_data_p, nslots);
 
   if (vacuum_page_only)
     {
@@ -5121,7 +5121,8 @@ spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
   /* Set all visible flag */
   if (vacuum_data_p->all_visible)
     {
-      page_header_p->flags |= SPAGE_HEADER_FLAG_ALL_VISIBLE;
+      /* TODO: Visibility is not implemented yet */
+      /*page_header_p->flags |= SPAGE_HEADER_FLAG_ALL_VISIBLE;*/
     }
 
   /* Compact page */

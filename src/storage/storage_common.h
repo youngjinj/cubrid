@@ -532,6 +532,8 @@ typedef enum
   S_UPDATE
 } SCAN_OPERATION_TYPE;
 
+#define COMPOSITE_LOCK(scan_op_type)	(scan_op_type != S_SELECT)
+#define READONLY_SCAN(scan_op_type)	(scan_op_type == S_SELECT)
 
 typedef enum
 {

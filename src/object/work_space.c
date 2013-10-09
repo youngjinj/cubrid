@@ -259,8 +259,6 @@ ws_make_mop (OID * oid)
       op->object = NULL;
       op->class_link = NULL;
       op->dirty_link = NULL;
-      op->updated_obj = NULL;
-      op->mvcc_next_version = NULL;
       op->dirty = 0;
       op->deleted = 0;
       op->pinned = 0;
@@ -655,6 +653,20 @@ ws_check_hash_link (int slot)
   return NO_ERROR;
 }
 
+/*
+ * ws_insert_mop_on_hash_link () - Insert a new mop in hash table at the given
+ *				   slot. The list of mop's is kept ordered
+ *				   by OID's.
+ *
+ * return    : Void.
+ * mop (in)  : New mop.
+ * slot (in) : Hash slot.
+ *
+ * NOTE: There are cases when real objects may have duplicate OID's,
+ *	 especially when MVCC is enabled. Duplicates cannot be removed
+ *	 because they may be still referenced. We can only discard the cached
+ *	 object and remove the mop from class.
+ */
 static void
 ws_insert_mop_on_hash_link (MOP mop, int slot)
 {
@@ -692,10 +704,43 @@ ws_insert_mop_on_hash_link (MOP mop, int slot)
     {
       c = oid_compare (WS_OID (mop), WS_OID (p));
 
-      if (c <= 0)
+      if (c == 0)
 	{
-	  /* Unfortunately, we have to navigate the list when c == 0 */
-	  /* See the above comment */
+	  if (WS_ISVID (mop))
+	    {
+	      break;
+	    }
+
+	  /* For real objects, must first discard the duplicate object and 
+	   * remove it from class_mop.
+	   */
+
+	  /* Decache object */
+	  /* TODO: With MVCC enabled, this case may be faced quite often.
+	   *	   Investigate a better solution (maybe old mop can be removed
+	   *	   completely).
+	   */
+	  ws_decache (p);
+
+	  if (p->class_mop != NULL)
+	    {
+	      if (p->class_mop->class_link != NULL)
+		{
+		  remove_class_object (p->class_mop, p);
+		}
+	      else
+		{
+		  p->class_mop = NULL;
+		  p->class_link = NULL;
+		}
+	    }
+	  assert (p->class_mop == NULL && p->class_link == NULL);
+
+	  break;
+	}
+
+      if (c < 0)
+	{
 	  break;
 	}
     }
@@ -718,6 +763,20 @@ ws_insert_mop_on_hash_link (MOP mop, int slot)
     }
 }
 
+/*
+ * ws_insert_mop_on_hash_link_with_position () - Insert a mop in hash table
+ *						 at the given slot, after prev
+ *						 mop.
+ *
+ * return    : Void.
+ * mop (in)  : New mop.
+ * slot (in) : Hash slot.
+ * prev (in) : Mop in hash list after which the new_mop should be added.
+ *
+ * NOTE: Real objects should have only one mop instance. This function does
+ *	 not check for duplicates. Therefore, make sure to use it only if
+ *	 OID conflict is not possible, or if duplicate was removed beforehand.
+ */
 static void
 ws_insert_mop_on_hash_link_with_position (MOP mop, int slot, MOP prev)
 {
@@ -744,74 +803,46 @@ ws_insert_mop_on_hash_link_with_position (MOP mop, int slot, MOP prev)
 }
 
 /*
- * ws_mvcc_get_last_version () - Used with MVCC, it will go through the update
- *				 chain until the last version of the object.
- *
- * return   : Updated MOP.
- * mop (in) : Current MOP.
- */
-MOP
-ws_mvcc_get_last_version (MOP mop)
-{
-  MOP mvcc_last_version;
-  if (mop->mvcc_next_version != NULL)
-    {
-      /* Has a next version, recursive call until the last version is found */
-      mvcc_last_version = ws_mvcc_get_last_version (mop->mvcc_next_version);
-      if (mvcc_last_version->deleted)
-	{
-	  /* This is deleted too */
-	  mop->deleted = 1;
-	}
-      /* Redo link to the last version of the object */
-      mop->mvcc_next_version = mvcc_last_version;
-      /* Return last version */
-      return mvcc_last_version;
-    }
-  /* No next version, return current object */
-  return mop;
-}
-
-/*
  * ws_updated_mop () - It is a replacement for ws_mop in the context of MVCC.
  *		       After an object is fetched from server, it may have
  *		       been updated, and the updated data may be found on
- *		       a different OID. If this is the case, return/create
- *		       MOP for the updated version, discard old MOP object and
- *		       save link to the new mop.
+ *		       a different OID. If this is true, make sure that the
+ *		       old mop is updated with the new OID and class.
  *
  * return	  : MOP for updated version of the object.
  * oid (in)	  : Initial object identifier.
- * new_oid (in)	  : Updated object identifier (null OID if it not the case)
+ * new_oid (in)	  : Updated object identifier.
  * class_mop (in) : Class MOP.
  */
 MOP
 ws_updated_mop (OID * oid, OID * new_oid, MOP class_mop)
 {
   MOP mop = NULL;
-  MOP mvcc_next_version = NULL;
+  int error_code = NO_ERROR;
 
-  if (!OID_ISNULL (new_oid))
+  if (!OID_ISNULL (new_oid) && !OID_EQ (oid, new_oid))
     {
       /* OID has changed */
-
-      /* Find/create mop for the new version */
-      mvcc_next_version = ws_mop (new_oid, class_mop);
-
-      if (!OID_ISNULL (oid))
+      mop = ws_mop_if_exists (oid);
+      if (mop == NULL)
 	{
-	  /* Find MOP for old version */
-	  mop = ws_mop_if_exists (oid);
-	  if (mop != NULL)
-	    {
-	      /* Found mop, discard it */
-	      ws_decache (mop);
-	      /* Create a link to the new object version */
-	      mop->mvcc_next_version = mvcc_next_version;
-	    }
+	  /* Create/find mop for new OID */
+	  return ws_mop (new_oid, class_mop);
 	}
-      /* Return MOP for new version */
-      return mvcc_next_version;
+      else
+	{
+	  /* Decache old object */
+	  ws_decache (mop);
+
+	  /* Change OID for mop */
+	  error_code =
+	    ws_update_oid_and_class (mop, new_oid, WS_OID (class_mop));
+	  if (error_code != NO_ERROR)
+	    {
+	      return NULL;
+	    }
+	  return mop;
+	}
     }
   else
     {
@@ -974,10 +1005,6 @@ ws_mop (OID * oid, MOP class_mop)
 			}
 		      mop->decached = 0;
 		    }
-		  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-		    {
-		      mop = ws_mvcc_get_last_version (mop);
-		    }
 		  return mop;
 		}
 	      else if (c < 0)
@@ -1081,8 +1108,8 @@ ws_vmop (MOP class_mop, int flags, DB_VALUE * keys)
     case DB_TYPE_OID:
       /*
        * a non-virtual object mop
-       * This will occur when reading the oid keys feild of a vobject
-       * if it was read thru some interface that does NOT swizzle.
+       * This will occur when reading the oid keys field of a virtual object
+       * if it was read through some interface that does NOT swizzle.
        * oid's to objects.
        */
       mop = ws_mop (&keys->data.oid, class_mop);
@@ -1093,7 +1120,7 @@ ws_vmop (MOP class_mop, int flags, DB_VALUE * keys)
       db_make_object (keys, mop);
       break;
     default:
-      /* otherwise fall thru to generic keys case */
+      /* otherwise fall through to generic keys case */
       break;
     }
 
@@ -1370,7 +1397,7 @@ ws_new_mop (OID * oid, MOP class_mop)
 #endif /* ENABLE_UNUSED_FUNCTION */
 
 /*
- * ws_perm_oid_and_class - change the OID of a MOP and recache the class mop
+ * ws_update_oid_and_class - change the OID of a MOP and recache the class mop
  *			   if it has been changed
  *    return: void
  *    mop(in/out)   : MOP whose OID needs to be changed
@@ -1378,36 +1405,31 @@ ws_new_mop (OID * oid, MOP class_mop)
  *    new_class_oid : new class OID
  *
  * Note:
- *    This is only called by the transaction locator as OIDs need to be
- *    flushed and must be converted to permanent OIDs before they are given
- *    to the server.
- *
- *    This assumes that the new permanent OID is guaranteed to be
- *    unique and we can avoid searching the hash table collision list
- *    for existing MOPs with this OID.  This makes the conversion faster.
+ *    This is called in three cases:
+ *    1. Newly created objects are flushed and are given a permanent OID.
+ *    2. An object changes partition after update.
+ *    3. MVCC is enabled and object changes OID after update.
  *
  *    If the object belongs to a partitioned class, it will
  *    have a different class oid here (i.e. the partition in
  *    which it was placed). We have to fetch the partition mop
- *    and recache it here
+ *    and recache it here.
  */
 int
-ws_perm_oid_and_class (MOP mop, OID * new_oid, OID * new_class_oid)
+ws_update_oid_and_class (MOP mop, OID * new_oid, OID * new_class_oid)
 {
   MOP class_mop = NULL;
   bool relink = false;
   class_mop = ws_class_mop (mop);
-  if (!OID_ISTEMP ((OID *) WS_OID (mop)))
-    {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_WS_MOP_NOT_TEMPORARY, 0);
-      return ER_FAILED;
-    }
 
-  if (!OID_EQ (WS_OID (class_mop), new_class_oid))
+  if (class_mop == NULL || !OID_EQ (WS_OID (class_mop), new_class_oid))
     {
       /* we also need to disconnect this instance from class_mop and add it
          to new_class_oid */
-      remove_class_object (class_mop, mop);
+      if (class_mop != NULL)
+	{
+	  remove_class_object (class_mop, mop);
+	}
       relink = true;
       class_mop = ws_mop (new_class_oid, NULL);
       if (class_mop == NULL)
@@ -1430,7 +1452,7 @@ ws_perm_oid_and_class (MOP mop, OID * new_oid, OID * new_class_oid)
 	}
     }
   mop->class_mop = class_mop;
-  ws_perm_oid (mop, new_oid);
+  ws_update_oid (mop, new_oid);
   if (relink)
     {
       add_class_object (class_mop, mop);
@@ -1439,133 +1461,24 @@ ws_perm_oid_and_class (MOP mop, OID * new_oid, OID * new_class_oid)
 }
 
 /*
- * ws_update_oid_and_class - update OID and class OID references for an
- *			     updated object
- *    return: error code or NO_ERROR
- *    mop(in/out)   : MOP whose OID needs to be updated
- *    newoid(in)    : new OID
- *    new_class_oid : new class OID
+ * ws_update_oid - change the OID of a MOP. Also update position in
+ *		   hash table.
  *
- * Note:
- *    This is only called by the transaction locator as OIDs need to be
- *    flushed and must be converted to permanent OIDs
- *
- *    This assumes that the new permanent OID is guaranteed to be
- *    unique and we can avoid searching the hash table collision list
- *    for existing MOPs with this OID.  This makes the conversion faster.
- *
- *    If the object belongs to a partitioned class, it might
- *    have different OID and class OID here (i.e. the partition to which it
- *    belong has changed). If the partition has changed, we will mark the
- *    original mop as deleted (because it was deleted from the original
- *    partition) and create a new MOP with the new information.
- *    This  means that the target partition class will also be fetched and
- *    cached here which is inefficient but preservers workspace coherency.
- */
-extern int
-ws_update_oid_and_class (MOP mop, OID * new_oid, OID * new_class_oid)
-{
-  MOP old_class = NULL, new_class = NULL, new_mop = NULL;
-  bool relink = false;
-  int error = NO_ERROR;
-
-  if (OID_ISTEMP ((OID *) WS_OID (mop)))
-    {
-      /* this only makes sense in an UPDATE operation and we should never
-       * work with temporary OIDs here. */
-      assert (false);
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-      return ER_FAILED;
-    }
-
-  /* get a reference to the old class */
-  old_class = ws_class_mop (mop);
-  if (OID_EQ (new_class_oid, WS_OID (old_class)))
-    {
-      /* class hasn't changed, nothing to be done here */
-      return NO_ERROR;
-    }
-
-  /* get a reference to the new class */
-  new_class = ws_mop (new_class_oid, sm_Root_class_mop);
-  if (new_class == NULL)
-    {
-      error = er_errid ();
-      if (error == NO_ERROR)
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return ER_FAILED;
-	}
-      return error;
-    }
-
-  /* Mark the old object as deleted. We don't actually remove the object from
-   * the dirty link here. It will be removed by the next call to
-   * ws_map_dirty_internal */
-  WS_SET_DELETED (mop);
-  WS_RESET_DIRTY (mop);
-  /* add the new object to the class it has been placed into */
-  if (new_class->object == NULL)
-    {
-      /* the new_class has not been fetched yet, do it here */
-      SM_CLASS *smclass = NULL;
-      int au_save;
-
-      /* Don't bother with authorization here. If the current user does not
-       * have access to this class, we should have known by now */
-      AU_DISABLE (au_save);
-      error = au_fetch_class (new_class, &smclass, AU_FETCH_READ, AU_SELECT);
-      AU_ENABLE (au_save);
-      if (error != NO_ERROR)
-	{
-	  return error;
-	}
-    }
-
-  /* create a new mop for the object */
-  new_mop = ws_mop (new_oid, new_class);
-  if (new_mop == NULL)
-    {
-      error = er_errid ();
-      if (error == NO_ERROR)
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return ER_FAILED;
-	}
-      return error;
-    }
-  /* this object is not dirty, we just received it from the server */
-  new_mop->dirty = false;
-  mop->updated_obj = new_mop;
-  return NO_ERROR;
-}
-
-/*
- * ws_perm_oid - change the OID of a MOP
  *    return: void
  *    mop(in/out): MOP whose OID needs to be changed
  *    newoid(in): new OID
  *
  * Note:
- *    This is only called by the transaction locator as OIDs need to be
- *    flushed and must be converted to permanent OIDs before they are given
- *    to the server.
- *
- *    This assumes that the new permanent OID is guaranteed to be
- *    unique and we can avoid searching the hash table collision list
- *    for existing MOPs with this OID.  This makes the conversion faster.
+ *    This is called in three cases:
+ *    1. Newly created objects are flushed and are given a permanent OID.
+ *    2. An object changes partition after update.
+ *    3. MVCC is enabled and object changes OID after update.
  */
 void
-ws_perm_oid (MOP mop, OID * newoid)
+ws_update_oid (MOP mop, OID * newoid)
 {
   MOP mops, prev;
   unsigned int slot;
-
-  if (!OID_ISTEMP ((OID *) WS_OID (mop)))
-    {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_WS_MOP_NOT_TEMPORARY, 0);
-      return;
-    }
 
   /* find current entry */
   slot = OID_PSEUDO_KEY (WS_OID (mop));
@@ -2623,8 +2536,8 @@ ws_map_class_dirty (MOP class_op, MAPFUNC function, void *args,
 int
 ws_map_class (MOP class_op, MAPFUNC function, void *args)
 {
-  MOP op;
-  DB_OBJLIST *l;
+  MOP op = NULL, save_class_link = NULL;
+  DB_OBJLIST *l = NULL;
   int status = WS_MAP_CONTINUE;
   int num_ws_continue_on_error = 0;
 
@@ -2651,8 +2564,9 @@ ws_map_class (MOP class_op, MAPFUNC function, void *args)
 	{
 	  for (op = class_op->class_link;
 	       op != Null_object && status == WS_MAP_CONTINUE;
-	       op = op->class_link)
+	       op = save_class_link)
 	    {
+	      save_class_link = op->class_link;
 	      /*
 	       * should we only call the function if the object has been
 	       * loaded ? what if it is deleted ?
@@ -3293,7 +3207,7 @@ ws_decache (MOP mop)
 			       (MOBJ) mop->object);
 	      if (mop->deleted)
 		{
-		  mop->class_mop = NULL;
+		  remove_class_object (mop->class_mop, mop);
 		}
 	      mop->object = NULL;
 	    }
@@ -3332,7 +3246,7 @@ void
 ws_decache_all_instances (MOP mop)
 {
   DB_OBJLIST *l;
-  MOP obj;
+  MOP obj = NULL, save_class_link = NULL;
 
   if (mop == sm_Root_class_mop)
     {
@@ -3347,8 +3261,9 @@ ws_decache_all_instances (MOP mop)
       if (mop->class_link != NULL)
 	{
 	  for (obj = mop->class_link; obj != Null_object;
-	       obj = obj->class_link)
+	       obj = save_class_link)
 	    {
+	      save_class_link = obj->class_link;
 	      ws_decache (obj);
 	    }
 	}
@@ -3671,11 +3586,6 @@ ws_find (MOP mop, MOBJ * obj)
   *obj = NULL;
   if (mop && !mop->deleted)
     {
-      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
-	  && mop->mvcc_next_version != NULL)
-	{
-	  return ws_find (mop->mvcc_next_version, obj);
-	}
       *obj = (MOBJ) mop->object;
     }
   else
@@ -3973,14 +3883,14 @@ ws_abort_mops (bool only_unpinned)
 void
 ws_decache_allxlockmops_but_norealclasses (void)
 {
-  MOP mop;
+  MOP mop = NULL, save_hash_link = NULL;
   unsigned int slot;
 
   for (slot = 0; slot < ws_Mop_table_size; slot++)
     {
-      for (mop = ws_Mop_table[slot].head; mop != NULL; mop = mop->hash_link)
+      for (mop = ws_Mop_table[slot].head; mop != NULL; mop = save_hash_link)
 	{
-
+	  save_hash_link = mop->hash_link;
 	  if (mop->pinned == 0
 	      && (ws_get_lock (mop) == X_LOCK || WS_ISDIRTY (mop))
 	      && (mop->class_mop != sm_Root_class_mop || mop->object == NULL

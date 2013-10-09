@@ -311,7 +311,7 @@ struct scan_id_struct
   SCAN_STATUS status;		/* Scan Status */
   SCAN_POSITION position;	/* Scan Position */
   SCAN_DIRECTION direction;	/* Forward/Backward Direction */
-  int readonly_scan;
+  bool mvcc_select_lock_needed;	/* true if lock at scanning needed in mvcc */
   SCAN_OPERATION_TYPE scan_op_type;	/* SELECT, DELETE, UPDATE */
 
   int fixed;			/* if true, pages containing scan
@@ -356,7 +356,7 @@ struct scan_id_struct
 
 extern int scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				/* fields of SCAN_ID */
-				int readonly_scan,
+				bool mvcc_select_lock_needed,
 				SCAN_OPERATION_TYPE scan_op_type,
 				int fixed,
 				int lock_hint,
@@ -411,7 +411,7 @@ extern int scan_open_class_attr_scan (THREAD_ENTRY * thread_p,
 				      HEAP_CACHE_ATTRINFO * cache_rest);
 extern int scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				 /* fields of SCAN_ID */
-				 int readonly_scan,
+				 bool mvcc_select_lock_needed,
 				 SCAN_OPERATION_TYPE scan_op_type,
 				 int fixed,
 				 int lock_hint,

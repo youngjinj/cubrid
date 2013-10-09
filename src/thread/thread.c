@@ -1586,21 +1586,6 @@ thread_unlock_entry (THREAD_ENTRY * thread_p)
       return ER_CSS_PTHREAD_MUTEX_UNLOCK;
     }
 
-  r = pthread_cond_init (&thread_Auto_vacuum_thread.cond, NULL);
-  if (r != 0)
-    {
-      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-			   ER_CSS_PTHREAD_COND_INIT, 0);
-      return ER_CSS_PTHREAD_COND_INIT;
-    }
-  r = pthread_mutex_init (&thread_Auto_vacuum_thread.lock, NULL);
-  if (r != 0)
-    {
-      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-			   ER_CSS_PTHREAD_MUTEX_INIT, 0);
-      return ER_CSS_PTHREAD_MUTEX_INIT;
-    }
-
   return r;
 }
 
@@ -2714,6 +2699,22 @@ css_initialize_sync_object (void)
 			   ER_CSS_PTHREAD_MUTEX_INIT, 0);
       return ER_CSS_PTHREAD_MUTEX_INIT;
     }
+
+  r = pthread_cond_init (&thread_Auto_vacuum_thread.cond, NULL);
+  if (r != 0)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ER_CSS_PTHREAD_COND_INIT, 0);
+      return ER_CSS_PTHREAD_COND_INIT;
+    }
+  r = pthread_mutex_init (&thread_Auto_vacuum_thread.lock, NULL);
+  if (r != 0)
+    {
+      er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			   ER_CSS_PTHREAD_MUTEX_INIT, 0);
+      return ER_CSS_PTHREAD_MUTEX_INIT;
+    }
+
 
 #if !defined (WINDOWS)
 /* initialize cond and mutex of thread_check_ha_delay_info_thread */

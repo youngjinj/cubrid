@@ -289,7 +289,7 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
   OID forward_oid, current_oid, relocation_dest;
   MVCC_REC_HEADER mvcc_header;
   MVCC_SATISFIES_VACUUM_RESULT satisfies_vacuum;
-  bool is_dead = false, break_loop = false, is_on_vacuum_page = false;
+  bool is_dead = false, is_on_vacuum_page = false;
   int visited_status;
 
   PGSLOTID static_chain[DEFAULT_CHAIN_SIZE];
@@ -469,6 +469,13 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	      goto error;
 	    }
 	}
+      else if (rec_type == REC_NEWHOME)
+	{
+	  /* TODO: Temporarily ignore this case, need more investigation for
+	   *	   a proper fix.
+	   */
+	  break;
+	}
       else
 	{
 	  /* Must be a HOME/BIG_ONE record */
@@ -529,7 +536,7 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	      /* Record was deleted, the deleting transaction committed and
 	       * the old version is not visible to any active transactions.
 	       */
-	      if (OID_ISNULL (&mvcc_header.next_version))
+	      if (OID_ISNULL (&MVCC_GET_NEXT_VERSION (&mvcc_header)))
 		{
 		  /* This is last in chain */
 		  is_dead = true;
@@ -537,7 +544,8 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	      else
 		{
 		  /* Must advance in update chain */
-		  COPY_OID (&forward_oid, &mvcc_header.next_version);
+		  COPY_OID (&forward_oid,
+			    &MVCC_GET_NEXT_VERSION (&mvcc_header));
 		}
 	      if (rec_type == REC_BIGONE)
 		{

@@ -676,8 +676,8 @@ or_mvcc_set_header (RECDES * record, MVCC_REC_HEADER mvcc_rec_header)
   /* Create repid_and_flags bits */
   /* Add mvcc flags */
   repid_and_flags =
-    (mvcc_rec_header.
-     mvcc_flag & OR_MVCC_FLAG_MASK) << OR_MVCC_FLAG_SHIFT_BITS;
+    (mvcc_rec_header.mvcc_flag & OR_MVCC_FLAG_MASK)
+    << OR_MVCC_FLAG_SHIFT_BITS;
 
   /* Add repid */
   repid_and_flags += mvcc_rec_header.repid;

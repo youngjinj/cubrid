@@ -2637,11 +2637,8 @@ struct pt_select_info
 #define PT_SELECT_INFO_DUMMY		4	/* is dummy (i.e., 'SELECT * FROM x') ? */
 #define PT_SELECT_INFO_HAS_AGG		8	/* has any type of aggregation? */
 #define PT_SELECT_INFO_HAS_ANALYTIC	16	/* has analytic functions */
-#if 0
-/* disabled temporary in MVCC */
 #define PT_SELECT_INFO_MULTI_UPDATE_AGG	32	/* is query for multi-table update
 						 * using aggregate */
-#endif
 #define PT_SELECT_INFO_IDX_SCHEMA	64	/* is show index query */
 #define PT_SELECT_INFO_COLS_SCHEMA	128	/* is show columns query */
 #define PT_SELECT_FULL_INFO_COLS_SCHEMA	256	/* is show columns query */
@@ -2655,6 +2652,7 @@ struct pt_select_info
 							 * MERGE and UPDATE we sometimes
 							 * want to allow OIDs of partially
 							 * updatable views */
+#define PT_SELECT_INFO_MVCC_LOCK_NEEDED	    4096	/* lock returned rows */
 
 #define PT_SELECT_INFO_IS_FLAGED(s, f)  \
           ((s)->info.query.q.select.flag & (short) (f))
@@ -2671,7 +2669,7 @@ struct pt_query_info
   PT_MISC_TYPE is_subquery;	/* PT_IS_SUB_QUERY, PT_IS_UNION_QUERY, or 0 */
   char is_view_spec;		/* 0 - normal, 1 - view query spec */
   char oids_included;		/* DB_NO_OIDS/0 DB_ROW_OIDS/1 */
-  char composite_locking;	/* 0 - off, 1 - on delete, 2 - on update */
+  SCAN_OPERATION_TYPE scan_op_type;	/* scan operation type */
   int upd_del_class_cnt;	/* number of classes affected by update or
 				 * delete in the generated SELECT statement */
   int mvcc_reev_extra_cls_cnt;	/* number of extra OID - CLASS_OID pairs added
@@ -3488,13 +3486,6 @@ struct pt_assignments_helper
   bool is_rhs_const;		/* true if the right side is a constant */
   bool is_n_column;		/* true if the assignment is a multi-column
 				 * assignment */
-};
-
-typedef enum pt_composite_locking PT_COMPOSITE_LOCKING;
-enum pt_composite_locking
-{
-  PT_COMPOSITE_LOCKING_DELETE = 1,
-  PT_COMPOSITE_LOCKING_UPDATE
 };
 
 /* Collation coercibility levels associated with parse tree nodes */
