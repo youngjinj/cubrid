@@ -58,7 +58,7 @@
  * heap_delete, heap get with lock functions.
  */
 typedef struct heap_mvcc_delete_info HEAP_MVCC_DELETE_INFO;
-typedef struct heap_mvcc_delete_info
+struct heap_mvcc_delete_info
 {
   MVCCID row_delid;		/* row delete id */
   OID next_row_version;		/* next row version */
