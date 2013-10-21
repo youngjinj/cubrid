@@ -578,6 +578,11 @@ static int btree_get_record (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 			     int slot_id, RECDES * rec, int is_peeking);
 static bool btree_is_new_file (BTID_INT * btid_int);
 
+static int btree_insert_init_locks (THREAD_ENTRY * thread_p, bool is_active,
+				    OID * class_oid, BTID_INT * btid_int,
+				    LOCK * class_lock,
+				    int * next_key_lock_request,
+				    int * mvcc_lock_request);
 static int btree_insert_oid_with_new_key (THREAD_ENTRY * thread_p,
 					  BTID_INT * btid, PAGE_PTR leaf_page,
 					  DB_VALUE * key, OID * cls_oid,
@@ -704,11 +709,6 @@ btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
 				  BTID_INT * btid_int, RECDES * key_recdes,
 				  int offset, int *visible_row_position,
 				  OID * oid, OID * class_oid);
-static DB_VALUE *btree_mvcc_insert (THREAD_ENTRY * thread_p, BTID * btid,
-				    DB_VALUE * key, OID * cls_oid, OID * oid,
-				    int op_type,
-				    BTREE_UNIQUE_STATS * unique_stat_info,
-				    int *pkyn);
 static DB_VALUE *btree_insert (THREAD_ENTRY * thread_p, BTID * btid,
 			       DB_VALUE * key, OID * cls_oid, OID * oid,
 			       int op_type,
@@ -3309,7 +3309,7 @@ xbtree_delete_with_unique_key (THREAD_ENTRY * thread_p, BTID * btid,
 
       error = heap_scancache_start_modify (thread_p, &scan_cache, &hfid,
 					   class_oid, SINGLE_ROW_DELETE,
-					   NULL, false);
+					   NULL);
       if (error != NO_ERROR)
 	{
 	  return error;
@@ -10854,6 +10854,39 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added,
   btree_read_record (thread_p, btid, &rec, NULL, &leafrec_pnt,
 		     BTREE_LEAF_NODE, &dummy, &offset, PEEK_KEY_VALUE);
 
+#if !defined (NDEBUG)
+  if (mvcc_Enabled && BTREE_IS_UNIQUE (btid)
+      && !logtb_is_active (thread_p, logtb_find_current_tranid (thread_p)))
+    {
+      int visible_row_position = 0;
+      OID C_oid, C_class_oid;
+      BTREE_SEARCH result;
+
+      result =
+	btree_key_find_first_visible_row (thread_p, btid, &rec, offset,
+					  &visible_row_position, &C_oid,
+					  &C_class_oid);
+      switch (result)
+	{
+	case BTREE_KEY_FOUND:
+	  assert (false);
+	  break;
+
+	case BTREE_KEY_NOTFOUND:
+	  /* there is no active key */
+	  break;
+
+	case BTREE_ACTIVE_KEY_FOUND:
+	  /* the row is updated by concurrent transaction */
+	  assert (false);
+	  break;
+
+	case BTREE_ERROR_OCCURRED:
+	  assert (false);
+	  break;
+	}
+    }
+#endif
   if (BTREE_IS_UNIQUE (btid) && check_unique == true)
     {
       if (BTREE_NEED_UNIQUE_CHECK (thread_p, op_type)
@@ -12833,6 +12866,98 @@ end:
   return ret_val;
 }
 
+/*
+ * btree_insert_init_locks () - Initialize lock request for btree_insert.
+ *
+ * return : 
+ * THREAD_ENTRY * thread_p (in) :
+ * bool is_active (in) :
+ * OID * class_oid (in) :
+ * BTID_INT * btid_int (in) :
+ * int * class_lock (in) :
+ * bool * next_key_lock_request (in) :
+ * bool * mvcc_lock_request (in) :
+ */
+static int
+btree_insert_init_locks (THREAD_ENTRY * thread_p, bool is_active,
+			 OID * class_oid, BTID_INT * btid_int,
+			 LOCK * class_lock, int * next_key_lock_request,
+			 int * mvcc_lock_request)
+{
+  int tran_index;
+
+  assert (next_key_lock_request != NULL && mvcc_lock_request != NULL
+	  && class_lock != NULL && btid_int != NULL && class_oid != NULL);
+
+  if (!is_active)
+    {
+      *next_key_lock_request = false;
+      *mvcc_lock_request = false;
+      *class_lock = NULL_LOCK;
+      return NO_ERROR;
+    }
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  *class_lock =
+    lock_get_object_lock (class_oid, oid_Root_class_oid, tran_index);
+
+  /* Is active */
+  if (mvcc_Enabled)
+    {
+      *next_key_lock_request = false;
+      *mvcc_lock_request = false;
+
+      switch (*class_lock)
+	{
+	case X_LOCK:
+	case SIX_LOCK:
+	case IX_LOCK:
+	  if (BTREE_IS_UNIQUE (btid_int))
+	    {
+	      *mvcc_lock_request = true;
+	    }
+	  break;
+	case S_LOCK:
+	case IS_LOCK:
+	case NULL_LOCK:
+	default:
+	  return ER_FAILED;
+	}
+    }
+  else
+    {
+      *mvcc_lock_request = false;
+      *next_key_lock_request = false;
+
+      switch (*class_lock)
+	{
+	case X_LOCK:
+	case SIX_LOCK:
+	case IX_LOCK:
+	  *next_key_lock_request = true;
+	  break;
+	case S_LOCK:
+	case IS_LOCK:
+	case NULL_LOCK:
+	default:
+	  return ER_FAILED;
+	}
+
+      if (!BTREE_IS_UNIQUE (btid_int))
+	{
+	  if (*class_lock == X_LOCK)
+	    {
+	      *next_key_lock_request = false;
+	    }
+	  else
+	    {
+	      *next_key_lock_request = true;
+	    }
+	}
+    }
+
+  return NO_ERROR;
+}
 
 /*
  * btree_insert () -
@@ -12879,6 +13004,7 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
   LOCK class_lock = NULL_LOCK;
   int tran_index;
   int nextkey_lock_request;
+  int mvcc_lock_request;
   int offset = -1;
   bool dummy;
   int ret_val;
@@ -12910,6 +13036,8 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
   bool old_check_interrupt;
 #endif /* SERVER_MODE */
   int retry_btree_no_space = 0;
+  BTREE_SEARCH result;
+  int visible_row_position = 0;
 
 #if defined(SERVER_MODE)
   old_check_interrupt = thread_set_check_interrupt (thread_p, false);
@@ -13222,47 +13350,20 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
       OID_SET_NULL (&saved_N_class_oid);
       OID_SET_NULL (&saved_C_oid);
       OID_SET_NULL (&saved_C_class_oid);
-
-      /* find the lock that is currently acquired on the class */
-      tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      class_lock = lock_get_object_lock (&class_oid, oid_Root_class_oid,
-					 tran_index);
-
-      /* get nextkey_lock_request from the class lock mode */
-      switch (class_lock)
-	{
-	case X_LOCK:
-	case SIX_LOCK:
-	case IX_LOCK:
-	  nextkey_lock_request = true;
-	  break;
-	case S_LOCK:
-	case IS_LOCK:
-	case NULL_LOCK:
-	default:
-	  goto error;
-	}
-
-      if (!BTREE_IS_UNIQUE (&btid_int))
-	{
-	  if (class_lock == X_LOCK)
-	    {
-	      nextkey_lock_request = false;
-	    }
-	  else
-	    {
-	      nextkey_lock_request = true;
-	    }
-	}
     }
-  else
+
+  if (btree_insert_init_locks (thread_p, is_active, &class_oid, &btid_int,
+			       &class_lock, &nextkey_lock_request,
+			       &mvcc_lock_request) != NO_ERROR)
     {
-      /* total rollback, partial rollback, undo phase in recovery */
-      nextkey_lock_request = false;
+      goto error;
     }
 
   COPY_OID (&N_class_oid, &class_oid);
   COPY_OID (&C_class_oid, &class_oid);
+
+  /* Get transaction index */
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 
 start_point:
   if (next_lock_flag == true || curr_lock_flag == true
@@ -13653,7 +13754,7 @@ start_point:
   p_slot_id = NULL_SLOTID;
 
   /* find next OID for range locking */
-  if (nextkey_lock_request == false)
+  if (mvcc_lock_request == false && nextkey_lock_request == false)
     {
       goto key_insertion;
     }
@@ -13663,30 +13764,33 @@ start_point:
     {
       /* key has been found */
       key_found = true;
-      if (!BTREE_IS_UNIQUE (&btid_int))
+      if (!mvcc_Enabled)
 	{
-	  /* key already exists, skip next key locking in non-unique
-	     indexes */
-	  if (next_lock_flag == true)
+	  if (!BTREE_IS_UNIQUE (&btid_int))
 	    {
-	      lock_remove_object_lock (thread_p, &saved_N_oid,
-				       &saved_N_class_oid, NS_LOCK);
-	      next_lock_flag = false;
-	      OID_SET_NULL (&saved_N_oid);
-	      OID_SET_NULL (&saved_N_class_oid);
+	      /* key already exists, skip next key locking in non-unique
+		 indexes */
+	      if (next_lock_flag == true)
+		{
+		  lock_remove_object_lock (thread_p, &saved_N_oid,
+					   &saved_N_class_oid, NS_LOCK);
+		  next_lock_flag = false;
+		  OID_SET_NULL (&saved_N_oid);
+		  OID_SET_NULL (&saved_N_class_oid);
+		}
+	      /* no need to lock next key during this call */
+	      next_key_granted_mode = NULL_LOCK;
+	      goto curr_key_locking;
 	    }
-	  /* no need to lock next key during this call */
-	  next_key_granted_mode = NULL_LOCK;
-	  goto curr_key_locking;
-	}
-      if (p_slot_id == key_cnt)
-	{
-	  next_slot_id = 1;
-	  next_page_flag = true;
-	}
-      else
-	{
-	  next_slot_id = p_slot_id + 1;
+	  if (p_slot_id == key_cnt)
+	    {
+	      next_slot_id = 1;
+	      next_page_flag = true;
+	    }
+	  else
+	    {
+	      next_slot_id = p_slot_id + 1;
+	    }
 	}
     }
   else
@@ -13698,15 +13802,22 @@ start_point:
 	  goto error;
 	}
 
-      if (p_slot_id > key_cnt)
+      if (!mvcc_Enabled)
 	{
-	  next_slot_id = 1;
-	  next_page_flag = true;
+	  if (p_slot_id > key_cnt)
+	    {
+	      next_slot_id = 1;
+	      next_page_flag = true;
+	    }
+	  else
+	    {
+	      next_slot_id = p_slot_id;
+	    }
 	}
-      else
-	{
-	  next_slot_id = p_slot_id;
-	}
+    }
+  if (mvcc_Enabled)
+    {
+      goto curr_key_locking;
     }
 
   /* get the next OID */
@@ -13968,6 +14079,142 @@ start_point:
     }
 
 curr_key_locking:
+  assert (!mvcc_Enabled || BTREE_IS_UNIQUE (&btid_int));
+
+  if (mvcc_Enabled)
+    {
+      result = BTREE_KEY_NOTFOUND;
+      if (key_found == true)
+	{
+	  /* check whether the key is visible */
+	  if (spage_get_record (P, p_slot_id, &peek_rec, PEEK) != S_SUCCESS)
+	    {
+	      goto error;
+	    }
+	  btree_read_record (thread_p, &btid_int, &peek_rec, NULL, &leaf_pnt,
+			     BTREE_LEAF_NODE, &dummy, &offset, PEEK_KEY_VALUE);
+	  result =
+	    btree_key_find_first_visible_row (thread_p, &btid_int, &peek_rec,
+					      offset, &visible_row_position,
+					      &C_oid, &C_class_oid);
+	  switch (result)
+	    {
+	    case BTREE_KEY_FOUND:
+	      BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, key, &C_oid,
+						&C_class_oid, btid_int.sys_btid,
+						NULL);
+	      goto error;
+
+	    case BTREE_KEY_NOTFOUND:
+	      /* there is no active key, must lock the new oid */
+	      COPY_OID (&C_class_oid, &class_oid);
+	      COPY_OID (&C_oid, oid);
+	      break;
+
+	    case BTREE_ACTIVE_KEY_FOUND:
+	      /* the row is updated by concurrent transaction, need to lock C_oid */
+	      break;
+
+	    case BTREE_ERROR_OCCURRED:
+	      goto error;
+	    }
+	}
+      else
+	{
+	  /* must lock the new oid */
+	  COPY_OID (&C_class_oid, &class_oid);
+	  COPY_OID (&C_oid, oid);
+	}
+
+      if (BTREE_IS_UNIQUE (&btid_int))
+	{
+	  assert_release (!OID_ISNULL (&C_class_oid));
+
+	  if (OID_EQ (&C_class_oid, &class_oid) && class_lock == X_LOCK)
+	    {
+	      goto key_insertion;
+	    }
+	}
+
+      /* preserve in mvcc */
+      if (curr_lock_flag == true)
+	{
+	  assert (BTREE_IS_UNIQUE (&btid_int));
+	  if (OID_EQ (&saved_C_oid, &C_oid))
+	    {
+	      goto key_insertion;
+	    }
+
+	  lock_remove_object_lock (thread_p, &saved_C_oid, &saved_C_class_oid,
+				   X_LOCK);
+	  curr_lock_flag = false;
+	  OID_SET_NULL (&saved_C_oid);
+	  OID_SET_NULL (&saved_C_class_oid);
+	}
+
+      ret_val =
+	lock_object_with_btid (thread_p, &C_oid, &C_class_oid, btid,
+			       X_LOCK, LK_COND_LOCK);
+
+      if (ret_val == LK_GRANTED)
+	{
+	  curr_lock_flag = true;
+	}
+      else if (ret_val == LK_NOTGRANTED_DUE_TIMEOUT)
+	{
+	  temp_lsa = pgbuf_get_lsa (P);
+	  LSA_COPY (&saved_plsa, temp_lsa);
+	  pgbuf_unfix_and_init (thread_p, P);
+
+	  COPY_OID (&saved_C_oid, &C_oid);
+	  COPY_OID (&saved_C_class_oid, &C_class_oid);
+
+	  assert (P == NULL && Q == NULL && R == NULL);
+
+	  /* UNCONDITIONAL lock request */
+	  ret_val = lock_object_with_btid (thread_p, &C_oid, &C_class_oid,
+					   btid, X_LOCK, LK_UNCOND_LOCK);
+	  if (ret_val != LK_GRANTED)
+	    {
+	      goto error;
+	    }
+	  curr_lock_flag = true;
+
+	  P = pgbuf_fix_without_validation (thread_p, &P_vpid, OLD_PAGE,
+					    PGBUF_LATCH_WRITE,
+					    PGBUF_UNCONDITIONAL_LATCH);
+	  if (P == NULL)
+	    {
+	      goto error;
+	    }
+
+	  temp_lsa = pgbuf_get_lsa (P);
+	  if (!LSA_EQ (&saved_plsa, temp_lsa))
+	    {
+	      pgbuf_unfix_and_init (thread_p, P);
+
+	      assert (curr_lock_flag == true);
+	      visible_row_position = 0;
+	      goto start_point;
+	    }
+	}
+      else
+	{
+	  goto error;
+	}
+
+      if (result == BTREE_ACTIVE_KEY_FOUND)
+	{
+	  /* check whether the other transaction key insertion has been
+	   * committed/aborted
+	   */
+	  goto curr_key_locking;
+	}
+
+      /* Object is locked, may insert into key */
+      goto key_insertion;
+    }
+
   if (key_found == true)
     {
       if (spage_get_record (P, p_slot_id, &peek_rec, PEEK) != S_SUCCESS)
@@ -14244,7 +14491,8 @@ key_insertion:
 
   ret_val = btree_insert_into_leaf (thread_p, &key_added, &btid_int,
 				    P, key, &class_oid, oid, &P_vpid,
-				    op_type, key_found, p_slot_id, true);
+				    op_type, key_found, p_slot_id,
+				    !mvcc_Enabled);
 
   if (ret_val != NO_ERROR)
     {
@@ -14323,6 +14571,7 @@ key_insertion:
 
   if (next_lock_flag == true)
     {
+      assert (!mvcc_Enabled);
       lock_remove_object_lock (thread_p, &N_oid, &N_class_oid, NS_LOCK);
     }
 
@@ -14379,7 +14628,15 @@ error:
     }
   if (curr_lock_flag)
     {
-      lock_remove_object_lock (thread_p, &C_oid, &C_class_oid, current_lock);
+      if (mvcc_Enabled)
+	{
+	  lock_remove_object_lock (thread_p, &C_oid, &C_class_oid, X_LOCK);
+	}
+      else
+	{
+	  lock_remove_object_lock (thread_p, &C_oid, &C_class_oid,
+				   current_lock);
+	}
     }
 
 #if defined(SERVER_MODE)
@@ -24089,1068 +24346,6 @@ btree_prepare_range_search (THREAD_ENTRY * thread_p, BTREE_SCAN * bts)
 }
 
 /*
- * btree_mvcc_insert () - mvcc insert key in btree
- *   return: (the key to be inserted or NULL)
- *   btid(in): B+tree index identifier
- *   key(in): Key to be inserted
- *   cls_oid(in): To find out the lock mode of corresponding class.
- *                The lock mode is used to make a decision about if the key
- *                range locking must be performed.
- *   oid(in): Object identifier to be inserted for the key
- *   op_type(in): operation types
- *                SINGLE_ROW_INSERT, SINGLE_ROW_UPDATE, SINGLE_ROW_MODIFY
- *                MULTI_ROW_INSERT, MULTI_ROW_UPDATE
- *   unique_stat_info(in):
- *            When multiple rows are inserted, unique_stat_info maintains
- *            the local statistical infomation related to uniqueness checking
- *            such as num_nulls, num_keys, and num_oids, and that is locally
- *            updated during the process of one INSERT or UPDATE statement.
- *            After those rows are inserted correctly, the local information
- *            would be reflected into global information saved in root page.
- *   unique(in):
- *
- */
-static DB_VALUE *
-btree_mvcc_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
-		   OID * cls_oid, OID * oid, int op_type,
-		   BTREE_UNIQUE_STATS * unique_stat_info, int *unique)
-{
-  VPID P_vpid, Q_vpid, R_vpid, child_vpid;
-  PAGE_PTR P = NULL, Q = NULL, R = NULL;
-  RECDES peek_rec, copy_rec, copy_rec1;
-  BTREE_ROOT_HEADER root_header;
-  int key_len, max_key, max_entry, key_len_in_page;
-  INT16 p_slot_id, q_slot_id;
-  int top_op_active = 0;
-  int max_free;
-  PAGEID_STRUCT pageid_struct;	/* for recovery purposes */
-  int key_added;
-  BTID_INT btid_int;
-  bool curr_lock_flag = false;
-  OID class_oid;
-  LOCK class_lock = NULL_LOCK;
-  int tran_index;
-  int lock_request;
-  int offset = -1;
-  bool dummy;
-  int ret_val;
-  LEAF_REC leaf_pnt;
-  char *header_ptr;
-  BTREE_NODE_TYPE node_type;
-  INT16 key_cnt;
-  VPID next_vpid;
-  OID C_oid, saved_C_oid;
-  LOG_LSA saved_plsa;
-  LOG_LSA *temp_lsa;
-  OID C_class_oid;
-  OID saved_C_class_oid;
-  int alignment;
-  char copy_rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
-  char copy_rec_buf1[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
-  bool is_active;
-  bool key_found = false;
-#if defined(SERVER_MODE)
-  bool old_check_interrupt;
-#endif /* SERVER_MODE */
-  int retry_btree_no_space = 0;
-  bool result;
-  int visible_row_position = 0;
-
-#if defined(SERVER_MODE)
-  old_check_interrupt = thread_set_check_interrupt (thread_p, false);
-#endif /* SERVER_MODE */
-
-  copy_rec.data = NULL;
-  copy_rec1.data = NULL;
-
-  is_active = logtb_is_current_active (thread_p);
-
-#if defined(BTREE_DEBUG)
-  if (BTREE_INVALID_INDEX_ID (btid))
-    {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BTREE_INVALID_INDEX_ID, 3,
-	      btid->vfid.fileid, btid->vfid.volid, btid->root_pageid);
-      goto error;
-    }
-#endif /* BTREE_DEBUG */
-
-  P_vpid.volid = btid->vfid.volid;	/* read the root page */
-  P_vpid.pageid = btid->root_pageid;
-  P = pgbuf_fix (thread_p, &P_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
-		 PGBUF_UNCONDITIONAL_LATCH);
-  if (P == NULL)
-    {
-      goto error;
-    }
-
-  /* read the header record */
-  if (spage_get_record (P, HEADER, &peek_rec, PEEK) != S_SUCCESS)
-    {
-      goto error;
-    }
-
-  btree_read_root_header (&peek_rec, &root_header);
-  btid_int.sys_btid = btid;
-  if (btree_glean_root_header_info (thread_p, &root_header, &btid_int) !=
-      NO_ERROR)
-    {
-      goto error;
-    }
-
-  if (unique)
-    {
-      *unique = btid_int.unique;
-    }
-
-  alignment = BTREE_MAX_ALIGN;
-
-  node_type =
-    root_header.node.node_level > 1 ? BTREE_NON_LEAF_NODE : BTREE_LEAF_NODE;
-  /* if root is a non leaf node, the number of keys is actually one greater */
-  key_len = btree_get_key_length (key);
-
-  max_key = root_header.node.max_key_len;
-  key_len_in_page = BTREE_GET_KEY_LEN_IN_PAGE (node_type, key_len);
-
-  if (key && DB_VALUE_DOMAIN_TYPE (key) == DB_TYPE_MIDXKEY)
-    {
-      /* set complete setdomain */
-      key->data.midxkey.domain = btid_int.key_type;
-    }
-
-  if (VFID_ISNULL (&btid_int.ovfid)
-      && (key_len >= MIN (BTREE_MAX_KEYLEN_INPAGE,
-			  BTREE_MAX_SEPARATOR_KEYLEN_INPAGE)))
-    {
-      if (log_start_system_op (thread_p) == NULL)
-	{
-	  goto error;
-	}
-
-      if (btree_create_overflow_key_file (thread_p, &btid_int) != NO_ERROR)
-	{
-	  log_end_system_op (thread_p, LOG_RESULT_TOPOP_ABORT);
-	  goto error;
-	}
-
-      /* notification */
-      BTREE_SET_CREATED_OVERFLOW_KEY_NOTIFICATION (thread_p, key, oid,
-						   cls_oid, btid);
-
-      log_append_undoredo_data2 (thread_p, RVBT_UPDATE_OVFID,
-				 &btid_int.sys_btid->vfid, P, HEADER,
-				 sizeof (VFID), sizeof (VFID),
-				 &root_header.ovfid, &btid_int.ovfid);
-
-      /* update the root header */
-      VFID_COPY (&root_header.ovfid, &btid_int.ovfid);
-      if (btree_write_root_header (&peek_rec, &root_header) != NO_ERROR)
-	{
-	  log_end_system_op (thread_p, LOG_RESULT_TOPOP_ABORT);
-	  goto error;
-	}
-
-      pgbuf_set_dirty (thread_p, P, DONT_FREE);
-
-      if (btree_is_new_file (&btid_int))
-	{
-	  log_end_system_op (thread_p, LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
-	}
-      else
-	{
-	  log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-	  file_new_declare_as_old (thread_p, &btid_int.ovfid);
-	}
-    }
-
-  if (key_len_in_page > max_key)
-    {
-      /* new key is longer than all the keys in index */
-      copy_rec.area_size = DB_PAGESIZE;
-      copy_rec.data = PTR_ALIGN (copy_rec_buf, BTREE_MAX_ALIGN);
-
-      copy_rec1.area_size = DB_PAGESIZE;
-      copy_rec1.data = PTR_ALIGN (copy_rec_buf1, BTREE_MAX_ALIGN);
-
-      /* save root head for undo purposes */
-      btree_rv_save_root_head (root_header.node.max_key_len, 0, 0, 0,
-			       &copy_rec1);
-
-      root_header.node.max_key_len = key_len_in_page;
-      max_key = key_len_in_page;
-
-      /* update the root header */
-      if (btree_write_root_header (&copy_rec, &root_header) != NO_ERROR)
-	{
-	  goto error;
-	}
-
-      log_append_undoredo_data2 (thread_p, RVBT_ROOTHEADER_UPD, &btid->vfid,
-				 P, HEADER, copy_rec1.length, copy_rec.length,
-				 copy_rec1.data, copy_rec.data);
-
-      if (spage_update (thread_p, P, HEADER, &copy_rec) != SP_SUCCESS)
-	{
-	  goto error;
-	}
-
-      pgbuf_set_dirty (thread_p, P, DONT_FREE);
-      copy_rec.data = NULL;
-      copy_rec1.data = NULL;
-    }
-
-  if (key == NULL || db_value_is_null (key)
-      || btree_multicol_key_is_null (key))
-    {
-      /* update root header statistics if it's a unique Btree
-       * and the transaction is active.
-       *
-       * unique statitistics for non null keys will be updated after
-       * we find out if we have a new key or not.
-       */
-      if (is_active && BTREE_IS_UNIQUE (&btid_int))
-	{
-	  if (op_type == SINGLE_ROW_INSERT || op_type == SINGLE_ROW_UPDATE
-	      || op_type == SINGLE_ROW_MODIFY)
-	    {
-	      root_header.num_nulls++;
-	      root_header.num_oids++;
-	      copy_rec.area_size = DB_PAGESIZE;
-	      copy_rec.data = PTR_ALIGN (copy_rec_buf, BTREE_MAX_ALIGN);
-
-	      copy_rec1.area_size = DB_PAGESIZE;
-	      copy_rec1.data = PTR_ALIGN (copy_rec_buf1, BTREE_MAX_ALIGN);
-
-	      /* save root head for undo purposes */
-	      btree_rv_save_root_head (root_header.node.max_key_len, -1, -1,
-				       0, &copy_rec1);
-
-	      /* update the root header */
-	      if (btree_write_root_header (&copy_rec, &root_header) !=
-		  NO_ERROR)
-		{
-		  goto error;
-		}
-
-	      log_append_undoredo_data2 (thread_p, RVBT_ROOTHEADER_UPD,
-					 &btid->vfid, P, HEADER,
-					 copy_rec1.length, copy_rec.length,
-					 copy_rec1.data, copy_rec.data);
-
-	      if (spage_update (thread_p, P, HEADER, &copy_rec) != SP_SUCCESS)
-		{
-		  goto error;
-		}
-
-	      pgbuf_set_dirty (thread_p, P, DONT_FREE);
-	      copy_rec.data = NULL;
-	      copy_rec1.data = NULL;
-	    }
-	  else
-	    {			/* MULTI_ROW_INSERT, MULTI_ROW_UPDATE */
-	      if (unique_stat_info == NULL)
-		{
-		  goto error;
-		}
-	      unique_stat_info->num_nulls++;
-	      unique_stat_info->num_oids++;
-	    }
-	}
-
-      /* nothing more to do -- this is not an error */
-      pgbuf_unfix_and_init (thread_p, P);
-
-      mnt_bt_inserts (thread_p);
-
-#if defined(SERVER_MODE)
-      (void) thread_set_check_interrupt (thread_p, old_check_interrupt);
-#endif /* SERVER_MODE */
-
-#if !defined(NDEBUG)
-      if (prm_get_integer_value (PRM_ID_ER_BTREE_DEBUG) &
-	  BTREE_DEBUG_DUMP_FULL)
-	{
-	  btree_dump (thread_p, stdout, btid, 2);
-	}
-#endif
-
-      return key;
-    }
-
-  /* update root header statistics if its a Btree for uniques.
-   * this only wants to be done if the transaction is active.  That
-   * is, if we are aborting a transaction the statistics are "rolled back"
-   * by their own logging.
-   *
-   * NOTE that we are optimistically updating the header statistics in advance.
-   * When we encounter the failure to insert a new key, updates are rollbacked
-   * by not an adjusting routine but the top operation.
-   * Also NOTE that users to see the header statistics may have the transient
-   * values.
-   */
-  if (is_active && BTREE_IS_UNIQUE (&btid_int))
-    {
-      if (op_type == SINGLE_ROW_INSERT || op_type == SINGLE_ROW_UPDATE
-	  || op_type == SINGLE_ROW_MODIFY)
-	{
-	  copy_rec.area_size = DB_PAGESIZE;
-	  copy_rec.data = PTR_ALIGN (copy_rec_buf, BTREE_MAX_ALIGN);
-
-	  copy_rec1.area_size = DB_PAGESIZE;
-	  copy_rec1.data = PTR_ALIGN (copy_rec_buf1, BTREE_MAX_ALIGN);
-
-	  /* save root head for undo purposes */
-	  btree_rv_save_root_head (root_header.node.max_key_len, 0, -1,
-				   -1, &copy_rec1);
-
-	  /* update the root header */
-	  root_header.num_oids++;
-	  root_header.num_keys++;	/* guess new key insert */
-	  if (btree_write_root_header (&copy_rec, &root_header) != NO_ERROR)
-	    {
-	      goto error;
-	    }
-
-	  log_append_undoredo_data2 (thread_p, RVBT_ROOTHEADER_UPD,
-				     &btid->vfid, P, HEADER, copy_rec1.length,
-				     copy_rec.length, copy_rec1.data,
-				     copy_rec.data);
-
-	  if (spage_update (thread_p, P, HEADER, &copy_rec) != SP_SUCCESS)
-	    {
-	      goto error;
-	    }
-
-	  pgbuf_set_dirty (thread_p, P, DONT_FREE);
-	  copy_rec.data = NULL;
-	  copy_rec1.data = NULL;
-	}
-      else
-	{
-	  if (unique_stat_info == NULL)
-	    {
-	      goto error;
-	    }
-	  unique_stat_info->num_oids++;
-	  unique_stat_info->num_keys++;	/* guess new key insert */
-	}
-    }
-
-  /* decide whether key range locking must be performed.
-   * if class_oid is transferred through a new argument,
-   * this operation will be performed more efficiently.
-   */
-  if (cls_oid != NULL && !OID_ISNULL (cls_oid))
-    {
-      COPY_OID (&class_oid, cls_oid);
-      /* cls_oid might be NULL_OID. But it does not make problem. */
-    }
-  else
-    {
-      if (is_active)
-	{
-	  if (heap_get_class_oid (thread_p, &class_oid, oid) == NULL)
-	    {
-	      goto error;
-	    }
-	}
-      else
-	{
-	  OID_SET_NULL (&class_oid);
-	}
-    }
-
-  if (is_active)
-    {
-      /* initialize saved_N_oid */
-      OID_SET_NULL (&saved_C_oid);
-      OID_SET_NULL (&saved_C_class_oid);
-
-      /* find the lock that is currently acquired on the class */
-      tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      class_lock = lock_get_object_lock (&class_oid, oid_Root_class_oid,
-					 tran_index);
-
-      /* get lock_request from the class lock mode */
-      switch (class_lock)
-	{
-	case X_LOCK:
-	case SIX_LOCK:
-	case IX_LOCK:
-	  lock_request = true;
-	  break;
-	case S_LOCK:
-	case IS_LOCK:
-	case NULL_LOCK:
-	default:
-	  goto error;
-	}
-
-      if (!BTREE_IS_UNIQUE (&btid_int))
-	{
-	  lock_request = false;
-	}
-    }
-  else
-    {
-      /* total rollback, partial rollback, undo phase in recovery */
-      lock_request = false;
-    }
-
-  COPY_OID (&C_class_oid, &class_oid);
-
-start_point:
-  if (curr_lock_flag == true || retry_btree_no_space > 0)
-    {
-      P_vpid.volid = btid->vfid.volid;	/* read the root page */
-      P_vpid.pageid = btid->root_pageid;
-      P = pgbuf_fix (thread_p, &P_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
-		     PGBUF_UNCONDITIONAL_LATCH);
-      if (P == NULL)
-	{
-	  goto error;
-	}
-
-      /* read the header record */
-      if (spage_get_record (P, HEADER, &peek_rec, PEEK) != S_SUCCESS)
-	{
-	  goto error;
-	}
-
-      node_type = BTREE_GET_NODE_TYPE (peek_rec.data);
-      max_key = BTREE_GET_NODE_MAX_KEY_LEN (peek_rec.data);
-    }
-
-  /* find the maximum entry size that may need to be inserted to the root */
-  if (node_type == BTREE_LEAF_NODE)
-    {
-      max_entry = 2 * LEAFENTSZ (max_key);
-    }
-  else
-    {
-      max_entry = NLEAFENTSZ (max_key);
-    }
-  /* slotted page overhead */
-  max_entry += (alignment +	/* sphdr->alignment */
-		spage_slot_size ());	/* slot size */
-
-  /* free space in the root node */
-  max_free = spage_max_space_for_new_record (thread_p, P);
-
-  key_cnt = btree_get_node_key_cnt (P);
-
-  /* there is a need to split the root, only if there is not enough space
-   * for a new entry and either there are more than one record or else
-   * the root is a leaf node and a non_existent key is to be inserted.
-   *
-   * in no case should a split happen if the node is currently empty
-   * (key_cnt == 0).  this can happen with large keys (greater than half
-   * the page size).
-   */
-  if ((max_entry > max_free)
-      && (key_cnt != 0)
-      && ((key_cnt > 1)
-	  || ((node_type == BTREE_LEAF_NODE)
-	      && !btree_search_leaf_page (thread_p, &btid_int, P, key,
-					  &p_slot_id))))
-    {
-      /* start system top operation */
-      log_start_system_op (thread_p);
-      top_op_active = 1;
-
-      /* get two new pages */
-      Q = btree_get_new_page (thread_p, &btid_int, &Q_vpid, &P_vpid);
-      if (Q == NULL)
-	{
-	  goto error;
-	}
-
-      /* log the newly allocated pageid for deallocation for undo purposes */
-      if (btree_is_new_file (&btid_int) != true)
-	{
-	  /* we don't do undo logging for new files */
-	  pageid_struct.vpid = Q_vpid;
-	  pageid_struct.vfid.fileid = btid->vfid.fileid;
-	  pageid_struct.vfid.volid = btid->vfid.volid;
-	  log_append_undo_data2 (thread_p, RVBT_NEW_PGALLOC, &btid->vfid,
-				 NULL, -1, sizeof (PAGEID_STRUCT),
-				 &pageid_struct);
-	}
-
-      R = btree_get_new_page (thread_p, &btid_int, &R_vpid, &P_vpid);
-      if (R == NULL)
-	{
-	  goto error;
-	}
-
-      /* log the newly allocated pageid for deallocation for undo purposes */
-      if (btree_is_new_file (&btid_int) != true)
-	{
-	  /* we don't do undo logging for new files */
-	  pageid_struct.vpid = R_vpid;
-	  log_append_undo_data2 (thread_p, RVBT_NEW_PGALLOC, &btid->vfid,
-				 NULL, -1, sizeof (PAGEID_STRUCT),
-				 &pageid_struct);
-	}
-
-      /* split the root P into two pages Q and R */
-      if (btree_split_root (thread_p, &btid_int, P, Q, R, &P_vpid, &Q_vpid,
-			    &R_vpid, node_type, key, &child_vpid) != NO_ERROR)
-	{
-	  goto error;
-	}
-
-      pgbuf_unfix_and_init (thread_p, P);
-
-      if (VPID_EQ (&child_vpid, &Q_vpid))
-	{
-	  /* child page to be followed is page Q */
-	  pgbuf_unfix_and_init (thread_p, R);
-
-	  if (btree_is_new_file (&btid_int))
-	    {
-	      log_end_system_op (thread_p, LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
-	    }
-	  else
-	    {
-	      log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-	    }
-
-	  top_op_active = 0;
-
-	  P = Q;
-	  Q = NULL;
-	  P_vpid = Q_vpid;
-	}
-      else if (VPID_EQ (&child_vpid, &R_vpid))
-	{
-	  /* child page to be followed is page R */
-	  pgbuf_unfix_and_init (thread_p, Q);
-
-	  if (btree_is_new_file (&btid_int))
-	    {
-	      log_end_system_op (thread_p, LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
-	    }
-	  else
-	    {
-	      log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-	    }
-
-	  top_op_active = 0;
-
-	  P = R;
-	  R = NULL;
-	  P_vpid = R_vpid;
-	}
-      else
-	{
-	  assert (false);	/* is error ? */
-
-	  pgbuf_unfix_and_init (thread_p, R);
-	  pgbuf_unfix_and_init (thread_p, Q);
-
-	  if (btree_is_new_file (&btid_int))
-	    {
-	      log_end_system_op (thread_p, LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
-	    }
-	  else
-	    {
-	      log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-	    }
-
-	  top_op_active = 0;
-
-	  P_vpid = child_vpid;
-	  P = pgbuf_fix (thread_p, &P_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
-			 PGBUF_UNCONDITIONAL_LATCH);
-	  if (P == NULL)
-	    {
-	      goto error;
-	    }
-	}
-    }
-
-  /* get the header record */
-  btree_get_header_ptr (P, &header_ptr);
-  node_type = BTREE_GET_NODE_TYPE (header_ptr);
-  key_cnt = btree_get_node_key_cnt (P);
-  BTREE_GET_NODE_NEXT_VPID (header_ptr, &next_vpid);
-
-  while (node_type == BTREE_NON_LEAF_NODE)
-    {
-
-      /* find and get the child page to be followed */
-      if (btree_search_nonleaf_page
-	  (thread_p, &btid_int, P, key, &p_slot_id, &Q_vpid) != NO_ERROR)
-	{
-	  goto error;
-	}
-      Q = pgbuf_fix (thread_p, &Q_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
-		     PGBUF_UNCONDITIONAL_LATCH);
-      if (Q == NULL)
-	{
-	  goto error;
-	}
-
-      max_free = spage_max_space_for_new_record (thread_p, Q);
-
-      /* read the header record */
-      if (spage_get_record (Q, HEADER, &peek_rec, PEEK) != S_SUCCESS)
-	{
-	  goto error;
-	}
-
-      node_type = BTREE_GET_NODE_TYPE (peek_rec.data);
-      key_cnt = btree_get_node_key_cnt (Q);
-
-      max_key = BTREE_GET_NODE_MAX_KEY_LEN (peek_rec.data);
-      key_len_in_page = BTREE_GET_KEY_LEN_IN_PAGE (node_type, key_len);
-
-      /* is new key longer than all in the subtree of child page Q ? */
-      if (key_len_in_page > max_key)
-	{
-	  BTREE_PUT_NODE_MAX_KEY_LEN (peek_rec.data, key_len_in_page);
-	  max_key = key_len_in_page;
-
-	  /* log the new header record for redo purposes, there is no need
-	   * to undo the change to the header record
-	   */
-	  log_append_redo_data2 (thread_p, RVBT_NDHEADER_UPD, &btid->vfid, Q,
-				 HEADER, peek_rec.length, peek_rec.data);
-	  pgbuf_set_dirty (thread_p, Q, DONT_FREE);
-	}
-
-      /* find the maximum entry size that may need to be inserted to Q */
-      if (node_type == BTREE_LEAF_NODE)
-	{
-	  max_entry = 2 * LEAFENTSZ (max_key);
-	}
-      else
-	{
-	  max_entry = NLEAFENTSZ (max_key);
-	}
-
-      /* slotted page overhead */
-      max_entry += (alignment +	/* sphdr->alignment */
-		    spage_slot_size ());	/* slot size */
-
-      /* there is a need to split Q, only if there is not enough space
-       * for a new entry and either there are more than one record or else
-       * the root is a leaf node and a non_existent key is to inserted
-       *
-       * in no case should a split happen if the node is currently empty
-       * (key_cnt == 0).  This can happen with large keys (greater than half
-       * the page size).
-       */
-      if ((max_entry > max_free)
-	  && (key_cnt != 0)
-	  && ((key_cnt > 1)
-	      || ((node_type == BTREE_LEAF_NODE)
-		  && !btree_search_leaf_page (thread_p, &btid_int, Q, key,
-					      &q_slot_id))))
-	{
-	  /* start system top operation */
-	  log_start_system_op (thread_p);
-	  top_op_active = 1;
-
-	  /* split the page Q into two pages Q and R, and update parent page P */
-
-	  R = btree_get_new_page (thread_p, &btid_int, &R_vpid, &Q_vpid);
-	  if (R == NULL)
-	    {
-	      goto error;
-	    }
-
-	  /* Log the newly allocated pageid for deallocation for undo purposes */
-	  if (btree_is_new_file (&btid_int) != true)
-	    {
-	      /* we don't do undo logging for new files */
-	      pageid_struct.vpid = R_vpid;
-	      pageid_struct.vfid.fileid = btid->vfid.fileid;
-	      pageid_struct.vfid.volid = btid->vfid.volid;
-	      log_append_undo_data2 (thread_p, RVBT_NEW_PGALLOC, &btid->vfid,
-				     NULL, -1, sizeof (PAGEID_STRUCT),
-				     &pageid_struct);
-	    }
-
-	  if (btree_split_node (thread_p, &btid_int, P, Q, R, &P_vpid,
-				&Q_vpid, &R_vpid, p_slot_id, node_type,
-				key, &child_vpid) != NO_ERROR)
-	    {
-	      goto error;
-	    }
-
-	  if (VPID_EQ (&child_vpid, &Q_vpid))
-	    {
-	      /* child page to be followed is Q */
-	      pgbuf_unfix_and_init (thread_p, R);
-
-	      if (btree_is_new_file (&btid_int))
-		{
-		  log_end_system_op (thread_p,
-				     LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
-		}
-	      else
-		{
-		  log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-		}
-
-	      top_op_active = 0;
-
-	    }
-	  else if (VPID_EQ (&child_vpid, &R_vpid))
-	    {
-	      /* child page to be followed is R */
-	      pgbuf_unfix_and_init (thread_p, Q);
-
-	      if (btree_is_new_file (&btid_int))
-		{
-		  log_end_system_op (thread_p,
-				     LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
-		}
-	      else
-		{
-		  log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-		}
-
-	      top_op_active = 0;
-
-	      Q = R;
-	      R = NULL;
-	      Q_vpid = R_vpid;
-	    }
-	  else
-	    {
-	      assert (false);	/* is error ? */
-
-	      pgbuf_unfix_and_init (thread_p, Q);
-	      pgbuf_unfix_and_init (thread_p, R);
-
-	      if (btree_is_new_file (&btid_int))
-		{
-		  log_end_system_op (thread_p,
-				     LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
-		}
-	      else
-		{
-		  log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-		}
-
-	      top_op_active = 0;
-
-	      Q_vpid = child_vpid;
-	      Q = pgbuf_fix (thread_p, &Q_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
-			     PGBUF_UNCONDITIONAL_LATCH);
-	      if (Q == NULL)
-		{
-		  goto error;
-		}
-	    }
-	}
-
-      /* release parent page P, and repeat the same operations from child
-       * page Q on
-       */
-      pgbuf_unfix_and_init (thread_p, P);
-      P = Q;
-      Q = NULL;
-      P_vpid = Q_vpid;
-
-      /* node_type must be recalculated */
-      btree_get_header_ptr (P, &header_ptr);
-      node_type = BTREE_GET_NODE_TYPE (header_ptr);
-      key_cnt = btree_get_node_key_cnt (P);
-      BTREE_GET_NODE_NEXT_VPID (header_ptr, &next_vpid);
-    }				/* while */
-
-  p_slot_id = NULL_SLOTID;
-
-  /* in mvcc do not acquire any key lock if non unique indexes */
-  if (lock_request == false)
-    {
-      goto key_insertion;
-    }
-
-  /* find next key */
-  if (btree_search_leaf_page (thread_p, &btid_int, P, key, &p_slot_id))
-    {
-      /* key has been found */
-      key_found = true;
-    }
-  else
-    {
-      /* key has not been found */
-      key_found = false;
-      if (p_slot_id == NULL_SLOTID)
-	{
-	  goto error;
-	}
-    }
-
-curr_key_locking:
-  assert (BTREE_IS_UNIQUE (&btid_int));
-  result = BTREE_KEY_NOTFOUND;
-  if (key_found == true)
-    {
-      /* check whether the key is visible */
-      if (spage_get_record (P, p_slot_id, &peek_rec, PEEK) != S_SUCCESS)
-	{
-	  goto error;
-	}
-      btree_read_record (thread_p, &btid_int, &peek_rec, NULL, &leaf_pnt,
-			 BTREE_LEAF_NODE, &dummy, &offset, PEEK_KEY_VALUE);
-      result =
-	btree_key_find_first_visible_row (thread_p, &btid_int, &peek_rec,
-					  offset, &visible_row_position,
-					  &C_oid, &C_class_oid);
-      switch (result)
-	{
-	case BTREE_KEY_FOUND:
-	  BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, key, &C_oid,
-					    &C_class_oid, btid_int.sys_btid,
-					    NULL);
-	  goto error;
-
-	case BTREE_KEY_NOTFOUND:
-	  /* there is no active key, must lock the new oid */
-	  COPY_OID (&C_class_oid, &class_oid);
-	  COPY_OID (&C_oid, oid);
-	  break;
-
-	case BTREE_ACTIVE_KEY_FOUND:
-	  /* the row is updated by concurrent transaction, need to lock C_oid */
-	  break;
-
-	case BTREE_ERROR_OCCURRED:
-	  goto error;
-	}
-    }
-  else
-    {
-      /* must lock the new oid */
-      COPY_OID (&C_class_oid, &class_oid);
-      COPY_OID (&C_oid, oid);
-    }
-
-  if (BTREE_IS_UNIQUE (&btid_int))
-    {
-      assert_release (!OID_ISNULL (&C_class_oid));
-
-      if (OID_EQ (&C_class_oid, &class_oid) && class_lock == X_LOCK)
-	{
-	  goto key_insertion;
-	}
-    }
-
-  /* preserve in mvcc */
-  if (curr_lock_flag == true)
-    {
-      assert (BTREE_IS_UNIQUE (&btid_int));
-      if (OID_EQ (&saved_C_oid, &C_oid))
-	{
-	  goto key_insertion;
-	}
-
-      lock_remove_object_lock (thread_p, &saved_C_oid, &saved_C_class_oid,
-			       X_LOCK);
-      curr_lock_flag = false;
-      OID_SET_NULL (&saved_C_oid);
-      OID_SET_NULL (&saved_C_class_oid);
-    }
-
-  ret_val =
-    lock_object_with_btid (thread_p, &C_oid, &C_class_oid, btid,
-			   X_LOCK, LK_COND_LOCK);
-
-  if (ret_val == LK_GRANTED)
-    {
-      curr_lock_flag = true;
-    }
-  else if (ret_val == LK_NOTGRANTED_DUE_TIMEOUT)
-    {
-      temp_lsa = pgbuf_get_lsa (P);
-      LSA_COPY (&saved_plsa, temp_lsa);
-      pgbuf_unfix_and_init (thread_p, P);
-
-      COPY_OID (&saved_C_oid, &C_oid);
-      COPY_OID (&saved_C_class_oid, &C_class_oid);
-
-      assert (P == NULL && Q == NULL && R == NULL);
-
-      /* UNCONDITIONAL lock request */
-      ret_val = lock_object_with_btid (thread_p, &C_oid, &C_class_oid,
-				       btid, X_LOCK, LK_UNCOND_LOCK);
-      if (ret_val != LK_GRANTED)
-	{
-	  goto error;
-	}
-      curr_lock_flag = true;
-
-      P = pgbuf_fix_without_validation (thread_p, &P_vpid, OLD_PAGE,
-					PGBUF_LATCH_WRITE,
-					PGBUF_UNCONDITIONAL_LATCH);
-      if (P == NULL)
-	{
-	  goto error;
-	}
-
-      temp_lsa = pgbuf_get_lsa (P);
-      if (!LSA_EQ (&saved_plsa, temp_lsa))
-	{
-	  pgbuf_unfix_and_init (thread_p, P);
-
-	  assert (curr_lock_flag == true);
-	  visible_row_position = 0;
-	  goto start_point;
-	}
-    }
-  else
-    {
-      goto error;
-    }
-
-  if (result == BTREE_ACTIVE_KEY_FOUND)
-    {
-      /* check whether the other transaction key insertion has been
-       * committed/aborted
-       */
-      goto curr_key_locking;
-    }
-
-key_insertion:
-
-  /* a leaf page is reached, make the actual insertion in this page.
-   * Because of the specific top-down splitting algorithm, there will be
-   * no need to go up to parent pages, and it will always be possible to
-   * make the insertion in this leaf page.
-   */
-  key_added = 0;
-
-  ret_val = btree_insert_into_leaf (thread_p, &key_added, &btid_int,
-				    P, key, &class_oid, oid, &P_vpid,
-				    op_type, key_found, p_slot_id, false);
-
-  if (ret_val != NO_ERROR)
-    {
-      if (ret_val == ER_BTREE_NO_SPACE)
-	{
-	  char *ptr = NULL;
-	  FILE *fp = NULL;
-	  size_t sizeloc;
-
-	  fp = port_open_memstream (&ptr, &sizeloc);
-	  if (fp)
-	    {
-	      btree_dump_page (thread_p, fp, &class_oid, &btid_int,
-			       NULL, P, &P_vpid, 2, 2);
-	      spage_dump (thread_p, fp, P, true);
-	      port_close_memstream (fp, &ptr, &sizeloc);
-	    }
-
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BTREE_NO_SPACE, 2,
-		  key_len, ptr);
-
-	  if (ptr)
-	    {
-	      free (ptr);
-	    }
-
-	  if (retry_btree_no_space < 1)
-	    {
-	      /* ER_BTREE_NO_SPACE can be made by split node algorithm
-	       * In this case, release resource and retry it one time.
-	       */
-	      assert (top_op_active == 0);
-	      assert (Q == NULL);
-	      assert (R == NULL);
-
-	      pgbuf_unfix_and_init (thread_p, P);
-
-	      retry_btree_no_space++;
-	      goto start_point;
-	    }
-	}
-
-      goto error;
-    }
-
-  assert (top_op_active == 0);
-  assert (Q == NULL);
-  assert (R == NULL);
-
-  pgbuf_unfix_and_init (thread_p, P);
-
-  if (is_active && BTREE_IS_UNIQUE (&btid_int))
-    {
-      if (op_type == SINGLE_ROW_INSERT || op_type == SINGLE_ROW_UPDATE
-	  || op_type == SINGLE_ROW_MODIFY)
-	{
-	  /* at here, do nothing.
-	   * later, undo root header statistics
-	   */
-	}
-      else
-	{
-	  if (unique_stat_info == NULL)
-	    {
-	      goto error;
-	    }
-	  /* revert local statistical information */
-	  if (key_added == 0)
-	    {
-	      unique_stat_info->num_keys--;
-	    }
-	}
-    }
-
-  mnt_bt_inserts (thread_p);
-
-#if defined(SERVER_MODE)
-  (void) thread_set_check_interrupt (thread_p, old_check_interrupt);
-#endif /* SERVER_MODE */
-
-#if !defined(NDEBUG)
-  if (prm_get_integer_value (PRM_ID_ER_BTREE_DEBUG) & BTREE_DEBUG_DUMP_FULL)
-    {
-      btree_dump (thread_p, stdout, btid, 2);
-    }
-#endif
-
-  return key;
-
-error:
-  /* do not unfix P, Q, R before topop rollback */
-  if (top_op_active)
-    {
-      log_end_system_op (thread_p, LOG_RESULT_TOPOP_ABORT);
-    }
-
-  if (P)
-    {
-      pgbuf_unfix_and_init (thread_p, P);
-    }
-  if (Q)
-    {
-      pgbuf_unfix_and_init (thread_p, Q);
-    }
-  if (R)
-    {
-      pgbuf_unfix_and_init (thread_p, R);
-    }
-
-  if (curr_lock_flag)
-    {
-      lock_remove_object_lock (thread_p, &C_oid, &C_class_oid, X_LOCK);
-    }
-
-#if defined(SERVER_MODE)
-  (void) thread_set_check_interrupt (thread_p, old_check_interrupt);
-#endif /* SERVER_MODE */
-
-  return NULL;
-}
-
-/*
  * btree_key_find_first_visible_row () - mvcc find first visible row
  *   return: whether the visible row has been found
  *   btid(in): B+tree index identifier
@@ -25326,20 +24521,12 @@ btree_perform_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 		      BTREE_UNIQUE_STATS * unique_stat_info,
 		      int *unique, bool use_mvcc)
 {
-  if (use_mvcc)
-    {
-      return btree_mvcc_insert (thread_p, btid, key, cls_oid, oid, op_type,
-				unique_stat_info, unique);
-    }
-  else
-    {
-      return btree_insert (thread_p, btid, key, cls_oid, oid, op_type,
-			   unique_stat_info, unique);
-    }
+  return btree_insert (thread_p, btid, key, cls_oid, oid, op_type,
+		       unique_stat_info, unique);
 }
 
 /*
- * btree_key_find_visible_row () - mvcc find visibile row
+ * btree_key_find_visible_row () - mvcc find visible row
  *   return: whether the visible row has been found 
  *   key_oids(in): key oids : (OID, CLASS OID) pairs
  *   key_oids_cnt(in): key oids count

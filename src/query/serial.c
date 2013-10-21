@@ -1177,17 +1177,10 @@ serial_load_attribute_info_of_db_serial (THREAD_ENTRY * thread_p)
   HEAP_CACHE_ATTRINFO attr_info;
   int i, error = NO_ERROR;
   const char *attr_name_p;
-  LC_FIND_CLASSNAME status;
 
   serial_Num_attrs = -1;
 
-  status = xlocator_find_class_oid (thread_p, CT_SERIAL_NAME,
-				    &serial_Cache_pool.db_serial_class_oid,
-				    NULL_LOCK);
-  if (status == LC_CLASSNAME_ERROR || status == LC_CLASSNAME_DELETED)
-    {
-      return ER_FAILED;
-    }
+  oid_get_serial_oid (&serial_Cache_pool.db_serial_class_oid);
 
   if (heap_scancache_quick_start (&scan) != NO_ERROR)
     {
@@ -1429,43 +1422,4 @@ serial_alloc_cache_area (int num)
   tmp_area->obj_area[i].next = NULL;
 
   return tmp_area;
-}
-
-/*
- * serial_get_class_oid () - get serial class OID
- * return: error code
- * thread_p(in) : thread entry
- * serial_class_oid(out): serial class OID
- */
-int
-serial_get_class_oid (THREAD_ENTRY * thread_p, OID * serial_class_oid)
-{
-  COPY_OID (serial_class_oid, &serial_Cache_pool.db_serial_class_oid);
-  return NO_ERROR;
-}
-
-/*
- * serial_set_class_oid () - set serial class OID if not already set
- * return: error code
- * thread_p(in) : thread entry
- * Note: This function must be called when server is started
- */
-int
-serial_set_class_oid (THREAD_ENTRY * thread_p)
-{
-  LC_FIND_CLASSNAME status;
-
-  if (OID_ISNULL (&serial_Cache_pool.db_serial_class_oid))
-    {
-      status =
-	xlocator_find_class_oid (thread_p, CT_SERIAL_NAME,
-				 &serial_Cache_pool.db_serial_class_oid,
-				 NULL_LOCK);
-      if (status == LC_CLASSNAME_ERROR)
-	{
-	  return ER_FAILED;
-	}
-    }
-
-  return NO_ERROR;
 }

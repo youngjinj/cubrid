@@ -112,6 +112,10 @@ struct db_object
   struct db_object *commit_link;	/* link for obj to be reset at commit/abort */
   void *version;		/* versioning information */
   LOCK lock;			/* object lock */
+  int mvcc_snapshot_version;	/* The snapshot version at the time mop object
+				 * is fetched and cached. Used only when MVCC
+				 * is enabled.
+				 */
 
   unsigned char pruning_type;	/* no pruning, prune as partitioned class,
 				 * prune as partition */
@@ -743,4 +747,8 @@ extern void ws_set_error_into_error_link (LC_COPYAREA_ONEOBJ * obj);
 extern WS_FLUSH_ERR *ws_get_error_from_error_link (void);
 extern void ws_clear_all_errors_of_error_link (void);
 extern void ws_free_flush_error (WS_FLUSH_ERR * flush_err);
+
+extern int ws_get_mvcc_snapshot_version ();
+extern void ws_increment_mvcc_snapshot_version ();
+extern bool ws_is_mop_fetched_with_current_snapshot (MOP mop);
 #endif /* _WORK_SPACE_H_ */

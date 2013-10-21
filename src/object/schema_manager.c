@@ -15284,7 +15284,7 @@ sm_truncate_using_delete (MOP class_mop)
       goto end;
     }
 
-  error = db_execute_statement (session, stmt_id, NULL);
+  error = db_execute_statement_local (session, stmt_id, NULL);
   if (error < 0)
     {
       goto end;

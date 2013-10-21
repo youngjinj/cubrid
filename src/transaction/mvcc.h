@@ -137,6 +137,8 @@ struct mvcc_snapshot
   MVCCID *active_child_ids;	/* active children */
 
   unsigned int cnt_active_child_ids;	/* count active child ids */
+
+  bool valid;
 };
 
 typedef enum mvcc_satisfies_delete_result MVCC_SATISFIES_DELETE_RESULT;

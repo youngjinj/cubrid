@@ -4955,7 +4955,8 @@ do_redistribute_partitions_data (const char *classname, const char *keyname,
       sprintf (query_buf, "UPDATE [%s] SET [%s]=[%s];", classname, keyname,
 	       keyname);
 
-      error = db_execute (query_buf, &query_result, &query_error);
+      error =
+	db_compile_and_execute_local (query_buf, &query_result, &query_error);
       if (error >= 0)
 	{
 	  error = NO_ERROR;
@@ -5004,7 +5005,8 @@ do_redistribute_partitions_data (const char *classname, const char *keyname,
       strcat (query_buf, promoted[promoted_count - 1]);
       strcat (query_buf, "];");
 
-      error = db_execute (query_buf, &query_result, &query_error);
+      error =
+	db_compile_and_execute_local (query_buf, &query_result, &query_error);
       if (error >= 0)
 	{
 	  error = NO_ERROR;
@@ -13726,7 +13728,7 @@ do_check_rows_for_null (MOP class_mop, const char *att_name, bool * has_nulls)
       goto end;
     }
 
-  error = db_execute_statement (session, stmt_id, &result);
+  error = db_execute_statement_local (session, stmt_id, &result);
   if (error < 0)
     {
       goto end;
@@ -13836,7 +13838,7 @@ do_run_update_query_for_class (char *query, MOP class_mop, int *row_count)
   check_tr_state = tr_set_execution_state (false);
   assert (check_tr_state == save_tr_state);
 
-  error = db_execute_statement (session, stmt_id, NULL);
+  error = db_execute_statement_local (session, stmt_id, NULL);
   if (error < 0)
     {
       goto end;

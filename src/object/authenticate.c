@@ -1233,7 +1233,8 @@ au_find_user (const char *user_name)
 		   upper_case_name);
 
 	  lang_set_parser_use_client_charset (false);
-	  error = db_execute (query, &query_result, &query_error);
+	  error =
+	    db_compile_and_execute_local (query, &query_result, &query_error);
 	  lang_set_parser_use_client_charset (true);
 	  /* error is row count if not negative. */
 	  if (error > 0)
@@ -2666,7 +2667,7 @@ au_compute_groups (MOP member, char *name)
       goto ret;
     }
 
-  error = db_execute_statement (session, stmt_id, &result);
+  error = db_execute_statement_local (session, stmt_id, &result);
   if (error < 0)
     goto ret;
 
@@ -3183,7 +3184,7 @@ au_drop_user (MOP user)
 	  goto error;
 	}
 
-      error = db_execute_statement (session, stmt_id, &result);
+      error = db_execute_statement_local (session, stmt_id, &result);
       if (error < 0)
 	{
 	  db_close_session (session);
@@ -3245,7 +3246,7 @@ au_drop_user (MOP user)
 	  stmt_id = db_compile_statement (session);
 	  if (stmt_id == 1)
 	    {
-	      error = db_execute_statement (session, stmt_id, &result);
+	      error = db_execute_statement_local (session, stmt_id, &result);
 	      db_query_end (result);
 	    }
 	  else
@@ -3279,7 +3280,7 @@ au_drop_user (MOP user)
   stmt_id = db_compile_statement (session);
   if (stmt_id == 1)
     {
-      error = db_execute_statement (session, stmt_id, &result);
+      error = db_execute_statement_local (session, stmt_id, &result);
       if (error > 0)
 	{
 	  error = NO_ERROR;
@@ -4265,7 +4266,7 @@ collect_class_grants (MOP class_mop, DB_AUTH type, MOP revoked_auth,
     }
 
   sprintf (query, qp1, AU_USER_CLASS_NAME, AU_USER_CLASS_NAME);
-  error = db_execute (query, &query_result, &query_error);
+  error = db_compile_and_execute_local (query, &query_result, &query_error);
   if (error < 0)
     /* error is row count if not negative. */
     {
@@ -6561,7 +6562,7 @@ au_export_users (FILE * outfp)
 
   sprintf (query, qp1, AU_USER_CLASS_NAME, AU_USER_CLASS_NAME);
 
-  error = db_execute (query, &query_result, &query_error);
+  error = db_compile_and_execute_local (query, &query_result, &query_error);
   /* error is row count if not negative. */
   if (error < 0)
     {
@@ -6996,7 +6997,7 @@ build_class_grant_list (CLASS_AUTH * cl_auth, MOP class_mop)
 
   sprintf (query, qp1, AU_USER_CLASS_NAME, AU_USER_CLASS_NAME);
 
-  error = db_execute (query, &query_result, &query_error);
+  error = db_compile_and_execute_local (query, &query_result, &query_error);
   if (error < 0)
     /* error is row count if not negative. */
     {
@@ -7444,7 +7445,8 @@ au_dump_auth (FILE * fp)
     {
       sprintf (query, qp1, AU_USER_CLASS_NAME, AU_USER_CLASS_NAME);
 
-      error = db_execute (query, &query_result, &query_error);
+      error =
+	db_compile_and_execute_local (query, &query_result, &query_error);
       /* error is row count if not negative. */
       if (error > 0)
 	{
@@ -7585,7 +7587,8 @@ au_print_class_auth (MOP class_mop)
     {
       sprintf (query, qp1, AU_USER_CLASS_NAME, AU_USER_CLASS_NAME);
 
-      error = db_execute (query, &query_result, &query_error);
+      error =
+	db_compile_and_execute_local (query, &query_result, &query_error);
       /* error is row count if not negative. */
       if (error > 0)
 	{
@@ -7671,7 +7674,8 @@ au_dump_to_file (FILE * fp)
     {
       sprintf (query, qp1, AU_USER_CLASS_NAME, AU_USER_CLASS_NAME);
 
-      error = db_execute (query, &query_result, &query_error);
+      error =
+	db_compile_and_execute_local (query, &query_result, &query_error);
       /* error is row count if not negative. */
       if (error > 0)
 	{

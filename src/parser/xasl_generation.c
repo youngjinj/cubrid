@@ -19167,10 +19167,11 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
   HFID *hfid;
   OID *class_oid;
   DB_OBJECT *class_obj;
-  int no_classes = 0, no_subclasses = 0, i, j;
+  int no_classes = 0, no_subclasses = 0, i, j, no_cond_reev_classes = 0;
   int error = NO_ERROR;
   PT_NODE *hint_arg, *node;
   float hint_wait_secs;
+  bool has_partitioned = false;
 
   assert (parser != NULL && statement != NULL);
 
@@ -19182,6 +19183,34 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
   if (from && from->node_type == PT_SPEC && from->info.spec.range_var)
     {
       PT_NODE *select_node, *select_list = NULL;
+
+      node = from;
+      while (node != NULL && !has_partitioned)
+	{
+	  cl_name_node = node->info.spec.flat_entity_list;
+
+	  while (cl_name_node != NULL && !has_partitioned)
+	    {
+	      has_partitioned = sm_is_partitioned_class(cl_name_node->info.name.db_object);
+	      cl_name_node = cl_name_node->next;
+	    }
+
+	  node = node->next;
+	}
+
+      /* Skip reevaluation if MVCC is not enbaled or at least a class referenced
+       * in DELETE statement is partitioned. The case of partitioned classes
+       * referenced in DELETE will be handled in the future */
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && !has_partitioned)
+	{
+	  /* Flag specs that are referenced in conditions and assignments */
+
+	  error = pt_mvcc_flag_specs_cond_reev (parser, from, where);
+	  if (error != NO_ERROR)
+	    {
+	      goto error_return;
+	    }
+	}
 
       /* append LOB type attributes to select_list */
       node = statement->info.delete_.spec;
@@ -19230,11 +19259,30 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  || pt_copy_upddel_hints_to_select (parser, statement,
 					     aptr_statement) != NO_ERROR
 	  || ((aptr_statement = mq_translate (parser, aptr_statement)) ==
-	      NULL)
-	  ||
-	  ((xasl =
-	    pt_make_aptr_parent_node (parser, aptr_statement,
-				      DELETE_PROC)) == NULL))
+	      NULL))
+	{
+	  goto error_return;
+	}
+
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* Prepare generated SELECT statement for mvcc reevaluation */
+	  aptr_statement =
+	    pt_mvcc_prepare_upd_del_select (parser, aptr_statement);
+	  if (aptr_statement == NULL)
+	    {
+	      error = er_errid ();
+	      if (error == NO_ERROR)
+		{
+		  error = ER_GENERIC_ERROR;
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
+		}
+	      goto error_return;
+	    }
+	}
+
+      xasl = pt_make_aptr_parent_node (parser, aptr_statement, DELETE_PROC);
+      if (xasl == NULL)
 	{
 	  goto error_return;
 	}
@@ -19247,12 +19295,6 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 	}
     }
 
-  if (aptr_statement)
-    {
-      parser_free_tree (parser, aptr_statement);
-      aptr_statement = NULL;
-    }
-
   if (xasl != NULL)
     {
       PT_NODE *node, *flat = NULL;
@@ -19260,19 +19302,32 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
       delete_ = &xasl->proc.delete_;
 
       node = statement->info.delete_.spec;
-      no_classes = 0;
+      no_classes = no_cond_reev_classes = 0;
       while (node != NULL)
 	{
 	  if (node->info.spec.flag & PT_SPEC_FLAG_DELETE)
 	    {
 	      no_classes++;
 	    }
+	  if (node->info.spec.flag & PT_SPEC_FLAG_MVCC_COND_REEV)
+	    {
+	      ++no_cond_reev_classes;
+	    }
 	  node = node->next;
 	}
       delete_->no_classes = no_classes;
+      delete_->no_reev_classes = no_cond_reev_classes;
       delete_->classes = regu_upddel_class_info_array_alloc (no_classes);
       if (delete_->classes == NULL)
 	{
+	  goto error_return;
+	}
+
+      delete_->mvcc_reev_classes =
+	regu_int_array_alloc (delete_->no_reev_classes);
+      if (delete_->mvcc_reev_classes == NULL && delete_->no_reev_classes)
+	{
+	  error = er_errid ();
 	  goto error_return;
 	}
 
@@ -19469,6 +19524,28 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
     {
       OID *oid;
 
+      /* prepare data for MVCC condition reevaluation. For each class used in 
+       * condition reevaluation set the position (index) into select list.
+       */
+
+      for (cl_name_node = aptr_statement->info.query.q.select.list, i = j = 0;
+	   cl_name_node != NULL
+	   && i <
+	   aptr_statement->info.query.upd_del_class_cnt +
+	   aptr_statement->info.query.mvcc_reev_extra_cls_cnt;
+	   cl_name_node = cl_name_node->next->next, i++)
+	{
+	  node =
+	    pt_find_spec (parser, aptr_statement->info.query.q.select.from,
+			  cl_name_node);
+	  assert (node != NULL);
+	  if (PT_IS_SPEC_FLAG_SET (node, PT_SPEC_FLAG_MVCC_COND_REEV))
+	    {
+	      /* set the position in SELECT list */
+	      delete_->mvcc_reev_classes[j++] = i;
+	    }
+	}
+
       /* OID of the user who is creating this XASL */
       if ((oid = ws_identifier (db_get_user ())) != NULL)
 	{
@@ -19508,6 +19585,12 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
       xasl->limit_row_count =
 	pt_to_regu_variable (parser, limit, UNBOX_AS_VALUE);
     }
+  if (aptr_statement)
+    {
+      parser_free_tree (parser, aptr_statement);
+      aptr_statement = NULL;
+    }
+
 
   return xasl;
 
@@ -19580,6 +19663,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   float hint_wait_secs;
   int *mvcc_assign_extra_classes = NULL;
   bool mvcc_enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+  bool has_partitioned = false;
 
 
   assert (parser != NULL && statement != NULL);
@@ -19604,6 +19688,10 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	    {
 	      goto cleanup;
 	    }
+	  if (!has_partitioned)
+	    {
+	      has_partitioned = sm_is_partitioned_class(cl_name_node->info.name.db_object);
+	    }
 	  cl_name_node = cl_name_node->next;
 	}
 
@@ -19617,7 +19705,10 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       goto cleanup;
     }
 
-  if (mvcc_enabled)
+  /* Skip reevaluation if MVCC is not enbaled or at least a class referenced in
+   * UPDATE statement is partitioned. The case of partitioned classes referenced
+   * in UPDATE will be handled in future */
+  if (mvcc_enabled && !has_partitioned)
     {
       /* Flag specs that are referenced in conditions and assignments */
 

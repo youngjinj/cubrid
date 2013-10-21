@@ -1211,7 +1211,8 @@ $ LOADDB
 1142 Handshake 에러 (peer host %1$s): 원격 접속 불허.
 1143 %1$s로의 연결 시도 타임아웃 (timeout: %2$d 초)
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
-2001 마지막 에러
+2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+2002 마지막 에러
 
 $set 6 MSGCAT_SET_INTERNAL
 1 에러 서브 시스템에 에러 발생(라인 %d):

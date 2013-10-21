@@ -239,7 +239,7 @@ static const OID *heap_mvcc_update (THREAD_ENTRY * thread_p,
 				    const OID * oid, RECDES * recdes,
 				    OID * new_oid, bool * old,
 				    HEAP_SCANCACHE * scan_cache,
-				    void *mvcc_reev_data);
+				    MVCC_REEV_DATA * mvcc_reev_data);
 static const OID *heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
 			       const OID * class_oid, const OID * oid,
 			       HEAP_SCANCACHE * scan_cache,
@@ -248,14 +248,14 @@ static const OID *heap_mvcc_delete (THREAD_ENTRY * thread_p,
 				    const HFID * hfid, const OID * class_oid,
 				    const OID * oid,
 				    HEAP_SCANCACHE * scan_cache,
-				    void *mvcc_reev_data);
+				    MVCC_REEV_DATA * mvcc_reev_data);
 static int heap_scancache_start_chain_update (THREAD_ENTRY * thread_p,
 					      HEAP_SCANCACHE * new_scan_cache,
 					      HEAP_SCANCACHE * old_scan_cache,
 					      OID * next_row_version);
 static int heap_mvcc_lock_for_delete (THREAD_ENTRY * thread_p,
 				      const HFID * hfid, const OID * oid,
-				      OID * class_oid,
+				      const OID * class_oid,
 				      bool * curr_row_locked,
 				      MVCC_REC_HEADER * recdes_header,
 				      PAGE_PTR * pgptr,
@@ -279,8 +279,7 @@ static SCAN_CODE heap_mvcc_get_with_lock (THREAD_ENTRY * thread_p,
 					  int ispeeking,
 					  HEAP_MVCC_DELETE_INFO *
 					  mvcc_delete_info,
-					  MVCC_SELECT_REEV_DATA *
-					  mvcc_reev_data);
+					  MVCC_REEV_DATA * mvcc_reev_data);
 static void set_mvcc_delete_info (HEAP_MVCC_DELETE_INFO * mvcc_delete_info,
 				  MVCCID row_delid, OID * next_row_version,
 				  LOCK next_row_lock_request,
@@ -302,16 +301,29 @@ static SCAN_CODE heap_mvcc_get_latest_version_with_lock (THREAD_ENTRY *
 							 int ispeeking,
 							 HEAP_MVCC_DELETE_INFO
 							 * mvcc_delete_info,
-							 void
-							 *mvcc_reev_data);
+							 MVCC_REEV_DATA *
+							 mvcc_reev_data);
 static DB_LOGICAL mvcc_reevaluate_filters (THREAD_ENTRY * thread_p,
-					   MVCC_SELECT_REEV_DATA *
+					   MVCC_SCAN_REEV_DATA *
 					   mvcc_reev_data, OID * oid,
 					   RECDES * recdes);
 static SCAN_CODE heap_get_bigone_content (THREAD_ENTRY * thread_p,
 					  HEAP_SCANCACHE * scan_cache,
 					  int ispeeking, OID * forward_oid,
 					  RECDES * recdes);
+static DB_LOGICAL heap_mvcc_reeval_scan_filters (THREAD_ENTRY * thread_p,
+						 OID * oid,
+						 HEAP_SCANCACHE * scan_cache,
+						 RECDES * recdes,
+						 UPDDEL_MVCC_COND_REEVAL *
+						 mvcc_cond_reeval,
+						 bool is_upddel);
+static DB_LOGICAL heap_mvcc_reev_cond_assigns (THREAD_ENTRY * thread_p,
+					       OID * class_oid, OID * oid,
+					       HEAP_SCANCACHE * scan_cache,
+					       RECDES * recdes,
+					       MVCC_UPDDEL_REEV_DATA *
+					       mvcc_reev_data);
 
 /*
  * Heap file header
@@ -850,8 +862,7 @@ static int heap_scancache_start_internal (THREAD_ENTRY * thread_p,
 					  int cache_last_fix_page,
 					  int is_queryscan, int is_indexscan,
 					  int lock_hint,
-					  MVCC_SNAPSHOT * mvcc_snapshot,
-					  bool delete_old_row);
+					  MVCC_SNAPSHOT * mvcc_snapshot);
 static int heap_scancache_force_modify (THREAD_ENTRY * thread_p,
 					HEAP_SCANCACHE * scan_cache);
 static int heap_scancache_reset_modify (THREAD_ENTRY * thread_p,
@@ -7113,38 +7124,26 @@ OID *
 heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid, OID * class_oid,
 	     OID * oid, RECDES * recdes, HEAP_SCANCACHE * scan_cache)
 {
-  bool use_mvcc = mvcc_Enabled && !OID_IS_ROOTOID (class_oid)
-    && !OID_ISNULL (class_oid);
+  bool use_mvcc =
+    mvcc_Enabled && !heap_is_mvcc_disabled_for_class (thread_p, class_oid);
   MVCCID mvcc_id;
   MVCC_REC_HEADER mvcc_header;
 
   if (use_mvcc)
     {
-      OID serial_class_oid;
-      if (serial_get_class_oid (thread_p, &serial_class_oid) != NO_ERROR)
-	{
-	  return NULL;
-	}
-
-      if (OID_EQ (&serial_class_oid, class_oid))
-	{
-	  use_mvcc = false;
-	}
-      else
-	{
-	  /*  mvcc section */
-	  mvcc_id = logtb_get_current_mvccid (thread_p);
-	  or_mvcc_get_header (recdes, &mvcc_header);
-
-	  /* Update record header according to mvcc */
-	  MVCC_SET_INSID (&mvcc_header, mvcc_id);
-	  MVCC_SET_FLAG (&mvcc_header, MVCC_FLAG_ENABLED);
-	  MVCC_SET_NEXT_VERSION (&mvcc_header, &oid_Null_oid);
-
-	  /* Update record data */
-	  or_mvcc_set_header (recdes, mvcc_header);
-	}
+      /*  mvcc section */
+      mvcc_id = logtb_get_current_mvccid (thread_p);
+      or_mvcc_get_header (recdes, &mvcc_header);
+      
+      /* Update record header according to mvcc */
+      MVCC_SET_INSID (&mvcc_header, mvcc_id);
+      MVCC_SET_FLAG (&mvcc_header, MVCC_FLAG_ENABLED);
+      MVCC_SET_NEXT_VERSION (&mvcc_header, &oid_Null_oid);
+      
+      /* Update record data */
+      or_mvcc_set_header (recdes, mvcc_header);
     }
+
   /*
    * If a scan cache for updates is given, make sure that it is for the
    * same heap, otherwise, end the current one and start a new one.
@@ -7308,8 +7307,8 @@ heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
   MVCC_REC_HEADER mvcc_header;
 
   assert (class_oid != NULL && !OID_ISNULL (class_oid));
-  use_mvcc = mvcc_Enabled && !OID_IS_ROOTOID (class_oid)
-    && !OID_ISNULL (class_oid);
+  use_mvcc =
+    mvcc_Enabled && !heap_is_mvcc_disabled_for_class (thread_p, class_oid);
   if (new_oid != NULL)
     {
       OID_SET_NULL (new_oid);
@@ -7348,31 +7347,16 @@ heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
 
   if (use_mvcc)
     {
-      /* check serial class just to be sure */
-      OID serial_class_oid;
-      if (serial_get_class_oid (thread_p, &serial_class_oid) != NO_ERROR)
-	{
-	  return NULL;
-	}
-
-      if (OID_EQ (&serial_class_oid, class_oid))
-	{
-	  /* disable mvcc flags - used for catalog serial class */
-	  use_mvcc = false;
-	}
-      else
-	{
-	  mvcc_id = logtb_get_current_mvccid (thread_p);
-	  or_mvcc_get_header (recdes, &mvcc_header);
-
-	  /* Update record header according to mvcc */
-	  MVCC_SET_INSID (&mvcc_header, mvcc_id);
-	  MVCC_SET_FLAG (&mvcc_header, MVCC_FLAG_ENABLED);
-	  MVCC_SET_NEXT_VERSION (&mvcc_header, &oid_Null_oid);
-
-	  /* Update record data */
-	  or_mvcc_set_header (recdes, mvcc_header);
-	}
+      mvcc_id = logtb_get_current_mvccid (thread_p);
+      or_mvcc_get_header (recdes, &mvcc_header);
+      
+      /* Update record header according to mvcc */
+      MVCC_SET_INSID (&mvcc_header, mvcc_id);
+      MVCC_SET_FLAG (&mvcc_header, MVCC_FLAG_ENABLED);
+      MVCC_SET_NEXT_VERSION (&mvcc_header, &oid_Null_oid);
+      
+      /* Update record data */
+      or_mvcc_set_header (recdes, mvcc_header);
     }
 
 try_again:
@@ -7480,7 +7464,7 @@ try_again:
     }
 
   is_big_length = heap_is_big_length (recdes->length);
-  if (use_mvcc && scan_cache->delete_old_row == false)
+  if (use_mvcc)
     {
       /* in case of mvcc, the old record may be updated to
        * REC_HOME or REC_BIGONE. If updated to bigone, recdes->type
@@ -7592,7 +7576,7 @@ try_again:
 	}
 #endif
 
-      if (use_mvcc && scan_cache->delete_old_row == false)
+      if (use_mvcc)
 	{
 	  RECDES old_recdes;
 	  MVCC_REC_HEADER old_rec_header;
@@ -7675,7 +7659,7 @@ try_again:
 
       if (update_home_page == false)
 	{
-	  if (use_mvcc && scan_cache->delete_old_row == false)
+	  if (use_mvcc)
 	    {
 	      if (is_big_length
 		  || (spage_insert (thread_p, forward_addr.pgptr, recdes,
@@ -7796,7 +7780,7 @@ try_again:
 		    }
 		}
 
-	      if (use_mvcc && scan_cache->delete_old_row == false)
+	      if (use_mvcc)
 		{
 		  OID temp_oid;
 		  if (is_big_length)
@@ -7956,7 +7940,7 @@ try_again:
 	  else
 	    {
 	      /* slotid already contains newly inserted slot into forward page */
-	      if (use_mvcc && scan_cache->delete_old_row == false)
+	      if (use_mvcc)
 		{
 		  HEAP_MVCC_HEADER_UPDATE_RECV heap_header_recv;
 		  HEAP_MVCC_OBJECT_HEADER_RECV heap_obj_header_recv;
@@ -8090,7 +8074,7 @@ try_again:
 	}
       else
 	{
-	  if (use_mvcc && scan_cache->delete_old_row == false)
+	  if (use_mvcc)
 	    {
 	      HEAP_MVCC_HEADER_UPDATE_RECV heap_header_recv;
 	      HEAP_MVCC_OBJECT_HEADER_RECV heap_obj_header_recv;
@@ -8256,7 +8240,7 @@ try_again:
 	    }
 	}
 
-      if (use_mvcc && scan_cache->delete_old_row == false)
+      if (use_mvcc)
 	{
 	  MVCC_REC_HEADER old_recdes_header;
 
@@ -8554,7 +8538,7 @@ try_again:
       /* Fall through REC_HOME */
 
     case REC_HOME:
-      if (use_mvcc && scan_cache->delete_old_row == false)
+      if (use_mvcc)
 	{
 	  RECDES old_recdes;
 	  MVCC_REC_HEADER old_rec_header;
@@ -8676,7 +8660,7 @@ try_again:
 		}
 	    }
 
-	  if (use_mvcc && scan_cache->delete_old_row == false)
+	  if (use_mvcc)
 	    {
 	      if (is_big_length)
 		{
@@ -8850,7 +8834,7 @@ try_again:
 	    }
 
 	  /* log the newly inserted data */
-	  if (use_mvcc && scan_cache->delete_old_row == false)
+	  if (use_mvcc)
 	    {
 	      HEAP_MVCC_HEADER_UPDATE_RECV heap_header_recv;
 	      HEAP_MVCC_OBJECT_HEADER_RECV heap_obj_header_recv;
@@ -9156,14 +9140,13 @@ heap_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
   FILE_TYPE file_type = FILE_UNKNOWN_TYPE;
   FILE_IS_NEW_FILE is_new_file = FILE_ERROR;
   bool need_update;
-  bool use_mvcc = mvcc_Enabled;
   bool record_locked = false;
-
-  if (use_mvcc == true && scan_cache != NULL)
-    {
-      use_mvcc = !OID_IS_ROOTOID (&scan_cache->class_oid)
-	&& !OID_ISNULL (&scan_cache->class_oid);
-    }
+  /* If MVCC delete style is used, mvcc_delete_info must be not null.
+   * If mvcc_delete_info is null, physical delete will be done.
+   */
+  bool use_mvcc =
+    mvcc_Enabled && !heap_is_mvcc_disabled_for_class (thread_p, class_oid)
+    && mvcc_delete_info != NULL;
 
   oid_valid = HEAP_ISVALID_OID (oid);
   if (oid_valid != DISK_VALID)
@@ -9370,7 +9353,7 @@ try_again:
 #endif
 
       /* Find the content of the record for logging purposes */
-      if (use_mvcc && scan_cache->delete_old_row == false)
+      if (use_mvcc)
 	{
 	  MVCCID mvcc_id = logtb_get_current_mvccid (thread_p);
 	  bool is_bigone = false;
@@ -9385,7 +9368,7 @@ try_again:
 
 	  or_mvcc_get_header (&old_recdes, &old_recdes_header);
 	  if (heap_mvcc_lock_for_delete (thread_p, hfid, oid,
-					 &scan_cache->class_oid, NULL,
+					 class_oid, NULL,
 					 &old_recdes_header, &addr.pgptr,
 					 &forward_addr.pgptr, NULL, X_LOCK,
 					 mvcc_delete_info) != NO_ERROR)
@@ -9551,7 +9534,7 @@ try_again:
 	  goto error;
 	}
 
-      if (use_mvcc && scan_cache->delete_old_row == false)
+      if (use_mvcc)
 	{
 	  MVCCID mvcc_id;
 	  bool is_bigone = true;
@@ -9577,7 +9560,7 @@ try_again:
 	  heap_get_mvcc_rec_header_from_overflow (forward_addr.pgptr,
 						  &old_recdes_header);
 	  if (heap_mvcc_lock_for_delete (thread_p, hfid, oid,
-					 &scan_cache->class_oid, NULL,
+					 class_oid, NULL,
 					 &old_recdes_header,
 					 &addr.pgptr, &forward_addr.pgptr,
 					 &hdr_pgptr, X_LOCK, mvcc_delete_info)
@@ -9657,7 +9640,7 @@ try_again:
     case REC_ASSIGN_ADDRESS:
 
       /* Find the content of the record for logging purposes */
-      if (use_mvcc && scan_cache->delete_old_row == false)
+      if (use_mvcc)
 	{
 	  MVCCID mvcc_id = logtb_get_current_mvccid (thread_p);
 	  bool is_bigone = false;
@@ -9672,7 +9655,7 @@ try_again:
 
 	  or_mvcc_get_header (&old_recdes, &old_recdes_header);
 	  if (heap_mvcc_lock_for_delete (thread_p, hfid, oid,
-					 &scan_cache->class_oid, NULL,
+					 class_oid, NULL,
 					 &old_recdes_header, &addr.pgptr,
 					 NULL, NULL, X_LOCK,
 					 mvcc_delete_info) != NO_ERROR)
@@ -10470,10 +10453,12 @@ heap_ovf_peek_mvcc_record_header (THREAD_ENTRY * thread_p,
   MVCC_REC_HEADER mvcc_header;
   assert (ovf_first_page != NULL);
 
-  heap_get_mvcc_rec_header_from_overflow (ovf_first_page, &mvcc_header);
+  recdes->data = overflow_get_first_page_data (ovf_first_page);
+  recdes->length = OR_HEADER_SIZE;
 
   if (mvcc_snapshot != NULL)
     {
+      or_mvcc_get_header (recdes, &mvcc_header);
       if (mvcc_snapshot->snapshot_fnc (thread_p, &mvcc_header,
 				       mvcc_snapshot) != true)
 	{
@@ -10530,8 +10515,7 @@ heap_scancache_start_internal (THREAD_ENTRY * thread_p,
 			       HEAP_SCANCACHE * scan_cache, const HFID * hfid,
 			       const OID * class_oid, int cache_last_fix_page,
 			       int is_queryscan, int is_indexscan,
-			       int lock_hint, MVCC_SNAPSHOT * mvcc_snapshot,
-			       bool delete_old_row)
+			       int lock_hint, MVCC_SNAPSHOT * mvcc_snapshot)
 {
   LOCK class_lock = NULL_LOCK;
   int ret = NO_ERROR;
@@ -10692,7 +10676,6 @@ heap_scancache_start_internal (THREAD_ENTRY * thread_p,
 
   scan_cache->debug_initpattern = HEAP_DEBUG_SCANCACHE_INITPATTERN;
   scan_cache->mvcc_snapshot = mvcc_snapshot;
-  scan_cache->delete_old_row = delete_old_row;
 
   return ret;
 
@@ -10753,7 +10736,7 @@ heap_scancache_start (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache,
   return heap_scancache_start_internal (thread_p, scan_cache, hfid, class_oid,
 					cache_last_fix_page, true,
 					is_indexscan, lock_hint,
-					mvcc_snapshot, false);
+					mvcc_snapshot);
 }
 
 /*
@@ -10786,8 +10769,7 @@ int
 heap_scancache_start_modify (THREAD_ENTRY * thread_p,
 			     HEAP_SCANCACHE * scan_cache, const HFID * hfid,
 			     const OID * class_oid, int op_type,
-			     MVCC_SNAPSHOT * mvcc_snapshot,
-			     bool delete_old_row)
+			     MVCC_SNAPSHOT * mvcc_snapshot)
 {
   OR_CLASSREP *classrepr = NULL;
   int classrepr_cacheindex = -1;
@@ -10796,7 +10778,7 @@ heap_scancache_start_modify (THREAD_ENTRY * thread_p,
 
   if (heap_scancache_start_internal (thread_p, scan_cache, hfid, NULL, false,
 				     false, false, LOCKHINT_NONE,
-				     mvcc_snapshot, delete_old_row)
+				     mvcc_snapshot)
       != NO_ERROR)
     {
       goto exit_on_error;
@@ -12058,7 +12040,7 @@ try_again:
   type = spage_get_record_type (pgptr, oid->slotid);
   if (type == REC_UNKNOWN)
     {
-      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
+      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_HEAP_BAD_OBJECT_TYPE, 3,
 	      oid->volid, oid->pageid, oid->slotid);
       scan = S_DOESNT_EXIST;
       goto end;
@@ -12587,8 +12569,8 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	  if (er_errid () == ER_PB_BAD_PAGEID)
 	    {
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_UNKNOWN_OBJECT, 3, oid->volid,
-		      oid->pageid, oid->slotid);
+		      ER_HEAP_UNKNOWN_OBJECT, 3, current_oid.volid,
+		      current_oid.pageid, current_oid.slotid);
 	    }
 
 	  /* something went wrong, return */
@@ -12625,7 +12607,7 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	    }
 	}
 
-      type = spage_get_record_type (pgptr, oid->slotid);
+      type = spage_get_record_type (pgptr, current_oid.slotid);
       switch (type)
 	{
 	case REC_NEWHOME:
@@ -12639,8 +12621,8 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	       * REC_RELOCATION.
 	       */
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_BAD_OBJECT_TYPE, 3, oid->volid, oid->pageid,
-		      oid->slotid);
+		      ER_HEAP_BAD_OBJECT_TYPE, 3, current_oid.volid,
+		      current_oid.pageid, current_oid.slotid);
 	      goto error;
 	    }
 	  /* Fall through to check MVCC header and get record data */
@@ -12657,12 +12639,14 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	      forward_recdes.area_size = sizeof (forward_oid);
 
 	      scan =
-		spage_get_record (pgptr, oid->slotid, &forward_recdes, COPY);
+		spage_get_record (pgptr, current_oid.slotid,
+				  &forward_recdes, COPY);
 	      if (scan != S_SUCCESS)
 		{
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-			  ER_HEAP_BAD_RELOCATION_RECORD, 3, oid->volid,
-			  oid->pageid, oid->slotid);
+			  ER_HEAP_BAD_RELOCATION_RECORD, 3,
+			  current_oid.volid, current_oid.pageid,
+			  current_oid.slotid);
 		  goto error;
 		}
 
@@ -12683,11 +12667,8 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 		      goto error;
 		    }
 		}
-	      if (spage_get_record (forward_pgptr, forward_oid.slotid,
-				    &mvcc_header_recdes, PEEK) != S_SUCCESS)
-		{
-		  pgbuf_unfix_and_init (thread_p, forward_pgptr);
-		}
+	      heap_get_mvcc_rec_header_from_overflow (forward_pgptr,
+						      &mvcc_rec_header);
 	    }
 	  else
 	    {
@@ -12851,12 +12832,14 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	  forward_recdes.length = sizeof (forward_oid);
 	  forward_recdes.area_size = sizeof (forward_oid);
 
-	  scan = spage_get_record (pgptr, oid->slotid, &forward_recdes, COPY);
+	  scan =
+	    spage_get_record (pgptr, current_oid.slotid, &forward_recdes,
+			      COPY);
 	  if (scan != S_SUCCESS)
 	    {
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_BAD_RELOCATION_RECORD, 3, oid->volid,
-		      oid->pageid, oid->slotid);
+		      ER_HEAP_BAD_RELOCATION_RECORD, 3, current_oid.volid,
+		      current_oid.pageid, current_oid.slotid);
 	      pgbuf_unfix_and_init (thread_p, pgptr);
 	      return scan;
 	    }
@@ -12870,18 +12853,19 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 
 	case REC_ASSIGN_ADDRESS:
 	  /* Object without content.. only the address has been assigned */
-	  if (spage_check_slot_owner (thread_p, pgptr, oid->slotid))
+	  if (spage_check_slot_owner (thread_p, pgptr, current_oid.slotid))
 	    {
 	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_NODATA_NEWADDRESS, 3, oid->volid, oid->pageid,
-		      oid->slotid);
+		      ER_HEAP_NODATA_NEWADDRESS, 3,
+		      current_oid.volid, current_oid.pageid,
+		      current_oid.slotid);
 	      scan = S_DOESNT_EXIST;
 	    }
 	  else
 	    {
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_UNKNOWN_OBJECT, 3, oid->volid, oid->pageid,
-		      oid->slotid);
+		      ER_HEAP_UNKNOWN_OBJECT, 3, current_oid.volid,
+		      current_oid.pageid, current_oid.slotid);
 	      scan = S_ERROR;
 	    }
 
@@ -12902,7 +12886,8 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	case REC_MARKDELETED:
 	default:
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_BAD_OBJECT_TYPE,
-		  3, oid->volid, oid->pageid, oid->slotid);
+		  3, current_oid.volid, current_oid.pageid,
+		  current_oid.slotid);
 	  goto error;
 	}
     }
@@ -13227,7 +13212,14 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		      /* MVCC skips REC_RELOCATION slots. The relocated OID
 		       * is checked instead.
 		       */
-		      continue;
+		      /* TODO: FIXME.
+		       * This isn't actually correct. Even with MVCC we may
+		       * still have REC_RELOCATED slots which point to
+		       * REC_NEWHOME records, which must be handled
+		       * differently?
+		       * Rethink and rewrite this and heap_get_record.
+		       */
+		      /* continue; */
 		    }
 
 		  if (mvcc_snapshot == NULL || type != REC_HOME)
@@ -24565,9 +24557,6 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
       peek_oid = (OID *) forward_recdes.data;
       forward_oid = *peek_oid;
 
-      /* Snapshot scan would skip this */
-      assert (check_snapshot == false);
-
       if (scan_cache == NULL || !scan_cache->cache_last_fix_page
 	  || scan_cache->pgptr != (*pgptr))
 	{
@@ -24650,6 +24639,29 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
 	    {
 	      scan = spage_get_record (*pgptr, forward_oid.slotid, recdes,
 				       COPY);
+	    }
+	}
+
+      if (scan == S_SUCCESS)
+	{
+	  if (recdes->type != REC_NEWHOME)
+	    {
+	      /* This can happen when MVCC is enabled */
+	      assert (mvcc_Enabled);
+	      /* Must ignore this */
+	      /* TODO: The REC_RELOCATION that is not followed by a REC_NEWHOME
+	       *	   should be a different type.
+	       */
+	      scan = S_SNAPSHOT_NOT_SATISFIED;
+	    }
+	  else if (check_snapshot)
+	    {
+	      or_mvcc_get_header (recdes, &mvcc_header);
+	      if (mvcc_snapshot->snapshot_fnc (thread_p, &mvcc_header,
+					       mvcc_snapshot) == false)
+		{
+		  scan = S_SNAPSHOT_NOT_SATISFIED;
+		}
 	    }
 	}
 
@@ -24936,7 +24948,7 @@ heap_prev_record_info (THREAD_ENTRY * thread_p, const HFID * hfid,
 static int
 heap_mvcc_lock_for_delete (THREAD_ENTRY * thread_p,
 			   const HFID * hfid, const OID * oid,
-			   OID * class_oid,
+			   const OID * class_oid,
 			   bool * current_record_locked,
 			   MVCC_REC_HEADER * recdes_header,
 			   PAGE_PTR * pgptr,
@@ -24961,7 +24973,9 @@ try_again:
   satisfies_delete_result = mvcc_satisfies_delete (thread_p, recdes_header);
   if (satisfies_delete_result == DELETE_RECORD_INVISIBLE)
     {
-      /* TODO - er set */
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+	      ER_MVCC_ROW_INVALID_FOR_DELETE, 3,
+	      oid->volid, oid->pageid, oid->slotid);
       goto error;
     }
   else if (satisfies_delete_result == DELETE_RECORD_IN_PROGRESS
@@ -25933,18 +25947,17 @@ heap_peek_mvcc_data (THREAD_ENTRY * thread_p,
  *   old(in/out): Flag. Set to true, if content of object has been stored
  *                it is set to false (i.e., only the address was stored)
  *   scan_cache(in/out): Scan cache
- *   mvcc_reev_data(in): mvcc data
+ *   mvcc_reev_data(in): mvcc reevaluation data
  */
 const OID *
 heap_mvcc_update (THREAD_ENTRY * thread_p, const HFID * hfid,
 		  const OID * class_oid, const OID * oid, RECDES * recdes,
 		  OID * new_oid, bool * old, HEAP_SCANCACHE * scan_cache,
-		  void *mvcc_reev_data)
+		  MVCC_REEV_DATA * mvcc_reev_data)
 {
   const OID *ret_oid = NULL;
   SCAN_CODE scan_code;
   HEAP_MVCC_DELETE_INFO mvcc_delete_info;
-  bool check_data_filter = false, wait = false;
   bool curr_row_locked = false;
 
   OID current_oid;
@@ -25974,15 +25987,8 @@ update_row:
       goto end;
     }
 
-  /* need to update the next row version */
-  switch (mvcc_delete_info.satisfies_delete_result)
+  if (mvcc_delete_info.satisfies_delete_result != DELETE_RECORD_DELETED)
     {
-    case DELETE_RECORD_DELETED:
-      /* need to update next row version */
-      check_data_filter = true;
-      break;
-
-    default:
       /* return NULL, lock not acquired, TODO - er_set */
       ret_oid = NULL;
       goto end;
@@ -25999,295 +26005,19 @@ update_row:
   scan_code =
     heap_mvcc_get_latest_version_with_lock (thread_p, hfid,
 					    &current_oid,
-					    scan_cache, NULL, PEEK,
+					    scan_cache, recdes, PEEK,
 					    &mvcc_delete_info,
 					    mvcc_reev_data);
 
-  if (scan_code != S_SUCCESS)
+  /* FIXME: mvcc_reev_data is NULL */
+  if (scan_code != S_SUCCESS
+      || (mvcc_reev_data != NULL && mvcc_reev_data->filter_result != V_TRUE))
     {
       /* lock already released in heap_mvcc_get_latest_version_with_lock */
       ret_oid = NULL;
       goto end;
     }
   curr_row_locked = true;
-
-  /* TO DO - replace checking/reevaluation code with a function */
-  /* check data filter */
-  if (check_data_filter && mvcc_reev_data)
-    {
-      HEAP_SCANCACHE local_scan_cache, *temp_scan_cache = &local_scan_cache;
-      DB_LOGICAL ev_res;
-      UPDDEL_MVCC_COND_REEVAL *mvcc_cond_reeval = NULL;
-      OID *cls_oid = NULL, *oid_inst = NULL;
-      int idx;
-      RECDES temp_recdes;
-
-      /* TO DO - separate where classes from assign classes ? */
-      for (mvcc_cond_reeval =
-	   ((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->mvcc_cond_reev_list;
-	   mvcc_cond_reeval != NULL;
-	   mvcc_cond_reeval = mvcc_cond_reeval->next)
-	{
-	  cls_oid = &mvcc_cond_reeval->cls_oid;
-	  oid_inst = mvcc_cond_reeval->inst_oid;
-	  if (OID_EQ (class_oid, cls_oid))
-	    {
-	      /* get record data */
-	      scan_code =
-		heap_get (thread_p, &current_oid, &temp_recdes,
-			  scan_cache, true, NULL_CHN);
-	      if (scan_code != S_SUCCESS)
-		{
-		  goto end;
-		}
-
-	      /* eval data filter */
-	      if (eval_data_filter
-		  (thread_p, (OID *) & current_oid, &temp_recdes,
-		   &mvcc_cond_reeval->filter) != V_TRUE)
-		{
-		  ret_oid = NULL;
-		  break;
-		}
-
-	      if (mvcc_cond_reeval->rest_attrs->num_attrs != 0)
-		{
-		  if (heap_attrinfo_read_dbvalues
-		      (thread_p, oid_inst, &temp_recdes,
-		       mvcc_cond_reeval->rest_attrs->attr_cache) != NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-
-		  if (fetch_val_list
-		      (thread_p, mvcc_cond_reeval->rest_regu_list,
-		       NULL, cls_oid, oid_inst, NULL, PEEK) != NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-		}
-	    }
-	  else
-	    {
-	      if (heap_scancache_quick_start (&local_scan_cache) != NO_ERROR)
-		{
-		  goto end;
-		}
-
-	      scan_code =
-		heap_get (thread_p, oid_inst, &temp_recdes, &local_scan_cache,
-			  PEEK, NULL_CHN);
-	      if (scan_code != S_SUCCESS)
-		{
-		  goto end;
-		}
-
-	      if (mvcc_cond_reeval->filter.scan_attrs->num_attrs != 0)
-		{
-		  if (heap_attrinfo_read_dbvalues
-		      (thread_p, oid_inst, &temp_recdes,
-		       mvcc_cond_reeval->filter.scan_attrs->attr_cache) !=
-		      NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-
-		  if (fetch_val_list
-		      (thread_p,
-		       mvcc_cond_reeval->filter.scan_pred->regu_list,
-		       NULL, cls_oid, oid_inst, NULL, PEEK) != NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-		}
-
-	      if (mvcc_cond_reeval->rest_attrs->num_attrs != 0)
-		{
-		  if (heap_attrinfo_read_dbvalues
-		      (thread_p, oid_inst, &temp_recdes,
-		       mvcc_cond_reeval->rest_attrs->attr_cache) != NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-
-		  if (fetch_val_list
-		      (thread_p, mvcc_cond_reeval->rest_regu_list,
-		       NULL, cls_oid, oid_inst, NULL, PEEK) != NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-		}
-
-	      if (mvcc_cond_reeval->filter.scan_pred->pred_expr != NULL)
-		{
-		  /* evaluate the predicates of the data filter */
-		  ev_res = V_TRUE;
-		  if (mvcc_cond_reeval->filter.scan_pred->pr_eval_fnc)
-		    {
-		      ev_res =
-			(*mvcc_cond_reeval->filter.scan_pred->
-			 pr_eval_fnc) (thread_p,
-				       mvcc_cond_reeval->filter.
-				       scan_pred->pred_expr,
-				       mvcc_cond_reeval->filter.val_descr,
-				       oid_inst);
-		    }
-
-		  if (ev_res != V_TRUE)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      ret_oid = NULL;
-		      break;
-		    }
-		}
-
-	      heap_scancache_end (thread_p, &local_scan_cache);
-	    }
-	}
-      if (mvcc_cond_reeval != NULL)
-	{
-	  /* The condition is false */
-	  goto end;
-	}
-
-      if (((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->
-	  curr_extra_assign_reev != NULL)
-	{
-	  for (idx = 0;
-	       idx <
-	       ((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->
-	       curr_extra_assign_cnt; idx++)
-	    {
-	      mvcc_cond_reeval =
-		((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->
-		curr_extra_assign_reev[idx];
-	      cls_oid = &mvcc_cond_reeval->cls_oid;
-	      if (OID_EQ (class_oid, cls_oid))
-		{
-		  oid_inst = &current_oid;
-		  temp_scan_cache = scan_cache;
-		}
-	      else
-		{
-		  oid_inst = mvcc_cond_reeval->inst_oid;
-		  temp_scan_cache = &local_scan_cache;
-		}
-
-	      if (heap_scancache_quick_start (&local_scan_cache) != NO_ERROR)
-		{
-		  goto end;
-		}
-	      scan_code =
-		heap_get (thread_p, oid_inst, &temp_recdes,
-			  temp_scan_cache, PEEK, NULL_CHN);
-	      if (scan_code != S_SUCCESS)
-		{
-		  goto end;
-		}
-
-	      if (mvcc_cond_reeval->rest_attrs->num_attrs != 0)
-		{
-		  if (heap_attrinfo_read_dbvalues
-		      (thread_p, oid_inst, &temp_recdes,
-		       mvcc_cond_reeval->rest_attrs->attr_cache) != NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-
-		  if (fetch_val_list
-		      (thread_p, mvcc_cond_reeval->rest_regu_list,
-		       NULL, cls_oid, oid_inst, NULL, PEEK) != NO_ERROR)
-		    {
-		      heap_scancache_end (thread_p, &local_scan_cache);
-		      goto end;
-		    }
-		}
-	      heap_scancache_end (thread_p, &local_scan_cache);
-	    }
-	}
-
-      if (((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->curr_assigns != NULL)
-	{
-	  UPDATE_MVCC_REEV_ASSIGNMENT *assign =
-	    ((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->curr_assigns;
-	  int rc;
-	  DB_VALUE *dbval = NULL;
-
-	  if (heap_attrinfo_clear_dbvalues
-	      (((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->curr_attrinfo) !=
-	      NO_ERROR)
-	    {
-	      goto end;
-	    }
-	  for (; assign != NULL; assign = assign->next)
-	    {
-	      if (assign->constant != NULL)
-		{
-		  rc =
-		    heap_attrinfo_set (&current_oid, assign->att_id,
-				       assign->constant,
-				       ((MVCC_UPDDEL_REEV_DATA *)
-					mvcc_reev_data)->curr_attrinfo);
-		}
-	      else
-		{
-		  if (fetch_peek_dbval
-		      (thread_p, assign->regu_right,
-		       ((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->vd,
-		       (OID *) class_oid, &current_oid, NULL,
-		       &dbval) != NO_ERROR)
-		    {
-		      goto end;
-		    }
-		  rc =
-		    heap_attrinfo_set (&current_oid, assign->att_id,
-				       dbval,
-				       ((MVCC_UPDDEL_REEV_DATA *)
-					mvcc_reev_data)->curr_attrinfo);
-		}
-	      if (rc != NO_ERROR)
-		{
-		  goto end;
-		}
-	    }
-
-	  /* TO DO - check that the page has been cached */
-	  scan_code =
-	    heap_get (thread_p, &current_oid, &temp_recdes,
-		      scan_cache, true, NULL_CHN);
-	  if (scan_code != S_SUCCESS)
-	    {
-	      goto end;
-	    }
-
-	  /* TO DO -  reuse already allocated area */
-	  if (((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->copyarea != NULL)
-	    {
-	      locator_free_copy_area (((MVCC_UPDDEL_REEV_DATA *)
-				       mvcc_reev_data)->copyarea);
-	      recdes->data = NULL;
-	      recdes->area_size = 0;
-	    }
-	  ((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->copyarea =
-	    locator_allocate_copy_area_by_attr_info (thread_p,
-						     ((MVCC_UPDDEL_REEV_DATA
-						       *) mvcc_reev_data)->
-						     curr_attrinfo,
-						     &temp_recdes, recdes, -1,
-						     LOB_FLAG_INCLUDE_LOB);
-	  if (((MVCC_UPDDEL_REEV_DATA *) mvcc_reev_data)->copyarea == NULL)
-	    {
-	      goto end;
-	    }
-	}
-    }
 
   /* prepare for updating locked row - no lock required */
   set_mvcc_delete_info (&mvcc_delete_info, MVCCID_NULL,
@@ -26326,7 +26056,7 @@ end:
  *   old(in/out): Flag. Set to true, if content of object has been stored
  *                it is set to false (i.e., only the address was stored)
  *   scan_cache(in/out): Scan cache
- *   mvcc_reev_data(in): mvcc data
+ *   mvcc_reev_data(in): mvcc reevaluation data
  */
 const OID *
 heap_perform_update (THREAD_ENTRY * thread_p, const HFID * hfid,
@@ -26358,12 +26088,12 @@ heap_perform_update (THREAD_ENTRY * thread_p, const HFID * hfid,
 const OID *
 heap_mvcc_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
 		  const OID * class_oid, const OID * oid,
-		  HEAP_SCANCACHE * scan_cache, void *mvcc_reev_data)
+		  HEAP_SCANCACHE * scan_cache,
+		  MVCC_REEV_DATA * mvcc_reev_data)
 {
   const OID *ret_oid = NULL;
   SCAN_CODE scan_code;
   HEAP_MVCC_DELETE_INFO mvcc_delete_info;
-  bool check_data_filter = false, wait = false;
   bool curr_row_locked = false;
 
   OID current_oid;
@@ -26393,15 +26123,8 @@ update_row:
       goto end;
     }
 
-  /* need to update the next row version */
-  switch (mvcc_delete_info.satisfies_delete_result)
+  if (mvcc_delete_info.satisfies_delete_result != DELETE_RECORD_DELETED)
     {
-    case DELETE_RECORD_DELETED:
-      /* need to update next row version */
-      check_data_filter = true;
-      break;
-
-    default:
       /* return NULL, lock not acquired, TODO - er_set */
       ret_oid = NULL;
       goto end;
@@ -26421,7 +26144,7 @@ update_row:
 					    PEEK, &mvcc_delete_info,
 					    mvcc_reev_data);
 
-  if (scan_code != S_SUCCESS)
+  if (scan_code != S_SUCCESS || mvcc_reev_data->filter_result != V_TRUE)
     {
       /* lock already released in heap_mvcc_get_latest_version_with_lock */
       ret_oid = NULL;
@@ -27092,14 +26815,18 @@ heap_get_bigone_content (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache,
  *   mvcc_delete_info(in/out): mvcc delete info
  *   mvcc_reev_data(in/out): data for condition reevaluation in mvcc
  *
- *   Note : This function get and lock the object if satisfies visibility. 
+ *   Note : This function get and lock the object if satisfies visibility.
+ *   We don't perform 'reevaluation' here, only 'evaluation' of data filter, so
+ *   we need all data related like: data filter, qualification and evaluation
+ *   result.
+ *   Also, we need the result of data filter evaluation
  */
 static SCAN_CODE
 heap_mvcc_get_with_lock (THREAD_ENTRY * thread_p, const HFID * hfid,
 			 OID * class_oid, OID * oid, RECDES * recdes,
 			 HEAP_SCANCACHE * scan_cache, int ispeeking,
 			 HEAP_MVCC_DELETE_INFO * mvcc_delete_info,
-			 MVCC_SELECT_REEV_DATA * mvcc_reev_data)
+			 MVCC_REEV_DATA * mvcc_reev_data)
 {
   VPID home_vpid, forward_vpid;
   VPID *vpidptr_incache;
@@ -27116,6 +26843,12 @@ heap_mvcc_get_with_lock (THREAD_ENTRY * thread_p, const HFID * hfid,
   MVCC_REC_HEADER mvcc_header;
   bool curr_lock_flag = false;
   DB_LOGICAL ev_res;
+  MVCC_SCAN_REEV_DATA *scan_reev_data = NULL;
+
+  if (mvcc_reev_data != NULL && mvcc_reev_data->type == REEV_DATA_SCAN)
+    {
+      scan_reev_data = mvcc_reev_data->select_reev_data;
+    }
 
 #if defined(CUBRID_DEBUG)
   if (scan_cache == NULL && ispeeking == PEEK)
@@ -27373,24 +27106,17 @@ try_again:
 		}
 	    }
 
-	  if (mvcc_reev_data != NULL
-	      && ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->data_filter !=
-	      NULL)
+	  if (scan_reev_data != NULL && scan_reev_data->data_filter != NULL)
 	    {
 	      ev_res =
 		eval_data_filter (thread_p, oid, &temp_recdes,
-				  ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->
-				  data_filter);
+				  scan_reev_data->data_filter);
 	      ev_res =
 		update_logical_result (thread_p, ev_res,
-				       (int *) ((MVCC_SELECT_REEV_DATA *)
-						mvcc_reev_data)->
-				       qualification,
-				       ((MVCC_SELECT_REEV_DATA *)
-					mvcc_reev_data)->key_filter,
+				       (int *) scan_reev_data->qualification,
+				       scan_reev_data->key_filter,
 				       &temp_recdes, oid);
-	      ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->filter_result =
-		ev_res;
+	      mvcc_reev_data->filter_result = ev_res;
 	      switch (ev_res)
 		{
 		case V_ERROR:
@@ -27514,24 +27240,17 @@ try_again:
 		}
 	    }
 
-	  if (mvcc_reev_data != NULL
-	      && ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->data_filter !=
-	      NULL)
+	  if (scan_reev_data != NULL && scan_reev_data->data_filter != NULL)
 	    {
 	      ev_res =
 		eval_data_filter (thread_p, oid, &temp_recdes,
-				  ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->
-				  data_filter);
+				  scan_reev_data->data_filter);
 	      ev_res =
 		update_logical_result (thread_p, ev_res,
-				       (int *) ((MVCC_SELECT_REEV_DATA *)
-						mvcc_reev_data)->
-				       qualification,
-				       ((MVCC_SELECT_REEV_DATA *)
-					mvcc_reev_data)->key_filter,
+				       (int *) scan_reev_data->qualification,
+				       scan_reev_data->key_filter,
 				       &temp_recdes, oid);
-	      ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->filter_result =
-		ev_res;
+	      mvcc_reev_data->filter_result = ev_res;
 	      switch (ev_res)
 		{
 		case V_ERROR:
@@ -27693,8 +27412,7 @@ try_again:
 	    }
 	}
 
-      if (mvcc_reev_data != NULL
-	  && ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->data_filter != NULL)
+      if (scan_reev_data != NULL && scan_reev_data->data_filter != NULL)
 	{
 	  scan =
 	    heap_get_bigone_content (thread_p, scan_cache, ispeeking,
@@ -27705,15 +27423,12 @@ try_again:
 	    }
 	  ev_res =
 	    eval_data_filter (thread_p, oid, recdes,
-			      ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->
-			      data_filter);
+			      scan_reev_data->data_filter);
 	  ev_res =
 	    update_logical_result (thread_p, ev_res,
-				   (int *) ((MVCC_SELECT_REEV_DATA *)
-					    mvcc_reev_data)->qualification,
-				   ((MVCC_SELECT_REEV_DATA *)
-				    mvcc_reev_data)->key_filter, recdes, oid);
-	  ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->filter_result = ev_res;
+				   (int *) scan_reev_data->qualification,
+				   scan_reev_data->key_filter, recdes, oid);
+	  mvcc_reev_data->filter_result = ev_res;
 	  switch (ev_res)
 	    {
 	    case V_ERROR:
@@ -27755,8 +27470,7 @@ try_again:
        * Now get the content of the multipage object.
        */
 
-      if (mvcc_reev_data == NULL
-	  || ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->data_filter == NULL)
+      if (scan_reev_data == NULL || scan_reev_data->data_filter == NULL)
 	{
 	  scan =
 	    heap_get_bigone_content (thread_p, scan_cache, ispeeking,
@@ -27853,16 +27567,16 @@ error:
  *	       involved in filters.
  *   recdes(in): Record descriptor that will contain the record
  */
-DB_LOGICAL
+static DB_LOGICAL
 mvcc_reevaluate_filters (THREAD_ENTRY * thread_p,
-			 MVCC_SELECT_REEV_DATA * mvcc_reev_data, OID * oid,
+			 MVCC_SCAN_REEV_DATA * mvcc_reev_data, OID * oid,
 			 RECDES * recdes)
 {
   FILTER_INFO *filter;
   DB_LOGICAL ev_res = V_TRUE;
 
   filter = mvcc_reev_data->range_filter;
-  if (filter != NULL)
+  if (filter != NULL && filter->scan_pred != NULL)
     {
       if (heap_attrinfo_read_dbvalues
 	  (thread_p, oid, recdes, filter->scan_attrs->attr_cache) != NO_ERROR)
@@ -27875,7 +27589,6 @@ mvcc_reevaluate_filters (THREAD_ENTRY * thread_p,
 					   filter->val_descr, oid);
       ev_res =
 	update_logical_result (thread_p, ev_res, NULL, NULL, NULL, NULL);
-      mvcc_reev_data->filter_result = ev_res;
       if (ev_res != V_TRUE)
 	{
 	  goto end;
@@ -27883,7 +27596,7 @@ mvcc_reevaluate_filters (THREAD_ENTRY * thread_p,
     }
 
   filter = mvcc_reev_data->key_filter;
-  if (filter != NULL)
+  if (filter != NULL && filter->scan_pred != NULL)
     {
       if (heap_attrinfo_read_dbvalues
 	  (thread_p, oid, recdes, filter->scan_attrs->attr_cache) != NO_ERROR)
@@ -27896,7 +27609,6 @@ mvcc_reevaluate_filters (THREAD_ENTRY * thread_p,
 					   filter->val_descr, oid);
       ev_res =
 	update_logical_result (thread_p, ev_res, NULL, NULL, NULL, NULL);
-      mvcc_reev_data->filter_result = ev_res;
       if (ev_res != V_TRUE)
 	{
 	  goto end;
@@ -27904,17 +27616,267 @@ mvcc_reevaluate_filters (THREAD_ENTRY * thread_p,
     }
 
   filter = mvcc_reev_data->data_filter;
-  if (filter != NULL)
+  if (filter != NULL && filter->scan_pred != NULL)
     {
       ev_res = eval_data_filter (thread_p, oid, recdes, filter);
       ev_res =
 	update_logical_result (thread_p, ev_res,
 			       (int *) mvcc_reev_data->qualification,
 			       mvcc_reev_data->key_filter, recdes, oid);
-      mvcc_reev_data->filter_result = ev_res;
     }
 
 end:
+  return ev_res;
+}
+
+/*
+ * heap_mvcc_reeval_scan_filters () - reevaluates conditions for a scan table
+ *				    at update/delete stage of an UPDATE/DELETE
+ *				    statement
+ *   return: result of reevaluation
+ *   thread_p(in): thread entry
+ *   oid(in) : The OID of the latest version of record that triggered
+ *	       reevaluation
+ *   scan_cache(in): scan_cache
+ *   recdes(in): Record descriptor of the record to be updated/deleted.
+ *   mvcc_cond_reeval(in): The structure that contains data needed for
+ *			   reevaluation
+ *   is_upddel(in): true if current scan is updated/deleted when reevaluation
+ *		    occured.
+ *
+ *  Note: The current transaction already acquired X-LOCK on oid parameter
+ *	    before calling this function. If the condition returns false then
+ *	    the lock must be released by the caller.
+ *	  The function reevaluates entire condition: key range, key filter and
+ *	    data filter.
+ */
+static DB_LOGICAL
+heap_mvcc_reeval_scan_filters (THREAD_ENTRY * thread_p, OID * oid,
+			       HEAP_SCANCACHE * scan_cache, RECDES * recdes,
+			       UPDDEL_MVCC_COND_REEVAL * mvcc_cond_reeval,
+			       bool is_upddel)
+{
+  OID *cls_oid = NULL, *oid_inst = NULL;
+  MVCC_SCAN_REEV_DATA scan_reev;
+  RECDES temp_recdes, *recdesp = NULL;
+  HEAP_SCANCACHE local_scan_cache;
+  bool scan_cache_inited = false;
+  SCAN_CODE scan_code;
+  DB_LOGICAL ev_res = V_TRUE;
+
+  cls_oid = &mvcc_cond_reeval->cls_oid;
+  if (!is_upddel)
+    {
+      /* the class is different than the class to be updated/deleted, so use
+       * the latest version of row */
+      recdesp = &temp_recdes;
+      oid_inst = oid;
+      if (heap_scancache_quick_start (&local_scan_cache) != NO_ERROR)
+	{
+	  ev_res = V_ERROR;
+	  goto end;
+	}
+      scan_cache_inited = true;
+      scan_code =
+	heap_get (thread_p, oid_inst, recdesp, &local_scan_cache,
+		  PEEK, NULL_CHN);
+      if (scan_code != S_SUCCESS)
+	{
+	  ev_res = V_ERROR;
+	  goto end;
+	}
+    }
+  else
+    {
+      /* the class to be updated/deleted */
+      recdesp = recdes;
+      oid_inst = mvcc_cond_reeval->inst_oid;
+    }
+
+  if (mvcc_cond_reeval->rest_attrs->num_attrs != 0)
+    {
+      if (heap_attrinfo_read_dbvalues
+	  (thread_p, oid_inst, recdesp,
+	   mvcc_cond_reeval->rest_attrs->attr_cache) != NO_ERROR)
+	{
+	  ev_res = V_ERROR;
+	  goto end;
+	}
+
+      if (fetch_val_list
+	  (thread_p, mvcc_cond_reeval->rest_regu_list,
+	   NULL, cls_oid, oid_inst, NULL, PEEK) != NO_ERROR)
+	{
+	  ev_res = V_ERROR;
+	  goto end;
+	}
+    }
+
+  if (mvcc_cond_reeval->range_filter.scan_pred != NULL ||
+      mvcc_cond_reeval->key_filter.scan_pred != NULL ||
+      mvcc_cond_reeval->data_filter.scan_pred != NULL)
+    {
+      /* evaluate conditions */
+      scan_reev.range_filter = &mvcc_cond_reeval->range_filter;
+      scan_reev.key_filter = &mvcc_cond_reeval->key_filter;
+      scan_reev.data_filter = &mvcc_cond_reeval->data_filter;
+      scan_reev.qualification = &mvcc_cond_reeval->qualification;
+      ev_res = mvcc_reevaluate_filters (thread_p, &scan_reev, oid_inst,
+					recdesp);
+    }
+
+end:
+  if (scan_cache_inited)
+    {
+      heap_scancache_end (thread_p, &local_scan_cache);
+    }
+
+  return ev_res;
+}
+
+/*
+ * heap_mvcc_reev_cond_assigns () - reevaluates conditions and assignments
+ *				    at update/delete stage of an UPDATE/DELETE
+ *				    statement
+ *   return: result of reevaluation
+ *   thread_p(in): thread entry
+ *   class_oid(in): OID of the class that triggered reevaluation
+ *   oid(in) : The OID of the latest version of record that triggered
+ *	       reevaluation
+ *   scan_cache(in): scan_cache
+ *   recdes(in): Record descriptor that will contain the updated/deleted record
+ *   mvcc_reev_data(in): The structure that contains data needed for
+ *			 reevaluation
+ *
+ *  Note: the current transaction already acquired X-LOCK on oid parameter
+ *	    before calling this function. If the condition returns false then
+ *	    the lock must be released by the caller.
+ *	  The function reevaluates entire condition: key range, key filter and
+ *	    data filter.
+ *	  This function allocates memory for recdes and deallocates it if it
+ *	    was already allocated for previous reevaluated record. After last
+ *	    reevaluation this memory must be deallocated by one of its callers
+ *	    (e.g. qexec_execute_update).
+ */
+static DB_LOGICAL
+heap_mvcc_reev_cond_assigns (THREAD_ENTRY * thread_p, OID * class_oid,
+			     OID * oid, HEAP_SCANCACHE * scan_cache,
+			     RECDES * recdes,
+			     MVCC_UPDDEL_REEV_DATA * mvcc_reev_data)
+{
+  DB_LOGICAL ev_res = V_TRUE;
+  UPDDEL_MVCC_COND_REEVAL *mvcc_cond_reeval = NULL;
+  int idx;
+  RECDES temp_recdes;
+  SCAN_CODE scan_code;
+
+  /* reevaluate condition for each class involved into */
+  for (mvcc_cond_reeval = mvcc_reev_data->mvcc_cond_reev_list;
+       mvcc_cond_reeval != NULL; mvcc_cond_reeval = mvcc_cond_reeval->next)
+    {
+      ev_res =
+	heap_mvcc_reeval_scan_filters (thread_p, oid, scan_cache, recdes,
+				       mvcc_cond_reeval,
+				       mvcc_reev_data->curr_upddel ==
+				       mvcc_cond_reeval);
+      if (ev_res != V_TRUE)
+	{
+	  goto end;
+	}
+    }
+
+  /* reload data from classes involved only in right side of assignments (not in
+   * condition) */
+  if (mvcc_reev_data->curr_extra_assign_reev != NULL)
+    {
+      for (idx = 0; idx < mvcc_reev_data->curr_extra_assign_cnt; idx++)
+	{
+	  mvcc_cond_reeval = mvcc_reev_data->curr_extra_assign_reev[idx];
+	  ev_res =
+	    heap_mvcc_reeval_scan_filters (thread_p, oid, scan_cache, recdes,
+					   mvcc_cond_reeval, false);
+	  if (ev_res != V_TRUE)
+	    {
+	      goto end;
+	    }
+	}
+    }
+
+  /* after reevaluation perform assignments */
+  if (mvcc_reev_data->curr_assigns != NULL)
+    {
+      UPDATE_MVCC_REEV_ASSIGNMENT *assign = mvcc_reev_data->curr_assigns;
+      int rc;
+      DB_VALUE *dbval = NULL;
+
+      if (heap_attrinfo_clear_dbvalues (mvcc_reev_data->curr_attrinfo) !=
+	  NO_ERROR)
+	{
+	  ev_res = V_ERROR;
+	  goto end;
+	}
+      for (; assign != NULL; assign = assign->next)
+	{
+	  if (assign->constant != NULL)
+	    {
+	      rc =
+		heap_attrinfo_set (oid, assign->att_id,
+				   assign->constant,
+				   mvcc_reev_data->curr_attrinfo);
+	    }
+	  else
+	    {
+	      if (fetch_peek_dbval
+		  (thread_p, assign->regu_right, mvcc_reev_data->vd,
+		   (OID *) class_oid, oid, NULL, &dbval) != NO_ERROR)
+		{
+		  ev_res = V_ERROR;
+		  goto end;
+		}
+	      rc =
+		heap_attrinfo_set (oid, assign->att_id,
+				   dbval, mvcc_reev_data->curr_attrinfo);
+	    }
+	  if (rc != NO_ERROR)
+	    {
+	      ev_res = V_ERROR;
+	      goto end;
+	    }
+
+	  /* TO DO - check that the page has been cached */
+	  scan_code =
+	    heap_get (thread_p, oid, &temp_recdes, scan_cache, true,
+		      NULL_CHN);
+	  if (scan_code != S_SUCCESS)
+	    {
+	      ev_res = V_ERROR;
+	      goto end;
+	    }
+
+	  /* TO DO -  reuse already allocated area */
+	  if (mvcc_reev_data->copyarea != NULL)
+	    {
+	      locator_free_copy_area (mvcc_reev_data->copyarea);
+	      recdes->data = NULL;
+	      recdes->area_size = 0;
+	    }
+	  mvcc_reev_data->copyarea =
+	    locator_allocate_copy_area_by_attr_info (thread_p,
+						     mvcc_reev_data->
+						     curr_attrinfo,
+						     &temp_recdes, recdes,
+						     -1,
+						     LOB_FLAG_INCLUDE_LOB);
+	  if (mvcc_reev_data->copyarea == NULL)
+	    {
+	      ev_res = V_ERROR;
+	      goto end;
+	    }
+	}
+    }
+
+end:
+
   return ev_res;
 }
 
@@ -27951,7 +27913,7 @@ heap_mvcc_get_latest_version_with_lock (THREAD_ENTRY * thread_p,
 					int ispeeking,
 					HEAP_MVCC_DELETE_INFO *
 					mvcc_delete_info,
-					void *mvcc_reev_data)
+					MVCC_REEV_DATA * mvcc_reev_data)
 {
   SCAN_CODE scan_code = S_SUCCESS;
   bool curr_row_locked = false;
@@ -27969,6 +27931,8 @@ heap_mvcc_get_latest_version_with_lock (THREAD_ENTRY * thread_p,
   /* the previously locked row in chain */
   OID prev_row_locked;
   bool ignore_record = false;
+  bool save_cache_last_fix_page = false;
+  DB_LOGICAL ev_res = V_TRUE;
 
   assert (mvcc_delete_info != NULL && scan_cache != NULL);
   assert (MVCCID_IS_VALID (mvcc_delete_info->row_delid));
@@ -28042,7 +28006,8 @@ fetch_row:
 		    }
 
 		  if (lock_object
-		      (thread_p, &curr_row_version, &scan_cache->class_oid,
+		      (thread_p, &curr_row_version,
+		       &scan_cache->class_oid,
 		       mvcc_delete_info->next_row_lock_request,
 		       LK_UNCOND_LOCK) != LK_GRANTED)
 		    {
@@ -28097,14 +28062,17 @@ fetch_row:
 	      OID_SET_NULL (&prev_row_locked);
 	    }
 
-	  /* now get the record, if requested */
-	  if (recdes != NULL)
+	  if (!MVCC_IS_REC_INSERTED_BY_ME (thread_p, &mvcc_header))
 	    {
 	      /* save scan cache snapshot and cache last fix page */
-	      MVCC_SNAPSHOT *saved_snapshot = scan_cache->mvcc_snapshot;
-	      bool save_cache_last_fix_page = scan_cache->cache_last_fix_page;
-	      DB_LOGICAL ev_res;
+	      saved_snapshot = scan_cache->mvcc_snapshot;
+	      save_cache_last_fix_page = scan_cache->cache_last_fix_page;
 
+	      /* now get the record, if requested */
+	      if (recdes == NULL)
+		{
+		  recdes = &temp_recdes;
+		}
 	      scan_cache->mvcc_snapshot = NULL;
 	      if (ispeeking == COPY)
 		{
@@ -28124,11 +28092,32 @@ fetch_row:
 		  goto end;
 		}
 
-	      ev_res =
-		mvcc_reevaluate_filters (thread_p,
-					 (MVCC_SELECT_REEV_DATA *)
-					 mvcc_reev_data, &curr_row_version,
-					 recdes);
+	      if (mvcc_reev_data != NULL)
+		{
+		  /* FIXME: Quick fix for NULL reevaluation */
+		  switch (mvcc_reev_data->type)
+		    {
+		    case REEV_DATA_SCAN:
+		      ev_res =
+			mvcc_reevaluate_filters (thread_p,
+						 mvcc_reev_data->select_reev_data,
+						 &curr_row_version, recdes);
+		      mvcc_reev_data->filter_result = ev_res;
+		      break;
+		    case REEV_DATA_UPDDEL:
+		      ev_res =
+			heap_mvcc_reev_cond_assigns (thread_p,
+						     &scan_cache->class_oid,
+						     &curr_row_version,
+						     scan_cache, recdes,
+						     mvcc_reev_data->
+						     upddel_reev_data);
+		      mvcc_reev_data->filter_result = ev_res;
+		      break;
+		    default:
+		      break;
+		    };
+		}
 	      if (ev_res == V_ERROR)
 		{
 		  scan_code = S_ERROR;
@@ -28138,6 +28127,11 @@ fetch_row:
 		{
 		  goto end;
 		}
+	    }
+	  else if (mvcc_reev_data != NULL)
+	    {
+	      /* FIXME: mvcc_reev_data is NULL */
+	      mvcc_reev_data->filter_result = V_TRUE;
 	    }
 	  COPY_OID (last_locked_version, &curr_row_version);
 	  break;
@@ -28233,9 +28227,7 @@ end:
     }
 
   if (scan_code != S_SUCCESS
-      || (mvcc_reev_data != NULL
-	  && ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->filter_result ==
-	  V_FALSE))
+      || (mvcc_reev_data != NULL && mvcc_reev_data->filter_result == V_FALSE))
     {
       /* the objec is not visible for me, so remove all locks */
       if (!OID_ISNULL (&prev_row_locked))
@@ -28329,14 +28321,13 @@ heap_mvcc_get_for_delete (THREAD_ENTRY * thread_p,
   scan_code =
     heap_mvcc_get_with_lock (thread_p, hfid, NULL, oid, recdes, scan_cache,
 			     ispeeking, &mvcc_delete_info, mvcc_reev_data);
-  if (scan_code != S_SUCCESS ||
-      mvcc_delete_info.satisfies_delete_result == DELETE_RECORD_INVISIBLE)
+  if (scan_code != S_SUCCESS)
     {
       return scan_code;
     }
 
   if (mvcc_reev_data != NULL
-      && ((MVCC_SELECT_REEV_DATA *) mvcc_reev_data)->filter_result == V_FALSE)
+      && ((MVCC_REEV_DATA *) mvcc_reev_data)->filter_result == V_FALSE)
     {
       return scan_code;
     }
@@ -28434,4 +28425,29 @@ get_mvcc_delete_info (HEAP_MVCC_DELETE_INFO * mvcc_delete_info,
     {
       *satisfies_del_result = mvcc_delete_info->satisfies_delete_result;
     }
+}
+
+/*
+ * heap_is_mvcc_disabled_for_class () - MVCC is disabled for root class and
+ *					db_serial.
+ *
+ * return	  : True if MVCC is disabled for class.
+ * thread_p (in)  : Thread entry.
+ * class_oid (in) : Class OID.
+ */
+bool
+heap_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p,
+				 const OID * class_oid)
+{
+  if (OID_ISNULL (class_oid) || OID_IS_ROOTOID (class_oid))
+    {
+      /* MVCC is disabled for root class */
+      return true;
+    }
+  if (oid_is_serial (class_oid))
+    {
+      return true;
+    }
+
+  return false;
 }

@@ -4055,8 +4055,7 @@ stx_build_delete_proc (THREAD_ENTRY * thread_p, char *ptr,
 					     delete_info->no_classes);
       if (delete_info->classes == NULL)
 	{
-	  stx_set_xasl_errcode (thread_p, ER_OUT_OF_VIRTUAL_MEMORY);
-	  return NULL;
+	  goto error;
 	}
     }
 
@@ -4064,7 +4063,30 @@ stx_build_delete_proc (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &delete_info->no_logging);
   ptr = or_unpack_int (ptr, &delete_info->release_lock);
 
+  /* restore MVCC condition reevaluation data */
+  ptr = or_unpack_int (ptr, &delete_info->no_reev_classes);
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0 || delete_info->no_reev_classes == 0)
+    {
+      delete_info->mvcc_reev_classes = NULL;
+    }
+  else
+    {
+      delete_info->mvcc_reev_classes =
+	stx_restore_int_array (thread_p,
+			       &xasl_unpack_info->packed_xasl[offset],
+			       delete_info->no_reev_classes);
+      if (delete_info->mvcc_reev_classes == NULL)
+	{
+	  goto error;
+	}
+    }
+
   return ptr;
+
+error:
+  stx_set_xasl_errcode (thread_p, ER_OUT_OF_VIRTUAL_MEMORY);
+  return NULL;
 }
 
 static char *

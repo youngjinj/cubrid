@@ -2193,13 +2193,12 @@ extern void xlogtb_dump_trantable (THREAD_ENTRY * thread_p, FILE * out_fp);
 extern bool logpb_need_wal (const LOG_LSA * lsa);
 extern void logpb_get_nxio_lsa (LOG_LSA * lsa_p);
 
-extern int logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
-					 MVCC_SNAPSHOT * snapshot);
 extern MVCCID logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p);
 
 extern MVCCID logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes);
 extern MVCCID logtb_find_current_mvccid (THREAD_ENTRY * thread_p);
 extern MVCCID logtb_get_current_mvccid (THREAD_ENTRY * thread_p);
+extern void xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p);
 
 extern bool logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);
 extern bool logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);

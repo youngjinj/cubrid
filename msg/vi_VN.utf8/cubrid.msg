@@ -1211,7 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): remote access to server not allowed.
 1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
-2001 Lỗi sau cùng
+2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+2002 Lỗi sau cùng
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Lỗi trong các lỗi hệ thống con (dòng %d):

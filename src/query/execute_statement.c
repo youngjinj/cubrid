@@ -3476,8 +3476,8 @@ do_internal_statements (PARSER_CONTEXT * parser, PT_NODE * internal_stmt_list,
 	  save_parser = parent_parser;
 	  parent_parser = parser;
 	  error =
-	    db_execute (stmt_str->info.value.text, &query_result,
-			&query_error);
+	    db_compile_and_execute_local (stmt_str->info.value.text,
+					  &query_result, &query_error);
 	  /* restore the parent parser */
 	  parent_parser = save_parser;
 	  if (error < NO_ERROR)

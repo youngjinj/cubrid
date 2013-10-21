@@ -1362,7 +1362,7 @@ vid_getall_mops (MOP class_mop, SM_CLASS * class_p, DB_FETCH_MODE purpose)
 	    class_name, class_name);
 
   /* run the query */
-  error = db_query_execute (query, &qres, &query_error);
+  error = db_compile_and_execute_local (query, &qres, &query_error);
   if (error != NO_ERROR)
     {
       return NULL;

@@ -472,7 +472,7 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
       else if (rec_type == REC_NEWHOME)
 	{
 	  /* TODO: Temporarily ignore this case, need more investigation for
-	   *	   a proper fix.
+	   *       a proper fix.
 	   */
 	  break;
 	}
@@ -781,7 +781,7 @@ mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header)
 	  /* Record was already deleted by me... This case should be filtered
 	   * by scan phase and it should never get here. Be conservative.
 	   */
-	  return DELETE_RECORD_INVISIBLE;
+	  return DELETE_RECORD_DELETED;
 	}
       else if (MVCC_IS_REC_DELETER_ACTIVE (thread_p, rec_header))
 	{
@@ -861,8 +861,9 @@ mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
 	}
       else if (MVCC_IS_REC_DELETER_ACTIVE (thread_p, rec_header))
 	{
-	  /* Record was deleted by an active transaction and is still visible
+	  /* Record was deleted by other active transaction and is still visible
 	   */
+	  snapshot->highest_completed_mvccid = rec_header->mvcc_del_id;
 	  return true;
 	}
       else

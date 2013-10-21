@@ -134,6 +134,7 @@ extern int catcls_get_db_collation (THREAD_ENTRY * thread_p,
 				    int *coll_cnt);
 extern int catcls_get_apply_info_log_record_time (THREAD_ENTRY * thread_p,
 						  time_t * log_record_time);
+extern int catcls_find_and_set_serial_class_oid (THREAD_ENTRY * thread_p);
 
 static int catcls_initialize_class_oid_to_oid_hash_table (int num_entry);
 static int catcls_get_or_value_from_class (THREAD_ENTRY * thread_p,
@@ -207,8 +208,7 @@ static int catcls_put_or_value_into_record (THREAD_ENTRY * thread_p,
 
 static int catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 				 OID * root_oid);
-static int catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
-				 bool delete_old_row);
+static int catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p);
 static int catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 				 OR_VALUE * old_value, int *uflag);
 
@@ -3470,7 +3470,7 @@ catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   hfid_p = &cls_info_p->hfid;
   /* need to update assigned oid of each instance */
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   MULTI_ROW_UPDATE, NULL, true) != NO_ERROR)
+				   MULTI_ROW_UPDATE, NULL) != NO_ERROR)
     {
       error = er_errid ();
       goto error;
@@ -3529,8 +3529,7 @@ error:
  *   delete_old_row(in): true, if old row must be physically deleted
  */
 static int
-catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
-		      bool delete_old_row)
+catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p)
 {
   OR_VALUE *subset_p;
   int n_subset;
@@ -3564,7 +3563,7 @@ catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   MULTI_ROW_DELETE, NULL, delete_old_row)
+				   MULTI_ROW_DELETE, NULL)
       != NO_ERROR)
     {
       error = er_errid ();
@@ -3674,7 +3673,7 @@ catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   MULTI_ROW_UPDATE, NULL, true) != NO_ERROR)
+				   MULTI_ROW_UPDATE, NULL) != NO_ERROR)
     {
       goto error;
     }
@@ -3989,8 +3988,7 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
       if (IS_SUBSET (attrs[i]))
 	{
 	  error =
-	    catcls_delete_subset (thread_p, &attrs[i],
-				  scan_p->delete_old_row);
+	    catcls_delete_subset (thread_p, &attrs[i]);
 	  if (error != NO_ERROR)
 	    {
 	      goto error;
@@ -4258,7 +4256,7 @@ catcls_insert_catalog_classes (THREAD_ENTRY * thread_p, RECDES * record_p)
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   SINGLE_ROW_UPDATE, NULL, true) != NO_ERROR)
+				   SINGLE_ROW_UPDATE, NULL) != NO_ERROR)
     {
       goto error;
     }
@@ -4336,8 +4334,7 @@ catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
   /* in mvcc, do not phisically remove the row */
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p,
 				   ct_class_oid_p,
-				   SINGLE_ROW_DELETE, NULL,
-				   false) != NO_ERROR)
+				   SINGLE_ROW_DELETE, NULL) != NO_ERROR)
     {
       goto error;
     }
@@ -4426,7 +4423,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p,
 				   class_oid_p,
-				   SINGLE_ROW_UPDATE, NULL, true) != NO_ERROR)
+				   SINGLE_ROW_UPDATE, NULL) != NO_ERROR)
     {
       goto error;
     }
@@ -4504,7 +4501,6 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	  /* already inserted by the current transaction, need to replace
 	   * the old version
 	   */
-	  scan.delete_old_row = true;
 	  if (catcls_update_instance
 	      (thread_p, value_p, &oid, class_oid_p, hfid_p,
 	       &scan) != NO_ERROR)
@@ -4516,7 +4512,6 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	{
 	  /* not inserted by the current transaction - update to new version */
 	  OID root_oid = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
-	  scan.delete_old_row = false;
 	  if (catcls_mvcc_update_instance (thread_p, value_p, &oid, &root_oid,
 					   class_oid_p, hfid_p,
 					   &scan) != NO_ERROR)
@@ -4953,12 +4948,12 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
     }
 
   /* link the old version by new version */
-  if (heap_mvcc_update_to_row_version (thread_p, hfid_p, class_oid_p, oid_p,
-				       &new_oid, scan_p) == NULL)
-    {
-      error = er_errid ();
-      goto error;
-    }
+  //if (heap_mvcc_update_to_row_version (thread_p, hfid_p, class_oid_p, oid_p,
+		//		       &new_oid, scan_p) == NULL)
+  //  {
+  //    error = er_errid ();
+  //    goto error;
+  //  }
 
   /* for replication */
   if (locator_add_or_remove_index (thread_p, &record, &new_oid, class_oid_p,
@@ -5400,4 +5395,31 @@ exit:
     }
 
   return error;
+}
+
+/*
+ * catcls_find_and_set_serial_class_oid () - Used to find OID for serial class
+ *					  and set the global variable for
+ *					  serial class OID.
+ *
+ * return	 : Error code.
+ * thread_p (in) : Thread entry.
+ *
+ * NOTE: This was required for MVCC. It is probably a good idea to extend
+ *	 cached OID's for all system classes, to avoid looking for them every
+ *	 time they're needed.
+ */
+int
+catcls_find_and_set_serial_class_oid (THREAD_ENTRY * thread_p)
+{
+  OID serial_class_oid;
+  LC_FIND_CLASSNAME status =
+    xlocator_find_class_oid (thread_p, CT_SERIAL_NAME, &serial_class_oid,
+			     NULL_LOCK);
+  if (status == LC_CLASSNAME_ERROR)
+    {
+      return ER_FAILED;
+    }
+  oid_set_serial (&serial_class_oid);
+  return NO_ERROR;
 }

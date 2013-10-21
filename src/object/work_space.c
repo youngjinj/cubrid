@@ -169,6 +169,14 @@ static MHT_TABLE *Classname_cache = NULL;
  */
 static AREA *Objlist_area = NULL;
 
+/* When MVCC is enabled, fetched objects are not locked. Which means next
+ * fetch call would go to server and check if object was changed. However,
+ * if the same snapshot is used, the visible object is not changed. To avoid
+ * checking on server, mark fetched object with the snapshot version and
+ * don't re-fetch until snapshot version is changed.
+ */
+static int ws_MVCC_snapshot_version = 0;
+
 /*
  * ws_area_init
  *    Initialize the areas used by the workspace manager.
@@ -277,6 +285,10 @@ ws_make_mop (OID * oid)
       op->is_temp = 0;
       op->released = 0;
       op->decached = 0;
+      /* Initialize mvcc snapshot version to be sure it doesn't match with
+       * current mvcc snapshot version.
+       */
+      op->mvcc_snapshot_version = ws_get_mvcc_snapshot_version () -1;
 
       /* this is NULL only for the Null_object hack */
       if (oid != NULL)
@@ -5763,4 +5775,39 @@ ws_free_flush_error (WS_FLUSH_ERR * flush_err)
   free_and_init (flush_err);
 
   return;
+}
+
+/*
+ * ws_get_mvcc_snapshot_version () - Get current snapshot version.
+ *
+ * return : Current snapshot version.
+ */
+int
+ws_get_mvcc_snapshot_version ()
+{
+  return ws_MVCC_snapshot_version;
+}
+
+/*
+ * ws_increment_mvcc_snapshot_version () - Increment current snapshot version.
+ *
+ * return : Void.
+ */
+void
+ws_increment_mvcc_snapshot_version ()
+{
+  ws_MVCC_snapshot_version++;
+}
+
+/*
+ * ws_is_mop_fetched_with_current_snapshot () - Check if mop was fetched
+ *						during current snapshot.
+ *
+ * return   : True if mop was already fetched during current snapshot.
+ * mop (in) : Cached object pointer.
+ */
+bool
+ws_is_mop_fetched_with_current_snapshot (MOP mop)
+{
+  return (mop->mvcc_snapshot_version == ws_MVCC_snapshot_version);
 }

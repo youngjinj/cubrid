@@ -5077,12 +5077,16 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  if (mvcc_Enabled == true && scan_id->mvcc_select_lock_needed
 	      && sp_scan == S_SUCCESS)
 	    {
-	      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+	      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
+	      MVCC_REEV_DATA mvcc_reev_data;
 
-	      mvcc_reev_data.data_filter = &data_filter;
-	      mvcc_reev_data.key_filter = NULL;
-	      mvcc_reev_data.range_filter = NULL;
-	      mvcc_reev_data.qualification = &scan_id->qualification;
+	      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
+	      mvcc_reev_data.type = REEV_DATA_SCAN;
+
+	      mvcc_sel_reev_data.data_filter = &data_filter;
+	      mvcc_sel_reev_data.key_filter = NULL;
+	      mvcc_sel_reev_data.range_filter = NULL;
+	      mvcc_sel_reev_data.qualification = &scan_id->qualification;
 	      COPY_OID (&current_oid, &hsidp->curr_oid);
 	      sp_scan =
 		heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
@@ -5117,12 +5121,17 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		  if (mvcc_Enabled == true && scan_id->mvcc_select_lock_needed
 		      && sp_scan == S_SUCCESS)
 		    {
-		      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+		      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
+		      MVCC_REEV_DATA mvcc_reev_data;
 
-		      mvcc_reev_data.data_filter = &data_filter;
-		      mvcc_reev_data.key_filter = NULL;
-		      mvcc_reev_data.range_filter = NULL;
-		      mvcc_reev_data.qualification = &scan_id->qualification;
+		      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
+		      mvcc_reev_data.type = REEV_DATA_SCAN;
+
+		      mvcc_sel_reev_data.data_filter = &data_filter;
+		      mvcc_sel_reev_data.key_filter = NULL;
+		      mvcc_sel_reev_data.range_filter = NULL;
+		      mvcc_sel_reev_data.qualification =
+			&scan_id->qualification;
 		      COPY_OID (&current_oid, &hsidp->curr_oid);
 		      sp_scan =
 			heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
@@ -5162,12 +5171,17 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		  if (mvcc_Enabled == true && scan_id->mvcc_select_lock_needed
 		      && sp_scan == S_SUCCESS)
 		    {
-		      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+		      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
+		      MVCC_REEV_DATA mvcc_reev_data;
 
-		      mvcc_reev_data.data_filter = &data_filter;
-		      mvcc_reev_data.key_filter = NULL;
-		      mvcc_reev_data.range_filter = NULL;
-		      mvcc_reev_data.qualification = &scan_id->qualification;
+		      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
+		      mvcc_reev_data.type = REEV_DATA_SCAN;
+
+		      mvcc_sel_reev_data.data_filter = &data_filter;
+		      mvcc_sel_reev_data.key_filter = NULL;
+		      mvcc_sel_reev_data.range_filter = NULL;
+		      mvcc_sel_reev_data.qualification =
+			&scan_id->qualification;
 		      COPY_OID (&current_oid, &hsidp->curr_oid);
 		      sp_scan =
 			heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
@@ -5776,7 +5790,11 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  else
 	    {
 	      FILTER_INFO range_filter, key_filter;
-	      MVCC_SELECT_REEV_DATA mvcc_reev_data;
+	      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
+	      MVCC_REEV_DATA mvcc_reev_data;
+
+	      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
+	      mvcc_reev_data.type = REEV_DATA_SCAN;
 
 	      if (isidp->range_pred.regu_list != NULL)
 		{
@@ -5785,11 +5803,11 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 					 scan_id->val_list, scan_id->vd,
 					 &isidp->cls_oid, 0, NULL,
 					 &isidp->num_vstr, isidp->vstr_ids);
-		  mvcc_reev_data.range_filter = &range_filter;
+		  mvcc_sel_reev_data.range_filter = &range_filter;
 		}
 	      else
 		{
-		  mvcc_reev_data.range_filter = NULL;
+		  mvcc_sel_reev_data.range_filter = NULL;
 		}
 	      if (isidp->key_pred.regu_list != NULL)
 		{
@@ -5799,21 +5817,21 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 					 isidp->bt_num_attrs,
 					 isidp->bt_attr_ids, &isidp->num_vstr,
 					 isidp->vstr_ids);
-		  mvcc_reev_data.key_filter = &key_filter;
+		  mvcc_sel_reev_data.key_filter = &key_filter;
 		}
 	      else
 		{
-		  mvcc_reev_data.key_filter = NULL;
+		  mvcc_sel_reev_data.key_filter = NULL;
 		}
 	      if (data_filter.scan_pred->regu_list != NULL)
 		{
-		  mvcc_reev_data.data_filter = &data_filter;
+		  mvcc_sel_reev_data.data_filter = &data_filter;
 		}
 	      else
 		{
-		  mvcc_reev_data.data_filter = NULL;
+		  mvcc_sel_reev_data.data_filter = NULL;
 		}
-	      mvcc_reev_data.qualification = &scan_id->qualification;
+	      mvcc_sel_reev_data.qualification = &scan_id->qualification;
 	      sp_scan = heap_mvcc_get_for_delete (thread_p,
 						  &isidp->hfid,
 						  isidp->curr_oidp,

@@ -4004,6 +4004,24 @@ xts_process_delete_proc (char *ptr, const DELETE_PROC_NODE * delete_info)
 
   ptr = or_pack_int (ptr, delete_info->release_lock);
 
+  /* mvcc condition reevaluation data */
+  ptr = or_pack_int (ptr, delete_info->no_reev_classes);
+  if (delete_info->no_reev_classes)
+    {
+      offset =
+	xts_save_int_array (delete_info->mvcc_reev_classes,
+			    delete_info->no_reev_classes);
+      if (offset == ER_FAILED)
+	{
+	  return NULL;
+	}
+    }
+  else
+    {
+      offset = 0;
+    }
+  ptr = or_pack_int (ptr, offset);
+
   return ptr;
 }
 
@@ -6016,7 +6034,9 @@ xts_sizeof_delete_proc (const DELETE_PROC_NODE * delete_info)
     OR_INT_SIZE +		/* no_classes */
     OR_INT_SIZE +		/* wait_msecs */
     OR_INT_SIZE +		/* no_logging */
-    OR_INT_SIZE;		/* release_lock */
+    OR_INT_SIZE +		/* release_lock */
+    OR_INT_SIZE +		/* no_cond_reev_classes */
+    PTR_SIZE;			/* mvcc_cond_reev_classes */
 
   return size;
 }

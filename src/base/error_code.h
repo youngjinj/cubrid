@@ -1455,8 +1455,9 @@
 #define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1143
 
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
+#define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001
 
-#define ER_LAST_ERROR                               -2001
+#define ER_LAST_ERROR                               -2002
 
 /*
  * CAUTION!

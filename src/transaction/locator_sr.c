@@ -212,14 +212,16 @@ static int locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid,
 				 HEAP_SCANCACHE * scan_cache,
 				 int *force_count, bool not_check_fk,
 				 REPL_INFO_TYPE repl_info, int pruning_type,
-				 PRUNING_CONTEXT * pcontext, void *mvcc_data);
+				 PRUNING_CONTEXT * pcontext,
+				 MVCC_REEV_DATA * mvcc_reev_data);
 static int locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
 				OID * old_class_oid, OID * obj_oid,
 				BTID * btid, bool btid_dup_key_locked,
 				OID * new_class_oid, HFID * new_class_hfid,
 				RECDES * recdes, HEAP_SCANCACHE * scan_cache,
 				int op_type, int has_index, int *force_count,
-				PRUNING_CONTEXT * context, void *mvcc_data);
+				PRUNING_CONTEXT * context,
+				MVCC_REEV_DATA * mvcc_reev_data);
 static int locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 					   LC_COPYAREA * force_area);
 
@@ -2306,21 +2308,10 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
     }
 
   assert (!OID_ISNULL (class_oid));
+
   if (!OID_IS_ROOTOID (class_oid))
     {
-      int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      if (mvcc_Enabled)
-	{
-	  LOG_TDES *tdes = NULL;
-	  tdes = LOG_FIND_TDES (tran_index);
-	  error_code =
-	    logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
-	  if (error_code != NO_ERROR)
-	    {
-	      return error_code;
-	    }
-	  mvcc_snapshot = &tdes->mvcc_snapshot;
-	}
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
     }
 
   /* Obtain the desired lock */
@@ -2392,7 +2383,16 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
        * large enough, increase the copy area by at least one page size.
        */
 
-      if (scan != S_DOESNT_FIT)
+      if (scan == S_DOESNT_EXIST)
+	{
+	  heap_scancache_end (thread_p, &nxobj.area_scancache);
+	  nxobj.comm_area = *fetch_area = NULL;
+	  error_code = ER_HEAP_UNKNOWN_OBJECT;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
+		  oid->volid, oid->pageid, oid->slotid);
+	  goto error;
+	}
+      else if (scan != S_DOESNT_FIT)
 	{
 	  heap_scancache_end (thread_p, &nxobj.area_scancache);
 	  nxobj.comm_area = *fetch_area = NULL;
@@ -2651,25 +2651,13 @@ xlocator_fetch_all (THREAD_ENTRY * thread_p, const HFID * hfid, LOCK * lock,
 	}
     }
 
+  if (!OID_IS_ROOTOID (class_oid))
+    {
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+    }
+
   /* Set OID to last fetched object */
   COPY_OID (&oid, last_oid);
-
-  if (class_oid != NULL && !OID_IS_ROOTOID (class_oid))
-    {
-      int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      if (mvcc_Enabled)
-	{
-	  LOG_TDES *tdes = NULL;
-	  tdes = LOG_FIND_TDES (tran_index);
-	  error_code =
-	    logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
-	  if (error_code != NO_ERROR)
-	    {
-	      return error_code;
-	    }
-	  mvcc_snapshot = &tdes->mvcc_snapshot;
-	}
-    }
 
   /* Start a scan cursor for getting several classes */
   error_code = heap_scancache_start (thread_p, &scan_cache, hfid, class_oid,
@@ -2885,21 +2873,7 @@ xlocator_fetch_lockset (THREAD_ENTRY * thread_p, LC_LOCKSET * lockset,
   SCAN_CODE scan = S_SUCCESS;
   int i, j;
   int error_code = NO_ERROR;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
-
-  int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-  if (mvcc_Enabled)
-    {
-      LOG_TDES *tdes = NULL;
-      tdes = LOG_FIND_TDES (tran_index);
-      error_code =
-	logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
-      if (error_code != NO_ERROR)
-	{
-	  return error_code;
-	}
-      mvcc_snapshot = &tdes->mvcc_snapshot;
-    }
+  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
 
   *fetch_area = NULL;
 
@@ -3059,7 +3033,6 @@ xlocator_fetch_lockset (THREAD_ENTRY * thread_p, LC_LOCKSET * lockset,
 	   * the class array
 	   */
 
-	  nxobj.ptr_scancache->mvcc_snapshot = mvcc_snapshot;
 	  for (i = lockset->num_reqobjs_processed;
 	       scan == S_SUCCESS && i < lockset->num_reqobjs; i++)
 	    {
@@ -3092,6 +3065,11 @@ xlocator_fetch_lockset (THREAD_ENTRY * thread_p, LC_LOCKSET * lockset,
 		    {
 		      continue;
 		    }
+		  nxobj.ptr_scancache->mvcc_snapshot = NULL;
+		}
+	      else
+		{
+		  nxobj.ptr_scancache->mvcc_snapshot = mvcc_snapshot;
 		}
 
 	      /* Now return the object */
@@ -3882,7 +3860,7 @@ locator_start_force_scan_cache (THREAD_ENTRY * thread_p,
 				int op_type)
 {
   return heap_scancache_start_modify (thread_p, scan_cache, hfid, class_oid,
-				      op_type, NULL, false);
+				      op_type, NULL);
 }
 
 /*
@@ -4309,8 +4287,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 							    &scan_cache,
 							    &hfid,
 							    &fkref->self_oid,
-							    op_type, NULL,
-							    false);
+							    op_type, NULL);
 		  if (error_code != NO_ERROR)
 		    {
 		      goto error2;
@@ -4604,7 +4581,7 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
 							&hfid,
 							&fkref->self_oid,
 							SINGLE_ROW_UPDATE,
-							NULL, false);
+							NULL);
 	      if (error_code != NO_ERROR)
 		{
 		  goto error2;
@@ -4857,7 +4834,7 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 							    &hfid,
 							    &fkref->self_oid,
 							    SINGLE_ROW_UPDATE,
-							    NULL, false);
+							    NULL);
 		  if (error_code != NO_ERROR)
 		    {
 		      goto error2;
@@ -5338,7 +5315,7 @@ error2:
  * has_index (in)	: true if the class has indexes
  * force_count (in/out)	:
  * context(in)	        : pruning context
- *   mvcc_data(in): mvcc data
+ * mvcc_reev_data(in)	: mvcc reevaluation data
  *
  * Note: this function calls locator_delete_force on the current object oid
  * and locator_insert_force for the RECDES it receives. The record has already
@@ -5352,7 +5329,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
 		     HFID * new_class_hfid, RECDES * recdes,
 		     HEAP_SCANCACHE * scan_cache, int op_type, int has_index,
 		     int *force_count, PRUNING_CONTEXT * context,
-		     void *mvcc_data)
+		     MVCC_REEV_DATA * mvcc_reev_data)
 {
   int error = NO_ERROR;
   OID new_obj_oid;
@@ -5367,7 +5344,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
   /* delete this record from the class it currently resides in */
   error = locator_delete_force (thread_p, old_hfid, obj_oid, btid,
 				btid_dup_key_locked, true, del_op_type,
-				scan_cache, force_count, mvcc_data);
+				scan_cache, force_count, mvcc_reev_data);
   if (error != NO_ERROR)
     {
       return error;
@@ -5453,7 +5430,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
  *   repl_inf(in): replication info
  *   pruning_type(in): pruning type
  *   pcontext(in): pruning context
- *   mvcc_data(in): mvcc data
+ *   mvcc_reev_data(in): mvcc reevaluation data
  *
  * Note: The given object is updated on this heap and all appropriate
  *              index entries are updated.
@@ -5467,7 +5444,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		      int op_type, HEAP_SCANCACHE * scan_cache,
 		      int *force_count, bool not_check_fk,
 		      REPL_INFO_TYPE repl_info, int pruning_type,
-		      PRUNING_CONTEXT * pcontext, void *mvcc_data)
+		      PRUNING_CONTEXT * pcontext,
+		      MVCC_REEV_DATA * mvcc_reev_data)
 {
   char *old_classname = NULL;	/* Classname that may have been
 				 * renamed */
@@ -5569,7 +5547,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 
       if (heap_perform_update
 	  (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
-	   scan_cache, mvcc_data) == NULL)
+	   scan_cache, mvcc_reev_data) == NULL)
 	{
 	  /*
 	   * Problems updating the object...Maybe, the transaction should be
@@ -5707,7 +5685,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 				     search_btid_duplicate_key_locked,
 				     &real_class_oid, &real_hfid, recdes,
 				     scan_cache, op_type, has_index,
-				     force_count, pcontext, mvcc_data);
+				     force_count, pcontext, mvcc_reev_data);
 	      if (error_code == NO_ERROR)
 		{
 		  COPY_OID (class_oid, &real_class_oid);
@@ -5759,7 +5737,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	  /* in mvcc update heap and then indexes */
 	  if (heap_perform_update
 	      (thread_p, hfid, class_oid, oid, recdes, new_oid_p,
-	       &isold_object, local_scan_cache, mvcc_data) == NULL)
+	       &isold_object, local_scan_cache, mvcc_reev_data) == NULL)
 	    {
 	      /*
 	       * Problems updating the object...Maybe, the transaction should be
@@ -5782,16 +5760,24 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    {
 	      if (mvcc_Enabled && !OID_ISNULL (new_oid_p))
 		{
+		  /* A new version of the object was created. The old version
+		   * is not physically removed, only marked as deleted.
+		   * Therefore, only inserting the new object in b-tree is
+		   * required.
+		   */
 		  error_code =
-		    locator_update_index (thread_p, recdes, oldrecdes,
-					  att_id, n_att_id, new_oid_p,
-					  class_oid, NULL, false, op_type,
-					  local_scan_cache, true, true,
-					  repl_info);
+		    locator_add_or_remove_index (thread_p, recdes, new_oid_p,
+						 class_oid, search_btid,
+						 search_btid_duplicate_key_locked,
+						 true, op_type, scan_cache,
+						 true, true, hfid, NULL);
 		}
 	      else
 		{
-		  /* Update the indices */
+		  /* Old object is physically deleted and must be removed
+		   * from b-tree and the new object must be added. Update
+		   * index.
+		   */
 		  error_code =
 		    locator_update_index (thread_p, recdes, oldrecdes,
 					  att_id, n_att_id, oid, class_oid,
@@ -5956,7 +5942,7 @@ error:
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                   between heap changes.
  *   force_count(in):
- *   mvcc_data(in): mvcc data
+ *   mvcc_reev_data(in): mvcc data
  *
  * Note: The given object is deleted on this heap and all appropiate
  *              index entries are deleted.
@@ -5967,7 +5953,7 @@ locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * oid,
 		      bool search_btid_duplicate_key_locked,
 		      int has_index, int op_type,
 		      HEAP_SCANCACHE * scan_cache, int *force_count,
-		      void *mvcc_data)
+		      MVCC_REEV_DATA * mvcc_reev_data)
 {
   bool isold_object;		/* Make sure that this is an old object
 				 * during the deletion */
@@ -6117,8 +6103,6 @@ locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * oid,
 			" failed for class { %d %d %d }\n",
 			oid->pageid, oid->slotid, oid->volid);
 	}
-
-      scan_cache->delete_old_row = true;
     }
   else
     {
@@ -6166,7 +6150,7 @@ locator_delete_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * oid,
     }
 
   if (heap_perform_delete (thread_p, hfid, &class_oid, oid, scan_cache,
-			   mvcc_data) == NULL)
+			   mvcc_reev_data) == NULL)
     {
       /*
        * Problems deleting the object...Maybe, the transaction should be
@@ -6537,23 +6521,7 @@ xlocator_force (THREAD_ENTRY * thread_p, LC_COPYAREA * force_area,
   int error_code = NO_ERROR;
   int pruning_type = 0;
   int num_continue_on_error = 0;
-  int tran_index;
   int has_index;
-
-  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-  if (mvcc_Enabled)
-    {
-      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
-      /* get snapshot data - the snapshot will be used to check
-       * only non-system rows visibility
-       */
-      error_code =
-	logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
-      if (error_code != NO_ERROR)
-	{
-	  return error_code;
-	}
-    }
 
   /* need to start a topop to ensure the atomic operation. */
   error_code = xtran_server_start_topop (thread_p, &lsa);
@@ -6919,7 +6887,7 @@ locator_allocate_copy_area_by_attr_info (THREAD_ENTRY * thread_p,
  *   pruning_type(in):
  *   pcontext(in): partition pruning context
  *   func_preds(in): cached function index expressions
- *   mvcc_data(in): mvcc data
+ *   mvcc_reev_data(in): mvcc reevaluation data
  *
  * Note: Force an object represented by an attribute information structure.
  *       For insert the oid is set as a side effect.
@@ -6936,7 +6904,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 			      bool not_check_fk, REPL_INFO_TYPE repl_info,
 			      int pruning_type, PRUNING_CONTEXT * pcontext,
 			      FUNC_PRED_UNPACK_INFO * func_preds,
-			      void *mvcc_data)
+			      MVCC_REEV_DATA * mvcc_reev_data)
 {
   LC_COPYAREA *copyarea = NULL;
   RECDES new_recdes;
@@ -7057,7 +7025,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 				  old_recdes, &new_recdes, true, att_id,
 				  n_att_id, op_type, scan_cache, force_count,
 				  not_check_fk, repl_info, pruning_type,
-				  pcontext, mvcc_data);
+				  pcontext, mvcc_reev_data);
 	}
       if (copyarea != NULL)
 	{
@@ -7074,7 +7042,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 					 search_btid,
 					 search_btid_duplicate_key_locked,
 					 true, op_type, scan_cache,
-					 force_count, mvcc_data);
+					 force_count, mvcc_reev_data);
       break;
 
     default:
@@ -7187,11 +7155,18 @@ locator_add_or_remove_index (THREAD_ENTRY * thread_p, RECDES * recdes,
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
 
-  if (mvcc_Enabled && scan_cache != NULL
-      && scan_cache->delete_old_row == false && is_insert == false)
+  if (mvcc_Enabled && !heap_is_mvcc_disabled_for_class (thread_p, class_oid))
     {
-      /* mvcc case, delete does not remove the old record */
-      return NO_ERROR;
+      if (is_insert)
+	{
+	  /* Use MVCC if it's not disabled for current class */
+	  use_mvcc = true;
+	}
+      else
+	{
+	  /* mvcc case, delete does not remove the old record */
+	  return NO_ERROR;
+	}
     }
   /*
    *  Populate the index_attrinfo structure.
@@ -7282,17 +7257,6 @@ locator_add_or_remove_index (THREAD_ENTRY * thread_p, RECDES * recdes,
 
 	  if (is_insert)
 	    {
-	      if ((mvcc_Enabled == true)
-		  && (scan_cache == NULL
-		      || scan_cache->delete_old_row == false))
-		{
-		  use_mvcc = true;
-		}
-	      else
-		{
-		  use_mvcc = false;
-		}
-
 	      key_ins_del =
 		btree_perform_insert (thread_p, &btid, key_dbvalue, class_oid,
 				      inst_oid, op_type, unique_stat_info,
@@ -7769,7 +7733,6 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   bool same_key = true;
   int c = DB_UNK;
   BTREE_LOCKED_KEYS locked_keys;
-  bool use_mvcc = false;
 
   assert_release (class_oid != NULL);
   assert_release (!OID_ISNULL (class_oid));
@@ -7943,16 +7906,6 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 	    }
 	}
 
-      if (do_delete_only)
-	{
-	  if (mvcc_Enabled && scan_cache != NULL
-	      && scan_cache->delete_old_row == false)
-	    {
-	      /* mvcc case - delete does not remove the old key */
-	      continue;
-	    }
-	}
-
       new_key = heap_attrvalue_get_key (thread_p, i, new_attrinfo, new_recdes,
 					&new_btid, &new_dbvalue,
 					aligned_newbuf, NULL);
@@ -8062,27 +8015,13 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		}
 	      else
 		{
-		  if ((mvcc_Enabled == true)
-		      && (scan_cache == NULL
-			  || scan_cache->delete_old_row == false)
-		      &&
-		      (!MVCCID_IS_EQUAL (or_mvcc_get_insert_id (old_recdes),
-					 or_mvcc_get_insert_id (new_recdes))))
-		    {
-		      use_mvcc = true;
-		    }
-		  else
-		    {
-		      use_mvcc = false;
-		    }
-
 		  /* in mvcc - update index key means insert index key */
-		  if ((do_insert_only == true) || (use_mvcc == true))
+		  if ((do_insert_only == true))
 		    {
 		      if (btree_perform_insert (thread_p, &old_btid, new_key,
 						class_oid, inst_oid, op_type,
 						unique_stat_info, &unique,
-						use_mvcc) == NULL)
+						false) == NULL)
 			{
 			  error_code = er_errid ();
 			  goto error;
@@ -11141,23 +11080,7 @@ xlocator_check_fk_validity (THREAD_ENTRY * thread_p, OID * cls_oid,
   DB_VALUE *key_val, tmpval;
   char midxkey_buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_midxkey_buf;
   int error_code;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
-
-  if (mvcc_Enabled)
-    {
-      int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
-      /* get snapshot data - the snapshot will be used to check
-       * only non-system rows visibility
-       */
-      error_code =
-	logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
-      if (error_code != NO_ERROR)
-	{
-	  return error_code;
-	}
-      mvcc_snapshot = &tdes->mvcc_snapshot;
-    }
+  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
 
   DB_MAKE_NULL (&tmpval);
 
@@ -11576,25 +11499,10 @@ xlocator_upgrade_instances_domain (THREAD_ENTRY * thread_p, OID * class_oid,
   OID last_oid;
   bool scancache_inited = false;
   bool attrinfo_inited = false;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
+  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
 
   HFID_SET_NULL (&hfid);
   OID_SET_NULL (&last_oid);
-
-  if (mvcc_Enabled)
-    {
-      int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
-      /* get snapshot data - the snapshot will be used to check
-       * only non-system rows visibility
-       */
-      error = logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
-      if (error != NO_ERROR)
-	{
-	  return error;
-	}
-      mvcc_snapshot = &tdes->mvcc_snapshot;
-    }
 
   if (class_oid == NULL || OID_ISNULL (class_oid) || att_id < 0)
     {
@@ -11614,7 +11522,7 @@ xlocator_upgrade_instances_domain (THREAD_ENTRY * thread_p, OID * class_oid,
 
   error =
     heap_scancache_start_modify (thread_p, &upd_scancache, &hfid, class_oid,
-				 SINGLE_ROW_UPDATE, mvcc_snapshot, true);
+				 SINGLE_ROW_UPDATE, mvcc_snapshot);
   if (error != NO_ERROR)
     {
       goto error_exit;

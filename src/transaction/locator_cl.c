@@ -662,6 +662,7 @@ locator_lock (MOP mop, LOCK lock)
   LC_COPYAREA *fetch_area;	/* Area where objects are received        */
   int error_code = NO_ERROR;
   bool is_prefetch;
+  bool mvcc_enabled;
 
   oid = ws_oid (mop);
 
@@ -706,116 +707,145 @@ locator_lock (MOP mop, LOCK lock)
   current_lock = ws_get_lock (mop);
   assert (lock >= NULL_LOCK && current_lock >= NULL_LOCK);
 
-  if (object == NULL || current_lock == NULL_LOCK
-      || ((lock = lock_Conv[lock][current_lock]) != current_lock
-	  && !OID_ISTEMP (oid)))
+  mvcc_enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+
+  if (object != NULL)
     {
-      /* We must invoke the transaction object locator on the server */
-      assert (lock != NA_LOCK);
-
-      cache_lock.oid = oid;
-      cache_lock.lock = lock;
-      cache_lock.isolation = TM_TRAN_ISOLATION ();
-
-      /* Find the cache coherency numbers for fetching purposes */
-      if (object == NULL && WS_ISMARK_DELETED (mop))
+      /* There is already an object fetched, check if a request for server
+       * is really necessary
+       */
+      if (current_lock != NULL_LOCK
+	  && ((lock = lock_Conv[lock][current_lock]) == current_lock)
+	      || OID_ISTEMP (oid))
 	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
-		  oid->volid, oid->pageid, oid->slotid);
+	  /* Object is fetched and locked, and no lock upgrade is required */
+	  /* Skip fetch from server */
+	  goto end;
+	}
+      if (mvcc_enabled	/* MVCC is enabled */
+	  /* And object is not a class */
+	  && class_mop != NULL && class_mop != sm_Root_class_mop
+	  /* And the required lock is not greater than a shared lock */
+	  && lock <= S_LOCK
+	  /* And current object was already fetched using current snapshot */
+	  && ws_is_mop_fetched_with_current_snapshot (mop))
+	{
+	  /* When MVCC is enabled, shared lock on instances are not used.
+	   * However, if object was already fetched using current snapshot,
+	   * it is not required to re-fetch them.
+	   * Go to server only if required lock is greater than a shared lock.
+	   */
+	  goto end;
+	}
+    }
+  
+  /* We must invoke the transaction object locator on the server */
+  assert (lock != NA_LOCK);
+  
+  cache_lock.oid = oid;
+  cache_lock.lock = lock;
+  cache_lock.isolation = TM_TRAN_ISOLATION ();
+  
+  /* Find the cache coherency numbers for fetching purposes */
+  if (object == NULL && WS_ISMARK_DELETED (mop))
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
+	      oid->volid, oid->pageid, oid->slotid);
+      error_code = ER_FAILED;
+      goto end;
+    }
+  
+  chn = ws_chn (object);
+  
+  /*
+   * Get the class information for the desired object, just in case we need
+   * to bring it from the server.
+   */
+  
+  if (class_mop == NULL)
+    {
+      /* Don't know the class. Server must figure it out */
+      class_oid = NULL;
+      class_obj = NULL;
+      class_chn = NULL_CHN;
+      cache_lock.class_oid = class_oid;
+      cache_lock.class_lock = NULL_LOCK;
+      cache_lock.implicit_lock = NULL_LOCK;
+    }
+  else
+    {
+      class_oid = ws_oid (class_mop);
+      if (ws_find (class_mop, &class_obj) == WS_FIND_MOP_DELETED)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_HEAP_UNKNOWN_CLASS_OF_INSTANCE, 3, oid->volid,
+		  oid->pageid, oid->slotid);
 	  error_code = ER_FAILED;
 	  goto end;
 	}
-
-      chn = ws_chn (object);
-
+      class_chn = ws_chn (class_obj);
+      cache_lock.class_oid = class_oid;
+      if (lock == NULL_LOCK)
+	{
+	  cache_lock.class_lock = ws_get_lock (class_mop);
+	}
+      else
+	{
+	  cache_lock.class_lock = (lock <= S_LOCK) ? IS_LOCK : IX_LOCK;
+	  
+	  assert (ws_get_lock (class_mop) >= NULL_LOCK);
+	  cache_lock.class_lock =
+	    lock_Conv[cache_lock.class_lock][ws_get_lock (class_mop)];
+	  assert (cache_lock.class_lock != NA_LOCK);
+	}
+      
+      /* Lock for prefetched instances of the same class */
+      cache_lock.implicit_lock =
+	locator_to_prefetched_lock (cache_lock.class_lock);
+    }
+  
+  /* Now acquire the lock and fetch the object if needed */
+  if (cache_lock.implicit_lock != NULL_LOCK)
+    {
+      is_prefetch = true;
+    }
+  else
+    {
+      is_prefetch = false;
+    }
+  if (locator_fetch (oid, chn, lock, class_oid, class_chn,
+		     is_prefetch, &fetch_area) != NO_ERROR)
+    {
+      error_code = ER_FAILED;
+      goto error;
+    }
+  /* We were able to acquire the lock. Was the cached object valid ? */
+  
+  if (fetch_area != NULL)
+    {
       /*
-       * Get the class information for the desired object, just in case we need
-       * to bring it from the server
+       * Cache the objects that were brought from the server
        */
-
-      if (class_mop == NULL)
+      error_code =
+	locator_cache (fetch_area, class_mop, class_obj, locator_cache_lock,
+		       &cache_lock);
+      locator_free_copy_area (fetch_area);
+      if (error_code != NO_ERROR)
 	{
-	  /* Don't know the class. Server must figure it out */
-	  class_oid = NULL;
-	  class_obj = NULL;
-	  class_chn = NULL_CHN;
-	  cache_lock.class_oid = class_oid;
-	  cache_lock.class_lock = NULL_LOCK;
-	  cache_lock.implicit_lock = NULL_LOCK;
-	}
-      else
-	{
-	  class_oid = ws_oid (class_mop);
-	  if (ws_find (class_mop, &class_obj) == WS_FIND_MOP_DELETED)
-	    {
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_UNKNOWN_CLASS_OF_INSTANCE, 3,
-		      oid->volid, oid->pageid, oid->slotid);
-	      error_code = ER_FAILED;
-	      goto end;
-	    }
-	  class_chn = ws_chn (class_obj);
-	  cache_lock.class_oid = class_oid;
-	  if (lock == NULL_LOCK)
-	    {
-	      cache_lock.class_lock = ws_get_lock (class_mop);
-	    }
-	  else
-	    {
-	      cache_lock.class_lock = (lock <= S_LOCK) ? IS_LOCK : IX_LOCK;
-
-	      assert (ws_get_lock (class_mop) >= NULL_LOCK);
-	      cache_lock.class_lock =
-		lock_Conv[cache_lock.class_lock][ws_get_lock (class_mop)];
-	      assert (cache_lock.class_lock != NA_LOCK);
-	    }
-	  /* Lock for prefetched instances of the same class */
-	  cache_lock.implicit_lock =
-	    locator_to_prefetched_lock (cache_lock.class_lock);
-	}
-
-      /* Now acquire the lock and fetch the object if needed */
-      if (cache_lock.implicit_lock != NULL_LOCK)
-	{
-	  is_prefetch = true;
-	}
-      else
-	{
-	  is_prefetch = false;
-	}
-      if (locator_fetch (oid, chn, lock, class_oid, class_chn,
-			 is_prefetch, &fetch_area) != NO_ERROR)
-	{
-	  error_code = ER_FAILED;
 	  goto error;
 	}
-      /* We were able to acquire the lock. Was the cached object valid ? */
-
-      if (fetch_area != NULL)
-	{
-	  /*
-	   * Cache the objects that were brought from the server
-	   */
-	  error_code = locator_cache (fetch_area, class_mop, class_obj,
-				      locator_cache_lock, &cache_lock);
-	  locator_free_copy_area (fetch_area);
-	  if (error_code != NO_ERROR)
-	    {
-	      goto error;
-	    }
-	}
-
-      /*
-       * Cache the lock for the object and its class.
-       * We need to do this since we don't know if the object was received in
-       * the fetch area
-       */
-      locator_cache_lock (mop, NULL, &cache_lock);
-
-      if (class_mop != NULL)
-	{
-	  locator_cache_lock (class_mop, NULL, &cache_lock);
-	}
+    }
+  
+  /*
+   * Cache the lock for the object and its class.
+   * We need to do this since we don't know if the object was received in
+   * the fetch area
+   */
+  locator_cache_lock (mop, NULL, &cache_lock);
+  
+  if (class_mop != NULL)
+    {
+      locator_cache_lock (class_mop, NULL, &cache_lock);
     }
 
 end:
@@ -3765,6 +3795,10 @@ locator_cache_have_object (MOP * mop_p, MOBJ * object_p, RECDES * recdes_p,
 	      return error_code;
 	    }
 	}
+      /* Update the object mvcc snapshot version, so it won't be re-fetched
+       * while current snapshot is still valid.
+       */
+      (*mop_p)->mvcc_snapshot_version = ws_get_mvcc_snapshot_version ();
     }
 
   return error_code;

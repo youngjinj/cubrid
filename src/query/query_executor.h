@@ -416,6 +416,19 @@ struct update_mvcc_reev_assignment
   struct update_mvcc_reev_assignment *next;	/* link to the next assignment */
 };
 
+/* Structure used in condition reevaluation at SELECT */
+typedef struct mvcc_scan_reev_data MVCC_SCAN_REEV_DATA;
+struct mvcc_scan_reev_data
+{
+  FILTER_INFO *range_filter;	/* filter for range predicate. Used only at
+				 * index scan */
+  FILTER_INFO *key_filter;	/* key filter */
+  FILTER_INFO *data_filter;	/* data filter */
+
+  QPROC_QUALIFICATION *qualification;	/* address of a variable that contains
+					 * qualification value */
+};
+
 /* class info for UPDATE/DELETE MVCC condition reevaluation */
 typedef struct upddel_mvcc_cond_reeval UPDDEL_MVCC_COND_REEVAL;
 struct upddel_mvcc_cond_reeval
@@ -423,7 +436,12 @@ struct upddel_mvcc_cond_reeval
   int class_index;		/* index of class in select list */
   OID cls_oid;			/* OID of class */
   OID *inst_oid;		/* OID of instance involved in condition */
-  FILTER_INFO filter;		/* filter info */
+  FILTER_INFO data_filter;	/* data filter */
+  FILTER_INFO key_filter;	/* key_filter */
+  FILTER_INFO range_filter;	/* range filter */
+  QPROC_QUALIFICATION qualification;	/* see QPROC_QUALIFICATION;
+					   used for both input and output
+					   parameter */
   REGU_VARIABLE_LIST rest_regu_list;	/* regulator variable list */
   SCAN_ATTRS *rest_attrs;	/* attribute info for attribute that is not
 				 * involved in current filter */
@@ -444,35 +462,61 @@ struct update_assignment
   REGU_VARIABLE *regu_var;	/* regu variable for rhs in assignment */
 };
 
+/* type of reevaluation */
+typedef enum mvcc_reev_data_type MVCC_REEV_DATA_TYPE;
+enum mvcc_reev_data_type
+{
+  REEV_DATA_UPDDEL = 0,
+  REEV_DATA_SCAN
+};
+
 /* data for MVCC condition reevaluation */
 typedef struct mvcc_update_reev_data MVCC_UPDDEL_REEV_DATA;
 struct mvcc_update_reev_data
 {
   UPDDEL_MVCC_COND_REEVAL *mvcc_cond_reev_list;	/* list of classes that are
-						 * referenced in condition */
-  int curr_extra_assign_cnt;
-  UPDDEL_MVCC_COND_REEVAL **curr_extra_assign_reev;
+						 * referenced in condition
+						 */
+
+  /* information for class that is currently updated/deleted */
+  UPDDEL_MVCC_COND_REEVAL *curr_upddel;	/* pointer to the reevaluation data
+					 * for class that is currently updated/
+					 * deleted or NULL if it is not involved
+					 * in reevaluation
+					 */
+  int curr_extra_assign_cnt;	/* length of curr_extra_assign_reev array */
+  UPDDEL_MVCC_COND_REEVAL **curr_extra_assign_reev;	/* classes involved in the
+							 * right side of assignments
+							 * and are not part of
+							 * conditions to be
+							 * reevaluated
+							 */
   UPDATE_MVCC_REEV_ASSIGNMENT *curr_assigns;	/* list of assignments to the
-						 * attributes of this class */
-  HEAP_CACHE_ATTRINFO *curr_attrinfo;	/* attribute info for UPDATE */
+						 * attributes of this class
+						 */
+  HEAP_CACHE_ATTRINFO *curr_attrinfo;	/* attribute info for performing
+					 * assignments
+					 */
+
   PRED_EXPR *cons_pred;
   LC_COPYAREA *copyarea;	/* used to build the tuple to be stored to disk after
-				 * reevaluation */
+				 * reevaluation
+				 */
   VAL_DESCR *vd;		/* values descriptor */
 };
 
-/* Structure used in condition reevaluation at SELECT */
-typedef struct mvcc_select_reev_data MVCC_SELECT_REEV_DATA;
-struct mvcc_select_reev_data
+/* Used in condition reevaluation for UPDATE/DELETE */
+typedef struct mvcc_reev_data MVCC_REEV_DATA;
+struct mvcc_reev_data
 {
-  FILTER_INFO *range_filter;	/* filter for range predicate. Used only at
-				 *  index scan
-				 */
-  FILTER_INFO *key_filter;	/* key filter */
-  FILTER_INFO *data_filter;	/* data filter */
-
-  QPROC_QUALIFICATION *qualification;	/* address of a variable that contains
-					 * qualification value */
+  MVCC_REEV_DATA_TYPE type;
+  union
+  {
+    MVCC_UPDDEL_REEV_DATA *upddel_reev_data;	/* data for reevaluation at
+						 * UPDATE/DELETE */
+    MVCC_SCAN_REEV_DATA *select_reev_data;	/* data for reevaluation at
+						 * SELECT */
+  };
   DB_LOGICAL filter_result;	/* the result of reevaluation if successful */
 };
 
@@ -561,6 +605,10 @@ struct delete_proc_node
   int wait_msecs;		/* lock timeout in milliseconds */
   int no_logging;		/* no logging */
   int release_lock;		/* release lock */
+  int no_reev_classes;		/* no of classes involved in mvcc condition */
+  int *mvcc_reev_classes;	/* array of indexes into the SELECT list that
+				 * references pairs of OID - CLASS OID used in
+				 * conditions */
 };
 
 typedef struct connectby_proc_node CONNECTBY_PROC_NODE;

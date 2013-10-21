@@ -134,6 +134,7 @@ static void logtb_set_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 static void logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes);
 static void logtb_init_mvcc_snapshot_data (LOG_TDES * tdes);
 static void logtb_finalize_mvcc_snapshot_data (LOG_TDES * tdes);
+static int logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p);
 
 static void logtb_free_log_ins_del (LOG_INSERTED_DELETED * log_ins_del);
 static void logtb_clear_log_ins_del (LOG_INSERTED_DELETED * log_ins_del);
@@ -1118,6 +1119,7 @@ logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes)
   tdes->mvcc_snapshot.highest_completed_mvccid = 0;
   tdes->mvcc_snapshot.cnt_active_ids = 0;
   tdes->mvcc_snapshot.cnt_active_child_ids = 0;
+  tdes->mvcc_snapshot.valid = false;
 }
 
 /*
@@ -1139,6 +1141,7 @@ logtb_init_mvcc_snapshot_data (LOG_TDES * tdes)
   tdes->mvcc_snapshot.cnt_active_ids = 0;
   tdes->mvcc_snapshot.active_child_ids = NULL;
   tdes->mvcc_snapshot.cnt_active_child_ids = 0;
+  tdes->mvcc_snapshot.valid = false;
 }
 
 /*
@@ -1723,7 +1726,7 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   /* safeguard code - mvccid should be already clean */
   TR_TABLE_CS_ENTER (thread_p);
   tdes->mvcc_id = MVCCID_NULL;
-  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;  
+  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
   TR_TABLE_CS_EXIT (thread_p);
   tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
 
@@ -3446,12 +3449,11 @@ logtb_update_transaction_inserted_deleted (THREAD_ENTRY * thread_p,
 }
 
 /*
- * logtb_get_mvcc_snapshot_data - get mvcc snapshot
+ * logtb_get_mvcc_snapshot_data - Obtain a new snapshot for current
+ *				  transaction descriptor.
  *
- * return: error code
- *
- *   thread_p(in): thread entry
- *   largest(in/out): largest active log page
+ * return	 : Error code.
+ * thread_p (in) : Thread entry.
  *
  * Note:  Allow other transactions to get snapshots, do not allow to any
  *	      transaction with an MVCCID assigned to end while we build
@@ -3470,9 +3472,8 @@ logtb_update_transaction_inserted_deleted (THREAD_ENTRY * thread_p,
  *	      logtb_complete_mvcc the inconsistency is avoided :
  *	      T1 and T2 will be seen as active.
  */
-int
-logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
-			      MVCC_SNAPSHOT * snapshot)
+static int
+logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
 {
   MVCCID lowest_active_mvccid = 0, highest_completed_mvccid = 0;
   unsigned int cnt_active_trans = 0;
@@ -3480,13 +3481,13 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
   int i, num_tran, tran_index;
   LOG_TDES *tdes;
   TRANID curr_tranid;
+  MVCC_SNAPSHOT *snapshot = NULL;
 
 #define NUM_CHILDREN_PER_TRAN_TEMP 32
 
-  assert (snapshot != NULL);
-
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tdes = LOG_FIND_TDES (tran_index);
+  snapshot = &tdes->mvcc_snapshot;
   curr_tranid = tdes->trid;
 
   snapshot->snapshot_fnc = mvcc_satisfies_snapshot;
@@ -3591,6 +3592,28 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p,
   snapshot->cnt_active_ids = cnt_active_trans;
 
   return NO_ERROR;
+}
+
+/*
+ * xlogtb_invalidate_snapshot_data () - Make sure MVCC is invalidated.
+ *
+ * return	 : Void.
+ * thread_p (in) : Thread entry.
+ */
+void
+xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
+{
+  /* Get transaction descriptor */
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+
+  if (!mvcc_Enabled || tdes == NULL)
+    {
+      /* Nothing to do */
+      return;
+    }
+  /* Invalidate snapshot */
+  tdes->mvcc_snapshot.valid = false;
+  return;
 }
 
 /*
@@ -3856,8 +3879,14 @@ logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p)
   else
     {
       LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-
       assert (tdes != NULL && tdes->trid != NULL_TRANID);
+      if (!tdes->mvcc_snapshot.valid)
+	{
+	  if (logtb_get_mvcc_snapshot_data (thread_p) != NO_ERROR)
+	    {
+	      return NULL;
+	    }
+	}
       return &tdes->mvcc_snapshot;
     }
 }

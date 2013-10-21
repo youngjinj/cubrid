@@ -140,6 +140,7 @@ extern int catcls_get_server_lang_charset (THREAD_ENTRY * thread_p,
 extern int catcls_get_db_collation (THREAD_ENTRY * thread_p,
 				    LANG_COLL_COMPAT ** db_collations,
 				    int *coll_cnt);
+extern int catcls_find_and_set_serial_class_oid (THREAD_ENTRY * thread_p);
 
 #if defined(SA_MODE)
 extern void boot_client_all_finalize (bool is_er_final);
@@ -3432,10 +3433,14 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
     }
 
   oid_set_root (&boot_Db_parm->rootclass_oid);
-  if (mvcc_Enabled)
+  error_code =
+    catcls_find_and_set_serial_class_oid (thread_p);
+  if (error_code != NO_ERROR)
     {
-      serial_set_class_oid (thread_p);
+      fileio_dismount_all (thread_p);
+      goto error;
     }
+
   error_code = file_tracker_cache_vfid (&boot_Db_parm->trk_vfid);
   if (error_code != NO_ERROR)
     {
@@ -6450,20 +6455,6 @@ xboot_compact_db (THREAD_ENTRY * thread_p, OID * class_oids, int n_classes,
 		  int *modified_objects, int *big_objects,
 		  int *initial_last_repr_id)
 {
-  if (mvcc_Enabled)
-    {
-      int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      LOG_TDES *tdes = NULL;
-      int error_code = NO_ERROR;
-      tdes = LOG_FIND_TDES (tran_index);
-
-      error_code =
-	logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot);
-      if (error_code != NO_ERROR)
-	{
-	  return error_code;
-	}
-    }
 
   return boot_compact_db (thread_p, class_oids, n_classes,
 			  space_to_process, instance_lock_timeout,

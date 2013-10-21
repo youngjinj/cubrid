@@ -492,4 +492,7 @@ extern void sboot_get_locales_info (THREAD_ENTRY * thread_p, unsigned int rid,
 
 extern void svacuum (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
 		     int reqlen);
+extern void slogtb_invalidate_mvcc_snapshot (THREAD_ENTRY * thread_p,
+					     unsigned int rid, char *request,
+					     int reqlen);
 #endif /* _NETWORK_INTERFACE_SR_H_ */

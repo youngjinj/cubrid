@@ -10384,6 +10384,22 @@ cleanup:
 }
 
 /*
+ * slogtb_invalidate_mvcc_snapshot () - Invalidates MVCC Snapshot.
+ *
+ * return	 :
+ * thread_p (in) :
+ * rid (in)	 :
+ * request (in)  :
+ * reqlen (in)	 :
+ */
+void
+slogtb_invalidate_mvcc_snapshot (THREAD_ENTRY * thread_p, unsigned int rid,
+				 char *request, int reqlen)
+{
+  xlogtb_invalidate_snapshot_data (thread_p);
+}
+
+/*
  * ssession_drop_session_variables () - drop session variables
  * return : void
  * thread_p (in) :

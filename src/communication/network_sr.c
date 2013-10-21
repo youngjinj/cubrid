@@ -933,6 +933,10 @@ net_server_init (void)
   req_p = &net_Requests[NET_SERVER_VACUUM];
   req_p->processing_function = svacuum;
   req_p->name = "NET_SERVER_VACUUM";
+
+  req_p = &net_Requests[NET_SERVER_INVALIDATE_MVCC_SNAPSHOT];
+  req_p->processing_function = slogtb_invalidate_mvcc_snapshot;
+  req_p->name = "NET_SERVER_INVALIDATE_MVCC_SNAPSHOT";
 }
 
 #if defined(CUBRID_DEBUG)

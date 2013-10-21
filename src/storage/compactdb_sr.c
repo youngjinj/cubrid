@@ -340,7 +340,7 @@ process_class (THREAD_ENTRY * thread_p, OID * class_oid, HFID * hfid,
 
   ret =
     heap_scancache_start_modify (thread_p, &upd_scancache, hfid, class_oid,
-				 SINGLE_ROW_UPDATE, NULL, false);
+				 SINGLE_ROW_UPDATE, NULL);
   if (ret != NO_ERROR)
     {
       return ER_FAILED;

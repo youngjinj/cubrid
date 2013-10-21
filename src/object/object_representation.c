@@ -2999,7 +2999,7 @@ or_unpack_int_array (char *ptr, int n, int **number_array)
  *    oid(in): OID value
  */
 char *
-or_pack_oid (char *ptr, OID * oid)
+or_pack_oid (char *ptr, const OID * oid)
 {
   ASSERT_ALIGN (ptr, INT_ALIGNMENT);
 

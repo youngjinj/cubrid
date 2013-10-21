@@ -258,6 +258,7 @@ enum net_server_request
   NET_SERVER_FIND_MULTI_UNIQUES,
 
   NET_SERVER_VACUUM,
+  NET_SERVER_INVALIDATE_MVCC_SNAPSHOT,
   /*
    * This is the last entry. It is also used for the end of an
    * array of statistics information on client/server communication.

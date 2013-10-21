@@ -879,6 +879,8 @@ extern int db_execute_and_keep_statement (DB_SESSION * session,
 					  int stmt,
 					  DB_QUERY_RESULT ** result);
 
+extern void db_invalidate_mvcc_snapshot ();
+
 extern int db_query_get_info (DB_QUERY_RESULT * result,
 			      int *done, int *count,
 			      int *error, char **err_string);

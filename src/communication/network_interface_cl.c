@@ -10873,6 +10873,29 @@ cvacuum (int num_classes, OID * class_oids)
 }
 
 /*
+ * log_invalidate_mvcc_snapshot () - Invalidate MVCC Snapshot to avoid further
+ *				     usage.
+ *
+ * return : Error code.
+ */
+int
+log_invalidate_mvcc_snapshot ()
+{
+#if defined(CS_MODE)
+  int err = NO_ERROR;
+
+  err =
+    net_client_request_no_reply (NET_SERVER_INVALIDATE_MVCC_SNAPSHOT,
+				 NULL, 0);
+
+  return err;
+#else /* !CS_MODE */
+  xlogtb_invalidate_snapshot_data (NULL);
+  return NO_ERROR;
+#endif /* CS_MODE */
+}
+
+/*
  * locator_upgrade_instances_domain () - performs an upgrade of domain for
  *					 instances of a class
  * return : NO_ERROR if all OK, error status otherwise

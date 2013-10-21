@@ -138,7 +138,6 @@ struct heap_scancache
 				 * and logging of new file
 				 */
   MVCC_SNAPSHOT *mvcc_snapshot;	/* mvcc snapshot */
-  bool delete_old_row;		/* true, if old row must be physically deleted */
 };
 
 typedef struct heap_scanrange HEAP_SCANRANGE;
@@ -272,7 +271,7 @@ extern const OID *heap_perform_update (THREAD_ENTRY * thread_p,
 				       RECDES * recdes, OID * new_oid,
 				       bool * old,
 				       HEAP_SCANCACHE * scan_cache,
-				       void *mvcc_data_filter);
+				       void *mvcc_reev_data);
 extern const OID *heap_mvcc_update_to_row_version (THREAD_ENTRY * thread_p,
 						   const HFID * hfid,
 						   const OID * class_oid,
@@ -298,8 +297,7 @@ extern int heap_scancache_start_modify (THREAD_ENTRY * thread_p,
 					HEAP_SCANCACHE * scan_cache,
 					const HFID * hfid,
 					const OID * class_oid, int op_type,
-					MVCC_SNAPSHOT * mvcc_snapshot,
-					bool delete_old_row);
+					MVCC_SNAPSHOT * mvcc_snapshot);
 extern int heap_scancache_quick_start (HEAP_SCANCACHE * scan_cache);
 extern int heap_scancache_quick_start_modify (HEAP_SCANCACHE * scan_cache);
 extern int heap_scancache_end (THREAD_ENTRY * thread_p,
@@ -690,5 +688,7 @@ extern SCAN_CODE heap_mvcc_get_for_delete (THREAD_ENTRY * thread_p,
 					   HEAP_SCANCACHE * scan_cache,
 					   int ispeeking,
 					   void *mvcc_reev_data);
+extern bool heap_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p,
+					     const OID * class_oid);
 
 #endif /* _HEAP_FILE_H_ */

@@ -1891,16 +1891,6 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   assert_release (IS_SYNC_EXEC_MODE (*flag_p));
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-  if (mvcc_Enabled)
-    {
-      LOG_TDES *tdes = NULL;
-      tdes = LOG_FIND_TDES (tran_index);
-      if (logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot)
-	  != NO_ERROR)
-	{
-	  return NULL;
-	}
-    }
 
   saved_is_stats_on = mnt_server_is_stats_on (thread_p);
 
@@ -2521,17 +2511,6 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   /* mark that this transaction is running a query */
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tran_entry_p = &qmgr_Query_table.tran_entries_p[tran_index];
-
-  if (mvcc_Enabled)
-    {
-      LOG_TDES *tdes = NULL;
-      tdes = LOG_FIND_TDES (tran_index);
-      if (logtb_get_mvcc_snapshot_data (thread_p, &tdes->mvcc_snapshot)
-	  != NO_ERROR)
-	{
-	  return NULL;
-	}
-    }
 
 #if defined (SERVER_MODE)
   qmgr_lock_mutex (thread_p, &tran_entry_p->lock);

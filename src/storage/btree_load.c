@@ -2358,7 +2358,7 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
     {
       ret =
 	heap_scancache_start_modify (thread_p, &upd_scancache, hfid, cls_oid,
-				     SINGLE_ROW_UPDATE, NULL, true);
+				     SINGLE_ROW_UPDATE, NULL);
       if (ret != NO_ERROR)
 	{
 	  goto exit_on_error;
