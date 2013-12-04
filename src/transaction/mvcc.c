@@ -446,6 +446,7 @@ mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 	      /* Mark as visited */
 	      vacuum_data_p->visited[current_oid.slotid] = VISITED_ALIVE;
 	    }
+	  break;
 	}
       else if (rec_type == REC_RELOCATION)
 	{

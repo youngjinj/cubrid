@@ -191,6 +191,25 @@
 #define QEXEC_NULL_COMMAND_ID   -1	/* Invalid command identifier */
 
 
+#define SET_MVCC_SELECT_REEV_DATA(p_mvcc_reev_data, p_mvcc_sel_reev_data, \
+				  reev_filter_result, p_primary_key) \
+  do { \
+    assert ((p_mvcc_reev_data) != NULL);  \
+    (p_mvcc_reev_data)->type = REEV_DATA_SCAN;	\
+    (p_mvcc_reev_data)->select_reev_data = p_mvcc_sel_reev_data;  \
+    (p_mvcc_reev_data)->filter_result = reev_filter_result; \
+    (p_mvcc_reev_data)->primary_key = p_primary_key;  \
+    }while (0)
+
+#define SET_MVCC_UPDATE_REEV_DATA(p_mvcc_reev_data, p_mvcc_upddel_reev_data, \
+				  reev_filter_result, p_primary_key) \
+  do { \
+  (p_mvcc_reev_data)->type = REEV_DATA_UPDDEL;	\
+  (p_mvcc_reev_data)->upddel_reev_data = p_mvcc_upddel_reev_data;  \
+  (p_mvcc_reev_data)->filter_result = reev_filter_result; \
+  (p_mvcc_reev_data)->primary_key = p_primary_key;  \
+    }while (0)
+
 /*
  * Access specification information
  */
@@ -564,6 +583,8 @@ struct mvcc_update_reev_data
 				 * reevaluation
 				 */
   VAL_DESCR *vd;		/* values descriptor */
+  RECDES *new_recdes;		/* record descriptor after assignment
+				 * reevaluation */
 };
 
 /* Used in condition reevaluation for UPDATE/DELETE */
@@ -579,6 +600,8 @@ struct mvcc_reev_data
 						 * SELECT */
   };
   DB_LOGICAL filter_result;	/* the result of reevaluation if successful */
+  DB_VALUE *primary_key;	/* primary key value used in foreign key cascade
+				 * UPDATE/DELETE reevaluation */
 };
 
 /*update/delete class info structure */

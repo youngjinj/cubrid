@@ -1273,7 +1273,8 @@
 
 #define ER_SM_INVALID_PREFIX_LENGTH                 -1022
 
-/* Please note that error codes from -1023 to -1024 are reserved for HA */
+/* Please note that error code -1023 is reserved for HA */
+#define ER_HA_LW_FAILED_GET_LOG_PAGE                -1024
 #define ER_HA_REPL_DELAY_DETECTED                   -1025
 #define ER_HA_REPL_DELAY_RESOLVED                   -1026
 #define ER_HA_LA_FAILED_TO_CHANGE_STATE             -1027
@@ -1445,14 +1446,16 @@
 #define ER_BTREE_CORRUPT_PREV_LINK                  -1135
 #define ER_BTREE_REPAIR_PREV_LINK                   -1136
 
-#define ER_NET_HS_INCOMPAT_INTERRUPTIBILITY         -1137
-#define ER_NET_HS_INCOMPAT_RW_MODE                  -1138
-#define ER_NET_HS_HA_REPL_DELAY                     -1139
-#define ER_NET_HS_HA_REPLICA_ONLY                   -1140
-#define ER_NET_HS_REMOTE_DISABLED                   -1141
-#define ER_NET_HS_UNKNOWN_SERVER_REL                -1142
+#define ER_MAX_RECURSION_SQL_DEPTH                  -1137
 
-#define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1143
+#define ER_NET_HS_INCOMPAT_INTERRUPTIBILITY         -1138
+#define ER_NET_HS_INCOMPAT_RW_MODE                  -1139
+#define ER_NET_HS_HA_REPL_DELAY                     -1140
+#define ER_NET_HS_HA_REPLICA_ONLY                   -1141
+#define ER_NET_HS_REMOTE_DISABLED                   -1142
+#define ER_NET_HS_UNKNOWN_SERVER_REL                -1143
+
+#define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1144
 
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001

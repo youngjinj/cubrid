@@ -228,6 +228,26 @@ struct btree_node_split_info
 
 typedef char *PAGE_PTR;		/* Pointer to a page */
 
+/* TODO - PAGE_TYPE is used for debugging */
+typedef enum
+{
+  PAGE_UNKNOWN = 0,		/* used for initialized page            */
+  PAGE_FTAB,			/* file allocset table page             */
+  PAGE_HEAP,			/* heap page                            */
+  PAGE_VOLHEADER,		/* volume header page                   */
+  PAGE_VOLBITMAP,		/* volume bitmap page                   */
+  PAGE_XASL,			/* xasl stream page                     */
+  PAGE_QRESULT,			/* query result page                    */
+  PAGE_EHASH,			/* ehash bucket/dir page                */
+  PAGE_LARGEOBJ,		/* large object/dir page                */
+  PAGE_OVERFLOW,		/* overflow page (with ovf_keyval)      */
+  PAGE_AREA,			/* area page                            */
+  PAGE_CATALOG,			/* catalog page                         */
+  PAGE_BTREE,			/* b+tree index page (with ovf_OIDs)    */
+  PAGE_LOG,			/* NONE - log page (unused)             */
+  PAGE_LAST = PAGE_LOG
+} PAGE_TYPE;
+
 #define ISCAN_OID_BUFFER_SIZE \
   ((((int) (IO_PAGESIZE * prm_get_float_value (PRM_ID_BT_OID_NBUFFERS))) \
     / OR_OID_SIZE) \
@@ -383,6 +403,8 @@ typedef int TRANID;		/* Transaction identifier      */
     (id)--; \
     } while ((id) < MVCCID_FIRST)
 
+#define COMPOSITE_LOCK(scan_op_type)	(scan_op_type != S_SELECT)
+#define READONLY_SCAN(scan_op_type)	(scan_op_type == S_SELECT)
 
 typedef enum
 {
@@ -391,17 +413,19 @@ typedef enum
   NA_LOCK = 0,			/* N/A lock */
   INCON_NON_TWO_PHASE_LOCK = 1,	/* Incompatible 2 phase lock. */
   NULL_LOCK = 2,		/* NULL LOCK */
-  IS_LOCK = 3,			/* Intention Shared lock */
-  S_LOCK = 4,			/* Shared lock */
-  IX_LOCK = 5,			/* Intention exclusive lock */
-  SIX_LOCK = 6,			/* Shared and intention exclusive lock */
-  U_LOCK = 7,			/* Update lock */
-  X_LOCK = 8,			/* Exclusive lock */
-  NS_LOCK = 9,			/* Next Key Shared lock */
-  NX_LOCK = 10			/* Next Key Exclusive lock */
+  SCH_S_LOCK = 3,		/* Schema Stability Lock */
+  IS_LOCK = 4,			/* Intention Shared lock */
+  S_LOCK = 5,			/* Shared lock */
+  IX_LOCK = 6,			/* Intention exclusive lock */
+  SIX_LOCK = 7,			/* Shared and intention exclusive lock */
+  U_LOCK = 8,			/* Update lock */
+  X_LOCK = 9,			/* Exclusive lock */
+  NS_LOCK = 10,			/* Next Key Shared lock */
+  NX_LOCK = 11,			/* Next Key Exclusive lock */
+  SCH_M_LOCK = 12		/* Schema Modification Lock */
 } LOCK;
 
-extern LOCK lock_Conv[11][11];
+extern LOCK lock_Conv[13][13];
 
 #define LOCK_TO_LOCKMODE_STRING(lock) 			\
   (((lock) ==NULL_LOCK) ? "NULL_LOCK" :			\
@@ -412,6 +436,8 @@ extern LOCK lock_Conv[11][11];
    ((lock) == SIX_LOCK) ? " SIX_LOCK" :			\
    ((lock) ==   U_LOCK) ? "   U_LOCK" :			\
    ((lock) ==  NX_LOCK) ? "  NX_LOCK" :			\
+   ((lock) ==  SCH_S_LOCK) ? "  SCH_S_LOCK" :		\
+   ((lock) ==  SCH_M_LOCK) ? "  SCH_M_LOCK" :		\
    ((lock) ==   X_LOCK) ? "   X_LOCK" : "UNKNOWN")
 
 /* CLASSNAME TO OID RETURN VALUES */
@@ -532,8 +558,8 @@ typedef enum
   S_UPDATE
 } SCAN_OPERATION_TYPE;
 
-#define COMPOSITE_LOCK(scan_op_type)	(scan_op_type != S_SELECT)
-#define READONLY_SCAN(scan_op_type)	(scan_op_type == S_SELECT)
+#define IS_WRITE_EXCLUSIVE_LOCK(lock) ((lock) == X_LOCK || (lock) == SCH_M_LOCK)
+
 
 typedef enum
 {

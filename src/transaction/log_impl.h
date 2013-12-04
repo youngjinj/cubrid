@@ -758,24 +758,12 @@ struct log_inserted_deleted
 
 typedef struct log_tdes LOG_TDES;
 struct log_tdes
-{				/* Transaction descriptor */
-  MVCC_SNAPSHOT mvcc_snapshot;	/* MVCC Snapshot */
+{
+/* Transaction descriptor */
+  MVCC_INFO *mvcc_info;		/* MVCC info */
+
   int tran_index;		/* Index onto transaction table          */
   TRANID trid;			/* Transaction identifier                */
-  MVCCID mvcc_id;		/* MVCC ID - increase with each transaction
-				 * that modified data
-				 */
-  /* transaction_lowest_active_mvccid - the lowest active mvcc id when we
-   * start the current transaction
-   */
-  MVCCID transaction_lowest_active_mvccid;
-
-  /* recent_snapshot_lowest_active_mvccid - the lowest active mvcc id computed
-   * for the most recent snapshot of current transaction. This field help to
-   * know faster whether an mvcc id is active or not. Thus, mvccid older than
-   * this field are not active anymore
-   */
-  MVCCID recent_snapshot_lowest_active_mvccid;
 
   int isloose_end;
   TRAN_STATE state;		/* Transaction state (e.g., Active,
@@ -934,6 +922,22 @@ struct trantable
 
 #define TRANTABLE_INITIALIZER \
   {0, 0, 0, 0, 0, 0, 0, NULL, NULL}
+
+typedef struct mvcctable MVCCTABLE;
+struct mvcctable
+{
+  MVCC_INFO *head_writers,	/* head of writer list */
+   *tail_writers,		/* tail of writer list */
+   *head_null_mvccids;		/* head of null MVCC id list */
+  MVCC_INFO_BLOCK *block_list;	/* MVCC info block list */
+  MVCC_INFO *free_list;		/* MVCC info free list */
+  int mvcc_info_free_list_lock;	/* MVCC info free list spin lock */
+  MVCCID highest_completed_mvccid;	/* highest committed or aborted mvccid */
+};
+
+#define MVCCTABLE_INITIALIZER \
+  {NULL, NULL, NULL, NULL, MVCCID_NULL}
+
 /*
  * This structure encapsulates various information and metrics related
  * to each backup level.
@@ -1692,7 +1696,8 @@ struct log_global
   /* background log archiving info */
   BACKGROUND_ARCHIVING_INFO bg_archive_info;
 
-  MVCCID highest_completed_mvccid;	/* highest committed or aborted mvccid */
+
+  MVCCTABLE mvcc_table;		/* MVCC table */
 };
 
 /* logging statistics */
@@ -2161,6 +2166,7 @@ extern bool logtb_istran_finished (THREAD_ENTRY * thread_p, TRANID trid);
 extern void logtb_disable_update (THREAD_ENTRY * thread_p);
 extern void logtb_enable_update (THREAD_ENTRY * thread_p);
 extern void logtb_set_to_system_tran_index (THREAD_ENTRY * thread_p);
+
 #if defined (ENABLE_UNUSED_FUNCTION)
 extern int logtb_set_current_tran_index (THREAD_ENTRY * thread_p,
 					 int tran_index);
@@ -2183,7 +2189,11 @@ extern void logpb_get_nxio_lsa (LOG_LSA * lsa_p);
 
 extern MVCCID logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p);
 
-extern MVCCID logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes);
+extern int logtb_get_new_mvccid (THREAD_ENTRY * thread_p,
+				 MVCC_INFO * curr_mvcc_info);
+extern int logtb_allocate_mvcc_info (THREAD_ENTRY * thread_p);
+extern int logtb_release_mvcc_info (THREAD_ENTRY * thread_p);
+
 extern MVCCID logtb_find_current_mvccid (THREAD_ENTRY * thread_p);
 extern MVCCID logtb_get_current_mvccid (THREAD_ENTRY * thread_p);
 extern void xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p);

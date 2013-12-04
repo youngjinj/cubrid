@@ -154,8 +154,6 @@ struct walk_info
   QO_TERM *term;
 };
 
-#define INDEX_SKIP_SCAN_FACTOR 1000
-
 double QO_INFINITY = 0.0;
 
 static QO_PLAN *qo_optimize_helper (QO_ENV * env);
@@ -310,6 +308,8 @@ static void qo_free_class_info (QO_ENV * env, QO_CLASS_INFO *);
 static QO_CLASS_INFO *qo_get_class_info (QO_ENV * env, QO_NODE * node);
 static QO_SEGMENT *qo_eqclass_wrt (QO_EQCLASS *, BITSET *);
 static void qo_env_dump (QO_ENV *, FILE *);
+static int qo_get_ils_prefix_length (QO_ENV * env, QO_NODE * nodep,
+				     QO_INDEX_ENTRY * index_entry);
 static bool qo_is_iss_index (QO_ENV * env, QO_NODE * nodep,
 			     QO_INDEX_ENTRY * index_entry);
 static void qo_discover_sort_limit_join_nodes (QO_ENV * env, QO_NODE * nodep,
@@ -1363,6 +1363,7 @@ qo_add_node (PT_NODE * entity, QO_ENV * env)
   QO_NODE *node = NULL;
   QO_CLASS_INFO *info;
   int i, n;
+  CLASS_STATS *stats;
 
   QO_ASSERT (env, env->nnodes < env->Nnodes);
 
@@ -1390,7 +1391,8 @@ qo_add_node (PT_NODE * entity, QO_ENV * env)
       QO_NODE_INFO (node) = info;
       for (i = 0, n = info->n; i < n; i++)
 	{
-	  QO_ASSERT (env, QO_GET_CLASS_STATS (&info->info[i]) != NULL);
+	  stats = QO_GET_CLASS_STATS (&info->info[i]);
+	  QO_ASSERT (env, stats != NULL);
 	  if (entity->info.spec.meta_class == PT_META_CLASS)
 	    {
 	      /* is class OID reference spec
@@ -1402,10 +1404,8 @@ qo_add_node (PT_NODE * entity, QO_ENV * env)
 	    }
 	  else
 	    {
-	      QO_NODE_NCARD (node) +=
-		QO_GET_CLASS_STATS (&info->info[i])->heap_num_objects;
-	      QO_NODE_TCARD (node) +=
-		QO_GET_CLASS_STATS (&info->info[i])->heap_num_pages;
+	      QO_NODE_NCARD (node) += stats->heap_num_objects;
+	      QO_NODE_TCARD (node) += stats->heap_num_pages;
 	    }
 	}			/* for (i = ... ) */
     }
@@ -2829,17 +2829,23 @@ qo_analyze_term (QO_TERM * term, int term_type)
 	  /* set the start node of outer join - init */
 	  join_idx = -1;
 
-	  node_idx = QO_NODE_IDX (head_node);
 	  /* if the sarg term belongs to null padding table; */
-	  if (QO_NODE_PT_JOIN_TYPE (tail_node) == PT_JOIN_LEFT_OUTER)
+	  for (i = bitset_iterate (&(QO_TERM_NODES (term)), &iter); i >= 0;
+	       i = bitset_next_member (&iter))
 	    {
-	      join_idx = node_idx;	/* case 4.2 */
+	      QO_NODE *tmp = QO_ENV_NODE (env, i);
+	      if (QO_NODE_PT_JOIN_TYPE (tmp) == PT_JOIN_LEFT_OUTER)
+		{
+		  join_idx = i;	/* case 4.2 */
+		  break;
+		}
 	    }
-	  else
+
+	  if (join_idx == -1)
 	    {
 	      /* NEED MORE OPTIMIZATION for future */
-	      node_idx =
-		MIN (QO_NODE_IDX (head_node), QO_NODE_IDX (tail_node));
+	      node_idx = MIN (QO_NODE_IDX (head_node),
+			      QO_NODE_IDX (tail_node));
 	      for (; node_idx < env->nnodes; node_idx++)
 		{
 		  if (QO_NODE_PT_JOIN_TYPE (QO_ENV_NODE (env, node_idx)) ==
@@ -4864,6 +4870,7 @@ qo_alloc_index (QO_ENV * env, int n)
       entryp->seg_other_terms = NULL;
       bitset_init (&(entryp->terms), env);
       bitset_init (&(entryp->key_filter_terms), env);
+      entryp->all_unique_index_columns_are_equi_terms = false;
       entryp->cover_segments = false;
       entryp->is_iss_candidate = false;
       entryp->multi_range_opt = false;
@@ -4874,6 +4881,7 @@ qo_alloc_index (QO_ENV * env, int n)
       entryp->statistics_attribute_name = NULL;
       entryp->key_limit = NULL;
       entryp->constraints = NULL;
+      entryp->ils_prefix_len = 0;
     }
 
   return indexp;
@@ -5136,6 +5144,8 @@ qo_get_attr_info_func_index (QO_ENV * env, QO_SEGMENT * seg,
   ATTR_STATS *attr_statsp = NULL;
   int n, i, j;
   int attr_id;
+  int n_attrs;
+  CLASS_STATS *stats;
 
   nodep = QO_SEG_HEAD (seg);
 
@@ -5175,27 +5185,47 @@ qo_get_attr_info_func_index (QO_ENV * env, QO_SEGMENT * seg,
   /* set the statistics from the class information(QO_CLASS_INFO_ENTRY) */
   for (i = 0; i < n; class_info_entryp++, i++)
     {
+      stats = QO_GET_CLASS_STATS (class_info_entryp);
+      QO_ASSERT (env, stats != NULL);
+      if (stats->attr_stats == NULL)
+	{
+	  /* the attribute statistics of the class were not set */
+	  cum_statsp->is_indexed = false;
+	  continue;
+	  /* We'll consider the segment to be indexed only if all of the
+	     attributes it represents are indexed. The current optimization
+	     strategy makes it inconvenient to try to construct "mixed"
+	     (segment and index) scans of a node that represents more than
+	     one node. */
+	}
+
       for (consp = class_info_entryp->smclass->constraints; consp;
 	   consp = consp->next)
 	{
+	  /* search the attribute from the class information */
+	  attr_statsp = stats->attr_stats;
+	  n_attrs = stats->n_attrs;
+
 	  if (consp->func_index_info && consp->func_index_info->col_id == 0
 	      && !intl_identifier_casecmp (expr_str,
 					   consp->func_index_info->expr_str))
 	    {
 	      attr_id = consp->attributes[0]->id;
-	      attr_statsp =
-		QO_GET_CLASS_STATS (class_info_entryp)->attr_stats;
-	      for (j = 0; j < QO_GET_CLASS_STATS (class_info_entryp)->n_attrs;
-		   j++, attr_statsp++)
+
+	      for (j = 0; j < n_attrs; j++, attr_statsp++)
 		{
 		  if (attr_statsp->id == attr_id)
 		    {
 		      break;
 		    }
 		}
+	      if (j == n_attrs)
+		{
+		  /* attribute not found, what happens to the class attribute? */
+		  cum_statsp->is_indexed = false;
+		  continue;
+		}
 
-	      attr_statsp =
-		&QO_GET_CLASS_STATS (class_info_entryp)->attr_stats[j];
 	      bstatsp = attr_statsp->bt_stats;
 	      for (j = 0; j < attr_statsp->n_btstats; j++, bstatsp++)
 		{
@@ -5275,6 +5305,7 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
   int n, i, j;
   int n_func_indexes;
   SM_CLASS_CONSTRAINT *consp;
+  CLASS_STATS *stats;
   bool is_reserved_name = false;
 
   if ((QO_SEG_PT_NODE (seg))->info.name.meta_class == PT_RESERVED)
@@ -5344,8 +5375,9 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
       attr_id = sm_att_id (class_info_entryp->mop, name);
 
       /* pointer to ATTR_STATS of CLASS_STATS of QO_CLASS_INFO_ENTRY */
-      attr_statsp = QO_GET_CLASS_STATS (class_info_entryp)->attr_stats;
-      if (attr_statsp == NULL)
+      stats = QO_GET_CLASS_STATS (class_info_entryp);
+      QO_ASSERT (env, stats != NULL);
+      if (stats->attr_stats == NULL)
 	{
 	  /* the attribute statistics of the class were not set */
 	  cum_statsp->is_indexed = false;
@@ -5368,7 +5400,8 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
          we just make the best guess we can. */
 
       /* search the attribute from the class information */
-      n_attrs = QO_GET_CLASS_STATS (class_info_entryp)->n_attrs;
+      attr_statsp = stats->attr_stats;
+      n_attrs = stats->n_attrs;
       for (j = 0; j < n_attrs; j++, attr_statsp++)
 	{
 	  if (attr_statsp->id == attr_id)
@@ -5567,6 +5600,7 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
   ATTR_STATS *attr_statsp;
   BTREE_STATS *bt_statsp;
   int i, j, k;
+  CLASS_STATS *stats;
 
   /* pointer to QO_NODE_INDEX structure of QO_NODE */
   node_indexp = QO_NODE_INDEXES (node);
@@ -5660,91 +5694,68 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 	  /* pointer to QO_CLASS_INFO_ENTRY[] array of the node */
 	  class_info_entryp = &QO_NODE_INFO (seg_node)->info[j];
 
+	  /* pointer to ATTR_STATS of CLASS_STATS of QO_CLASS_INFO_ENTRY */
+	  stats = QO_GET_CLASS_STATS (class_info_entryp);
+	  QO_ASSERT (env, stats != NULL);
+
+	  /* search the attribute from the class information */
+	  attr_statsp = stats->attr_stats;
+	  n_attrs = stats->n_attrs;
+
 	  if (!index_entryp->is_func_index)
 	    {
 	      attr_id = sm_att_id (class_info_entryp->mop, name);
-
-	      /* pointer to ATTR_STATS of CLASS_STATS of QO_CLASS_INFO_ENTRY */
-	      attr_statsp =
-		QO_GET_CLASS_STATS (class_info_entryp)->attr_stats;
-
-	      /* search the attribute from the class information */
-	      n_attrs = QO_GET_CLASS_STATS (class_info_entryp)->n_attrs;
-	      for (k = 0; k < n_attrs; k++, attr_statsp++)
-		{
-		  if (attr_statsp->id == attr_id)
-		    {
-		      break;
-		    }
-		}
-
-	      index_entryp->key_type = NULL;
-	      if (k >= n_attrs)	/* not found */
-		{
-		  attr_statsp = NULL;
-		  continue;
-		}
-
-	      if (cum_statsp->valid_limits == false)
-		{
-		  /* first time */
-		  cum_statsp->type = attr_statsp->type;
-		  cum_statsp->valid_limits = true;
-		}
-
-	      /* find the index that we are interesting within BTREE_STATS[] array */
-	      for (k = 0, bt_statsp = attr_statsp->bt_stats;
-		   k < attr_statsp->n_btstats; k++, bt_statsp++)
-		{
-		  if (BTID_IS_EQUAL (&bt_statsp->btid,
-				     &(index_entryp->constraints->
-				       index_btid)))
-		    {
-		      index_entryp->key_type =
-			attr_statsp->bt_stats[k].key_type;
-		      break;
-		    }
-		}		/* for (k = 0, ...) */
-	      if (k == attr_statsp->n_btstats)
-		{
-		  /* cannot find index in this attribute. what happens? */
-		  continue;
-		}
 	    }
 	  else
 	    {
 	      /* function index with the function expression as the first
 	       * attribute
 	       */
-	      SM_FUNCTION_INFO *fi_info = NULL;
-	      fi_info = index_entryp->constraints->func_index_info;
-
 	      attr_id = index_entryp->constraints->attributes[0]->id;
-	      attr_statsp =
-		QO_GET_CLASS_STATS (class_info_entryp)->attr_stats;
-	      for (j = 0; j < QO_GET_CLASS_STATS (class_info_entryp)->n_attrs;
-		   j++, attr_statsp++)
+	    }
+
+	  for (k = 0; k < n_attrs; k++, attr_statsp++)
+	    {
+	      if (attr_statsp->id == attr_id)
 		{
-		  if (attr_statsp->id == attr_id)
+		  break;
+		}
+	    }
+
+	  index_entryp->key_type = NULL;
+	  if (k >= n_attrs)	/* not found */
+	    {
+	      attr_statsp = NULL;
+	      continue;
+	    }
+
+	  if (cum_statsp->valid_limits == false)
+	    {
+	      /* first time */
+	      cum_statsp->type = attr_statsp->type;
+	      cum_statsp->valid_limits = true;
+	    }
+
+	  /* find the index that we are interesting within BTREE_STATS[] array */
+	  bt_statsp = attr_statsp->bt_stats;
+	  for (k = 0; k < attr_statsp->n_btstats; k++, bt_statsp++)
+	    {
+	      if (BTID_IS_EQUAL (&bt_statsp->btid,
+				 &(index_entryp->constraints->index_btid)))
+		{
+		  if (!index_entryp->is_func_index
+		      || bt_statsp->has_function == 1)
 		    {
+		      index_entryp->key_type = bt_statsp->key_type;
 		      break;
 		    }
 		}
+	    }			/* for (k = 0, ...) */
 
-	      attr_statsp =
-		&QO_GET_CLASS_STATS (class_info_entryp)->attr_stats[j];
-	      bt_statsp = attr_statsp->bt_stats;
-	      for (j = 0; j < attr_statsp->n_btstats; j++, bt_statsp++)
-		{
-		  if (BTID_IS_EQUAL (&bt_statsp->btid,
-				     &index_entryp->constraints->index_btid)
-		      && bt_statsp->has_function == 1)
-		    {
-		      break;
-		    }
-		}
-
-	      index_entryp->key_type = bt_statsp->key_type;
+	  if (k == attr_statsp->n_btstats)
+	    {
+	      /* cannot find index in this attribute. what happens? */
+	      continue;
 	    }
 
 	  if (QO_NODE_ENTITY_SPEC (node)->info.spec.only_all == PT_ALL)
@@ -5868,6 +5879,41 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 
 	  ni_entryp->head->is_iss_candidate =
 	    (row_count > first_pkey_card * INDEX_SKIP_SCAN_FACTOR);
+
+	  /* disable loose scan if skip scan is possible */
+	  if (ni_entryp->head->is_iss_candidate)
+	    {
+	      ni_entryp->head->ils_prefix_len = 0;
+	    }
+	}
+
+      /* if loose index scan is possible, check statistics */
+      if (ni_entryp->head->ils_prefix_len > 0)
+	{
+	  if (cum_statsp->pkeys_size <= 1 || cum_statsp->keys <= 0
+	      || ni_entryp->head->ils_prefix_len > cum_statsp->pkeys_size)
+	    {
+	      ni_entryp->head->ils_prefix_len = 0;
+	    }
+	  else
+	    {
+	      long long int pkey_card, index_card;
+
+	      /* acquire cardinalities */
+	      pkey_card =
+		cum_statsp->pkeys[ni_entryp->head->ils_prefix_len - 1];
+	      index_card = cum_statsp->pkeys[cum_statsp->pkeys_size - 1];
+
+	      /* safeguard */
+	      pkey_card = (pkey_card > 0 ? pkey_card : 1);
+	      index_card = (index_card > 0 ? index_card : 1);
+
+	      /* disable if not worth it */
+	      if (pkey_card * INDEX_LOOSE_SCAN_FACTOR > index_card)
+		{
+		  ni_entryp->head->ils_prefix_len = 0;
+		}
+	    }
 	}
     }				/* for (i = 0, ...) */
 }
@@ -6921,6 +6967,68 @@ qo_is_coverage_index (QO_ENV * env, QO_NODE * nodep,
 }
 
 /*
+ * qo_get_ils_prefix_length () - get prefix length of loose scan
+ *   returns: prefix length or -1 if loose scan not possible
+ *   env(in): environment
+ *   nodep(in): graph node
+ *   index_entry(in): index structure
+ */
+static int
+qo_get_ils_prefix_length (QO_ENV * env, QO_NODE * nodep,
+			  QO_INDEX_ENTRY * index_entry)
+{
+  BITSET segments;
+  int prefix_len = 0, i;
+
+  /* check for nulls */
+  if (env == NULL || nodep == NULL || index_entry == NULL)
+    {
+      return 0;
+    }
+
+  /* loose scan has no point on single column index */
+  if (!QO_ENTRY_MULTI_COL (index_entry))
+    {
+      return 0;
+    }
+
+  if (env->pt_tree->node_type == PT_SELECT
+      && index_entry->cover_segments
+      && !PT_SELECT_INFO_IS_FLAGED (env->pt_tree,
+				    PT_SELECT_INFO_DISABLE_LOOSE_SCAN)
+      && (env->pt_tree->info.query.all_distinct == PT_DISTINCT
+	  || PT_SELECT_INFO_IS_FLAGED (env->pt_tree, PT_SELECT_INFO_HAS_AGG)))
+    {
+      /* this is a select, index is covering all segments and it's either a
+       * DISTINCT query or GROUP BY query with DISTINCT functions */
+
+      /* see if only a prefix of the index is used */
+      for (i = index_entry->nsegs - 1; i >= 0; i--)
+	{
+	  if (index_entry->seg_idxs[i] != -1)
+	    {
+	      prefix_len = i + 1;
+	      break;
+	    }
+	}
+    }
+  else
+    {
+      /* not applicable */
+      return 0;
+    }
+
+  /* no need to continue if no prefix detected */
+  if (prefix_len == -1 || prefix_len == index_entry->col_num)
+    {
+      return 0;
+    }
+
+  /* all done */
+  return prefix_len;
+}
+
+/*
  * qo_is_iss_index () - check if we can use the Index Skip Scan optimization
  *   return: bool
  *   env(in): The environment
@@ -6941,7 +7049,6 @@ qo_is_iss_index (QO_ENV * env, QO_NODE * nodep, QO_INDEX_ENTRY * index_entry)
   bool second_col_present = false;
   QO_CLASS_INFO *class_infop = NULL;
   QO_NODE *seg_nodep = NULL;
-  bool has_count_star = false;
   BITSET_ITERATOR iter;
 
   if (env == NULL || nodep == NULL || index_entry == NULL)
@@ -7094,19 +7201,8 @@ qo_is_iss_index (QO_ENV * env, QO_NODE * nodep, QO_INDEX_ENTRY * index_entry)
     }
 
   /* The first col is missing, and the second col is present and has terms that
-   * can be used in a range search. */
-
-  /* Using count() involves a lot of risks: btree_range_search might decide
-   * it only needs to count the elements, and index skip scan is not supported
-   * in this scenario. So check for count(...) usage */
-  if (nodep->env->pt_tree &&
-      nodep->env->pt_tree->node_type == PT_SELECT &&
-      PT_SELECT_INFO_IS_FLAGED (nodep->env->pt_tree, PT_SELECT_INFO_HAS_AGG))
-    {
-      return false;
-    }
-
-  /* Go ahead and approve the index as a candidate
+   * can be used in a range search.
+   * Go ahead and approve the index as a candidate
    * for index skip scanning. We still have a long way ahead of us (use sta-
    * tistics to decide whether index skip scan is the best approach) but we've
    * made the first step.
@@ -7434,6 +7530,9 @@ qo_find_node_indexes (QO_ENV * env, QO_NODE * nodep)
 
 	      index_entryp->is_iss_candidate =
 		qo_is_iss_index (env, nodep, index_entryp);
+
+	      index_entryp->ils_prefix_len =
+		qo_get_ils_prefix_length (env, nodep, index_entryp);
 
 	      index_entryp->statistics_attribute_name = NULL;
 	      index_entryp->is_func_index = false;

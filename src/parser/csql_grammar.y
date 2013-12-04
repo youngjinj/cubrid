@@ -222,7 +222,8 @@ static FUNCTION_MAP functions[] = {
   {"inet_ntoa", PT_INET_NTOA},
   {"coercibility", PT_COERCIBILITY},
   {"width_bucket", PT_WIDTH_BUCKET},
-  {"trace_stats", PT_TRACE_STATS}
+  {"trace_stats", PT_TRACE_STATS},
+  {"str_to_date", PT_STR_TO_DATE}
 };
 
 
@@ -649,6 +650,7 @@ typedef struct YYLTYPE
 %type <number> opt_nulls_first_or_last
 %type <number> query_trace_spec
 %type <number> opt_trace_output_format
+%type <number> opt_if_not_exists
 /*}}}*/
 
 /* define rule type (node) */
@@ -779,7 +781,6 @@ typedef struct YYLTYPE
 %type <node> sp_param_list
 %type <node> sp_param_def
 %type <node> esql_query_stmt
-%type <node> opt_for_update
 %type <node> csql_query
 %type <node> select_expression
 %type <node> table_op
@@ -945,6 +946,7 @@ typedef struct YYLTYPE
 %type <node> values_expression
 %type <node> values_expr_item
 %type <node> opt_partition_spec
+%type <node> opt_for_update_clause
 %type <node> vacuum_stmt
 /*}}}*/
 
@@ -2345,25 +2347,26 @@ create_stmt
 		}
 	  opt_hint_list					/* 3 */
 	  of_class_table_type				/* 4 */
-	  class_name					/* 5 */
-	  opt_subtable_clause 				/* 6 */
-	  opt_class_attr_def_list			/* 7 */
-	  opt_class_or_normal_attr_def_list		/* 8 */
-	  opt_table_option_list				/* 9 */
-	  opt_method_def_list 				/* 10 */
-	  opt_method_files 				/* 11 */
-	  opt_inherit_resolution_list			/* 12 */
-	  opt_partition_clause 				/* 13 */
-          opt_create_as_clause				/* 14 */
+	  opt_if_not_exists				/* 5 */
+	  class_name					/* 6 */
+	  opt_subtable_clause 				/* 7 */
+	  opt_class_attr_def_list			/* 8 */
+	  opt_class_or_normal_attr_def_list		/* 9 */
+	  opt_table_option_list				/* 10 */
+	  opt_method_def_list 				/* 11 */
+	  opt_method_files 				/* 12 */
+	  opt_inherit_resolution_list			/* 13 */
+	  opt_partition_clause 				/* 14 */
+      opt_create_as_clause				/* 15 */
 		{{
 
 			PT_NODE *qc = parser_pop_hint_node ();
 			PARSER_SAVE_ERR_CONTEXT (qc, @$.buffer_pos)
 
-			if (CONTAINER_AT_1 ($14) != NULL)
+			if (CONTAINER_AT_1 ($15) != NULL)
 			  {
-			    if ($6 != NULL || $7 != NULL || $10 != NULL
-				|| $11 != NULL || $12 != NULL)
+			    if ($7 != NULL || $8 != NULL || $11 != NULL
+				|| $12 != NULL || $13 != NULL)
 			      {
 				PT_ERRORf (this_parser, qc, "check syntax at %s",
                                           parser_print_tree (this_parser, qc));
@@ -2372,20 +2375,21 @@ create_stmt
 
 			if (qc)
 			  {
-			    qc->info.create_entity.entity_name = $5;
+			    qc->info.create_entity.if_not_exists = $5;
+			    qc->info.create_entity.entity_name = $6;
 			    qc->info.create_entity.entity_type = (PT_MISC_TYPE) $4;
-			    qc->info.create_entity.supclass_list = $6;
-			    qc->info.create_entity.class_attr_def_list = $7;
-			    qc->info.create_entity.attr_def_list = $8;
-			    qc->info.create_entity.table_option_list = $9;
-			    qc->info.create_entity.method_def_list = $10;
-			    qc->info.create_entity.method_file_list = $11;
-			    qc->info.create_entity.resolution_list = $12;
-			    qc->info.create_entity.partition_info = $13;
-                            if (CONTAINER_AT_1 ($14) != NULL)
+			    qc->info.create_entity.supclass_list = $7;
+			    qc->info.create_entity.class_attr_def_list = $8;
+			    qc->info.create_entity.attr_def_list = $9;
+			    qc->info.create_entity.table_option_list = $10;
+			    qc->info.create_entity.method_def_list = $11;
+			    qc->info.create_entity.method_file_list = $12;
+			    qc->info.create_entity.resolution_list = $13;
+			    qc->info.create_entity.partition_info = $14;
+                            if (CONTAINER_AT_1 ($15) != NULL)
 			      {
-			        qc->info.create_entity.create_select_action = TO_NUMBER(CONTAINER_AT_0 ($14));
-			        qc->info.create_entity.create_select = CONTAINER_AT_1 ($14);
+			        qc->info.create_entity.create_select_action = TO_NUMBER(CONTAINER_AT_0 ($15));
+			        qc->info.create_entity.create_select = CONTAINER_AT_1 ($15);
 			      }
 
 			    pt_gather_constraints (this_parser, qc);
@@ -2672,46 +2676,50 @@ create_stmt
 
 		DBG_PRINT}}
 	| CREATE						/* 1 */
-		{ push_msg(MSGCAT_SYNTAX_INVALID_CREATE_PROCEDURE); }		/* 2 */
-	  PROCEDURE						/* 3 */
-	  identifier '(' opt_sp_param_list  ')'			/* 4, 5, 6, 7 */
-	  opt_of_is_as LANGUAGE JAVA				/* 8, 9, 10 */
-	  NAME char_string_literal				/* 11, 12 */
+	  opt_or_replace                /* 2 */
+		{ push_msg(MSGCAT_SYNTAX_INVALID_CREATE_PROCEDURE); }		/* 3 */
+	  PROCEDURE						/* 4 */
+	  identifier '(' opt_sp_param_list  ')'			/* 5, 6, 7, 8 */
+	  opt_of_is_as LANGUAGE JAVA				/* 9, 10, 11 */
+	  NAME char_string_literal				/* 12, 13 */
 		{ pop_msg(); }
 		{{
 
 			PT_NODE *node = parser_new_node (this_parser, PT_CREATE_STORED_PROCEDURE);
 			if (node)
 			  {
-			    node->info.sp.name = $4;
+			    node->info.sp.or_replace = $2;
+			    node->info.sp.name = $5;
 			    node->info.sp.type = PT_SP_PROCEDURE;
-			    node->info.sp.param_list = $6;
+			    node->info.sp.param_list = $7;
 			    node->info.sp.ret_type = PT_TYPE_NONE;
-			    node->info.sp.java_method = $12;
+			    node->info.sp.java_method = $13;
 			  }
 
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| CREATE
-		{ push_msg(MSGCAT_SYNTAX_INVALID_CREATE_FUNCTION); }
-	  FUNCTION
-	  identifier '('  opt_sp_param_list  ')'
-	  RETURN opt_of_data_type_cursor
-	  opt_of_is_as LANGUAGE JAVA
-	  NAME char_string_literal
+	| CREATE                        /* 1 */
+	  opt_or_replace                /* 2 */
+		{ push_msg(MSGCAT_SYNTAX_INVALID_CREATE_FUNCTION); }		/* 3 */
+	  FUNCTION						/* 4 */
+	  identifier '('  opt_sp_param_list  ')'			/* 5, 6, 7, 8 */
+	  RETURN opt_of_data_type_cursor				/* 9, 10 */
+	  opt_of_is_as LANGUAGE JAVA					/* 11, 12, 13 */
+	  NAME char_string_literal						/* 14, 15 */
 		{ pop_msg(); }
 		{{
 
 			PT_NODE *node = parser_new_node (this_parser, PT_CREATE_STORED_PROCEDURE);
 			if (node)
 			  {
-			    node->info.sp.name = $4;
+			    node->info.sp.or_replace = $2;
+			    node->info.sp.name = $5;
 			    node->info.sp.type = PT_SP_FUNCTION;
-			    node->info.sp.param_list = $6;
-			    node->info.sp.ret_type = $9;
-			    node->info.sp.java_method = $14;
+			    node->info.sp.param_list = $7;
+			    node->info.sp.ret_type = $10;
+			    node->info.sp.java_method = $15;
 			  }
 
 			$$ = node;
@@ -2732,18 +2740,20 @@ create_stmt
 		}
 	  opt_hint_list					/* 3 */
 	  of_class_table_type				/* 4 */
-	  class_name					/* 5 */
-	  LIKE						/* 6 */
-	  class_name					/* 7 */
+	  opt_if_not_exists				/* 5 */
+	  class_name					/* 6 */
+	  LIKE						/* 7 */
+	  class_name					/* 8 */
 		{{
 
 			PT_NODE *qc = parser_pop_hint_node ();
 
 			if (qc)
 			  {
-			    qc->info.create_entity.entity_name = $5;
+			    qc->info.create_entity.if_not_exists = $5;
+			    qc->info.create_entity.entity_name = $6;
 			    qc->info.create_entity.entity_type = PT_CLASS;
-			    qc->info.create_entity.create_like = $7;
+			    qc->info.create_entity.create_like = $8;
 			  }
 
 			$$ = qc;
@@ -2757,20 +2767,22 @@ create_stmt
 		}
 	  opt_hint_list					/* 3 */
 	  of_class_table_type				/* 4 */
-	  class_name					/* 5 */
-	  '('						/* 6 */
-	  LIKE						/* 7 */
-	  class_name					/* 8 */
-	  ')'						/* 9 */
+	  opt_if_not_exists				/* 5 */
+	  class_name					/* 6 */
+	  '('						/* 7 */
+	  LIKE						/* 8 */
+	  class_name					/* 9 */
+	  ')'						/* 10 */
 		{{
 
 			PT_NODE *qc = parser_pop_hint_node ();
 
 			if (qc)
 			  {
-			    qc->info.create_entity.entity_name = $5;
+			    qc->info.create_entity.if_not_exists = $5;
+			    qc->info.create_entity.entity_name = $6;
 			    qc->info.create_entity.entity_type = PT_CLASS;
-			    qc->info.create_entity.create_like = $8;
+			    qc->info.create_entity.create_like = $9;
 			  }
 
 			$$ = qc;
@@ -3282,35 +3294,6 @@ alter_stmt
 			  }
 
 		DBG_PRINT}}
-	| ALTER						/* 1 */
-		{					/* 2 */
-			PT_NODE* node = parser_new_node(this_parser, PT_ALTER_INDEX);
-			parser_push_hint_node(node);
-		}
-	  opt_hint_list					/* 3 */
-	  opt_reverse					/* 4 */
-	  opt_unique					/* 5 */
-	  INDEX						/* 6 */
-	  identifier					/* 7 */
-	  REBUILD					/* 8 */
-		{{
-
-			PT_NODE *node = parser_pop_hint_node ();
-
-			node->info.index.code = PT_REBUILD_INDEX;
-			node->info.index.reverse = $4;
-			node->info.index.unique = $5;
-
-			node->info.index.index_name = $7;
-			if (node->info.index.index_name)
-			  {
-			    node->info.index.index_name->info.name.meta_class = PT_INDEX_NAME;
-			  }
-
-			$$ = node;
-			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
-
-		DBG_PRINT}}
 	| ALTER				/* 1 */
 	  INDEX				/* 2 */
 	  identifier			/* 3 */
@@ -3680,32 +3663,6 @@ drop_stmt
 			    $$ = node;
 			    PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 			  }
-
-		DBG_PRINT}}
-	| DROP						/* 1 */
-		{					/* 2 */
-			PT_NODE* node = parser_new_node(this_parser, PT_DROP_INDEX);
-			parser_push_hint_node(node);
-		}
-	  opt_hint_list					/* 3 */
-	  opt_reverse					/* 4 */
-	  opt_unique					/* 5 */
-	  INDEX						/* 6 */
-	  identifier					/* 7 */
-		{{
-
-			PT_NODE *node = parser_pop_hint_node ();
-
-			node->info.index.reverse = $4;
-			node->info.index.unique = $5;
-
-			node->info.index.index_name = $7;
-			if (node->info.index.index_name)
-			  {
-			    node->info.index.index_name->info.name.meta_class = PT_INDEX_NAME;
-			  }
-			$$ = node;
-			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	| DROP USER identifier
@@ -7812,6 +7769,21 @@ opt_or_replace
 		DBG_PRINT}}
 	;
 
+opt_if_not_exists
+	: /*empty*/
+		{{
+
+			$$ = 0;
+
+		DBG_PRINT}}
+	| IF NOT EXISTS
+		{{
+
+			$$ = 1;
+
+		DBG_PRINT}}
+	;
+
 opt_paren_view_attr_def_list
 	: /* empty */
 		{{
@@ -10943,22 +10915,13 @@ opt_sp_in_out
 
 esql_query_stmt
 	: 	{ parser_select_level++; }
-	  csql_query opt_for_update
+	  csql_query
 		{{
-
-			$2->info.query.for_update = $3;
 			$$ = $2;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 			parser_select_level--;
 
 		DBG_PRINT}}
-	;
-
-opt_for_update
-	: /* empty */
-		{ $$ = NULL; }
-	| For UPDATE OF sort_spec_list
-		{ $$ = $4; }
 	;
 
 csql_query
@@ -11039,6 +11002,7 @@ csql_query
 
 		DBG_PRINT}}
 	opt_select_limit_clause
+	opt_for_update_clause
 		{{
 
 			PT_NODE *node = parser_pop_orderby_node ();
@@ -11094,9 +11058,10 @@ select_expression
         }
         
         parser_push_orderby_node (node);
-      
-              DBG_PRINT}}
-      opt_select_limit_clause  
+        
+		DBG_PRINT}}
+      opt_select_limit_clause
+      opt_for_update_clause
 		{{
                         
 			PT_NODE *node = parser_pop_orderby_node ();
@@ -11107,13 +11072,13 @@ select_expression
      table_op select_or_subquery
      {{
          
-         PT_NODE *stmt = $7;
+         PT_NODE *stmt = $8;
          
          if (stmt)
          {
 			    stmt->info.query.id = (UINTPTR) stmt;
 			    stmt->info.query.q.union_.arg1 = $1;
-			    stmt->info.query.q.union_.arg2 = $8;
+			    stmt->info.query.q.union_.arg2 = $9;
          }
 
 
@@ -11724,7 +11689,12 @@ alias_enabled_expression_list
 	| alias_enabled_expression_
 		{{
 
-			$$ = $1;
+			PT_NODE *node = $1;
+			if (node != NULL)
+			  {
+			    node->is_alias_enabled_expr = 1;
+			  }
+			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -12547,6 +12517,71 @@ opt_with_increment_clause
 		{{
 
 			$$ = $4;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	;
+
+opt_for_update_clause
+	: /* empty */
+	| For UPDATE
+		{{
+
+			PT_NODE *node = parser_top_orderby_node ();
+			
+			if (node != NULL && node->node_type == PT_SELECT)
+			  {
+			    PT_SELECT_INFO_SET_FLAG(node, PT_SELECT_INFO_FOR_UPDATE);
+			  }
+			else
+			  {
+			    PT_ERRORm (this_parser, node,
+				       MSGCAT_SET_PARSER_SEMANTIC,
+				       MSGCAT_SEMANTIC_INVALID_USE_FOR_UPDATE_CLAUSE);
+			  }
+			  
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| For UPDATE OF class_name_list
+		{{
+
+			PT_NODE *node = parser_top_orderby_node ();
+			PT_NODE *names_list = $4;
+			PT_NODE *node1 = names_list, *node2 = NULL;
+			
+			if (node != NULL && node->node_type == PT_SELECT)
+			  {
+			    PT_SELECT_INFO_SET_FLAG(node, PT_SELECT_INFO_FOR_UPDATE);
+			    node->info.query.q.select.for_update = names_list;
+			    for (; node1 != NULL && node2 == NULL;  node1 = node1->next)
+			      {
+				for (node2 = node1->next; node2 != NULL; node2 = node2->next)
+				  {
+				    /* check if search is duplicate of table */
+				    if (!pt_str_compare (node1->info.name.original,
+					 node2->info.name.original, CASE_INSENSITIVE))
+				      {
+					/* same class found twice in table list */
+					PT_ERRORmf (this_parser, node2,
+						    MSGCAT_SET_PARSER_SEMANTIC,
+						    MSGCAT_SEMANTIC_DUPLICATE_CLASS_OR_ALIAS,
+						    node2->info.name.original);
+						    break;
+				      }
+				  }
+				  PT_NAME_INFO_SET_FLAG(node1, PT_NAME_FOR_UPDATE);
+			      }
+			  }
+			else
+			  {
+			    PT_ERRORm (this_parser, node,
+					MSGCAT_SET_PARSER_SEMANTIC,
+					MSGCAT_SEMANTIC_INVALID_USE_FOR_UPDATE_CLAUSE);
+			  }
+
+			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
@@ -22483,6 +22518,8 @@ PT_HINT parser_hint_table[] = {
   ,
   {"NO_SORT_LIMIT", NULL, PT_HINT_NO_SORT_LIMIT}
   ,
+  {"NO_HASH_AGGREGATE", NULL, PT_HINT_NO_HASH_AGGREGATE}
+  ,
   {"SELECT_RECORD_INFO", NULL, PT_HINT_SELECT_RECORD_INFO}
   ,
   {"SELECT_PAGE_INFO", NULL, PT_HINT_SELECT_PAGE_INFO}
@@ -22683,7 +22720,8 @@ parser_keyword_func (const char *name, PT_NODE * args)
       /* arg 2 */
     case PT_DATE_FORMAT:
     case PT_TIME_FORMAT:
-    case PT_FORMAT:    
+    case PT_FORMAT:
+    case PT_STR_TO_DATE:    
       if (c != 2)
 	return NULL;
       a1 = args;

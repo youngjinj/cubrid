@@ -146,7 +146,7 @@ extern int locator_add_or_remove_index (THREAD_ENTRY * thread_p,
 					FUNC_PRED_UNPACK_INFO * func_preds);
 extern int locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 				 RECDES * old_recdes, ATTR_ID * att_id,
-				 int n_att_id, OID * inst_oid,
+				 int n_att_id, OID * old_oid, OID * new_oid,
 				 OID * class_oid, BTID * search_btid,
 				 bool duplicate_key_locked,
 				 int op_type, HEAP_SCANCACHE * scan_cache,

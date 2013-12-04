@@ -237,7 +237,6 @@ process_object (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scancache,
 	  if (error_code == ER_MVCC_ROW_ALREADY_DELETED)
 	    {
 	      result = 0;
-	      er_clear ();
 	    }
 	  else
 	    {

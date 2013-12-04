@@ -902,7 +902,8 @@ au_find_user_cache_index (DB_OBJECT * user, int *index, int check_it)
   AU_USER_CACHE *u, *new_user_cache;
   DB_OBJECT *class_mop;
 
-  for (u = Au_user_cache; u != NULL && u->user != user; u = u->next)
+  for (u = Au_user_cache; u != NULL && !ws_is_same_object (u->user, user);
+       u = u->next)
     ;
 
   if (u != NULL)
@@ -1897,7 +1898,7 @@ au_is_dba_group_member (MOP user)
       return false;		/* avoid gratuitous er_set later */
     }
 
-  if (user == Au_dba_user)
+  if (ws_is_same_object (user, Au_dba_user))
     {
       return true;
     }
@@ -2339,7 +2340,7 @@ au_set_password_internal (MOP user, const char *password, int encode,
   char pbuf[AU_MAX_PASSWORD_BUF + 4];
 
   AU_DISABLE (save);
-  if (Au_user != user && !au_is_dba_group_member (Au_user))
+  if (!ws_is_same_object (Au_user, user) && !au_is_dba_group_member (Au_user))
     {
       error = ER_AU_UPDATE_FAILURE;
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
@@ -2910,7 +2911,8 @@ au_add_member_method (MOP user, DB_VALUE * returnval, DB_VALUE * memval)
 
       if (member != NULL)
 	{
-	  if (user == Au_user || au_is_dba_group_member (Au_user))
+	  if (ws_is_same_object (user, Au_user)
+	      || au_is_dba_group_member (Au_user))
 	    {
 	      error = au_add_member (user, member);
 	    }
@@ -3061,7 +3063,8 @@ au_drop_member_method (MOP user, DB_VALUE * returnval, DB_VALUE * memval)
 
       if (member != NULL)
 	{
-	  if (user == Au_user || au_is_dba_group_member (Au_user))
+	  if (ws_is_same_object (user, Au_user)
+	      || au_is_dba_group_member (Au_user))
 	    {
 	      error = au_drop_member (user, member);
 	    }
@@ -3147,7 +3150,9 @@ au_drop_user (MOP user)
     }
 
   /* check if user is dba/public or current user */
-  if (user == Au_dba_user || user == Au_public_user || user == Au_user)
+  if (ws_is_same_object (user, Au_dba_user)
+      || ws_is_same_object (user, Au_public_user)
+      || ws_is_same_object (user, Au_user))
     {
       db_make_null (&name);
       error = obj_get (user, "name", &name);
@@ -3757,7 +3762,7 @@ update_cache (MOP classop, SM_CLASS * sm_class, AU_CLASS_CACHE * cache)
     {
       *bits = AU_FULL_AUTHORIZATION;
     }
-  else if (Au_user == sm_class->owner)
+  else if (ws_is_same_object (Au_user, sm_class->owner))
     {
       /* might want to allow grant/revoke on self */
       *bits = AU_FULL_AUTHORIZATION;
@@ -3796,7 +3801,7 @@ update_cache (MOP classop, SM_CLASS * sm_class, AU_CLASS_CACHE * cache)
 		  error = au_set_get_obj (groups, i, &group);
 		  if (error == NO_ERROR)
 		    {
-		      if (group == Au_dba_user)
+		      if (ws_is_same_object (group, Au_dba_user))
 			{
 			  /* someones on the DBA member list, give them power */
 			  *bits = AU_FULL_AUTHORIZATION;
@@ -4059,7 +4064,7 @@ au_grant (MOP user, MOP class_mop, DB_AUTH type, bool grant_option)
     }
 
   AU_DISABLE (save);
-  if (user == Au_user)
+  if (ws_is_same_object (user, Au_user))
     {
       /*
        * Treat grant to self condition as a success only. Although this
@@ -4592,7 +4597,7 @@ au_revoke (MOP user, MOP class_mop, DB_AUTH type)
     }
 
   AU_DISABLE (save);
-  if (user == Au_user)
+  if (ws_is_same_object (user, Au_user))
     {
       error = ER_AU_CANT_REVOKE_SELF;
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, error, 0);
@@ -5650,6 +5655,8 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
       return ER_FAILED;
     }
 
+  op = ws_mvcc_latest_version (op);
+
   classmop = NULL;
   class_ = NULL;
 
@@ -5658,9 +5665,9 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
     {
       classmop = op;
     }
-  else if (op->class_mop != NULL)
+  else
     {
-      classmop = op->class_mop;
+      classmop = ws_class_mop (op);
     }
 
   /* the locator_fetch_class_of_instance doesn't seem to be working right now */
@@ -5794,6 +5801,7 @@ au_fetch_class (MOP op, SM_CLASS ** class_ptr, AU_FETCHMODE fetchmode,
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, error, 1, "");
       return error;
     }
+  op = ws_mvcc_latest_version (op);
 
   if (fetchmode != AU_FETCH_READ	/* not just reading */
       || op->deleted		/* marked deleted */
@@ -5924,6 +5932,7 @@ fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE fetchmode)
   /* DO NOT PUT ANY RETURNS FROM HERE UNTIL THE AU_ENABLE */
   AU_DISABLE (save);
 
+  op = ws_mvcc_latest_version (op);
   pin = ws_pin (op, 1);
   if (op->is_vid)
     {
@@ -6024,6 +6033,7 @@ au_fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE mode, DB_AUTH type)
       return error;
     }
 
+  op = ws_mvcc_latest_version (op);
   error = fetch_class (op, &classmop, &class_, AU_FETCH_READ);
   if (error != NO_ERROR)
     {
@@ -6088,7 +6098,7 @@ au_set_user (MOP newuser)
   int error = NO_ERROR;
   int index;
 
-  if (newuser != NULL && newuser != Au_user)
+  if (newuser != NULL && !ws_is_same_object (newuser, Au_user))
     {
       if (!(error = au_find_user_cache_index (newuser, &index, 1)))
 	{
@@ -6641,7 +6651,8 @@ au_export_users (FILE * outfp)
 
       if (error == NO_ERROR)
 	{
-	  if (user != Au_dba_user && user != Au_public_user)
+	  if (!ws_is_same_object (user, Au_dba_user)
+	      && !ws_is_same_object (user, Au_public_user))
 	    {
 	      if (!strlen (passbuf))
 		{
@@ -6836,7 +6847,7 @@ make_class_user (MOP user_obj)
        * without being granted it by any users.  Therefore we need to set
        * the authorization explicitly before any code checks it.
        */
-      if (user_obj == Au_dba_user)
+      if (ws_is_same_object (user_obj, Au_dba_user))
 	{
 	  u->available_auth = AU_FULL_AUTHORIZATION;
 	}
@@ -8295,7 +8306,8 @@ au_check_serial_authorization (MOP serial_object)
 
   ret_val = ER_QPROC_CANNOT_UPDATE_SERIAL;
 
-  if (creator == Au_user || au_is_dba_group_member (Au_user))
+  if (ws_is_same_object (creator, Au_user)
+      || au_is_dba_group_member (Au_user))
     {
       ret_val = NO_ERROR;
     }

@@ -1135,6 +1135,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 #if !defined(NDEBUG)
   int track_id;
 #endif
+  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
 
   /* Check for robustness */
   if (!btid || !hfids || !class_oids || !attr_ids || !key_type)
@@ -1264,7 +1265,8 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   if (heap_scancache_start (thread_p, &sort_args->hfscan_cache,
 			    &sort_args->hfids[cur_class],
 			    &sort_args->class_ids[cur_class],
-			    true, false, LOCKHINT_NONE, NULL) != NO_ERROR)
+			    true, false, LOCKHINT_NONE, mvcc_snapshot)
+      != NO_ERROR)
     {
       goto error;
     }
@@ -2745,6 +2747,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 							      NULL,
 							      0) != NO_ERROR)
 	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_TF_CORRUPTED, 0);
 	  goto error;
 	}
 
@@ -3097,6 +3100,10 @@ error:
     }
   btree_clear_key_value (&copy, &this_key);
 
+  if (er_errid () == NO_ERROR)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+    }
   return er_errid ();
 }
 
@@ -3292,7 +3299,6 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
 	{
 	  if (ret == ER_MVCC_ROW_ALREADY_DELETED)
 	    {
-	      er_clear ();
 	      ret = NO_ERROR;
 	    }
 	  else
@@ -3343,6 +3349,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
   char midxkey_buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_midxkey_buf;
   int *prefix_lengthp;
   int result;
+  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
 
   DB_MAKE_NULL (&dbvalue);
 
@@ -3431,7 +3438,8 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 					&sort_args->hfids[cur_class],
 					&sort_args->class_ids[cur_class],
 					true, false,
-					LOCKHINT_NONE, NULL) != NO_ERROR)
+					LOCKHINT_NONE, mvcc_snapshot)
+		  != NO_ERROR)
 		{
 		  return SORT_ERROR_OCCURRED;
 		}

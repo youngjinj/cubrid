@@ -1932,7 +1932,7 @@ db_get_user_and_host_name (void)
 DB_OBJECT *
 db_get_user (void)
 {
-  return Au_user;
+  return ws_mvcc_latest_version (Au_user);
 }
 
 /*

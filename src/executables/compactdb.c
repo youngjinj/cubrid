@@ -636,7 +636,7 @@ disk_update_instance (MOP classop, DESC_OBJ * obj, OID * oid)
     }
 
   if (heap_perform_update
-      (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL, &oldflag, NULL,
+      (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL, &oldflag,
        NULL) != oid)
     {
       printf (msgcat_message (MSGCAT_CATALOG_UTILS,
@@ -724,8 +724,8 @@ update_indexes (OID * class_oid, OID * obj_oid, RECDES * rec)
        * 9rd arg -> data or schema, 10th arg -> max repl. log or not
        */
       success = locator_update_index (NULL, rec, &oldrec, NULL, 0,
-				      obj_oid, class_oid, NULL, false,
-				      SINGLE_ROW_UPDATE,
+				      obj_oid, obj_oid, class_oid, NULL,
+				      false, SINGLE_ROW_UPDATE,
 				      (HEAP_SCANCACHE *) NULL, false, false,
 				      REPL_INFO_TYPE_STMT_NORMAL);
     }

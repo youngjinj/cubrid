@@ -1090,7 +1090,7 @@ $ LOADDB
 1021 다음 트랜잭션들 간에 교착상태가 발견되었습니다. %1$s
 1022 prefix length의 값(%d)이 유효하지 않습니다.
 1023 Reserved error code for HA.
-1024 Reserved error code for HA.
+1024 log writer: page id %1$lld부터 시작하는 로그를 찾을 수 없습니다.
 1025 HA delay info: 복제 지연(%1$d 초)이 허용치(%2$d 초)를 초과하였습니다.
 1026 HA delay info: 복제 지연(%1$d 초)이 적정 수준(%2$d 초) 이하로 감소하였습니다.
 1027 log applier: '%1$s'에서 '%2$s'로 복제 반영 상태를 변경하지 못하였습니다.
@@ -1203,13 +1203,14 @@ $ LOADDB
 1134 Applylogdb for %1$s은 (는) 이미 존재합니다.
 1135 B+tree(%1$s)의 프리비어스 링크에 오류가 있습니다.: vpid = (%2$d, %3$d)
 1136 B+tree(%1$s)의 프리비어스 링크을 복구합니다.: vpid = (%2$d, %3$d)
-1137 Handshake 에러 (peer host %1$s): 인터럽트 호환 불일치. (client: %2$s, server: %3$s)
-1138 Handshake 에러 (peer host %1$s): 읽기/쓰기 모드 불일치. (client: %2$s, server: %3$s)
-1139 Handshake 에러 (peer host %1$s): HA 복제 지연 발생.
-1140 Handshake 에러 (peer host %1$s): 레플리카 접속 정책 불일치.
-1141 Handshake 에러 (peer host %1$s): 알 수 없는 서버 버전.
-1142 Handshake 에러 (peer host %1$s): 원격 접속 불허.
-1143 %1$s로의 연결 시도 타임아웃 (timeout: %2$d 초)
+1137 SQL 문이 허용된 것(%d) 보다 많은 재귀 호출을 유발하여 처리할 수 없습니다.
+1138 Handshake 에러 (peer host %1$s): 인터럽트 호환 불일치. (client: %2$s, server: %3$s)
+1139 Handshake 에러 (peer host %1$s): 읽기/쓰기 모드 불일치. (client: %2$s, server: %3$s)
+1140 Handshake 에러 (peer host %1$s): HA 복제 지연 발생.
+1141 Handshake 에러 (peer host %1$s): 레플리카 접속 정책 불일치.
+1142 Handshake 에러 (peer host %1$s): 알 수 없는 서버 버전.
+1143 Handshake 에러 (peer host %1$s): 원격 접속 불허.
+1144 %1$s로의 연결 시도 타임아웃 (timeout: %2$d 초)
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 마지막 에러
@@ -1642,6 +1643,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 278 Only one table within a view can be updated.
 279 Multiple insert targets not allowed.
 280 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
+281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 가상 메모리 없음: %d 바이트를 할당할 수 없습니다.

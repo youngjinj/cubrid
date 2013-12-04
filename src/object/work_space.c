@@ -210,6 +210,9 @@ static void ws_insert_mop_on_hash_link_with_position (MOP mop, int slot,
 						      MOP prev);
 static MOP ws_mop_if_exists (OID * oid);
 
+static MOP ws_mvcc_latest_permanent_version (MOP mop);
+static MOP ws_mvcc_latest_temporary_version (MOP mop);
+
 /*
  * MEMORY CRISES
  */
@@ -275,6 +278,7 @@ ws_make_mop (OID * oid)
       op->pruning_type = DB_NOT_PARTITIONED_CLASS;
       op->hash_link = NULL;
       op->commit_link = NULL;
+      op->mvcc_link = NULL;
       op->reference = 0;
       op->version = NULL;
       op->oid_info.oid.volid = 0;
@@ -285,6 +289,7 @@ ws_make_mop (OID * oid)
       op->is_temp = 0;
       op->released = 0;
       op->decached = 0;
+      op->permanent_mvcc_link = 0;
       /* Initialize mvcc snapshot version to be sure it doesn't match with
        * current mvcc snapshot version.
        */
@@ -726,12 +731,13 @@ ws_insert_mop_on_hash_link (MOP mop, int slot)
 	  /* For real objects, must first discard the duplicate object and 
 	   * remove it from class_mop.
 	   */
+	  /* TODO: This can happen in non-mvcc now. We can have a duplicate
+	   *       mop in a insert->rollback->insert, where the duplicate is
+	   *       the first inserted object. That object does not exist
+	   *       anymore and should probably be marked accordingly.
+	   */
 
 	  /* Decache object */
-	  /* TODO: With MVCC enabled, this case may be faced quite often.
-	   *	   Investigate a better solution (maybe old mop can be removed
-	   *	   completely).
-	   */
 	  ws_decache (p);
 
 	  if (p->class_mop != NULL)
@@ -746,7 +752,6 @@ ws_insert_mop_on_hash_link (MOP mop, int slot)
 		  p->class_link = NULL;
 		}
 	    }
-	  assert (p->class_mop == NULL && p->class_link == NULL);
 
 	  break;
 	}
@@ -815,7 +820,7 @@ ws_insert_mop_on_hash_link_with_position (MOP mop, int slot, MOP prev)
 }
 
 /*
- * ws_updated_mop () - It is a replacement for ws_mop in the context of MVCC.
+ * ws_mvcc_updated_mop () - It is a replacement for ws_mop in the context of MVCC.
  *		       After an object is fetched from server, it may have
  *		       been updated, and the updated data may be found on
  *		       a different OID. If this is true, make sure that the
@@ -827,12 +832,14 @@ ws_insert_mop_on_hash_link_with_position (MOP mop, int slot, MOP prev)
  * class_mop (in) : Class MOP.
  */
 MOP
-ws_updated_mop (OID * oid, OID * new_oid, MOP class_mop)
+ws_mvcc_updated_mop (OID * oid, OID * new_oid, MOP class_mop,
+		     bool updated_by_me)
 {
-  MOP mop = NULL;
+  MOP mop = NULL, new_mop = NULL;
   int error_code = NO_ERROR;
 
-  if (!OID_ISNULL (new_oid) && !OID_EQ (oid, new_oid))
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && !OID_ISNULL (new_oid)
+      && !OID_EQ (oid, new_oid))
     {
       /* OID has changed */
       mop = ws_mop_if_exists (oid);
@@ -846,14 +853,24 @@ ws_updated_mop (OID * oid, OID * new_oid, MOP class_mop)
 	  /* Decache old object */
 	  ws_decache (mop);
 
-	  /* Change OID for mop */
-	  error_code =
-	    ws_update_oid_and_class (mop, new_oid, WS_OID (class_mop));
-	  if (error_code != NO_ERROR)
+	  new_mop = ws_mop (new_oid, class_mop);
+	  mop->mvcc_link = new_mop;
+
+	  if (updated_by_me)
 	    {
-	      return NULL;
+	      /* Mark mvcc link as temporary */
+	      mop->permanent_mvcc_link = 0;
+	      /* Add old object to commit list to resolve link on
+	       * commit/rollback
+	       */
+	      WS_PUT_COMMIT_MOP (mop);
 	    }
-	  return mop;
+	  else
+	    {
+	      /* Mark mvcc link as permanent */
+	      mop->permanent_mvcc_link = 1;
+	    }
+	  return new_mop;
 	}
     }
   else
@@ -2008,6 +2025,7 @@ ws_dirty (MOP op)
     {
       return;
     }
+  op = ws_mvcc_latest_version (op);
   WS_SET_DIRTY (op);
   /*
    * add_class_object makes sure each class' dirty list (even an empty one)
@@ -2952,6 +2970,11 @@ ws_clear_internal (bool clear_vmop_keys)
 
 	  mop->lock = NULL_LOCK;
 	  mop->deleted = 0;
+
+	  if (mop->mvcc_link != NULL && !mop->permanent_mvcc_link)
+	    {
+	      mop->mvcc_link = NULL;
+	    }
 	}
     }
   ws_Commit_mops = NULL;
@@ -3395,6 +3418,7 @@ ws_oid (MOP mop)
 MOP
 ws_class_mop (MOP mop)
 {
+  mop = ws_mvcc_latest_version (mop);
   return (mop->class_mop);
 }
 
@@ -3442,6 +3466,7 @@ ws_get_lock (MOP mop)
 void
 ws_set_lock (MOP mop, LOCK lock)
 {
+  mop = ws_mvcc_latest_version (mop);
   if (mop != NULL)
     {
       WS_SET_LOCK (mop, lock);
@@ -3562,6 +3587,7 @@ ws_restore_pin (MOP obj, int opin, int cpin)
 void
 ws_mark_deleted (MOP mop)
 {
+  mop = ws_mvcc_latest_version (mop);
   ws_dirty (mop);
 
   WS_SET_DELETED (mop);
@@ -3594,6 +3620,8 @@ int
 ws_find (MOP mop, MOBJ * obj)
 {
   int status = WS_FIND_MOP_NOTDELETED;
+
+  mop = ws_mvcc_latest_version (mop);
 
   *obj = NULL;
   if (mop && !mop->deleted)
@@ -3804,6 +3832,12 @@ ws_clear_all_hints (bool retain_lock)
       next = mop->commit_link;
       mop->commit_link = NULL;	/* remove mop from commit link (it's done) */
 
+      if (mop->mvcc_link != NULL && !mop->permanent_mvcc_link)
+	{
+	  /* Make mvcc links permanent when committed */
+	  mop->permanent_mvcc_link = 1;
+	}
+
       if (next == mop)
 	{
 	  mop = NULL;
@@ -3861,6 +3895,15 @@ ws_abort_mops (bool only_unpinned)
 
       /* clear all hint fields including the lock */
       ws_clear_hints (mop, only_unpinned);
+
+      /* Remove MVCC link if it is not permanent */
+      if (mop->mvcc_link != NULL && !mop->permanent_mvcc_link)
+	{
+	  /* Decache temporary version */
+	  ws_decache (mop->mvcc_link);
+	  /* Remove mvcc link */
+	  mop->mvcc_link = NULL;
+	}
 
       if (next == mop)
 	{
@@ -5811,4 +5854,102 @@ bool
 ws_is_mop_fetched_with_current_snapshot (MOP mop)
 {
   return (mop->mvcc_snapshot_version == ws_MVCC_snapshot_version);
+}
+
+/*
+ * ws_mvcc_latest_version () - If the current mop is a duplicate for an object
+ *			       a link is created for the newer mop. Follow
+ *			       the link to find the newest mop for current
+ *			       object.
+ *
+ * return   : Newest mop.
+ * mop (in) : Initial mop.
+ */
+MOP
+ws_mvcc_latest_version (MOP mop)
+{
+  if (!prm_get_bool_value (PRM_ID_MVCC_ENABLED) || mop == NULL)
+    {
+      return mop;
+    }
+  if (mop->mvcc_link != NULL)
+    {
+      mop->mvcc_link = ws_mvcc_latest_permanent_version (mop->mvcc_link);
+      return ws_mvcc_latest_temporary_version (mop->mvcc_link);
+    }
+  return mop;
+}
+
+/*
+ * ws_mvcc_latest_permanent_version () - Walk through mvcc link list as long
+ *				         as links are permanent and update
+ *					 all intermediate mvcc_links to latest
+ *					 permanent version.
+ *
+ * return   : Latest permanent mop.
+ * mop (in) : Current mop.
+ */
+static MOP
+ws_mvcc_latest_permanent_version (MOP mop)
+{
+  assert (mop != NULL);
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
+
+  if (mop->mvcc_link != NULL && mop->permanent_mvcc_link)
+    {
+      mop->mvcc_link = ws_mvcc_latest_permanent_version (mop->mvcc_link);
+      return mop->mvcc_link;
+    }
+  return mop;
+}
+
+/*
+ * ws_mvcc_latest_temporary_version () - Get latest temporary mvcc version.
+ *					 Temporary versions are created
+ *					 by current transaction and become
+ *					 permanent with commit.
+ *
+ * return   : Latest temporary version.
+ * mop (in) : Current mop.
+ *
+ * NOTE: This is called only after ws_mvcc_latest_permanent_version. This
+ *	 function assumes that it will find only temporary mvcc links.
+ */
+static MOP
+ws_mvcc_latest_temporary_version (MOP mop)
+{
+  if (mop->mvcc_link != NULL)
+    {
+      assert (!mop->permanent_mvcc_link);
+      return ws_mvcc_latest_temporary_version (mop->mvcc_link);
+    }
+  return mop;
+}
+
+/*
+ * ws_is_dirty () - Is object dirty.
+ *
+ * return   : True/false.
+ * mop (in) : Checked object (latest mvcc version is checked).
+ */
+int
+ws_is_dirty (MOP mop)
+{
+  mop = ws_mvcc_latest_version (mop);
+  return mop->dirty;
+}
+
+/*
+ * ws_is_same_object () - Check if the mops belong to the same object.
+ *
+ * return    : True if the same object.
+ * mop1 (in) : First mop.
+ * mop2 (in) : Second mop.
+ */
+bool
+ws_is_same_object (MOP mop1, MOP mop2)
+{
+  mop1 = ws_mvcc_latest_version (mop1);
+  mop2 = ws_mvcc_latest_version (mop2);
+  return (mop1 == mop2);
 }

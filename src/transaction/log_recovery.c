@@ -3051,8 +3051,9 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 		}
 	      log_recovery_resetlog (thread_p, &lsa, true, end_redo_lsa);
 	      *did_incom_recovery = true;
-	      log_Gl.highest_completed_mvccid = log_Gl.hdr.mvcc_next_id;
-	      MVCCID_BACKWARD (log_Gl.highest_completed_mvccid);
+	      log_Gl.mvcc_table.highest_completed_mvccid =
+		log_Gl.hdr.mvcc_next_id;
+	      MVCCID_BACKWARD (log_Gl.mvcc_table.highest_completed_mvccid);
 	      return;
 	    }
 	  else
@@ -3299,8 +3300,8 @@ log_recovery_analysis (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 	}
     }
 
-  log_Gl.highest_completed_mvccid = log_Gl.hdr.mvcc_next_id;
-  MVCCID_BACKWARD (log_Gl.highest_completed_mvccid);
+  log_Gl.mvcc_table.highest_completed_mvccid = log_Gl.hdr.mvcc_next_id;
+  MVCCID_BACKWARD (log_Gl.mvcc_table.highest_completed_mvccid);
 
   return;
 }

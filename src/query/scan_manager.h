@@ -224,6 +224,7 @@ struct indx_scan_id
 					 */
   INDEX_SKIP_SCAN iss;		/* index skip scan structure */
   bool duplicate_key_locked;	/* true if duplicate key have been scanned */
+  bool for_update;		/* true if FOR UPDATE clause is active */
   DB_VALUE **key_info_values;	/* Used for index key info scan */
   REGU_VARIABLE_LIST key_info_regu_list;	/* regulator variable list */
 };
@@ -444,7 +445,8 @@ extern int scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				 int num_attrs_range,
 				 ATTR_ID * attrids_range,
 				 HEAP_CACHE_ATTRINFO * cache_range,
-				 bool iscan_oid_order, QUERY_ID query_id);
+				 bool iscan_oid_order, QUERY_ID query_id,
+				 bool for_update);
 extern int scan_open_index_key_info_scan (THREAD_ENTRY * thread_p,
 					  SCAN_ID * scan_id,
 					  /* fields of SCAN_ID */

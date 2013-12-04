@@ -68,6 +68,41 @@
 
 extern void qo_plan_lite_print (QO_PLAN * plan, FILE * f, int howfar);
 
+/* maximum number of unique columns that can be optimized */
+#define ANALYTIC_OPT_MAX_SORT_LIST_COLUMNS      32
+
+/* maximum number of functions that can be optimized */
+#define ANALYTIC_OPT_MAX_FUNCTIONS              32
+
+typedef struct analytic_key_metadomain ANALYTIC_KEY_METADOMAIN;
+struct analytic_key_metadomain
+{
+  /* indexed sort list */
+  unsigned char key[ANALYTIC_OPT_MAX_FUNCTIONS];
+
+  /* sort list size */
+  int key_size;
+
+  /* partition prefix size */
+  int part_size;
+
+  /* compatibility links */
+  ANALYTIC_KEY_METADOMAIN *links[ANALYTIC_OPT_MAX_FUNCTIONS];
+  int links_count;
+
+  /* if composite metadomain then the two children, otherwise null */
+  ANALYTIC_KEY_METADOMAIN *children[2];
+
+  /* true if metadomain is now part of composite metadomain */
+  bool demoted;
+
+  /* level of metadomain */
+  int level;
+
+  /* source function */
+  ANALYTIC_TYPE *source;
+};
+
 typedef enum
 { SORT_LIST_AFTER_ISCAN = 1,
   SORT_LIST_ORDERBY,
@@ -138,13 +173,17 @@ static int pt_table_compatible (PARSER_CONTEXT * parser, PT_NODE * node,
 static TABLE_INFO *pt_table_info_alloc (void);
 static PT_NODE *pt_filter_pseudo_specs (PARSER_CONTEXT * parser,
 					PT_NODE * spec);
+static PT_NODE *pt_is_hash_agg_eligible (PARSER_CONTEXT * parser,
+					 PT_NODE * tree,
+					 void *arg, int *continue_walk);
 static PT_NODE *pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 				      void *arg, int *continue_walk);
 static PT_NODE *pt_to_analytic_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 				     ANALYTIC_INFO * analytic_info);
 static PT_NODE *pt_to_analytic_final_node (PARSER_CONTEXT * parser,
 					   PT_NODE * tree,
-					   PT_NODE ** ex_list);
+					   PT_NODE ** ex_list,
+					   int *instnum_flag);
 static PT_NODE *pt_expand_analytic_node (PARSER_CONTEXT * parser,
 					 PT_NODE * node,
 					 PT_NODE * select_list);
@@ -447,6 +486,31 @@ static XASL_NODE *pt_to_buildschema_proc (PARSER_CONTEXT * parser,
 static XASL_NODE *pt_to_buildvalue_proc (PARSER_CONTEXT * parser,
 					 PT_NODE * select_node,
 					 QO_PLAN * qo_plan);
+static bool pt_analytic_to_metadomain (ANALYTIC_TYPE * func_p,
+				       PT_NODE * sort_list,
+				       ANALYTIC_KEY_METADOMAIN * func_meta,
+				       PT_NODE ** index, int *index_size);
+static bool pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
+				       ANALYTIC_KEY_METADOMAIN * f2,
+				       ANALYTIC_KEY_METADOMAIN * out,
+				       int *lost_link_count, int level);
+static void pt_metadomain_build_comp_graph (ANALYTIC_KEY_METADOMAIN *
+					    af_meta, int af_count, int level);
+static SORT_LIST *pt_sort_list_from_metadomain (PARSER_CONTEXT * parser,
+						ANALYTIC_KEY_METADOMAIN *
+						meta,
+						PT_NODE ** sort_list_index,
+						PT_NODE * select_list);
+static void pt_metadomain_adjust_key_prefix (ANALYTIC_KEY_METADOMAIN * meta);
+static ANALYTIC_EVAL_TYPE *pt_build_analytic_eval_list (PARSER_CONTEXT *
+							parser,
+							ANALYTIC_KEY_METADOMAIN
+							* meta,
+							ANALYTIC_EVAL_TYPE *
+							eval,
+							PT_NODE **
+							sort_list_index,
+							ANALYTIC_INFO * info);
 static XASL_NODE *pt_to_union_proc (PARSER_CONTEXT * parser, PT_NODE * node,
 				    PROC_TYPE type);
 static XASL_NODE *pt_plan_set_query (PARSER_CONTEXT * parser, PT_NODE * node,
@@ -561,6 +625,7 @@ static AGGREGATE_TYPE *pt_to_aggregate (PARSER_CONTEXT * parser,
 					OUTPTR_LIST * out_list,
 					VAL_LIST * value_list,
 					REGU_VARIABLE_LIST regu_list,
+					REGU_VARIABLE_LIST scan_regu_list,
 					PT_NODE * out_names,
 					DB_VALUE ** grbynum_valp);
 
@@ -4156,6 +4221,37 @@ pt_find_table_info (UINTPTR spec_id, TABLE_INFO * exposed_list)
 }
 
 /*
+ * pt_is_hash_agg_eligible () - determine if query is eligible for hash
+ *                              aggregate evaluation
+ *   return: tree node
+ *   parser(in): parser context
+ *   tree(in): tree node to check for eligibility
+ *   arg(in/out): pointer to int, eligibility
+ *   continue_walk(in/out): continue walk
+ */
+static PT_NODE *
+pt_is_hash_agg_eligible (PARSER_CONTEXT * parser, PT_NODE * tree, void *arg,
+			 int *continue_walk)
+{
+  int *eligible = (int *) arg;
+
+  if (tree && eligible && pt_is_aggregate_function (parser, tree))
+    {
+      if (tree->info.function.function_type == PT_GROUP_CONCAT
+	  || tree->info.function.function_type == PT_MEDIAN
+	  || tree->info.function.function_type == PT_CUME_DIST
+	  || tree->info.function.function_type == PT_PERCENT_RANK
+	  || tree->info.function.all_or_distinct == PT_DISTINCT)
+	{
+	  *eligible = 0;
+	  *continue_walk = PT_STOP_WALK;
+	}
+    }
+
+  return tree;
+}
+
+/*
  * pt_to_aggregate_node () - test for aggregate function nodes,
  * 	                     convert them to aggregate_list_nodes
  *   return:
@@ -4169,9 +4265,10 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 		      void *arg, int *continue_walk)
 {
   bool is_agg = 0;
-  REGU_VARIABLE *regu = NULL;
+  REGU_VARIABLE *regu = NULL, *scan_regu = NULL;
   AGGREGATE_TYPE *aggregate_list;
   AGGREGATE_INFO *info = (AGGREGATE_INFO *) arg;
+  REGU_VARIABLE_LIST scan_regu_list;
   REGU_VARIABLE_LIST out_list;
   REGU_VARIABLE_LIST regu_list;
   REGU_VARIABLE_LIST regu_temp;
@@ -4209,7 +4306,7 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 		  regu_dbval_type_init (*(info->grbynum_valp),
 					DB_TYPE_INTEGER);
 		}
-	      aggregate_list->value = *(info->grbynum_valp);
+	      aggregate_list->accumulator.value = *(info->grbynum_valp);
 	    }
 	  aggregate_list->function = code;
 	  aggregate_list->opr_dbtype = DB_TYPE_NULL;
@@ -4303,13 +4400,17 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 								 UNBOX_AS_VALUE);
 	    }
 
-	  if (regu == NULL)
+	  scan_regu =
+	    pt_to_regu_variable (parser, tree->info.function.arg_list,
+				 UNBOX_AS_VALUE);
+
+	  if (!regu || !scan_regu)
 	    {
 	      return NULL;
 	    }
 
 	  aggregate_list->domain = pt_xasl_node_to_domain (parser, tree);
-	  regu_dbval_type_init (aggregate_list->value,
+	  regu_dbval_type_init (aggregate_list->accumulator.value,
 				pt_node_to_db_type (tree));
 	  if (aggregate_list->function == PT_GROUP_CONCAT)
 	    {
@@ -4322,7 +4423,8 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 					    type_enum))
 		    {
 		      pr_clone_value (&group_concat_sep_node_save->info.value.
-				      db_value, aggregate_list->value2);
+				      db_value,
+				      aggregate_list->accumulator.value2);
 		      /* set the next argument pointer (the separator
 		       * argument) to NULL in order to avoid impacting
 		       * the regu vars generation.
@@ -4356,23 +4458,24 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 			}
 		      strcpy (buf, ",");
 		      qstr_make_typed_string (pt_type_enum_to_db (arg_type),
-					      aggregate_list->value2,
-					      DB_DEFAULT_PRECISION, buf, 1,
+					      aggregate_list->accumulator.
+					      value2, DB_DEFAULT_PRECISION,
+					      buf, 1,
 					      TP_DOMAIN_CODESET
 					      (aggregate_list->domain),
 					      TP_DOMAIN_COLLATION
 					      (aggregate_list->domain));
-		      aggregate_list->value2->need_clear = true;
+		      aggregate_list->accumulator.value2->need_clear = true;
 		    }
 		  else
 		    {
-		      DB_MAKE_NULL (aggregate_list->value2);
+		      DB_MAKE_NULL (aggregate_list->accumulator.value2);
 		    }
 		}
 	    }
 	  else
 	    {
-	      regu_dbval_type_init (aggregate_list->value2,
+	      regu_dbval_type_init (aggregate_list->accumulator.value2,
 				    pt_node_to_db_type (tree));
 	    }
 	  aggregate_list->opr_dbtype =
@@ -4452,6 +4555,30 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 		  regu_temp = regu_temp->next;
 		}
 	      regu_temp->next = regu_list;
+
+	      /* append regu to info->scan_regu_list */
+	      scan_regu_list = regu_varlist_alloc ();
+	      if (!scan_regu_list)
+		{
+		  PT_ERROR (parser, tree,
+			    msgcat_message (MSGCAT_CATALOG_CUBRID,
+					    MSGCAT_SET_PARSER_SEMANTIC,
+					    MSGCAT_SEMANTIC_OUT_OF_MEMORY));
+		  return NULL;
+		}
+
+	      scan_regu->vfetch_to =
+		pt_index_value (info->value_list,
+				info->out_list->valptr_cnt - 1);
+	      scan_regu_list->next = NULL;
+	      scan_regu_list->value = *scan_regu;
+
+	      regu_temp = info->scan_regu_list;
+	      while (regu_temp->next)
+		{
+		  regu_temp = regu_temp->next;
+		}
+	      regu_temp->next = scan_regu_list;
 	    }
 	  else
 	    {
@@ -4471,8 +4598,10 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	  aggregate_list->option = Q_ALL;
 
 	  aggregate_list->domain = &tp_Integer_domain;
-	  regu_dbval_type_init (aggregate_list->value, DB_TYPE_INTEGER);
-	  regu_dbval_type_init (aggregate_list->value2, DB_TYPE_INTEGER);
+	  regu_dbval_type_init (aggregate_list->accumulator.value,
+				DB_TYPE_INTEGER);
+	  regu_dbval_type_init (aggregate_list->accumulator.value2,
+				DB_TYPE_INTEGER);
 	  aggregate_list->opr_dbtype = DB_TYPE_INTEGER;
 
 	  /* hack.  we need to pack some domain even though we don't
@@ -4482,7 +4611,7 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	}
 
       /* record the value for pt_to_regu_variable to use in "out arith" */
-      tree->etc = (void *) aggregate_list->value;
+      tree->etc = (void *) aggregate_list->accumulator.value;
 
       info->head_list = aggregate_list;
 
@@ -4741,20 +4870,22 @@ pt_index_value (const VAL_LIST * value, int index)
 
 /*
  * pt_to_aggregate () - Generates an aggregate list from a select node
- *   return:
- *   parser(in):
- *   select_node(in):
- *   out_list(in):
- *   value_list(in):
- *   regu_list(in):
- *   out_names(in):
- *   grbynum_valp(in):
+ *   return: aggregate XASL node
+ *   parser(in): parser context
+ *   select_node(in): SELECT statement node
+ *   out_list(in): outptr list to generate intermediate file
+ *   value_list(in): value list
+ *   regu_list(in): regulist to read values from intermediate file
+ *   scan_regu_list(in): regulist to read values during initial scan
+ *   out_names(in): outptr name nodes
+ *   grbynum_valp(in): groupby_num() dbvalue
  */
 static AGGREGATE_TYPE *
 pt_to_aggregate (PARSER_CONTEXT * parser, PT_NODE * select_node,
 		 OUTPTR_LIST * out_list,
 		 VAL_LIST * value_list,
 		 REGU_VARIABLE_LIST regu_list,
+		 REGU_VARIABLE_LIST scan_regu_list,
 		 PT_NODE * out_names, DB_VALUE ** grbynum_valp)
 {
   PT_NODE *select_list, *from, *where, *having;
@@ -4769,6 +4900,7 @@ pt_to_aggregate (PARSER_CONTEXT * parser, PT_NODE * select_node,
   info.out_list = out_list;
   info.value_list = value_list;
   info.regu_list = regu_list;
+  info.scan_regu_list = scan_regu_list;
   info.out_names = out_names;
   info.grbynum_valp = grbynum_valp;
 
@@ -4776,9 +4908,8 @@ pt_to_aggregate (PARSER_CONTEXT * parser, PT_NODE * select_node,
   info.class_name = NULL;
   info.flag_agg_optimize = false;
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false)
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
     {
-      /* enable count optimization in non-mvcc */
       if (pt_is_single_tuple (parser, select_node))
 	{
 	  if (where == NULL
@@ -4788,13 +4919,9 @@ pt_to_aggregate (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	    {
 	      if (from->info.spec.entity_name)
 		{
-		  if (from->info.spec.entity_name->info.name.partition_of ==
-		      NULL)
-		    {
-		      info.class_name =
-			from->info.spec.entity_name->info.name.original;
-		      info.flag_agg_optimize = true;
-		    }
+		  info.class_name =
+		    from->info.spec.entity_name->info.name.original;
+		  info.flag_agg_optimize = true;
 		}
 	    }
 	}
@@ -5165,7 +5292,7 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
     {
       assert (class_ != NULL);
 
-      if (locator_fetch_class (class_, DB_FETCH_CLREAD_INSTREAD) == NULL)
+      if (locator_fetch_class (class_, DB_FETCH_READ) == NULL)
 	{
 	  PT_ERRORc (parser, flat, er_msg ());
 	  return NULL;
@@ -5584,7 +5711,8 @@ pt_to_sort_list (PARSER_CONTEXT * parser, PT_NODE * node_list,
 
   /* check if a hidden column is in the select list; if it is the case, store
      the position in 'adjust_for_hidden_col_from' - index starting from 1
-     !! Only one column is supported!
+     !! Only one column is supported! If we deal with more than two columns
+     then we deal with SELECT ... FOR UPDATE and we must skip the check
      This adjustement is needed for UPDATE statements with SELECT subqueries,
      executed on broker (ex: on tables with triggers); in this case,
      the class OID field in select list is marked as hidden, and the
@@ -5593,7 +5721,8 @@ pt_to_sort_list (PARSER_CONTEXT * parser, PT_NODE * node_list,
      problem */
   if (sort_mode == SORT_LIST_ORDERBY)
     {
-      for (col = col_list, k = 1; col; col = col->next, k++)
+      for (col = col_list, k = 1; col && adjust_for_hidden_col_from != -2;
+	   col = col->next, k++)
 	{
 	  switch (col->node_type)
 	    {
@@ -5601,8 +5730,14 @@ pt_to_sort_list (PARSER_CONTEXT * parser, PT_NODE * node_list,
 	      if (col->info.function.hidden_column
 		  && col->info.function.function_type == F_CLASS_OF)
 		{
-		  assert (adjust_for_hidden_col_from == -1);
-		  adjust_for_hidden_col_from = k;
+		  if (adjust_for_hidden_col_from != -1)
+		    {
+		      adjust_for_hidden_col_from = -2;
+		    }
+		  else
+		    {
+		      adjust_for_hidden_col_from = k;
+		    }
 		  break;
 		}
 	      break;
@@ -5610,8 +5745,14 @@ pt_to_sort_list (PARSER_CONTEXT * parser, PT_NODE * node_list,
 	    case PT_NAME:
 	      if (col->info.name.hidden_column)
 		{
-		  assert (adjust_for_hidden_col_from == -1);
-		  adjust_for_hidden_col_from = k;
+		  if (adjust_for_hidden_col_from != -1)
+		    {
+		      adjust_for_hidden_col_from = -2;
+		    }
+		  else
+		    {
+		      adjust_for_hidden_col_from = k;
+		    }
 		  break;
 		}
 
@@ -5785,7 +5926,7 @@ pt_to_sort_list (PARSER_CONTEXT * parser, PT_NODE * node_list,
       else
 	{
 	  sort->pos_descr.pos_no--;
-	  if (adjust_for_hidden_col_from != -1)
+	  if (adjust_for_hidden_col_from > -1)
 	    {
 	      assert (sort_mode == SORT_LIST_ORDERBY);
 	      /* adjust for hidden column */
@@ -12142,6 +12283,7 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
   indx_infop->groupby_desc = 0;
 
   indx_infop->use_iss = index_entryp->is_iss_candidate;
+  indx_infop->ils_prefix_len = index_entryp->ils_prefix_len;
   indx_infop->func_idx_col_id = fi_info ? fi_info->col_id : -1;
   if (index_entryp->constraints->func_index_info)
     {
@@ -12151,7 +12293,9 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
 						   class_,
 						   fi->fi_domain->precision,
 						   fi->fi_domain->scale,
-						   NULL));
+						   NULL,
+						   fi->fi_domain->
+						   collation_id));
     }
   else
     {
@@ -12786,6 +12930,11 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 
 	  if (access)
 	    {
+	      if (spec->info.spec.flag & PT_SPEC_FLAG_FOR_UPDATE_CLAUSE)
+		{
+		  access->flags |= ACCESS_SPEC_FLAG_FOR_UPDATE;
+		}
+
 	      access->next = access_list;
 	      access_list = access;
 	    }
@@ -14995,139 +15144,890 @@ error_exit:
 }
 
 /*
+ * pt_analytic_to_metadomain () - initialize metadomain for analytic function
+ *				    and index the sort list elements
+ *   returns: true if successful, false if sort spec index overflows
+ *   func_p(in): analytic function
+ *   sort_list(in): sort list of analytic function
+ *   func_meta(in): metadomain to be initialized
+ *   index(in/out): sort spec index
+ *   index_size(in/out): sort spec index size
+ */
+static bool
+pt_analytic_to_metadomain (ANALYTIC_TYPE * func_p,
+			   PT_NODE * sort_list,
+			   ANALYTIC_KEY_METADOMAIN * func_meta,
+			   PT_NODE ** index, int *index_size)
+{
+  PT_NODE *list;
+  int i, idx;
+
+  assert (func_p != NULL && func_meta != NULL && index != NULL);
+
+  /* structure initialization */
+  func_meta->level = 0;
+  func_meta->key_size = 0;
+  func_meta->links_count = 0;
+  func_meta->demoted = false;
+  func_meta->children[0] = NULL;
+  func_meta->children[1] = NULL;
+  func_meta->source = func_p;
+  func_meta->part_size = func_p->sort_prefix_size;
+
+  /* build index and structure */
+  for (list = sort_list; list != NULL; list = list->next)
+    {
+      /* search for sort list in index */
+      idx = -1;
+      for (i = 0; i < (*index_size); i++)
+	{
+	  if (SORT_SPEC_EQ (index[i], list))
+	    {
+	      /* found */
+	      idx = i;
+	      break;
+	    }
+	}
+
+      /* add to index if not present */
+      if (idx == -1)
+	{
+	  if ((*index_size) >= ANALYTIC_OPT_MAX_SORT_LIST_COLUMNS)
+	    {
+	      /* no more space in index */
+	      return false;
+	    }
+
+	  idx = (*index_size);
+	  index[idx] = list;
+	  (*index_size)++;
+	}
+
+      /* register */
+      func_meta->key[func_meta->key_size] = idx;
+      func_meta->key_size++;
+      func_meta->level++;
+    }
+
+  /* all ok */
+  return true;
+}
+
+/*
+ * pt_metadomains_compatible () - determine if two metadomains are compatible
+ *				  (i.e. can be evaluated together)
+ *   returns: compatibility as boolean
+ *   f1/f2(in): the two metadomains
+ *   out(in): output (common) metadomain to be populated
+ *   lost_link_count(out): the number of compatibility links that are lost by
+ *			   combining the two metadomains
+ *   level(in): maximum sort list size to consider in compatibility checking
+ * 
+ * NOTE: Given two window definitions like the following (* denotes a partition
+ *       by column, # denotes an order by column):
+ * 
+ *   f1: * * * * # # # # #
+ *   f2: * * # # # # #
+ *  out: * * # # # # # # #
+ *       ^-^--------------------------- common partition prefix (CPP)
+ *           ^-^----------------------- forced partition suffix (FPS)
+ *               ^-^-^----------------- common sort list (CSL)
+ *                     ^-^------------- sort list suffix (SLS)
+ * 
+ * The two windows can share a sort list iff:
+ *   a. CSL(f1) == CSL(f2)
+ *   b. {CPP(f2)} + {FPS(f2)} is a subset of {FPS(f1)} + {CPP(f1)}
+ * 
+ * The resulting window (out) will have the structure:
+ *  out = CPP(f2) + FPS(f2) + CSL(f1) + SLS(f1) i.e.
+ *  out = f2 + SLS(f1)
+ */
+static bool
+pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
+			   ANALYTIC_KEY_METADOMAIN * f2,
+			   ANALYTIC_KEY_METADOMAIN * out,
+			   int *lost_link_count, int level)
+{
+  unsigned int f1_fps_cpp = 0, f2_fps_cpp = 0;
+  int i, j;
+  bool found;
+
+  assert (f1 != NULL && f2 != NULL);
+
+  /* determine larger key */
+  if (f1->part_size < f2->part_size)
+    {
+      ANALYTIC_KEY_METADOMAIN *aux = f1;
+      f1 = f2;
+      f2 = aux;
+    }
+
+  /* step (a): compare common sort lists */
+  for (i = f1->part_size; i < MIN (level, MIN (f1->key_size, f2->key_size));
+       i++)
+    {
+      if (f1->key[i] != f2->key[i])
+	{
+	  return false;
+	}
+    }
+
+  /* step (b) */
+  for (i = 0; i < MIN (level, f1->part_size); i++)
+    {
+      f1_fps_cpp |= 1 << f1->key[i];
+    }
+  for (i = 0; i < MIN (level, MIN (f1->part_size, f2->key_size)); i++)
+    {
+      f2_fps_cpp |= 1 << f2->key[i];
+    }
+  if ((f2_fps_cpp & f1_fps_cpp) != f2_fps_cpp)
+    {
+      /* f2_fps_cpp is not a subset of f1_fps_cpp */
+      return false;
+    }
+
+  if (out == NULL || lost_link_count == NULL)
+    {
+      /* no need to compute common metadomain */
+      return true;
+    }
+
+  /* build common metadomain */
+  out->source = NULL;
+  out->level = level;
+  out->demoted = false;
+  out->children[0] = f1;
+  out->children[1] = f2;
+  out->part_size = MIN (f2->part_size, level);
+  out->key_size = MIN (MAX (f1->key_size, f2->key_size), level);
+
+  for (i = 0; i < out->key_size; i++)
+    {
+      if (i < f2->key_size)
+	{
+	  /* get from f2 */
+	  out->key[i] = f2->key[i];
+	  if (i < f1->part_size)
+	    {
+	      /* current key element cannot be used further */
+	      f1_fps_cpp &= ~(1 << f2->key[i]);
+	    }
+	}
+      else
+	{
+	  if (i >= f1->part_size)
+	    {
+	      /* original order (SLS) */
+	      out->key[i] = f1->key[i];
+	    }
+	  else
+	    {
+	      bool found = false;
+
+	      /* whatever order from what's left in {CPP(f1)} + {FPS(f1)}  */
+	      for (j = 0; j < ANALYTIC_OPT_MAX_SORT_LIST_COLUMNS; j++)
+		{
+		  if (f1_fps_cpp & (1 << j))
+		    {
+		      out->key[i] = j;
+		      f1_fps_cpp &= ~(1 << j);
+		      found = true;
+		      break;
+		    }
+		}
+	      if (!found)
+		{
+		  assert (false);
+		  /* make sure corrupted struct is not used */
+		  return false;
+		}
+	    }
+	}
+    }
+
+  /* build links */
+  out->links_count = 0;
+  (*lost_link_count) = 0;
+
+  for (i = 0; i < f1->links_count; i++)
+    {
+      if (f1->links[i] == f2)
+	{
+	  continue;
+	}
+      else
+	if (pt_metadomains_compatible (out, f1->links[i], NULL, NULL, level))
+	{
+	  out->links[out->links_count++] = f1->links[i];
+	}
+      else
+	{
+	  (*lost_link_count)++;
+	}
+    }
+  for (i = 0; i < f2->links_count; i++)
+    {
+      found = false;
+      for (j = 0; j < f1->links_count; j++)
+	{
+	  if (f1->links[j] == f2->links[i])
+	    {
+	      found = true;
+	      break;
+	    }
+	}
+
+      if ((f2->links[i] == f1) || found)
+	{
+	  continue;
+	}
+      else
+	{
+	  if (pt_metadomains_compatible
+	      (out, f2->links[i], NULL, NULL, level))
+	    {
+	      out->links[out->links_count++] = f2->links[i];
+	    }
+	  else
+	    {
+	      (*lost_link_count)++;
+	    }
+	}
+    }
+
+  /* all ok */
+  return true;
+}
+
+/*
+ * pt_metadomain_build_comp_graph () - build metadomain compatibility graph of
+ *				       all analytic functions
+ *   af_meta(in): analytic function meta domain list
+ *   af_count(in): analytic function count
+ *   level(in): maximum size of considered sort list
+ */
+static void
+pt_metadomain_build_comp_graph (ANALYTIC_KEY_METADOMAIN * af_meta,
+				int af_count, int level)
+{
+  int i, j;
+
+  assert (af_meta != NULL);
+
+  /* reset link count */
+  for (i = 0; i < af_count; i++)
+    {
+      af_meta[i].links_count = 0;
+    }
+
+  /* check compatibility */
+  for (i = 0; i < af_count; i++)
+    {
+      if (af_meta[i].demoted)
+	{
+	  continue;
+	}
+
+      for (j = i + 1; j < af_count; j++)
+	{
+	  if (af_meta[j].demoted)
+	    {
+	      continue;
+	    }
+
+	  if (pt_metadomains_compatible
+	      (&af_meta[i], &af_meta[j], NULL, NULL, level))
+	    {
+	      /* now kiss */
+	      af_meta[i].links[af_meta[i].links_count] = &af_meta[j];
+	      af_meta[j].links[af_meta[j].links_count] = &af_meta[i];
+	      af_meta[i].links_count++;
+	      af_meta[j].links_count++;
+	    }
+	}
+    }
+}
+
+/*
+ * pt_sort_list_from_metadomain () - build sort list for metadomain
+ *   returns: sort list or NULL on error
+ *   parser(in): parser context
+ *   sort_list_index(in): index of sort specs
+ *   select_list(in): select list of query
+ */
+static SORT_LIST *
+pt_sort_list_from_metadomain (PARSER_CONTEXT * parser,
+			      ANALYTIC_KEY_METADOMAIN * meta,
+			      PT_NODE ** sort_list_index,
+			      PT_NODE * select_list)
+{
+  PT_NODE *sort_list_pt = NULL;
+  SORT_LIST *sort_list;
+  int i;
+
+  assert (meta != NULL && sort_list_index != NULL);
+
+  /* build PT_NODE list */
+  for (i = 0; i < meta->key_size; i++)
+    {
+      PT_NODE *copy =
+	parser_copy_tree (parser, sort_list_index[meta->key[i]]);
+      if (copy == NULL)
+	{
+	  PT_INTERNAL_ERROR (parser, "copy tree");
+	  (void) parser_free_tree (parser, sort_list_pt);
+	  return NULL;
+	}
+      else
+	{
+	  copy->next = NULL;
+	  sort_list_pt = parser_append_node (copy, sort_list_pt);
+	}
+    }
+
+  if (sort_list_pt != NULL)
+    {
+      sort_list =
+	pt_to_sort_list (parser, sort_list_pt, select_list,
+			 SORT_LIST_ANALYTIC_WINDOW);
+      parser_free_tree (parser, sort_list_pt);
+
+      if (sort_list == NULL)
+	{
+	  PT_INTERNAL_ERROR (parser, "sort list generation");
+	}
+
+      return sort_list;
+    }
+  else
+    {
+      return NULL;
+    }
+}
+
+/*
+ * pt_metadomain_adjust_key_prefix () - adjust children's sort key using parent's sort key
+ *   meta(in): metadomain
+ */
+static void
+pt_metadomain_adjust_key_prefix (ANALYTIC_KEY_METADOMAIN * meta)
+{
+  int i, child;
+
+  assert (meta != NULL);
+
+  for (child = 0; child < 2; child++)
+    {
+      if (meta->children[child])
+	{
+	  for (i = 0; i < meta->level; i++)
+	    {
+	      if (i < meta->children[child]->key_size)
+		{
+		  meta->children[child]->key[i] = meta->key[i];
+		}
+	    }
+
+	  pt_metadomain_adjust_key_prefix (meta->children[child]);
+	}
+    }
+}
+
+/*
+ * pt_build_analytic_eval_list () - build evaluation sequence based on computed
+ *				    metadomains
+ *   returns: (partial) evaluation sequence
+ *   parser(in): parser context
+ *   meta(in): metadomain
+ *   eval(in): eval structure (i.e. sequence component)
+ *   sort_list_index(in): index of sort specs
+ *   info(in): analytic info structure
+ */
+static ANALYTIC_EVAL_TYPE *
+pt_build_analytic_eval_list (PARSER_CONTEXT * parser,
+			     ANALYTIC_KEY_METADOMAIN * meta,
+			     ANALYTIC_EVAL_TYPE * eval,
+			     PT_NODE ** sort_list_index, ANALYTIC_INFO * info)
+{
+  ANALYTIC_EVAL_TYPE *new = NULL, *new2 = NULL, *tail;
+  ANALYTIC_TYPE *func_p;
+
+  assert (meta != NULL && info != NULL);
+
+  if (meta->children[0] && meta->children[1])
+    {
+      if (meta->level >= meta->children[0]->level
+	  && meta->level >= meta->children[1]->level)
+	{
+	  /* must use this metadomain's sort list, so prealloc eval structure */
+	  if (eval == NULL)
+	    {
+	      eval = regu_analytic_eval_alloc ();
+	      if (eval == NULL)
+		{
+		  PT_INTERNAL_ERROR (parser, "regu alloc");
+		  return NULL;
+		}
+
+	      /* check for top level here, write sort list */
+	      eval->sort_list =
+		pt_sort_list_from_metadomain (parser, meta, sort_list_index,
+					      info->select_list);
+	      if (meta->key_size > 0 && eval->sort_list == NULL)
+		{
+		  /* error was already set */
+		  return NULL;
+		}
+	    }
+
+	  /* this is the case of a perfect match where both children can
+	     be evaluated together */
+	  eval =
+	    pt_build_analytic_eval_list (parser, meta->children[0], eval,
+					 sort_list_index, info);
+	  if (eval == NULL)
+	    {
+	      /* error was already set */
+	      return NULL;
+	    }
+
+	  eval =
+	    pt_build_analytic_eval_list (parser, meta->children[1], eval,
+					 sort_list_index, info);
+	  if (eval == NULL)
+	    {
+	      /* error was already set */
+	      return NULL;
+	    }
+	}
+      else
+	{
+	  if (meta->level >= meta->children[0]->level)
+	    {
+	      eval =
+		pt_build_analytic_eval_list (parser, meta->children[0], eval,
+					     sort_list_index, info);
+	      if (eval == NULL)
+		{
+		  /* error was already set */
+		  return NULL;
+		}
+
+	      new =
+		pt_build_analytic_eval_list (parser, meta->children[1], NULL,
+					     sort_list_index, info);
+	      if (new == NULL)
+		{
+		  /* error was already set */
+		  return NULL;
+		}
+	    }
+	  else if (meta->level >= meta->children[1]->level)
+	    {
+	      eval =
+		pt_build_analytic_eval_list (parser, meta->children[1], eval,
+					     sort_list_index, info);
+	      if (eval == NULL)
+		{
+		  /* error was already set */
+		  return NULL;
+		}
+
+	      new =
+		pt_build_analytic_eval_list (parser, meta->children[0], NULL,
+					     sort_list_index, info);
+	      if (new == NULL)
+		{
+		  /* error was already set */
+		  return NULL;
+		}
+	    }
+	  else
+	    {
+	      new =
+		pt_build_analytic_eval_list (parser, meta->children[0], NULL,
+					     sort_list_index, info);
+	      if (new == NULL)
+		{
+		  /* error was already set */
+		  return NULL;
+		}
+
+	      new2 =
+		pt_build_analytic_eval_list (parser, meta->children[1], NULL,
+					     sort_list_index, info);
+	      if (new2 == NULL)
+		{
+		  /* error was already set */
+		  return NULL;
+		}
+	    }
+
+	  if (new != NULL && new2 != NULL)
+	    {
+	      /* link new to new2 */
+	      tail = new;
+	      while (tail->next != NULL)
+		{
+		  tail = tail->next;
+		}
+	      tail->next = new2;
+	    }
+
+	  if (eval == NULL)
+	    {
+	      eval = new;
+	    }
+	  else
+	    {
+	      /* link eval to new */
+	      tail = eval;
+	      while (tail->next != NULL)
+		{
+		  tail = tail->next;
+		}
+	      tail->next = new;
+	    }
+	}
+    }
+  else
+    {
+      /* this is a leaf node; create eval structure if necessary */
+      if (eval == NULL)
+	{
+	  eval = regu_analytic_eval_alloc ();
+	  if (eval == NULL)
+	    {
+	      PT_INTERNAL_ERROR (parser, "regu alloc");
+	      return NULL;
+	    }
+
+	  /* check for top level here, write sort list */
+	  eval->sort_list =
+	    pt_sort_list_from_metadomain (parser, meta, sort_list_index,
+					  info->select_list);
+	  if (meta->key_size > 0 && eval->sort_list == NULL)
+	    {
+	      /* error was already set */
+	      return NULL;
+	    }
+	}
+
+      meta->source->next = NULL;
+      if (eval->head != NULL)
+	{
+	  for (func_p = eval->head; func_p->next != NULL;
+	       func_p = func_p->next);
+	  func_p->next = meta->source;
+	}
+      else
+	{
+	  eval->head = meta->source;
+	}
+    }
+
+  return eval;
+}
+
+/*
  * pt_optimize_analytic_list () - optimize analytic exectution
  *   info(in/out): analytic info
  *
  * NOTE: This function groups together the evaluation of analytic functions
  * that share the same window.
  */
-static void
-pt_optimize_analytic_list (ANALYTIC_INFO * info)
+static ANALYTIC_EVAL_TYPE *
+pt_optimize_analytic_list (PARSER_CONTEXT * parser, ANALYTIC_INFO * info)
 {
-  ANALYTIC_TYPE *prev, *next, *curr, *list, *new_head, *new_list;
-  int group_id = 0, i;
+  ANALYTIC_EVAL_TYPE *ret = NULL;
+  ANALYTIC_TYPE *func_p, *save_next;
+  PT_NODE *sort_list;
+  bool found;
+  int group_id = 0, i, j, k, level = 0;
 
-  /* find analytic groups */
-  for (curr = info->head_list; curr != NULL; curr = curr->next)
+  /* sort list index */
+  PT_NODE *sc_index[ANALYTIC_OPT_MAX_SORT_LIST_COLUMNS];
+  int sc_count = 0;
+
+  /* meta domains */
+  ANALYTIC_KEY_METADOMAIN af_meta[ANALYTIC_OPT_MAX_FUNCTIONS * 2];
+  int af_count = 0;
+
+  assert (info != NULL);
+
+  /* find unique sort columns and index them; build analytic meta structures */
+  for (func_p = info->head_list, sort_list = info->sort_lists;
+       func_p != NULL, sort_list != NULL;
+       func_p = func_p->next, sort_list = sort_list->next, af_count++)
     {
-      int found = 0;		/* number of matches found */
-
-      if (curr->eval_group > -1)
+      if (!pt_analytic_to_metadomain
+	  (func_p, sort_list->info.pointer.node, &af_meta[af_count], sc_index,
+	   &sc_count))
 	{
-	  /* already grouped */
-	  continue;
+	  /* sort spec index overflow, we'll do it the old fashioned way */
+	  goto fallback;
 	}
 
-      for (list = curr->next; list != NULL; list = list->next)
+      /* first level is maximum key size */
+      if (level < af_meta[af_count].key_size)
 	{
-	  SORT_LIST *curr_s = curr->sort_list;
-	  SORT_LIST *list_s = list->sort_list;
+	  level = af_meta[af_count].key_size;
+	}
+    }
 
-	  if (list->eval_group > -1)
+  /* group metadomains with zero-length sort keys */
+  do
+    {
+      found = false;
+      for (i = 0; i < af_count - 1; i++)
+	{
+	  if (!af_meta[i].demoted && af_meta[i].key_size == 0)
 	    {
-	      /* already grouped */
-	      continue;
-	    }
+	      for (j = i + 1; j < af_count; j++)
+		{
+		  if (!af_meta[j].demoted && af_meta[j].key_size == 0)
+		    {
+		      found = true;
 
-	  /* check for same partition count */
-	  if (curr->partition_cnt != list->partition_cnt)
-	    {
-	      continue;
-	    }
+		      if (af_count >= ANALYTIC_OPT_MAX_FUNCTIONS)
+			{
+			  goto fallback;
+			}
 
-	  /* check for same subpartition flag */
-	  if (QPROC_ANALYTIC_HAS_SUBPARTITIONS (curr) !=
-	      QPROC_ANALYTIC_HAS_SUBPARTITIONS (list))
-	    {
-	      continue;
-	    }
+		      /* demote and register children */
+		      af_meta[i].demoted = true;
+		      af_meta[j].demoted = true;
+		      af_meta[af_count].children[0] = &af_meta[i];
+		      af_meta[af_count].children[1] = &af_meta[j];
 
-	  /* check for same sort spec list */
-	  while (curr_s != NULL && list_s != NULL)
-	    {
-	      /* median sort string in different order */
-	      if (curr_s->pos_descr.pos_no != list_s->pos_descr.pos_no
-		  || curr_s->s_order != list_s->s_order
-		  || curr_s->s_nulls != list_s->s_nulls
-		  || ((curr->function == PT_MEDIAN
-		       || list->function == PT_MEDIAN)
-		      && curr->function != list->function
-		      && TP_IS_STRING_TYPE
-		      (TP_DOMAIN_TYPE (curr_s->pos_descr.dom))))
+		      /* populate new metadomain */
+		      af_meta[af_count].demoted = false;
+		      af_meta[af_count].part_size = 0;
+		      af_meta[af_count].key_size = 0;
+		      af_meta[af_count].level = level;	/* maximum level */
+		      af_meta[af_count].links_count = 0;
+		      af_meta[af_count].source = NULL;
+
+		      /* repeat */
+		      af_count++;
+		      break;
+		    }
+		}
+
+	      if (found)
 		{
 		  break;
 		}
-
-	      curr_s = curr_s->next;
-	      list_s = list_s->next;
 	    }
+	}
+    }
+  while (found);
 
-	  if (curr_s != NULL || list_s != NULL)
+
+  /* build initial compatibility graph */
+  pt_metadomain_build_comp_graph (af_meta, af_count, level);
+
+  /* compose every compatible metadomains from each possible prefix length */
+  while (level > 0)
+    {
+      ANALYTIC_KEY_METADOMAIN new, best;
+      int new_destroyed, best_destroyed = -1;
+
+      /* compose best two compatible metadomains */
+      for (i = 0; i < af_count; i++)
+	{
+	  if (af_meta[i].links_count <= 0 || af_meta[i].demoted)
 	    {
+	      /* nothing to do for unlinked or demoted metadomain */
 	      continue;
 	    }
 
-	  /* we now have a match */
-	  found++;
-	  list->eval_group = group_id;
-	}
-
-      if (found > 0)
-	{
-	  curr->eval_group = group_id;
-	  group_id++;
-	}
-    }
-
-  /* group analytics together in list */
-  new_list = new_head = NULL;
-  for (i = 0; i < group_id; i++)
-    {
-      prev = NULL;
-      list = info->head_list;
-
-      while (list != NULL)
-	{
-	  next = list->next;
-
-	  if (list->eval_group == i)
+	  for (j = 0; j < af_meta[i].links_count; j++)
 	    {
-	      if (prev == NULL)
+	      /* build composite metadomain */
+	      pt_metadomains_compatible (&af_meta[i], af_meta[i].links[j],
+					 &new, &new_destroyed, level);
+
+	      /* see if it's better than current best */
+	      if (new_destroyed < best_destroyed || best_destroyed == -1)
 		{
-		  info->head_list = next;
-		}
-	      else
-		{
-		  prev->next = next;
+		  best_destroyed = new_destroyed;
+		  best = new;
 		}
 
-	      list->next = NULL;
-
-	      if (new_head == NULL)
+	      if (best_destroyed == 0)
 		{
-		  new_head = new_list = list;
-		}
-	      else
-		{
-		  new_list->next = list;
-		  new_list = list;
+		  /* early exit, perfect match */
+		  break;
 		}
 	    }
-	  else
+
+	  if (best_destroyed == 0)
 	    {
-	      prev = list;
+	      /* early exit, perfect match */
+	      break;
+	    }
+	}
+
+      if (best_destroyed == -1)
+	{
+	  /* no more optimizations on this level */
+	  level--;
+
+	  /* rebuild compatibility graph */
+	  pt_metadomain_build_comp_graph (af_meta, af_count, level);
+	}
+      else
+	{
+	  ANALYTIC_KEY_METADOMAIN *link;
+
+	  /* add new composed metadomain */
+	  af_meta[af_count++] = best;
+
+	  /* unlink child metadomains */
+	  for (i = 0; i < best.children[0]->links_count; i++)
+	    {
+	      link = best.children[0]->links[i];
+	      for (j = 0; j < link->links_count; j++)
+		{
+		  if (link->links[j] == best.children[0])
+		    {
+		      link->links[j] = link->links[link->links_count - 1];
+		      link->links_count--;
+		      break;
+		    }
+		}
+	    }
+	  for (i = 0; i < best.children[1]->links_count; i++)
+	    {
+	      link = best.children[1]->links[i];
+	      for (j = 0; j < link->links_count; j++)
+		{
+		  if (link->links[j] == best.children[1])
+		    {
+		      link->links[j] = link->links[link->links_count - 1];
+		      link->links_count--;
+		      break;
+		    }
+		}
 	    }
 
-	  list = next;
+	  /* demote and unlink child metadomains */
+	  best.children[0]->demoted = true;
+	  best.children[1]->demoted = true;
+	  best.children[0]->links_count = 0;
+	  best.children[1]->links_count = 0;
+
+	  /* relink new composite metadomain */
+	  for (i = 0; i < best.links_count; i++)
+	    {
+	      link = best.links[i];
+	      link->links[link->links_count++] = &af_meta[af_count - 1];
+	    }
+
+	  /* adjust key prefix on tree */
+	  pt_metadomain_adjust_key_prefix (&best);
 	}
     }
 
-  if (new_head != NULL)
+  /* rebuild analytic type list */
+  ret = NULL;
+  for (i = 0; i < af_count; i++)
     {
-      /* add ungrouped analytics at end of list */
-      new_list->next = info->head_list;
-      info->head_list = new_head;
+      ANALYTIC_EVAL_TYPE *new, *tail;
+
+      if (af_meta[i].demoted)
+	{
+	  /* demoted metadomains have already been composed; we're interested
+	     only in top level metadomains */
+	  continue;
+	}
+
+      /* build new list */
+      new =
+	pt_build_analytic_eval_list (parser, &af_meta[i], NULL, sc_index,
+				     info);
+      if (new == NULL)
+	{
+	  /* error has already been set */
+	  return NULL;
+	}
+
+      /* attach to current list */
+      if (ret == NULL)
+	{
+	  /* first top level metadomain */
+	  ret = new;
+	}
+      else
+	{
+	  /* locate list tail */
+	  tail = ret;
+	  while (tail->next != NULL)
+	    {
+	      tail = tail->next;
+	    }
+
+	  /* link */
+	  tail->next = new;
+	}
     }
+
+  return ret;
+
+fallback:
+  /* build one eval group for each analytic function */
+  func_p = info->head_list;
+  sort_list = info->sort_lists;
+  while (func_p)
+    {
+      ANALYTIC_EVAL_TYPE *new = regu_analytic_eval_alloc ();
+
+      /* new eval structure */
+      if (new == NULL)
+	{
+	  PT_INTERNAL_ERROR (parser, "regu alloc");
+	  return NULL;
+	}
+      else if (ret == NULL)
+	{
+	  ret = new;
+	}
+      else
+	{
+	  new->next = ret;
+	  ret = new;
+	}
+
+      /* set up sort list */
+      if (sort_list->info.pointer.node != NULL)
+	{
+	  ret->sort_list =
+	    pt_to_sort_list (parser, sort_list->info.pointer.node,
+			     info->select_list, SORT_LIST_ANALYTIC_WINDOW);
+	  if (ret->sort_list == NULL)
+	    {
+	      /* error has already been set */
+	      return NULL;
+	    }
+	}
+      else
+	{
+	  ret->sort_list = NULL;
+	}
+
+      /* one function */
+      ret->head = func_p;
+
+      /* unlink and advance */
+      save_next = func_p->next;
+      func_p->next = NULL;
+      func_p = save_next;
+      sort_list = sort_list->next;
+    }
+
+  return ret;
 }
 
 /*
@@ -15145,7 +16045,7 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
   XASL_NODE *xasl;
   PT_NODE *saved_current_class;
   int groupby_ok = 1;
-  AGGREGATE_TYPE *aggregate = NULL;
+  AGGREGATE_TYPE *aggregate = NULL, *agg_list = NULL;
   SYMBOL_INFO *symbols;
   PT_NODE *from, *limit;
   UNBOX unbox;
@@ -15156,6 +16056,7 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
   BUILDLIST_PROC_NODE *buildlist;
   int i;
   REGU_VARIABLE_LIST regu_var_p;
+  QPROC_DB_VALUE_LIST vallist_p;
 
   assert (parser != NULL);
 
@@ -15275,8 +16176,48 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 				group_out_list);
 	}
 
-      xasl->outptr_list = pt_to_outlist (parser, group_out_list,
-					 NULL, UNBOX_AS_VALUE);
+      /* determine if query is eligible for hash aggregate evaluation */
+      if (select_node->info.query.q.select.hint & PT_HINT_NO_HASH_AGGREGATE)
+	{
+	  /* forced not applicable */
+	  buildlist->g_hash_eligible = false;
+	}
+      else
+	{
+	  buildlist->g_hash_eligible = true;
+
+	  (void) parser_walk_tree (parser,
+				   select_node->info.query.q.select.list,
+				   pt_is_hash_agg_eligible,
+				   (void *) &buildlist->g_hash_eligible, NULL,
+				   NULL);
+	  (void) parser_walk_tree (parser,
+				   select_node->info.query.q.select.having,
+				   pt_is_hash_agg_eligible,
+				   (void *) &buildlist->g_hash_eligible, NULL,
+				   NULL);
+
+	  /* determine where we're storing the first tuple of each group */
+	  if (buildlist->g_hash_eligible)
+	    {
+	      if (select_node->info.query.q.select.group_by->with_rollup)
+		{
+		  /* if using rollup groups, we must output the first tuple of each
+		     group so rollup will be correctly handled during sort */
+		  buildlist->g_output_first_tuple = true;
+		}
+	      else
+		{
+		  /* in other cases just store everyting in hash table */
+		  buildlist->g_output_first_tuple = false;
+		}
+	    }
+	}
+
+      /* this one will be altered further on and it's the actual output of the
+         initial scan; will contain group key and aggregate expressions */
+      xasl->outptr_list =
+	pt_to_outlist (parser, group_out_list, NULL, UNBOX_AS_VALUE);
 
       if (xasl->outptr_list == NULL)
 	{
@@ -15302,6 +16243,35 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
       attr_offsets = pt_make_identity_offsets (group_out_list);
 
+      /* set up hash aggregate lists */
+      if (buildlist->g_hash_eligible)
+	{
+	  /* regulist for hash key during initial scan */
+	  buildlist->g_hk_scan_regu_list =
+	    pt_to_regu_variable_list (parser, group_out_list, UNBOX_AS_VALUE,
+				      buildlist->g_val_list, attr_offsets);
+
+	  /* regulist for hash key during sort operation */
+	  buildlist->g_hk_sort_regu_list =
+	    pt_to_position_regu_variable_list (parser,
+					       group_out_list,
+					       buildlist->g_val_list,
+					       attr_offsets);
+	}
+      else
+	{
+	  buildlist->g_hk_sort_regu_list = NULL;
+	  buildlist->g_hk_scan_regu_list = NULL;
+	}
+
+      /* this will load values from initial scan into g_val_list, a bypass
+         of outptr_list => (listfile) => g_regu_list => g_vallist; this
+         will be modified when building aggregate nodes */
+      buildlist->g_scan_regu_list =
+	pt_to_regu_variable_list (parser, group_out_list, UNBOX_AS_VALUE,
+				  buildlist->g_val_list, attr_offsets);
+
+      /* regulist for loading from listfile */
       buildlist->g_regu_list =
 	pt_to_position_regu_variable_list (parser,
 					   group_out_list,
@@ -15333,7 +16303,29 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 				   xasl->outptr_list,
 				   buildlist->g_val_list,
 				   buildlist->g_regu_list,
+				   buildlist->g_scan_regu_list,
 				   group_out_list, &buildlist->g_grbynum_val);
+
+      /* compute function count */
+      buildlist->g_func_count = 0;
+      agg_list = aggregate;
+      while (agg_list != NULL)
+	{
+	  buildlist->g_func_count++;
+	  agg_list = agg_list->next;
+	}
+
+      /* compute hash key size */
+      buildlist->g_hkey_size = 0;
+      if (buildlist->g_hash_eligible)
+	{
+	  REGU_VARIABLE_LIST regu_list = buildlist->g_hk_scan_regu_list;
+	  while (regu_list != NULL)
+	    {
+	      buildlist->g_hkey_size++;
+	      regu_list = regu_list->next;
+	    }
+	}
 
       /* set current_listfile only around call to make g_outptr_list
        * and havein_pred */
@@ -15430,7 +16422,25 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
 	  ANALYTIC_INFO analytic_info;
 	  PT_NODE *select_list_ex = NULL, *select_list_final = NULL, *node;
-	  int idx;
+	  int idx, final_idx, final_count, *sort_adjust = NULL;
+
+	  /* prepare sort adjustment array */
+	  final_idx = 0;
+	  final_count =
+	    pt_length_of_list (select_node->info.query.q.select.list);
+	  sort_adjust =
+	    (int *) db_private_alloc (NULL, final_count * sizeof (int));
+	  if (sort_adjust == NULL)
+	    {
+	      PT_ERRORm (parser, select_list_ex, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
+	      goto analytic_exit_on_error;
+	    }
+
+	  /* clear instnum_flag from buildlist; this can be modified by
+	     pt_to_analytic_final_node and in some cases will be OR'd with
+	     xasl->instnum_flag */
+	  buildlist->a_instnum_flag = 0;
 
 	  /* break up expressions with analytic functions */
 	  select_list_ex = NULL;
@@ -15442,14 +16452,15 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	  while (node != NULL)
 	    {
 	      PT_NODE *final, *to_ex_list = NULL, *save_next;
-	      long sort_adjust;
 
 	      /* save next and unlink node */
 	      save_next = node->next;
 	      node->next = NULL;
 
 	      /* get final select list node */
-	      final = pt_to_analytic_final_node (parser, node, &to_ex_list);
+	      final =
+		pt_to_analytic_final_node (parser, node, &to_ex_list,
+					   &buildlist->a_instnum_flag);
 	      if (final == NULL)
 		{
 		  /* error was set somewhere - clean up */
@@ -15467,38 +16478,35 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 		parser_append_node (final, select_list_final);
 
 	      /* modify sort spec adjustment counter to account for new nodes */
-	      sort_adjust = -1;	/* subtracted 1 for original node */
+	      assert (final_idx < final_count);
+	      sort_adjust[final_idx] = -1;	/* subtracted 1 for original node */
 	      for (; to_ex_list != NULL; to_ex_list = to_ex_list->next)
 		{
 		  /* add one for each node that goes in extended list */
-		  sort_adjust += 1;
+		  sort_adjust[final_idx] += 1;
 		}
-
-	      /* keep adjustment in final node's etc */
-	      final->etc = (void *) sort_adjust;
 
 	      /* advance */
 	      node = save_next;
+	      final_idx++;
 	    }
 
 	  /* adjust sort specs of analytics in select_list_ex */
-	  for (node = select_list_final, idx = 0; node; node = node->next)
+	  for (node = select_list_final, idx = 0, final_idx = 0;
+	       node != NULL && final_idx < final_count;
+	       node = node->next, final_idx++)
 	    {
 	      PT_NODE *list;
-	      long sort_adjust = (long) node->etc;
 
 	      /* walk list and adjust */
 	      for (list = select_list_ex; list; list = list->next)
 		{
 		  pt_adjust_analytic_sort_specs (parser, list, idx,
-						 sort_adjust);
+						 sort_adjust[final_idx]);
 		}
 
 	      /* increment and adjust index too */
-	      idx += sort_adjust + 1;
-
-	      /* reset etc (it will have a different meaning further on) */
-	      node->etc = NULL;
+	      idx += sort_adjust[final_idx] + 1;
 	    }
 
 	  /* we now have all analytics as top-level nodes in select_list_ex;
@@ -15547,12 +16555,17 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
 	  /* generate analytic nodes */
 	  analytic_info.head_list = NULL;
+	  analytic_info.sort_lists = NULL;
 	  analytic_info.select_node = select_node;
 	  analytic_info.select_list = select_list_ex;
 	  analytic_info.val_list = buildlist->a_val_list;
 
-	  for (node = select_list_ex, idx = 0; node; node = node->next, idx++)
+	  for (node = select_list_ex, vallist_p = buildlist->a_val_list->valp,
+	       idx = 0; node;
+	       node = node->next, vallist_p = vallist_p->next, idx++)
 	    {
+	      assert (vallist_p);
+
 	      if (PT_IS_ANALYTIC_NODE (node))
 		{
 		  /* process analytic node */
@@ -15562,9 +16575,8 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 		      goto analytic_exit_on_error;
 		    }
 
-		  /* new analytic node is at head of list; register function's
-		     index in val_list/outptr_list_ex */
-		  analytic_info.head_list->outptr_idx = idx;
+		  /* register vallist dbval for further use */
+		  analytic_info.head_list->out_value = vallist_p->val;
 		}
 	    }
 
@@ -15615,6 +16627,21 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	  if (buildlist->a_outptr_list == NULL)
 	    {
 	      goto analytic_exit_on_error;
+	    }
+
+	  /* optimize analytic function list */
+	  xasl->proc.buildlist.a_eval_list =
+	    pt_optimize_analytic_list (parser, &analytic_info);
+	  if (xasl->proc.buildlist.a_eval_list == NULL
+	      && analytic_info.head_list != NULL)
+	    {
+	      /* input functions were provided but optimizer messed up */
+	      goto analytic_exit_on_error;
+	    }
+	  else
+	    {
+	      /* register the eval list in the plan for printing purposes */
+	      qo_plan->analytic_eval_list = xasl->proc.buildlist.a_eval_list;
 	    }
 
 	  /* substitute references of analytic arguments */
@@ -15711,12 +16738,6 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	  parser_free_tree (parser, select_list_ex);
 	  select_list_ex = NULL;
 
-	  /* optimize analytic function list */
-	  pt_optimize_analytic_list (&analytic_info);
-
-	  /* register analytic functions */
-	  buildlist->a_func_list = analytic_info.head_list;
-
 	  /* register initial outlist */
 	  xasl->outptr_list = buildlist->a_outptr_list_ex;
 
@@ -15733,10 +16754,18 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	    {
 	      parser_free_tree (parser, select_list_final);
 	    }
+	  if (sort_adjust != NULL)
+	    {
+	      db_private_free (NULL, sort_adjust);
+	    }
 	  goto exit_on_error;
 
 	analytic_exit:
-	  ;			/* finalized correctly */
+	  if (sort_adjust != NULL)
+	    {
+	      db_private_free (NULL, sort_adjust);
+	    }
+	  /* finalized correctly */
 	}
 
       /* check if this select statement has click counter */
@@ -15910,14 +16939,16 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	  orderby_ok = ((xasl->orderby_list != NULL) || orderby_skip);
 	}
 
-      if (xasl->instnum_pred != NULL && pt_has_analytic (parser, select_node))
+      if ((xasl->instnum_pred != NULL
+	   || buildlist->a_instnum_flag & XASL_INSTNUM_FLAG_EVAL_DEFER)
+	  && pt_has_analytic (parser, select_node))
 	{
-	  /* we have an inst_num() condition which should not get evaluated
-	     in the initial fetch; move it in buildlist, qexec_execute_analytic
-	     will use it in the final sort */
+	  /* we have an inst_num() which should not get evaluated in the
+	     initial fetch; move it in buildlist, qexec_execute_analytic will
+	     use it in the final sort */
 	  buildlist->a_instnum_pred = xasl->instnum_pred;
 	  buildlist->a_instnum_val = xasl->instnum_val;
-	  buildlist->a_instnum_flag = xasl->instnum_flag;
+	  buildlist->a_instnum_flag |= xasl->instnum_flag;
 	  xasl->instnum_pred = NULL;
 	  xasl->instnum_val = NULL;
 	  xasl->instnum_flag = 0;
@@ -15967,7 +16998,7 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	      groupby_ok = 1;
 	    }
 
-	  buildlist->a_func_list = NULL;
+	  buildlist->a_eval_list = NULL;
 	  buildlist->a_outptr_list = NULL;
 	  buildlist->a_outptr_list_ex = NULL;
 	  buildlist->a_regu_list = NULL;
@@ -16142,7 +17173,7 @@ pt_to_buildvalue_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 			  xasl);
 
   aggregate = pt_to_aggregate (parser, select_node, NULL, NULL,
-			       NULL, NULL, &buildvalue->grbynum_val);
+			       NULL, NULL, NULL, &buildvalue->grbynum_val);
 
   /* the calls pt_to_out_list, pt_to_spec_list, and pt_to_if_pred,
    * record information in the "symbol_info" structure
@@ -18832,6 +19863,9 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
   statement = parser_new_node (parser, PT_SELECT);
   if (statement != NULL)
     {
+      /* this is an internally built query */
+      PT_SELECT_INFO_SET_FLAG (statement, PT_SELECT_INFO_IS_UPD_DEL_QUERY);
+
       statement->info.query.q.select.list =
 	parser_copy_tree_list (parser, select_list);
 
@@ -19094,6 +20128,9 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 	  statement->info.query.q.select.group_by = group_by;
 	  PT_SELECT_INFO_SET_FLAG (statement,
 				   PT_SELECT_INFO_MULTI_UPDATE_AGG);
+
+	  /* can't use hash aggregation for this, might mess up order */
+	  statement->info.query.q.select.hint |= PT_HINT_NO_HASH_AGGREGATE;
 	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	    {
 	      /* The locking at update/delete stage does not work with GROUP BY,
@@ -19191,7 +20228,8 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 
 	  while (cl_name_node != NULL && !has_partitioned)
 	    {
-	      has_partitioned = sm_is_partitioned_class(cl_name_node->info.name.db_object);
+	      has_partitioned =
+		sm_is_partitioned_class (cl_name_node->info.name.db_object);
 	      cl_name_node = cl_name_node->next;
 	    }
 
@@ -19690,7 +20728,8 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	    }
 	  if (!has_partitioned)
 	    {
-	      has_partitioned = sm_is_partitioned_class(cl_name_node->info.name.db_object);
+	      has_partitioned =
+		sm_is_partitioned_class (cl_name_node->info.name.db_object);
 	    }
 	  cl_name_node = cl_name_node->next;
 	}
@@ -19885,7 +20924,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   if (no_assign_reev_classes > 0)
     {
       mvcc_assign_extra_classes =
-	db_private_alloc (NULL, no_assign_reev_classes);
+	regu_int_array_alloc (no_assign_reev_classes);
       if (mvcc_assign_extra_classes == NULL)
 	{
 	  error = ER_OUT_OF_VIRTUAL_MEMORY;
@@ -20316,10 +21355,7 @@ cleanup:
     {
       parser_free_tree (parser, aptr_statement);
     }
-  if (mvcc_assign_extra_classes != NULL)
-    {
-      db_private_free_and_init (NULL, mvcc_assign_extra_classes);
-    }
+
   if (pt_has_error (parser))
     {
       pt_report_to_ersys (parser, PT_SEMANTIC);
@@ -22349,6 +23385,7 @@ pt_to_analytic_node (PARSER_CONTEXT * parser, PT_NODE * tree,
   ANALYTIC_TYPE *analytic;
   PT_FUNCTION_INFO *func_info;
   PT_NODE *list = NULL, *order_list = NULL, *link = NULL;
+  PT_NODE *sort_list, *list_entry;
   PT_NODE *arg_list = NULL;
 
   if (parser == NULL || analytic_info == NULL)
@@ -22400,11 +23437,17 @@ pt_to_analytic_node (PARSER_CONTEXT * parser, PT_NODE * tree,
     }
 
   /* count partitions */
-  analytic->partition_cnt = 0;
+  analytic->sort_prefix_size = 0;
+  analytic->sort_list_size = 0;
   for (list = func_info->analytic.partition_by; list; list = list->next)
     {
-      analytic->partition_cnt++;
+      analytic->sort_prefix_size++;
+      analytic->sort_list_size++;
       link = list;		/* save last node in partitions list */
+    }
+  for (list = func_info->analytic.order_by; list; list = list->next)
+    {
+      analytic->sort_list_size++;
     }
 
   /* link PARTITION BY and ORDER BY sort spec lists (no differentiation is
@@ -22421,29 +23464,51 @@ pt_to_analytic_node (PARSER_CONTEXT * parser, PT_NODE * tree,
       order_list = func_info->analytic.order_by;
     }
 
-  /* generate sort list */
+  /* copy sort list for later use */
   if (order_list != NULL)
     {
-      analytic->sort_list =
-	pt_to_sort_list (parser, order_list, analytic_info->select_list,
-			 SORT_LIST_ANALYTIC_WINDOW);
-
-      if (analytic->sort_list == NULL)
+      sort_list = parser_copy_tree_list (parser, order_list);
+      if (sort_list == NULL)
 	{
-	  if (!pt_has_error (parser))
-	    {
-	      PT_ERROR (parser, tree,
-			msgcat_message (MSGCAT_CATALOG_CUBRID,
-					MSGCAT_SET_PARSER_SEMANTIC,
-					MSGCAT_SEMANTIC_SORT_SPEC_NOT_EXIST));
-	    }
-
+	  PT_INTERNAL_ERROR (parser, "copy tree");
 	  goto exit_on_error;
 	}
     }
   else
     {
-      analytic->sort_list = NULL;
+      sort_list = NULL;
+    }
+
+  list_entry = parser_new_node (parser, PT_POINTER);
+  if (list_entry == NULL)
+    {
+      PT_INTERNAL_ERROR (parser, "alloc node");
+      goto exit_on_error;
+    }
+
+  if ((order_list != NULL && sort_list == NULL) || list_entry == NULL)
+    {
+      PT_ERROR (parser, tree,
+		msgcat_message (MSGCAT_CATALOG_CUBRID,
+				MSGCAT_SET_PARSER_SEMANTIC,
+				MSGCAT_SEMANTIC_OUT_OF_MEMORY));
+      goto exit_on_error;
+    }
+
+  list_entry->info.pointer.node = sort_list;
+  if (sort_list != NULL)
+    {
+      list_entry->line_number = sort_list->line_number;
+      list_entry->column_number = sort_list->column_number;
+    }
+  if (analytic_info->sort_lists != NULL)
+    {
+      list_entry->next = analytic_info->sort_lists;
+      analytic_info->sort_lists = list_entry;
+    }
+  else
+    {
+      analytic_info->sort_lists = list_entry;
     }
 
   /* find indexes of offset and default values for LEAD/LAG/NTH_VALUE */
@@ -22558,6 +23623,7 @@ unlink_and_exit:
  *   parser(in): parser context
  *   tree(in): analytic node
  *   ex_list(out): pointer to a PT_NODE list
+ *   instnum_flag(out): see NOTE2
  *
  * NOTE: This function has the following behavior:
  *
@@ -22571,10 +23637,13 @@ unlink_and_exit:
  *
  * The returned node should be used in the "final" outptr_list of analytics
  * processing.
+ *
+ * NOTE2: The function will set the XASL_INSTNUM_FLAG_SELECTS_INSTNUM bit in
+ * instnum_flag if an INST_NUM() is found in tree.
  */
 static PT_NODE *
 pt_to_analytic_final_node (PARSER_CONTEXT * parser, PT_NODE * tree,
-			   PT_NODE ** ex_list)
+			   PT_NODE ** ex_list, int *instnum_flag)
 {
   PT_NODE *ptr;
 
@@ -22606,15 +23675,38 @@ pt_to_analytic_final_node (PARSER_CONTEXT * parser, PT_NODE * tree,
       goto exit_return_ptr;
     }
 
-  if (PT_IS_EXPR_NODE (tree) && pt_has_analytic (parser, tree))
+  if (PT_IS_EXPR_NODE (tree))
     {
       PT_NODE *ret = NULL;
+
+      if (PT_IS_ORDERBYNUM (tree))
+	{
+	  /* orderby_num() should be evaluated at the write of output */
+	  return tree;
+	}
+
+      if (PT_IS_INSTNUM (tree))
+	{
+	  /* inst_num() should be evaluated at the write of output; also set
+	     flag so we defer inst_num() incrementation to output */
+	  (*instnum_flag) |= XASL_INSTNUM_FLAG_EVAL_DEFER;
+	  return tree;
+	}
+
+      if (!pt_has_analytic (parser, tree)
+	  && !pt_has_inst_or_orderby_num (parser, tree))
+	{
+	  /* no reason to split this expression tree, we can evaluate it in the
+	     initial scan */
+	  goto exit_return_ptr;
+	}
 
       /* expression tree with analytic children; walk arguments */
       if (tree->info.expr.arg1 != NULL)
 	{
 	  ret =
-	    pt_to_analytic_final_node (parser, tree->info.expr.arg1, ex_list);
+	    pt_to_analytic_final_node (parser, tree->info.expr.arg1, ex_list,
+				       instnum_flag);
 	  if (ret != NULL)
 	    {
 	      tree->info.expr.arg1 = ret;
@@ -22628,7 +23720,8 @@ pt_to_analytic_final_node (PARSER_CONTEXT * parser, PT_NODE * tree,
       if (tree->info.expr.arg2 != NULL)
 	{
 	  ret =
-	    pt_to_analytic_final_node (parser, tree->info.expr.arg2, ex_list);
+	    pt_to_analytic_final_node (parser, tree->info.expr.arg2, ex_list,
+				       instnum_flag);
 	  if (ret != NULL)
 	    {
 	      tree->info.expr.arg2 = ret;
@@ -22642,7 +23735,8 @@ pt_to_analytic_final_node (PARSER_CONTEXT * parser, PT_NODE * tree,
       if (tree->info.expr.arg3 != NULL)
 	{
 	  ret =
-	    pt_to_analytic_final_node (parser, tree->info.expr.arg3, ex_list);
+	    pt_to_analytic_final_node (parser, tree->info.expr.arg3, ex_list,
+				       instnum_flag);
 	  if (ret != NULL)
 	    {
 	      tree->info.expr.arg3 = ret;
@@ -22671,7 +23765,8 @@ pt_to_analytic_final_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	  arg->next = NULL;
 
 	  /* get final node */
-	  ret = pt_to_analytic_final_node (parser, arg, ex_list);
+	  ret =
+	    pt_to_analytic_final_node (parser, arg, ex_list, instnum_flag);
 	  if (ret == NULL)
 	    {
 	      /* error was set */
@@ -24639,6 +25734,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	    }
 	  insert->vals = NULL;
 	  insert->no_vals = no_vals + no_default_expr;
+	  insert->no_default_expr = no_default_expr;
 	}
       else
 	{
@@ -24973,7 +26069,7 @@ pt_is_async_executable (PARSER_CONTEXT * parser, XASL_NODE * xasl)
       return false;
     }
 
-  if (xasl_type == BUILDLIST_PROC && xasl->proc.buildlist.a_func_list != NULL)
+  if (xasl_type == BUILDLIST_PROC && xasl->proc.buildlist.a_eval_list != NULL)
     {
       return false;
     }

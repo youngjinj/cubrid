@@ -111,6 +111,7 @@ static int logtb_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 				      TRAN_ISOLATION isolation);
 static void logtb_initialize_tdes (LOG_TDES * tdes, int tran_index);
 static LOG_ADDR_TDESAREA *logtb_allocate_tdes_area (int num_indices);
+static int logtb_alloc_mvcc_info_block (THREAD_ENTRY * thread_p);
 static void logtb_initialize_trantable (TRANTABLE * trantable_p);
 static int logtb_initialize_system_tdes (THREAD_ENTRY * thread_p);
 static void logtb_set_number_of_assigned_tran_indices (int num_trans);
@@ -131,9 +132,8 @@ static void logtb_dump_tdes (FILE * out_fp, LOG_TDES * tdes);
 static void logtb_set_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 			    const BOOT_CLIENT_CREDENTIAL * client_credential,
 			    int wait_msecs, TRAN_ISOLATION isolation);
-static void logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes);
-static void logtb_init_mvcc_snapshot_data (LOG_TDES * tdes);
-static void logtb_finalize_mvcc_snapshot_data (LOG_TDES * tdes);
+static int logtb_initialize_mvcctable (THREAD_ENTRY * thread_p);
+static void logtb_finalize_mvcctable (THREAD_ENTRY * thread_p);
 static int logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p);
 
 static void logtb_free_log_ins_del (LOG_INSERTED_DELETED * log_ins_del);
@@ -478,6 +478,15 @@ logtb_define_trantable_log_latch (THREAD_ENTRY * thread_p,
 
   LOG_SET_CURRENT_TRAN_INDEX (thread_p, LOG_SYSTEM_TRAN_INDEX);
 
+  if (mvcc_Enabled)
+    {
+      error_code = logtb_initialize_mvcctable (thread_p);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+    }
+
   /* Initialize the lock manager and the page buffer pool */
   error_code = lock_initialize ();
   if (error_code != NO_ERROR)
@@ -551,9 +560,7 @@ logtb_initialize_system_tdes (THREAD_ENTRY * thread_p)
   logtb_clear_tdes (thread_p, tdes);
   tdes->tran_index = LOG_SYSTEM_TRAN_INDEX;
   tdes->trid = LOG_SYSTEM_TRANID;
-  tdes->mvcc_id = MVCCID_NULL;
-  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
-  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+  tdes->mvcc_info = NULL;
   tdes->isloose_end = true;
   tdes->wait_msecs = TRAN_LOCK_INFINITE_WAIT;
   tdes->isolation = TRAN_DEFAULT_ISOLATION;
@@ -580,6 +587,10 @@ logtb_undefine_trantable (THREAD_ENTRY * thread_p)
   LOG_TDES *tdes;		/* Transaction descriptor */
   int i;
 
+  if (mvcc_Enabled)
+    {
+      logtb_finalize_mvcctable (thread_p);
+    }
   lock_finalize ();
   pgbuf_finalize ();
   (void) file_manager_finalize (thread_p);
@@ -608,7 +619,6 @@ logtb_undefine_trantable (THREAD_ENTRY * thread_p)
 #endif
 
 	      logtb_clear_tdes (thread_p, tdes);
-	      logtb_finalize_mvcc_snapshot_data (tdes);
 	      logtb_free_log_ins_del (&tdes->log_ins_del);
 	      csect_finalize_critical_section (&tdes->cs_topop);
 	      if (tdes->topops.max != 0)
@@ -837,6 +847,17 @@ logtb_assign_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 
   if (tran_index != NULL_TRAN_INDEX)
     {
+      if (mvcc_Enabled)
+	{
+	  int error_code;
+	  error_code = logtb_allocate_mvcc_info (thread_p);
+	  if (error_code != NO_ERROR)
+	    {
+	      assert (true);
+	      return NULL_TRAN_INDEX;
+	    }
+	}
+
       LOG_SET_CURRENT_TRAN_INDEX (thread_p, tran_index);
     }
   else
@@ -1100,71 +1121,80 @@ logtb_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 }
 
 /*
- * logtb_clear_mvcc_snapshot_data - clear mvcc snapshot data
+ * logtb_initialize_mvcctable - initialize mvcc table
  *
- * return: nothing..
+ * return: error code
  *
- *   tdes(in): Transaction descriptor
+ *   thread_p(in): thread entry 
  */
-static void
-logtb_clear_mvcc_snapshot_data (LOG_TDES * tdes)
+static int
+logtb_initialize_mvcctable (THREAD_ENTRY * thread_p)
 {
-  /* clear snapshot - do no free active_ids and active_child_ids
-   * since they are reused by future transactions
-   */
-  assert (tdes != NULL);
+  MVCC_INFO_BLOCK *mvcc_info_block = NULL;
+  MVCC_INFO *curr_mvcc_info = NULL, *prev_mvcc_info = NULL;
+  int error;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
 
-  tdes->mvcc_snapshot.snapshot_fnc = NULL;
-  tdes->mvcc_snapshot.lowest_active_mvccid = 0;
-  tdes->mvcc_snapshot.highest_completed_mvccid = 0;
-  tdes->mvcc_snapshot.cnt_active_ids = 0;
-  tdes->mvcc_snapshot.cnt_active_child_ids = 0;
-  tdes->mvcc_snapshot.valid = false;
+  mvcc_table->head_writers = mvcc_table->tail_writers =
+    mvcc_table->head_null_mvccids = NULL;
+
+  mvcc_table->block_list = NULL;
+  mvcc_table->free_list = NULL;
+
+  error = logtb_alloc_mvcc_info_block (thread_p);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  *(volatile int *) (&mvcc_table->mvcc_info_free_list_lock) = 0;
+  mvcc_table->highest_completed_mvccid = MVCCID_NULL;
+
+  return NO_ERROR;
 }
 
 /*
- * logtb_init_mvcc_snapshot_data - init mvcc snapshot data
+ * logtb_finalize_mvcctable - cleanup mvcc table
  *
- * return: nothing..
+ * return: error code
  *
- *   tdes(in): Transaction descriptor
+ *   thread_p(in): thread entry
  */
 static void
-logtb_init_mvcc_snapshot_data (LOG_TDES * tdes)
+logtb_finalize_mvcctable (THREAD_ENTRY * thread_p)
 {
-  assert (tdes != NULL);
+  MVCC_INFO_BLOCK *curr_mvcc_info_block, *next_mvcc_info_block;
+  MVCC_INFO *curr_mvcc_info;
+  int i;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
 
-  tdes->mvcc_snapshot.snapshot_fnc = NULL;
-  tdes->mvcc_snapshot.lowest_active_mvccid = 0;
-  tdes->mvcc_snapshot.highest_completed_mvccid = 0;
-  tdes->mvcc_snapshot.active_ids = NULL;
-  tdes->mvcc_snapshot.cnt_active_ids = 0;
-  tdes->mvcc_snapshot.active_child_ids = NULL;
-  tdes->mvcc_snapshot.cnt_active_child_ids = 0;
-  tdes->mvcc_snapshot.valid = false;
-}
+  mvcc_table->head_writers = mvcc_table->tail_writers =
+    mvcc_table->head_null_mvccids = NULL;
 
-/*
- * logtb_finalize_mvcc_snapshot_data - free allocated mvcc snapshot data
- *
- * return: nothing..
- *
- *   tdes(in): Transaction descriptor
- */
-static void
-logtb_finalize_mvcc_snapshot_data (LOG_TDES * tdes)
-{
-  assert (tdes != NULL);
-
-  if (tdes->mvcc_snapshot.active_ids != NULL)
+  curr_mvcc_info_block = mvcc_table->block_list;
+  while (curr_mvcc_info_block != NULL)
     {
-      free_and_init (tdes->mvcc_snapshot.active_ids);
+      next_mvcc_info_block = curr_mvcc_info_block->next_block;
+      if (curr_mvcc_info_block->block != NULL)
+	{
+	  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
+	    {
+	      curr_mvcc_info = curr_mvcc_info_block->block + i;
+	      if (curr_mvcc_info->mvcc_snapshot.active_ids != NULL)
+		{
+		  free_and_init (curr_mvcc_info->mvcc_snapshot.active_ids);
+		}
+	    }
+	  free_and_init (curr_mvcc_info_block->block);
+	}
+      free_and_init (curr_mvcc_info_block);
+      curr_mvcc_info_block = next_mvcc_info_block;
     }
+  mvcc_table->block_list = NULL;
+  mvcc_table->free_list = NULL;
 
-  if (tdes->mvcc_snapshot.active_child_ids != NULL)
-    {
-      free_and_init (tdes->mvcc_snapshot.active_child_ids);
-    }
+  *(volatile int *) (&mvcc_table->mvcc_info_free_list_lock) = 0;
+  mvcc_table->highest_completed_mvccid = MVCCID_NULL;
 }
 
 int
@@ -1270,6 +1300,10 @@ logtb_release_tran_index (THREAD_ENTRY * thread_p, int tran_index)
   tdes = LOG_FIND_TDES (tran_index);
   if (tran_index != LOG_SYSTEM_TRAN_INDEX && tdes != NULL)
     {
+      if (mvcc_Enabled)
+	{
+	  logtb_release_mvcc_info (thread_p);
+	}
 
       TR_TABLE_CS_ENTER (thread_p);
 
@@ -1720,16 +1754,9 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   tdes->tran_abort_reason = TRAN_NORMAL;
   tdes->num_exec_queries = 0;
 
-  logtb_clear_mvcc_snapshot_data (tdes);
   logtb_clear_log_ins_del (&tdes->log_ins_del);
 
-  /* safeguard code - mvccid should be already clean */
-  TR_TABLE_CS_ENTER (thread_p);
-  tdes->mvcc_id = MVCCID_NULL;
-  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
-  TR_TABLE_CS_EXIT (thread_p);
-  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
-
+  assert (tdes->mvcc_info == NULL || tdes->mvcc_info->mvcc_id == MVCCID_NULL);
   if (BOOT_WRITE_ON_STANDY_CLIENT_TYPE (tdes->client.client_type))
     {
       tdes->disable_modifications = 0;
@@ -1821,11 +1848,7 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
       tdes->bind_history[i].vals = NULL;
     }
 
-  logtb_init_mvcc_snapshot_data (tdes);
-  tdes->mvcc_id = MVCCID_NULL;
-  tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
-  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
-
+  tdes->mvcc_info = NULL;
   tdes->log_ins_del.crt_tran_entries = NULL;
   tdes->log_ins_del.free_entries = NULL;
 }
@@ -3478,24 +3501,27 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
   MVCCID lowest_active_mvccid = 0, highest_completed_mvccid = 0;
   unsigned int cnt_active_trans = 0;
   LOG_TDES *curr_tdes = NULL;
-  int i, num_tran, tran_index;
+  int tran_index;
   LOG_TDES *tdes;
-  TRANID curr_tranid;
+  MVCCID curr_mvccid;
   MVCC_SNAPSHOT *snapshot = NULL;
-
-#define NUM_CHILDREN_PER_TRAN_TEMP 32
+  MVCC_INFO *elem = NULL, *curr_mvcc_info = NULL;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tdes = LOG_FIND_TDES (tran_index);
-  snapshot = &tdes->mvcc_snapshot;
-  curr_tranid = tdes->trid;
+
+  curr_mvcc_info = tdes->mvcc_info;
+  assert (tdes != NULL && curr_mvcc_info != NULL);
+  snapshot = &(curr_mvcc_info->mvcc_snapshot);
+  curr_mvccid = curr_mvcc_info->mvcc_id;
 
   snapshot->snapshot_fnc = mvcc_satisfies_snapshot;
   if (snapshot->active_ids == NULL)
     {
       /* allocate only once */
       int size;
-      size = NUM_TOTAL_TRAN_INDICES * sizeof (TRANID);
+      size = NUM_TOTAL_TRAN_INDICES * sizeof (MVCCID);
 
       snapshot->active_ids = malloc (size);
       if (snapshot->active_ids == NULL)
@@ -3504,92 +3530,65 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
 		  1, size);
 	  return ER_OUT_OF_VIRTUAL_MEMORY;
 	}
-
-      assert (snapshot->active_child_ids == NULL);
-      /* TODO - replace 32 with constant */
-      size =
-	NUM_TOTAL_TRAN_INDICES * NUM_CHILDREN_PER_TRAN_TEMP * sizeof (TRANID);
-      snapshot->active_child_ids = malloc (size);
-      if (snapshot->active_child_ids == NULL)
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
-		  1, size);
-	  return ER_OUT_OF_VIRTUAL_MEMORY;
-	}
     }
 
   /* Start building the snapshot. See the note. */
-  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+  csect_enter_as_reader (thread_p, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
 
-  highest_completed_mvccid = log_Gl.highest_completed_mvccid;
+  highest_completed_mvccid = mvcc_table->highest_completed_mvccid;
   MVCCID_FORWARD (highest_completed_mvccid);
   lowest_active_mvccid = highest_completed_mvccid;
 
-  for (i = 0, num_tran = 0; i < log_Gl.trantable.num_total_indices,
-       num_tran < log_Gl.trantable.num_assigned_indices; i++)
+  /* record the active MVCC ids */
+
+  elem = mvcc_table->tail_writers;
+  /* heap_readers is the next node after tail writer or null */
+  while (elem != NULL)
     {
-      tdes = LOG_FIND_TDES (i);
-      if (tdes != NULL && tdes->trid != NULL_TRANID)
+      assert (MVCCID_IS_NORMAL (elem->mvcc_id));
+
+      if (mvcc_id_follow_or_equal (elem->mvcc_id, highest_completed_mvccid))
 	{
-	  if (i == LOG_SYSTEM_TRAN_INDEX)
-	    {
-	      num_tran++;
-	      continue;
-	    }
-
-	  if (!MVCCID_IS_VALID (tdes->mvcc_id))
-	    {
-	      num_tran++;
-	      continue;
-	    }
-
-	  if (!MVCCID_IS_NORMAL (tdes->mvcc_id)
-	      || mvcc_id_follow_or_equal (tdes->mvcc_id,
-					  highest_completed_mvccid))
-	    {
-	      /* skip since these transactions are considered as
-	       * active anyway
-	       */
-	      num_tran++;
-	      continue;
-	    }
-
-	  /* active transaction found it */
-	  if (tdes->mvcc_id < lowest_active_mvccid)
-	    {
-	      lowest_active_mvccid = tdes->mvcc_id;
-	    }
-
-	  if (tdes->trid == curr_tranid)
-	    {
-	      /* do not add mvcc id of current transaction in snapshot */
-	      num_tran++;
-	      continue;
-	    }
-
-	  snapshot->active_ids[cnt_active_trans++] = tdes->mvcc_id;
-
-	  num_tran++;
+	  /* skip remaining MVCC ids since these transactions are considered
+	   * as active anyway
+	   */
+	  break;
 	}
+
+      if (elem->mvcc_id < lowest_active_mvccid)
+	{
+	  lowest_active_mvccid = elem->mvcc_id;
+	}
+
+      /* do not add MVCC id of current transaction in snapshot */
+      if (elem->mvcc_id != curr_mvccid)
+	{
+	  snapshot->active_ids[cnt_active_trans++] = elem->mvcc_id;
+	}
+
+      elem = elem->prev;
     }
 
-  /* set the lowest active mvcc id when we start the current transaction
+  assert (cnt_active_trans <= (unsigned int) NUM_TOTAL_TRAN_INDICES);
+
+  /* set the lowest active MVCC id when we start the current transaction
    * if was not already set to not null value
    */
-  if (!MVCCID_IS_VALID (tdes->transaction_lowest_active_mvccid))
+  if (!MVCCID_IS_VALID (curr_mvcc_info->transaction_lowest_active_mvccid))
     {
-      tdes->transaction_lowest_active_mvccid = lowest_active_mvccid;
+      curr_mvcc_info->transaction_lowest_active_mvccid = lowest_active_mvccid;
     }
 
-  TR_TABLE_CS_EXIT (thread_p);
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
 
   /* update lowest active mvccid computed for the most recent snapshot */
-  tdes->recent_snapshot_lowest_active_mvccid = lowest_active_mvccid;
+  curr_mvcc_info->recent_snapshot_lowest_active_mvccid = lowest_active_mvccid;
 
   /* update snapshot data */
   snapshot->lowest_active_mvccid = lowest_active_mvccid;
   snapshot->highest_completed_mvccid = highest_completed_mvccid;
   snapshot->cnt_active_ids = cnt_active_trans;
+  snapshot->valid = true;
 
   return NO_ERROR;
 }
@@ -3606,13 +3605,13 @@ xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
   /* Get transaction descriptor */
   LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
 
-  if (!mvcc_Enabled || tdes == NULL)
+  if (!mvcc_Enabled || tdes == NULL || tdes->mvcc_info == NULL)
     {
       /* Nothing to do */
       return;
     }
   /* Invalidate snapshot */
-  tdes->mvcc_snapshot.valid = false;
+  tdes->mvcc_info->mvcc_snapshot.valid = false;
   return;
 }
 
@@ -3633,48 +3632,42 @@ xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
 MVCCID
 logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
 {
-  MVCCID lowest_active_mvccid = log_Gl.highest_completed_mvccid;
-  int i;
+  MVCCID lowest_active_mvccid;
   LOG_TDES *tdes = NULL;
+  MVCC_INFO *elem = NULL;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
 
-  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+  csect_enter_as_reader (thread_p, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
 
   /* init lowest_active_mvccid */
-  lowest_active_mvccid = log_Gl.highest_completed_mvccid;
+  lowest_active_mvccid = mvcc_table->highest_completed_mvccid;
   MVCCID_FORWARD (lowest_active_mvccid);
 
-  for (i = 0; i < log_Gl.trantable.num_total_indices; i++)
+  elem = mvcc_table->head_writers;
+  /* heap_readers is the next node after tail writer or null */
+  while (elem != NULL)
     {
-      if (i == LOG_SYSTEM_TRAN_INDEX)
-	{
-	  continue;
-	}
-
-      tdes = LOG_FIND_TDES (i);
-      if (tdes == NULL || tdes->trid == NULL_TRANID)
-	{
-	  continue;
-	}
-
       /* check lowest_active_mvccid against mvccid and
        * transaction_lowest_active_mvccid since a transaction can have
        * only one of this fields set
        */
-      if (MVCCID_IS_NORMAL (tdes->mvcc_id)
-	  && mvcc_id_precedes (tdes->mvcc_id, lowest_active_mvccid))
+      if (MVCCID_IS_NORMAL (elem->mvcc_id)
+	  && mvcc_id_precedes (elem->mvcc_id, lowest_active_mvccid))
 	{
-	  lowest_active_mvccid = tdes->mvcc_id;
+	  lowest_active_mvccid = elem->mvcc_id;
 	}
 
-      if (MVCCID_IS_NORMAL (tdes->transaction_lowest_active_mvccid)
-	  && mvcc_id_precedes (tdes->transaction_lowest_active_mvccid,
+      if (MVCCID_IS_NORMAL (elem->transaction_lowest_active_mvccid)
+	  && mvcc_id_precedes (elem->transaction_lowest_active_mvccid,
 			       lowest_active_mvccid))
 	{
-	  lowest_active_mvccid = tdes->transaction_lowest_active_mvccid;
+	  lowest_active_mvccid = elem->transaction_lowest_active_mvccid;
 	}
+
+      elem = elem->next;
     }
 
-  TR_TABLE_CS_EXIT (thread_p);
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
 
   return lowest_active_mvccid;
 }
@@ -3682,54 +3675,133 @@ logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
 /*
  * logtb_get_new_mvccid - mvcc get new id
  *
- * return: new mvcc id
+ * return: error code
  *
  *  thread_p(in):
- *  tdes(in): transaction descriptor
+ *  curr_mvcc_info(in/out): current mvcc info
  *
- *  Note: By keeping mvccid into tdes before releasing CSECT_TRAN_TABLE,
+ *  Note: This function set mvcc_id field of curr_mvcc_info. By keeping mvccid
+ *	    into curr_mvcc_info before releasing CSECT_MVCC_ACTIVE_TRANS,
  *	    we are sure that all MVCCIDs <= highest_completed_mvccid are
  *	    either present in the transaction table or not running anymore.
  *	    If the current transaction will set its MVCCID after releasing
- *	    CSECT_TRAN_TABLE, other transaction can generate and commit a
- *	    later MVCCID (causing highest_completed_mvccid > current mvccid), 
+ *	    CSECT_MVCC_ACTIVE_TRANS, other transaction can generate and commit
+ *	    a later MVCCID (causing highest_completed_mvccid > current mvccid) 
  *	    before current transaction MVCCID to be stored in tran table.
  *	    This would break logtb_get_lowest_active_mvccid() that may
  *	    return a bigger value than the real one. Thus, this function
  *	    can consider that there is no active transaction and return
  *	    highest_completed_mvccid + 1, when, in fact, the only active
- *	    transaction MVCCID has not been stored yet in transaction table.
- *	  An alternative to partially set MVCCID issue may be to consider
- *	    mvccid set/get atomic in 64 bit systems, and to call functions
- *	    that provide atomic operations in 32 bit systems. In this case
- *	    MVCCID must be set/fetch using volatile pointers. The advantage
- *	    of this approach would be that in logtb_get_new_mvccid we may
- *	    replace CSECT_TRAN_TABLE with other new critical section. This
- *	    means logtb_get_new_mvccid and logtb_get_mvcc_snapshot_data can
- *	    be parallelize. However, since logtb_get_new_mvccid is called
- *	    rare and its code is simply, CSECT_TRAN_TABLE is used currently.
+ *	    transaction MVCCID has not been stored yet in transaction table. 
  */
-MVCCID
-logtb_get_new_mvccid (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
+int
+logtb_get_new_mvccid (THREAD_ENTRY * thread_p, MVCC_INFO * curr_mvcc_info)
 {
   MVCCID mvcc_id;
+  MVCC_INFO *elem = NULL, *head_null_mvccids = NULL;
+  int error;
+  MVCCTABLE *mvcc_table;
 
-  /* Protect log_Gl.hdr.mvcc_next_id by concurrent modifications.
-   * Protect tdes->mvcc_id against partially-set. See the note, too.
-   */
-  TR_TABLE_CS_ENTER (thread_p);
+  assert (curr_mvcc_info != NULL && curr_mvcc_info->mvcc_id == MVCCID_NULL);
+
+  mvcc_table = &log_Gl.mvcc_table;
+  /* do not allow others to read/write MVCC info list */
+  error = csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  head_null_mvccids = mvcc_table->head_null_mvccids;
 
   mvcc_id = log_Gl.hdr.mvcc_next_id;
   MVCCID_FORWARD (log_Gl.hdr.mvcc_next_id);
-  tdes->mvcc_id = mvcc_id;
+  curr_mvcc_info->mvcc_id = mvcc_id;
 
-  TR_TABLE_CS_EXIT (thread_p);
+  /* remove current MVCC info from null mvccid list */
+  if (curr_mvcc_info->next != NULL)
+    {
+      curr_mvcc_info->next->prev = curr_mvcc_info->prev;
+    }
 
-  return mvcc_id;
+  if (curr_mvcc_info->prev != NULL)
+    {
+      curr_mvcc_info->prev->next = curr_mvcc_info->next;
+    }
+
+  if (curr_mvcc_info == head_null_mvccids)
+    {
+      mvcc_table->head_null_mvccids = curr_mvcc_info->next;
+      head_null_mvccids = curr_mvcc_info->next;
+    }
+
+  /* move current MVCC info into writers list */
+  elem = mvcc_table->head_writers;
+  if (elem == NULL)
+    {
+      /* empty writer list */
+      curr_mvcc_info->prev = NULL;
+      curr_mvcc_info->next = head_null_mvccids;
+      if (head_null_mvccids != NULL)
+	{
+	  head_null_mvccids->prev = curr_mvcc_info;
+	}
+      mvcc_table->head_writers = mvcc_table->tail_writers = curr_mvcc_info;
+    }
+  else
+    {
+      /* writers list is not null */
+      while (elem != head_null_mvccids)
+	{
+	  if (mvcc_id > elem->mvcc_id)
+	    {
+	      break;
+	    }
+	  elem = elem->next;
+	}
+
+      if (elem == NULL)
+	{
+	  /* tail_writers is not null */
+	  assert (mvcc_table->tail_writers != NULL);
+	  /* head_null_mvccids list is null - insert at the end of the list */
+	  curr_mvcc_info->next = NULL;
+	  curr_mvcc_info->prev = mvcc_table->tail_writers;
+	  mvcc_table->tail_writers->next = curr_mvcc_info;
+
+	  mvcc_table->tail_writers = curr_mvcc_info;
+	}
+      else
+	{
+	  /* insert before elem */
+	  curr_mvcc_info->prev = elem->prev;
+	  curr_mvcc_info->next = elem;
+
+	  if (elem->prev != NULL)
+	    {
+	      elem->prev->next = curr_mvcc_info;
+	      if (elem == head_null_mvccids)
+		{
+		  /* insert before head_null_mvccids - update tail_writers */
+		  mvcc_table->tail_writers = curr_mvcc_info;
+		}
+	    }
+	  else
+	    {
+	      /* insert at head writer */
+	      mvcc_table->head_writers = curr_mvcc_info;
+	    }
+
+	  elem->prev = curr_mvcc_info;
+	}
+    }
+
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
+  return NO_ERROR;
 }
 
 /*
- * logtb_find_current_mvccid - find current transaction mvcc id
+ * logtb_find_current_mvccid - find current transaction MVCC id
  *
  * return: MVCCID
  *
@@ -3741,15 +3813,16 @@ logtb_find_current_mvccid (THREAD_ENTRY * thread_p)
   LOG_TDES *tdes;
   MVCCID mvcc_id = MVCCID_NULL;
   tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  if (tdes != NULL)
+
+  if (tdes != NULL && tdes->mvcc_info != NULL)
     {
-      mvcc_id = tdes->mvcc_id;
+      mvcc_id = tdes->mvcc_info->mvcc_id;
     }
   return mvcc_id;
 }
 
 /*
- * logtb_get_current_mvccid - return current transaction mvcc id. Assign
+ * logtb_get_current_mvccid - return current transaction MVCC id. Assign
  *			      a new ID if not previously set.
  *
  * return: current MVCCID
@@ -3760,14 +3833,15 @@ MVCCID
 logtb_get_current_mvccid (THREAD_ENTRY * thread_p)
 {
   LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  assert (tdes != NULL);
+  MVCC_INFO *curr_mvcc_info = tdes->mvcc_info;
+  assert (tdes != NULL && curr_mvcc_info != NULL);
 
-  if (MVCCID_IS_VALID (tdes->mvcc_id) == false)
+  if (MVCCID_IS_VALID (curr_mvcc_info->mvcc_id) == false)
     {
-      (void) logtb_get_new_mvccid (thread_p, tdes);
+      (void) logtb_get_new_mvccid (thread_p, curr_mvcc_info);
     }
 
-  return tdes->mvcc_id;
+  return curr_mvcc_info->mvcc_id;
 }
 
 /*
@@ -3776,17 +3850,15 @@ logtb_get_current_mvccid (THREAD_ENTRY * thread_p)
  * return: bool
  *
  *   thread_p(in): thred entry
- *   mvccid(in): mvcc id
+ *   mvccid(in): MVCC id
  */
 bool
 logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 {
   LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  assert (tdes != NULL);
+  assert (tdes != NULL && tdes->mvcc_info != NULL);
 
-  /* TO DO - check parent transaction too */
-
-  if (tdes->mvcc_id == mvccid)
+  if (tdes->mvcc_info != NULL && tdes->mvcc_info->mvcc_id == mvccid)
     {
       return true;
     }
@@ -3800,17 +3872,20 @@ logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
  * return: bool
  *
  *   thread_p(in): thred entry
- *   mvccid(in): mvcc id
+ *   mvccid(in): MVCC id
  */
 bool
 logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 {
   LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  int i, num_tran;
-  MVCCID tran_mvccid;
+  MVCC_INFO *curr_mvcc_info = NULL, *elem = NULL;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
 
-  assert (tdes != NULL);
-  if (mvcc_id_precedes (mvccid, tdes->recent_snapshot_lowest_active_mvccid))
+  assert (tdes != NULL && tdes->mvcc_info != NULL && mvccid != MVCCID_NULL);
+  curr_mvcc_info = tdes->mvcc_info;
+
+  if (mvcc_id_precedes (mvccid,
+			curr_mvcc_info->recent_snapshot_lowest_active_mvccid))
     {
       return false;
     }
@@ -3820,51 +3895,37 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
       return true;
     }
 
-  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
-  if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, mvccid))
+  (void) csect_enter_as_reader (thread_p, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+
+  if (mvcc_id_precedes (mvcc_table->highest_completed_mvccid, mvccid))
     {
-      TR_TABLE_CS_EXIT (thread_p);
+      csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
       return true;
     }
 
-  for (i = 0, num_tran = 0; i < log_Gl.trantable.num_total_indices,
-       num_tran < log_Gl.trantable.num_assigned_indices; i++)
+  elem = mvcc_table->tail_writers;
+  /* search not null mvccids  */
+  while (elem != NULL)
     {
-      tdes = LOG_FIND_TDES (i);
-      if (tdes != NULL && tdes->trid != NULL_TRANID)
+      assert (MVCCID_IS_VALID (elem->mvcc_id));
+
+      if (MVCCID_IS_EQUAL (mvccid, elem->mvcc_id))
 	{
-	  if (i == LOG_SYSTEM_TRAN_INDEX)
-	    {
-	      num_tran++;
-	      continue;
-	    }
-
-	  tran_mvccid = tdes->mvcc_id;
-	  if (!MVCCID_IS_VALID (tdes->mvcc_id))
-	    {
-	      num_tran++;
-	      continue;
-
-	    }
-
-	  if (MVCCID_IS_EQUAL (mvccid, tran_mvccid))
-	    {
-	      TR_TABLE_CS_EXIT (thread_p);
-	      return true;
-	    }
-
-	  num_tran++;
+	  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
+	  return true;
 	}
-    }
-  TR_TABLE_CS_EXIT (thread_p);
 
+      elem = elem->prev;
+    }
+
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
   return false;
 }
 
 /*
- * logtb_get_mvcc_snapshot  - get mvcc snapshot
+ * logtb_get_mvcc_snapshot  - get MVCC snapshot
  *
- * return: mvcc snapshot
+ * return: MVCC snapshot
  *
  *   thread_p(in): thread entry
  */
@@ -3873,26 +3934,26 @@ logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p)
 {
   if (mvcc_Enabled == false)
     {
-      /* null snapshot if mvcc is disabled */
+      /* null snapshot if MVCC is disabled */
       return NULL;
     }
   else
     {
       LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-      assert (tdes != NULL && tdes->trid != NULL_TRANID);
-      if (!tdes->mvcc_snapshot.valid)
+      assert (tdes != NULL && tdes->mvcc_info != NULL);
+      if (!tdes->mvcc_info->mvcc_snapshot.valid)
 	{
 	  if (logtb_get_mvcc_snapshot_data (thread_p) != NO_ERROR)
 	    {
 	      return NULL;
 	    }
 	}
-      return &tdes->mvcc_snapshot;
+      return &tdes->mvcc_info->mvcc_snapshot;
     }
 }
 
 /*
- * logtb_complete_mvcc () - Called at commit or rollback, completes mvcc info
+ * logtb_complete_mvcc () - Called at commit or rollback, completes MVCC info
  *			    for current transaction.
  *
  * return	  : Void. 
@@ -3905,34 +3966,106 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 {
   LOG_INS_DEL_ENTRY *entry = NULL;
   HFID hfid;
+  MVCC_INFO *curr_mvcc_info = NULL, *head_null_mvccids = NULL;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
+  MVCC_SNAPSHOT *p_mvcc_snapshot = NULL;
 
   assert (tdes != NULL);
 
   assert (mvcc_Enabled == true);
-
-  if (MVCCID_IS_VALID (tdes->mvcc_id))
+  curr_mvcc_info = tdes->mvcc_info;
+  if (curr_mvcc_info == NULL)
+    {
+      return;
+    }
+  if (MVCCID_IS_VALID (curr_mvcc_info->mvcc_id))
     {
       /* lock CSECT_TRAN_TABLE while clearing mvccid
        * and updating highest_completed_mvccid in order to not remove this
        * mvccid from set of "running" mvccids while other concurrent
        * transaction is taking a snapshot.
        */
-      TR_TABLE_CS_ENTER (thread_p);
+      (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+
+      head_null_mvccids = mvcc_table->head_null_mvccids;
+
       /* update highest completed mvccid */
-      if (mvcc_id_precedes (log_Gl.highest_completed_mvccid, tdes->mvcc_id))
+      if (mvcc_id_precedes (mvcc_table->highest_completed_mvccid,
+			    curr_mvcc_info->mvcc_id))
 	{
-	  log_Gl.highest_completed_mvccid = tdes->mvcc_id;
+	  mvcc_table->highest_completed_mvccid = curr_mvcc_info->mvcc_id;
 	}
-      tdes->mvcc_id = MVCCID_NULL;
-      tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
-      TR_TABLE_CS_EXIT (thread_p);
+      curr_mvcc_info->mvcc_id = MVCCID_NULL;
+      curr_mvcc_info->transaction_lowest_active_mvccid = MVCCID_NULL;
+
+      /* remove current MVCC info from writers */
+      if (curr_mvcc_info->next != NULL)
+	{
+	  curr_mvcc_info->next->prev = curr_mvcc_info->prev;
+	}
+
+      if (curr_mvcc_info->prev != NULL)
+	{
+	  curr_mvcc_info->prev->next = curr_mvcc_info->next;
+	}
+
+      if (curr_mvcc_info == mvcc_table->head_writers)
+	{
+	  if (curr_mvcc_info == mvcc_table->tail_writers)
+	    {
+	      mvcc_table->head_writers = mvcc_table->tail_writers = NULL;
+	    }
+	  else
+	    {
+	      /* remove first element from list */
+	      mvcc_table->head_writers = curr_mvcc_info->next;
+	    }
+	}
+      else if (curr_mvcc_info == mvcc_table->tail_writers)
+	{
+	  /* remove the last element from list */
+	  mvcc_table->tail_writers = curr_mvcc_info->prev;
+	}
+
+      /* add current MVCC info null mvccid list */
+      if (head_null_mvccids == NULL)
+	{
+	  /* empty reader list */
+	  curr_mvcc_info->prev = mvcc_table->tail_writers;
+	  curr_mvcc_info->next = NULL;
+	  if (mvcc_table->tail_writers != NULL)
+	    {
+	      mvcc_table->tail_writers->next = curr_mvcc_info;
+	    }
+
+	  mvcc_table->head_null_mvccids = curr_mvcc_info;
+	}
+      else
+	{
+	  /* non empty reader list - insert before head_null_mvccids */
+	  curr_mvcc_info->prev = head_null_mvccids->prev;
+	  curr_mvcc_info->next = head_null_mvccids;
+
+	  if (head_null_mvccids->prev != NULL)
+	    {
+	      head_null_mvccids->prev->next = curr_mvcc_info;
+	    }
+
+	  head_null_mvccids->prev = curr_mvcc_info;
+	  mvcc_table->head_null_mvccids = curr_mvcc_info;
+	}
+
+
+      csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
     }
   else
     {
-      tdes->transaction_lowest_active_mvccid = MVCCID_NULL;
+      curr_mvcc_info->transaction_lowest_active_mvccid = MVCCID_NULL;
     }
 
-  tdes->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+  curr_mvcc_info->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
+  p_mvcc_snapshot = &(curr_mvcc_info->mvcc_snapshot);
+  MVCC_CLEAR_SNAPSHOT_DATA (p_mvcc_snapshot);
 
   if (!committed)
     {
@@ -4287,4 +4420,258 @@ logtb_find_smallest_and_largest_active_pages (THREAD_ENTRY * thread_p,
 	}
     }
   TR_TABLE_CS_EXIT (thread_p);
+}
+
+/*
+ * logtb_allocate_mvcc_info - allocate MVCC info
+ *
+ * return: error code
+ *
+ *   thread_p(in): thread entry 
+ */
+int
+logtb_allocate_mvcc_info (THREAD_ENTRY * thread_p)
+{
+  int tran_index;
+  LOG_TDES *tdes;
+  MVCC_INFO *curr_mvcc_info = NULL, *elem = NULL, *head_null_mvccids = NULL;
+  int error;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  tdes = LOG_FIND_TDES (tran_index);
+  assert (tdes != NULL);
+
+  if (tdes->mvcc_info != NULL)
+    {
+      /* MVCC info already added */
+      return NO_ERROR;
+    }
+
+#if defined(HAVE_ATOMIC_BUILTINS)
+  while (!ATOMIC_CAS_32 (&mvcc_table->mvcc_info_free_list_lock, 0, 1))
+    {
+    }
+#endif
+
+  if (mvcc_table->free_list == NULL)
+    {
+      logtb_alloc_mvcc_info_block (thread_p);
+    }
+
+  curr_mvcc_info = mvcc_table->free_list;
+  mvcc_table->free_list = curr_mvcc_info->next;
+
+#if defined(HAVE_ATOMIC_BUILTINS)
+  *(volatile int *) (&mvcc_table->mvcc_info_free_list_lock) = 0;
+#endif
+
+  /* no need to init MVCC info - already cleared */
+  curr_mvcc_info->next = curr_mvcc_info->prev = NULL;
+
+  error = csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  head_null_mvccids = mvcc_table->head_null_mvccids;
+
+  /* add curr_mvcc_info on top of head_null_mvccids */
+  if (head_null_mvccids == NULL)
+    {
+      /* empty reader list */
+      curr_mvcc_info->prev = mvcc_table->tail_writers;
+      curr_mvcc_info->next = NULL;
+      if (mvcc_table->tail_writers != NULL)
+	{
+	  mvcc_table->tail_writers->next = curr_mvcc_info;
+	}
+
+      mvcc_table->head_null_mvccids = curr_mvcc_info;
+    }
+  else
+    {
+      /* non empty reader list - insert before head_null_mvccids */
+      curr_mvcc_info->prev = head_null_mvccids->prev;
+      curr_mvcc_info->next = head_null_mvccids;
+
+      if (head_null_mvccids->prev != NULL)
+	{
+	  head_null_mvccids->prev->next = curr_mvcc_info;
+	}
+
+      head_null_mvccids->prev = curr_mvcc_info;
+      mvcc_table->head_null_mvccids = curr_mvcc_info;
+    }
+
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
+  tdes->mvcc_info = curr_mvcc_info;
+
+  return NO_ERROR;
+}
+
+/*
+ * logtb_release_mvcc_info - release MVCC info
+ *
+ * return: error code
+ *
+ *   thread_p(in): thread entry 
+ *
+ * Note: If transaction MVCC info is valid then it's mvcc_id must be null.
+ *  This means that transaction has complete before this call
+ */
+int
+logtb_release_mvcc_info (THREAD_ENTRY * thread_p)
+{
+  int tran_index;
+  LOG_TDES *tdes;
+  MVCC_INFO *curr_mvcc_info = NULL, *elem = NULL;
+  MVCC_SNAPSHOT *p_mvcc_snapshot = NULL;
+  int error;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  tdes = LOG_FIND_TDES (tran_index);
+  assert (tdes != NULL);
+
+  /* MVCC info already released */
+  if (tdes->mvcc_info == NULL)
+    {
+      /* nothing to do */
+      return NO_ERROR;
+    }
+
+  assert (tdes->mvcc_info->mvcc_id == MVCCID_NULL);
+  curr_mvcc_info = tdes->mvcc_info;
+
+  error = csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  /* remove current MVCC info from readers */
+  if (curr_mvcc_info->next != NULL)
+    {
+      curr_mvcc_info->next->prev = curr_mvcc_info->prev;
+    }
+
+  if (curr_mvcc_info->prev != NULL)
+    {
+      curr_mvcc_info->prev->next = curr_mvcc_info->next;
+    }
+
+  if (curr_mvcc_info == mvcc_table->head_null_mvccids)
+    {
+      mvcc_table->head_null_mvccids = curr_mvcc_info->next;
+    }
+
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
+
+  /* clean MVCC info */
+  p_mvcc_snapshot = &(curr_mvcc_info->mvcc_snapshot);
+  MVCC_CLEAR_SNAPSHOT_DATA (p_mvcc_snapshot);
+
+  curr_mvcc_info->transaction_lowest_active_mvccid =
+    curr_mvcc_info->recent_snapshot_lowest_active_mvccid =
+    curr_mvcc_info->mvcc_id = MVCCID_NULL;
+
+  curr_mvcc_info->prev = NULL;
+
+  /* add curr_mvcc_info into free area using spin lock */
+#if defined(HAVE_ATOMIC_BUILTINS)
+  while (!ATOMIC_CAS_32 (&mvcc_table->mvcc_info_free_list_lock, 0, 1))
+    {
+    }
+#endif
+
+  curr_mvcc_info->next = mvcc_table->free_list;
+  mvcc_table->free_list = curr_mvcc_info;
+
+#if defined(HAVE_ATOMIC_BUILTINS)
+  *(volatile int *) (&mvcc_table->mvcc_info_free_list_lock) = 0;
+#endif
+
+  tdes->mvcc_info = NULL;
+
+  return NO_ERROR;
+}
+
+/*
+ * logtb_alloc_mvcc_info_block - allocate an MVCC info block
+ *
+ * return: error code
+ *
+ *   thread_p(in): thread entry 
+ */
+int
+logtb_alloc_mvcc_info_block (THREAD_ENTRY * thread_p)
+{
+  MVCC_INFO_BLOCK *new_mvcc_info_block = NULL;
+  MVCC_INFO *curr_mvcc_info = NULL, *prev_mvcc_info = NULL;
+  MVCC_SNAPSHOT *p_mvcc_snapshot = NULL;
+  int i;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
+
+  new_mvcc_info_block = (MVCC_INFO_BLOCK *) malloc (sizeof (MVCC_INFO_BLOCK));
+  if (new_mvcc_info_block == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+	      sizeof (MVCC_INFO_BLOCK));
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+  new_mvcc_info_block->next_block = NULL;
+  new_mvcc_info_block->block = (MVCC_INFO *) malloc (sizeof (MVCC_INFO) *
+						     NUM_TOTAL_TRAN_INDICES);
+  if (new_mvcc_info_block->block == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+	      sizeof (sizeof (MVCC_INFO) * NUM_TOTAL_TRAN_INDICES));
+      free_and_init (new_mvcc_info_block);
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+  /* initialize allocated MVCC info objects of the block */
+  prev_mvcc_info = NULL;
+  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
+    {
+      curr_mvcc_info = new_mvcc_info_block->block + i;
+
+      p_mvcc_snapshot = &(curr_mvcc_info->mvcc_snapshot);
+      MVCC_SET_SNAPSHOT_DATA (p_mvcc_snapshot, NULL, MVCCID_NULL, MVCCID_NULL,
+			      NULL, 0, false);
+
+      curr_mvcc_info->transaction_lowest_active_mvccid =
+	curr_mvcc_info->recent_snapshot_lowest_active_mvccid =
+	curr_mvcc_info->mvcc_id = MVCCID_NULL;
+
+      curr_mvcc_info->prev = prev_mvcc_info;
+      curr_mvcc_info->next = new_mvcc_info_block->block + i + 1;
+      prev_mvcc_info = curr_mvcc_info;
+    }
+  curr_mvcc_info->next = NULL;
+
+  if (mvcc_table->block_list == NULL)
+    {
+      mvcc_table->block_list = new_mvcc_info_block;
+    }
+  else
+    {
+      new_mvcc_info_block->next_block = mvcc_table->block_list;
+      mvcc_table->block_list = new_mvcc_info_block;
+    }
+
+  if (mvcc_table->free_list == NULL)
+    {
+      mvcc_table->free_list = new_mvcc_info_block->block;
+    }
+  else
+    {
+      curr_mvcc_info->next = mvcc_table->free_list;
+      mvcc_table->free_list = new_mvcc_info_block->block;
+    }
+
+  return NO_ERROR;
 }

@@ -495,6 +495,8 @@ db_is_deleted (DB_OBJECT * obj)
 
   CHECK_1ARG_ERROR (obj);
 
+  obj = ws_mvcc_latest_version (obj);
+
   if (obj->deleted)
     {
       return 1;

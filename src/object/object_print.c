@@ -2661,7 +2661,7 @@ help_obj (MOP op)
       if (error == NO_ERROR)
 	{
 	  pin = ws_pin (op, 1);
-	  error = au_fetch_class (op->class_mop, &class_, AU_FETCH_READ,
+	  error = au_fetch_class (ws_class_mop (op), &class_, AU_FETCH_READ,
 				  AU_SELECT);
 	  if (error == NO_ERROR)
 	    {

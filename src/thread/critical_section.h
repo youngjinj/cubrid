@@ -76,6 +76,7 @@ enum
   CSECT_LOG_PB,			/* Latch for log_Pb */
   CSECT_LOG_ARCHIVE,		/* Latch for log_Gl.archive */
   CSECT_VACUUM_STATS,		/* Latch for vacuum statistics table */
+  CSECT_MVCC_ACTIVE_TRANS,	/* Latch for mvcc active transaction */
   CSECT_LAST
 };
 

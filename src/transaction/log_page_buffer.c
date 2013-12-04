@@ -5659,7 +5659,17 @@ prior_lsa_start_append (THREAD_ENTRY * thread_p, LOG_PRIOR_NODE * node,
   LOG_PRIOR_LSA_APPEND_ADVANCE_WHEN_DOESNOT_FIT (sizeof (LOG_RECORD_HEADER));
 
   node->log_header.trid = tdes->trid;
-  node->log_header.mvcc_id = tdes->mvcc_id;
+  if (mvcc_Enabled)
+    {
+      if (tdes->mvcc_info != NULL)
+	{
+	  node->log_header.mvcc_id = tdes->mvcc_info->mvcc_id;
+	}
+      else
+	{
+	  node->log_header.mvcc_id = MVCCID_NULL;
+	}
+    }
 
   /*
    * Link the record with the previous transaction record for quick undos.

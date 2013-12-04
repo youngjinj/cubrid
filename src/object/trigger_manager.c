@@ -3247,7 +3247,8 @@ check_authorization (TR_TRIGGER * trigger, bool alter_flag)
 
   if (trigger->status == TR_STATUS_INVALID)
     {
-      if (au_is_dba_group_member (Au_user) || trigger->owner == Au_user)
+      if (au_is_dba_group_member (Au_user)
+	  || ws_is_same_object (trigger->owner, Au_user))
 	{
 	  status = true;
 	}
@@ -3280,7 +3281,7 @@ check_authorization (TR_TRIGGER * trigger, bool alter_flag)
   else
     {
       /* its a user trigger, must be the active user */
-      if (trigger->owner == Au_user)
+      if (ws_is_same_object (trigger->owner, Au_user))
 	{
 	  status = true;
 	}
@@ -5821,7 +5822,8 @@ tr_drop_deferred_activities (DB_OBJECT * trigger_object, DB_OBJECT * target)
 	      && (target == NULL || t->target == target))
 	    {
 
-	      if (Au_user == Au_dba_user || Au_user == t->trigger->owner)
+	      if (ws_is_same_object (Au_user, Au_dba_user)
+		  || ws_is_same_object (Au_user, t->trigger->owner))
 		remove_deferred_activity (c, t);
 	      else
 		{

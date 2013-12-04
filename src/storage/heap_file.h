@@ -53,16 +53,14 @@
  * Heap scan structures
  */
 
-/* Heap mvcc delete informations. This structure keep informations about
- * the current and next. This informations are used and updated by heap_update
- * heap_delete, heap get with lock functions.
+/* Heap MVCC delete informations. This structure keep informations about
+ * the current row. 
  */
 typedef struct heap_mvcc_delete_info HEAP_MVCC_DELETE_INFO;
 struct heap_mvcc_delete_info
 {
   MVCCID row_delid;		/* row delete id */
   OID next_row_version;		/* next row version */
-  LOCK next_row_lock_request;	/* lock to acquire on next row for delete */
   MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;	/* can delete row? */
 };
 
@@ -270,8 +268,7 @@ extern const OID *heap_perform_update (THREAD_ENTRY * thread_p,
 				       const OID * class_oid, const OID * oid,
 				       RECDES * recdes, OID * new_oid,
 				       bool * old,
-				       HEAP_SCANCACHE * scan_cache,
-				       void *mvcc_reev_data);
+				       HEAP_SCANCACHE * scan_cache);
 extern const OID *heap_mvcc_update_to_row_version (THREAD_ENTRY * thread_p,
 						   const HFID * hfid,
 						   const OID * class_oid,
@@ -279,11 +276,9 @@ extern const OID *heap_mvcc_update_to_row_version (THREAD_ENTRY * thread_p,
 						   OID * new_oid,
 						   HEAP_SCANCACHE *
 						   scan_cache);
-extern const OID *heap_perform_delete (THREAD_ENTRY * thread_p,
-				       const HFID * hfid,
-				       const OID * class_oid, const OID * oid,
-				       HEAP_SCANCACHE * scan_cache,
-				       void *mvcc_data_filter);
+extern const OID *heap_delete (THREAD_ENTRY * thread_p, const HFID * hfid,
+			       const OID * class_oid, const OID * oid,
+			       HEAP_SCANCACHE * scan_cache);
 extern void heap_flush (THREAD_ENTRY * thread_p, const OID * oid);
 extern int xheap_reclaim_addresses (THREAD_ENTRY * thread_p,
 				    const HFID * hfid);
@@ -657,12 +652,11 @@ extern int heap_get_pages_for_mvcc_chain_read (THREAD_ENTRY * thread_p,
 					       PAGE_PTR * pgptr,
 					       PAGE_PTR * forward_pgptr,
 					       bool * ignore_record);
-extern SCAN_CODE heap_peek_mvcc_data (THREAD_ENTRY * thread_p,
-				      const OID * oid, RECDES * recdes,
-				      PAGE_PTR page_ptr,
-				      PAGE_PTR ovf_first_page,
-				      MVCC_SNAPSHOT * mvcc_snapshot);
-
+extern SCAN_CODE heap_get_mvcc_data (THREAD_ENTRY * thread_p, const OID * oid,
+				     MVCC_REC_HEADER * mvcc_rec_header,
+				     PAGE_PTR page_ptr,
+				     PAGE_PTR ovf_first_page,
+				     MVCC_SNAPSHOT * mvcc_snapshot);
 extern int heap_stats_set_records_count (THREAD_ENTRY * thread_p,
 					 const HFID * hfid,
 					 int total_records_count,
@@ -677,17 +671,19 @@ extern int heap_mvcc_lock_chain_for_delete (THREAD_ENTRY * thread_p,
 					    HEAP_SCANCACHE * scan_p);
 extern void heap_get_mvcc_rec_header_from_overflow (PAGE_PTR ovf_page,
 						    MVCC_REC_HEADER *
-						    mvcc_header);
+						    mvcc_header,
+						    RECDES * peek_recdes);
 extern void heap_set_mvcc_rec_header_on_overflow (PAGE_PTR ovf_page,
 						  MVCC_REC_HEADER
 						  mvcc_header);
 extern OID *heap_get_serial_class_oid (THREAD_ENTRY * thread_p);
-extern SCAN_CODE heap_mvcc_get_for_delete (THREAD_ENTRY * thread_p,
-					   const HFID * hfid, OID * oid,
-					   RECDES * recdes,
-					   HEAP_SCANCACHE * scan_cache,
-					   int ispeeking,
-					   void *mvcc_reev_data);
+extern SCAN_CODE heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
+						   const HFID * hfid,
+						   OID * oid, OID * class_oid,
+						   RECDES * recdes,
+						   HEAP_SCANCACHE *
+						   scan_cache, int ispeeking,
+						   void *mvcc_reev_data);
 extern bool heap_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p,
 					     const OID * class_oid);
 

@@ -122,7 +122,7 @@ RUNNING_VACUUM *current_running_vacuums;
 /* Cached entries to be reused when a new vacuum process starts */
 RUNNING_VACUUM *running_vacuum_pool;
 /* Mutex to synchronize access in the list of currently running vacuums */
-pthread_mutex_t running_vacuums_mutex;
+pthread_mutex_t running_vacuums_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Blocks/allows a new vacuum to start */
 bool is_vacuum_allowed = false;
@@ -229,6 +229,7 @@ vacuum_class (THREAD_ENTRY * thread_p, OID * class_oid,
   if (!is_vacuum_allowed)
     {
       /* Database is shutting down */
+      pthread_mutex_unlock (&running_vacuums_mutex);
       return NO_ERROR;
     }
   if (vacuum_is_class_vacuumed (thread_p, class_oid))
@@ -1141,14 +1142,14 @@ vacuum_running_vacuums_finalize (THREAD_ENTRY * thread_p)
 {
   RUNNING_VACUUM *entry = NULL, *save_next = NULL;
 
+  /* Abort running vacuums */
+  vacuum_running_vacuums_abort_all (thread_p);
+  assert (current_running_vacuums == NULL);
+
   pthread_mutex_lock (&running_vacuums_mutex);
 
   /* Block any newly starting vacuums */
   is_vacuum_allowed = false;
-
-  /* Abort running vacuums */
-  vacuum_running_vacuums_abort_all (thread_p);
-  assert (current_running_vacuums == NULL);
 
   for (entry = running_vacuum_pool; entry != NULL; entry = save_next)
     {

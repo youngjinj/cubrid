@@ -328,7 +328,7 @@ find_shared_attribute (SM_CLASS ** classp, SM_ATTRIBUTE ** attp,
       if (for_write)
 	{
 	  /* must call this when updating instances - is this necessary here ? */
-	  ws_class_has_object_dependencies (op->class_mop);
+	  ws_class_has_object_dependencies (ws_class_mop (op));
 	}
 
       att = classobj_find_attribute (class_, name, 0);
@@ -427,7 +427,7 @@ obj_locate_attribute (MOP op, int attid, int for_write,
 	      if (for_write)
 		{
 		  /* must call this when updating instances */
-		  ws_class_has_object_dependencies (op->class_mop);
+		  ws_class_has_object_dependencies (ws_class_mop (op));
 		}
 
 	      found = NULL;
@@ -505,6 +505,8 @@ assign_null_value (MOP op, SM_ATTRIBUTE * att, char *mem)
    * value if NULL is passed in
    */
 
+  MOBJ object = NULL;
+
   if (mem == NULL)
     {
       pr_clear_value (&att->default_value.value);
@@ -519,7 +521,12 @@ assign_null_value (MOP op, SM_ATTRIBUTE * att, char *mem)
 	{
 	  if (!att->domain->type->variable_p)
 	    {
-	      OBJ_CLEAR_BOUND_BIT (op->object, att->storage_order);
+	      if ((ws_find (op, &object) == WS_FIND_MOP_DELETED)
+		  || object == NULL)
+		{
+		  return ER_OBJ_INVALID_ARGUMENTS;
+		}
+	      OBJ_CLEAR_BOUND_BIT (object, att->storage_order);
 	    }
 	}
     }
@@ -563,7 +570,7 @@ assign_set_value (MOP op, SM_ATTRIBUTE * att, char *mem, SETREF * setref)
       owner = op;
       if (mem == NULL && !locator_is_class (op, DB_FETCH_WRITE))
 	{
-	  owner = op->class_mop;
+	  owner = ws_class_mop (op);
 	}
 
       new_set = set_change_owner (setref, owner, att->id, att->domain);
@@ -674,6 +681,7 @@ obj_assign_value (MOP op, SM_ATTRIBUTE * att, char *mem, DB_VALUE * value)
 {
   int error = NO_ERROR;
   MOP mop;
+  MOBJ object = NULL;
 
   if (op == NULL || att == NULL)
     {
@@ -701,14 +709,19 @@ obj_assign_value (MOP op, SM_ATTRIBUTE * att, char *mem, DB_VALUE * value)
 	    }
 	  else
 	    {
-	      /* uncomplicated assignment, use the primimtive type macros */
+	      /* uncomplicated assignment, use the primitive type macros */
 	      if (mem != NULL)
 		{
 		  error = PRIM_SETMEM (att->domain->type, att->domain, mem,
 				       value);
 		  if (!error && !att->domain->type->variable_p)
 		    {
-		      OBJ_SET_BOUND_BIT (op->object, att->storage_order);
+		      if (ws_find (op, &object) == WS_FIND_MOP_DELETED
+			  || object == NULL)
+			{
+			  return ER_OBJ_INVALID_ARGUMENTS;
+			}
+		      OBJ_SET_BOUND_BIT (object, att->storage_order);
 		    }
 		}
 	      else
@@ -829,9 +842,10 @@ obj_set_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att,
 			      (op, att->header.name))
 			    {
 			      /* could have att/descriptor versions of these */
-			      error = mq_update_attribute (op->class_mop,
+			      error = mq_update_attribute (ws_class_mop (op),
 							   att->header.name,
-							   ref_mop->class_mop,
+							   ws_class_mop
+							   (ref_mop),
 							   value, &base_value,
 							   &base_name,
 							   DB_AUTH_UPDATE);
@@ -883,7 +897,7 @@ obj_set_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att,
 		}
 
 	      /* must call this when updating instances */
-	      ws_class_has_object_dependencies (op->class_mop);
+	      ws_class_has_object_dependencies (ws_class_mop (op));
 	      mem = (char *) (((char *) obj) + att->offset);
 	    }
 
@@ -1112,8 +1126,9 @@ get_object_value (MOP op, SM_ATTRIBUTE * att, char *mem,
     {
       current = DB_GET_OBJECT (source);
     }
+  current = ws_mvcc_latest_version (current);
 
-  /* check for existance of the object
+  /* check for existence of the object
    * this is expensive so only do this if enabled by a parameter.
    */
   if (current != NULL && current->object == NULL
@@ -1246,7 +1261,7 @@ get_set_value (MOP op, SM_ATTRIBUTE * att, char *mem,
       /* note, we may have a temporary OP here ! */
       if (!locator_is_class (op, DB_FETCH_READ))
 	{
-	  owner = op->class_mop;	/* shared attribute, owner is class */
+	  owner = ws_class_mop (op);	/* shared attribute, owner is class */
 	}
       if (TP_DOMAIN_TYPE (att->domain) == DB_VALUE_TYPE (source))
 	{
@@ -1318,6 +1333,7 @@ obj_get_value (MOP op, SM_ATTRIBUTE * att, void *mem,
 	       DB_VALUE * source, DB_VALUE * dest)
 {
   int error = NO_ERROR;
+  MOBJ object = NULL;
 
   if (op == NULL || att == NULL)
     {
@@ -1332,9 +1348,16 @@ obj_get_value (MOP op, SM_ATTRIBUTE * att, void *mem,
       source = &att->default_value.value;
     }
 
+  if ((ws_find (op, &object) == WS_FIND_MOP_DELETED) || object == NULL)
+    {
+      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_OBJ_INVALID_ARGUMENTS,
+	      0);
+      return ER_OBJ_INVALID_ARGUMENTS;
+    }
+
   /* first check the bound bits */
   if (!att->domain->type->variable_p && mem != NULL
-      && OBJ_GET_BOUND_BIT (op->object, att->storage_order) == 0)
+      && OBJ_GET_BOUND_BIT (object, att->storage_order) == 0)
     {
       DB_MAKE_NULL (dest);
     }
@@ -1418,10 +1441,10 @@ obj_get_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att, DB_VALUE * value)
 						    AU_FETCH_READ);
 		      if (error == NO_ERROR)
 			{
-			  return mq_get_attribute (op->class_mop,
+			  return mq_get_attribute (ws_class_mop (op),
 						   att->header.name,
-						   ref_mop->class_mop, value,
-						   ref_mop);
+						   ws_class_mop (ref_mop),
+						   value, ref_mop);
 			}
 		      else
 			{
@@ -2018,7 +2041,7 @@ obj_copy (MOP op)
       if (au_fetch_instance (op, &src, AU_FETCH_READ, AU_SELECT) != NO_ERROR)
 	return NULL;
 
-      obj_template = obt_def_object (op->class_mop);
+      obj_template = obt_def_object (ws_class_mop (op));
       if (obj_template != NULL)
 	{
 	  for (att = class_->attributes; att != NULL;
@@ -4502,6 +4525,7 @@ obj_isinstance (MOP obj)
   int status;
   MOBJ object;
 
+  obj = ws_mvcc_latest_version (obj);
   if (obj != NULL)
     {
       if (!locator_is_class (obj, DB_FETCH_READ))
@@ -4560,18 +4584,20 @@ int
 obj_is_instance_of (MOP obj, MOP class_mop)
 {
   int status = 0;
+  MOP object_class_mop;
 
   /*
    * is it possible for the obj->class field to be unset and yet still have
    * the class MOP in the workspace ?
    */
-  if (obj->class_mop == class_mop)
+  object_class_mop = ws_class_mop (obj);
+  if (object_class_mop == class_mop)
     {
       status = 1;
     }
   else
     {
-      if (obj->class_mop == NULL)
+      if (object_class_mop == NULL)
 	{
 	  /* must force fetch of instance to get its class */
 	  if (au_fetch_instance (obj, NULL, AU_FETCH_READ, AU_SELECT)
@@ -4581,7 +4607,7 @@ obj_is_instance_of (MOP obj, MOP class_mop)
 	    }
 	  else
 	    {
-	      if (obj->class_mop == class_mop)
+	      if (object_class_mop == class_mop)
 		{
 		  status = 1;
 		}

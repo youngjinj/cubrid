@@ -58,6 +58,10 @@
 #define INDENTED_TITLE_FMT	INDENT_FMT TITLE_FMT
 #define __STR(n)		__VAL(n)
 #define __VAL(n)		#n
+#define SORT_SPEC_FMT(spec) \
+  "%d %s %s", (spec)->pos_descr.pos_no + 1, \
+  ((spec)->s_order == S_ASC ? "asc" : "desc"), \
+  ((spec)->s_nulls == S_NULLS_FIRST ? "nulls first" : "nulls last")
 
 #define VALID_INNER(plan)	(plan->well_rooted || \
 				 (plan->plan_type == QO_PLANTYPE_SORT))
@@ -126,6 +130,7 @@ static void qo_plan_print_projected_segs (QO_PLAN *, FILE *, int);
 static void qo_plan_print_sarged_terms (QO_PLAN *, FILE *, int);
 static void qo_plan_print_outer_join_terms (QO_PLAN *, FILE *, int);
 static void qo_plan_print_subqueries (QO_PLAN *, FILE *, int);
+static void qo_plan_print_analytic_eval (QO_PLAN *, FILE *, int);
 static void qo_sort_walk (QO_PLAN *, void (*)(QO_PLAN *, void *), void *,
 			  void (*)(QO_PLAN *, void *), void *);
 static void qo_join_walk (QO_PLAN *, void (*)(QO_PLAN *, void *), void *,
@@ -865,20 +870,20 @@ qo_plan_compute_iscan_sort_list (QO_PLAN * root, bool * is_index_w_prefix)
       return;			/* nop */
     }
 
-  /* if no index scan terms, no index scan */
-  nterms = bitset_cardinality (&(plan->plan_un.scan.terms));
-
-  if (nterms <= 0
-      && !qo_is_iscan_from_groupby (plan) && !qo_is_iscan_from_orderby (plan))
-    {
-      return;			/* nop */
-    }
-
   /* pointer to QO_NODE_INDEX_ENTRY structure in QO_PLAN */
   ni_entryp = plan->plan_un.scan.index;
   /* pointer to linked list of index node, 'head' field(QO_INDEX_ENTRY
      strucutre) of QO_NODE_INDEX_ENTRY */
   index_entryp = (ni_entryp)->head;
+
+  /* if no index scan terms, no index scan */
+  nterms = bitset_cardinality (&(plan->plan_un.scan.terms));
+
+  if (nterms <= 0 && index_entryp->ils_prefix_len == 0
+      && !qo_is_iscan_from_groupby (plan) && !qo_is_iscan_from_orderby (plan))
+    {
+      return;			/* nop */
+    }
 
   /* check if this is an index with prefix */
   *is_index_w_prefix = qo_is_prefix_index (index_entryp);
@@ -929,6 +934,13 @@ qo_plan_compute_iscan_sort_list (QO_PLAN * root, bool * is_index_w_prefix)
 
   for (i = equi_nterms; i < index_entryp->nsegs; i++)
     {
+      if (index_entryp->ils_prefix_len > 0
+	  && i >= index_entryp->ils_prefix_len)
+	{
+	  /* sort list should contain only prefix when using loose index scan */
+	  break;
+	}
+
       seg_idx = (index_entryp->seg_idxs[i]);
       if (seg_idx == -1)
 	{			/* not exist in query */
@@ -1665,6 +1677,83 @@ qo_plan_print_subqueries (QO_PLAN * plan, FILE * f, int howfar)
 }
 
 /*
+ * qo_plan_print_analytic_eval () - print evaluation order of analytic
+ *				    functions
+ *   return:
+ *   plan(in):
+ *   f(in):
+ *   howfar(in):
+ */
+static void
+qo_plan_print_analytic_eval (QO_PLAN * plan, FILE * f, int howfar)
+{
+  ANALYTIC_EVAL_TYPE *eval;
+  ANALYTIC_TYPE *func;
+  SORT_LIST *sort;
+  int i, j, k;
+  char buf[32];
+
+  if (plan->analytic_eval_list != NULL)
+    {
+      fprintf (f, "\n\nAnalytic functions:");
+
+      /* list functions */
+      for (i = 0, k = 0, eval = plan->analytic_eval_list; eval != NULL;
+	   eval = eval->next, k++)
+	{
+	  /* run info */
+	  sprintf (buf, "run[%d]: ", k);
+	  fprintf (f, "\n" INDENTED_TITLE_FMT, (int) howfar, ' ', buf);
+	  fprintf (f, "sort with key (");
+
+	  /* eval sort list */
+	  for (sort = eval->sort_list; sort != NULL; sort = sort->next)
+	    {
+	      fprintf (f, SORT_SPEC_FMT (sort));
+	      if (sort->next != NULL)
+		{
+		  fputs (", ", f);
+		}
+	    }
+	  fputs (")", f);
+
+	  for (func = eval->head; func != NULL; func = func->next, i++)
+	    {
+	      /* func info */
+	      fprintf (f, "\n" INDENTED_TITLE_FMT, (int) howfar, ' ', "");
+	      fprintf (f, "func[%d]: ", i);
+	      fputs (pt_show_function (func->function), f);
+
+	      /* func partition by */
+	      fputs (" partition by (", f);
+	      for (sort = eval->sort_list, j = func->sort_prefix_size;
+		   sort != NULL && j > 0; sort = sort->next, j--)
+		{
+		  fprintf (f, SORT_SPEC_FMT (sort));
+		  if (sort->next != NULL && j != 1)
+		    {
+		      fputs (", ", f);
+		    }
+		}
+
+	      /* func order by */
+	      fputs (") order by (", f);
+	      for (j = func->sort_list_size - func->sort_prefix_size;
+		   sort != NULL && j > 0; sort = sort->next, j--)
+		{
+		  fprintf (f, SORT_SPEC_FMT (sort));
+		  if (sort->next != NULL && j != 1)
+		    {
+		      fputs (", ", f);
+		    }
+		}
+	      fputs (")", f);
+	    }
+	}
+    }
+}
+
+/*
  * qo_scan_new () -
  *   return:
  *   info(in):
@@ -1694,6 +1783,7 @@ qo_scan_new (QO_INFO * info, QO_NODE * node, QO_SCANMETHOD scan_method,
   plan->top_rooted = false;
   plan->well_rooted = true;
   plan->iscan_sort_list = NULL;
+  plan->analytic_eval_list = NULL;
   plan->plan_type = QO_PLANTYPE_SCAN;
   plan->order = QO_UNORDERED;
 
@@ -2008,6 +2098,8 @@ qo_iscan_cost (QO_PLAN * planp)
 	   * thus to force the optimizer to select this scan.
 	   */
 	  qo_zero_cost (planp);
+
+	  index_entryp->all_unique_index_columns_are_equi_terms = true;
 	  return;
 	}
     }
@@ -2288,6 +2380,13 @@ qo_scan_fprint (QO_PLAN * plan, FILE * f, int howfar)
 	}
 
       if (plan->plan_un.scan.index
+	  && plan->plan_un.scan.index->head->ils_prefix_len > 0)
+	{
+	  fprintf (f, " (loose index scan on prefix %d)",
+		   plan->plan_un.scan.index->head->ils_prefix_len);
+	}
+
+      if (plan->plan_un.scan.index
 	  && plan->plan_un.scan.index->head->multi_range_opt)
 	{
 	  fprintf (f, " (multi_range_opt)");
@@ -2398,6 +2497,13 @@ qo_scan_info (QO_PLAN * plan, FILE * f, int howfar)
 	}
 
       if (plan->plan_un.scan.index
+	  && plan->plan_un.scan.index->head->ils_prefix_len > 0)
+	{
+	  fprintf (f, " (loose index scan on prefix %d)",
+		   plan->plan_un.scan.index->head->ils_prefix_len);
+	}
+
+      if (plan->plan_un.scan.index
 	  && plan->plan_un.scan.index->head->multi_range_opt)
 	{
 	  fprintf (f, " (multi_range_opt)");
@@ -2491,6 +2597,7 @@ qo_sort_new (QO_PLAN * root, QO_EQCLASS * order, SORT_TYPE sort_type)
   plan->top_rooted = subplan->top_rooted;
   plan->well_rooted = false;
   plan->iscan_sort_list = NULL;
+  plan->analytic_eval_list = NULL;
   plan->order = order;
   plan->plan_type = QO_PLANTYPE_SORT;
   plan->vtbl = &qo_sort_plan_vtbl;
@@ -2791,6 +2898,7 @@ qo_join_new (QO_INFO * info,
   plan->top_rooted = false;
   plan->well_rooted = false;
   plan->iscan_sort_list = NULL;
+  plan->analytic_eval_list = NULL;
   plan->plan_type = QO_PLANTYPE_JOIN;
   plan->multi_range_opt_use = PLAN_MULTI_RANGE_OPT_NO;
   plan->has_sort_limit = (outer->has_sort_limit || inner->has_sort_limit);
@@ -3433,6 +3541,7 @@ qo_follow_new (QO_INFO * info,
   plan->top_rooted = false;
   plan->well_rooted = head_plan->well_rooted;
   plan->iscan_sort_list = NULL;
+  plan->analytic_eval_list = NULL;
   plan->plan_type = QO_PLANTYPE_FOLLOW;
   plan->vtbl = &qo_follow_plan_vtbl;
   plan->order = QO_UNORDERED;
@@ -3622,6 +3731,7 @@ qo_worst_new (QO_ENV * env)
   plan->top_rooted = true;
   plan->well_rooted = false;
   plan->iscan_sort_list = NULL;
+  plan->analytic_eval_list = NULL;
   plan->order = QO_UNORDERED;
   plan->plan_type = QO_PLANTYPE_WORST;
   plan->vtbl = &qo_worst_plan_vtbl;
@@ -3908,6 +4018,18 @@ qo_plan_cmp (QO_PLAN * a, QO_PLAN * b)
 
   if (a->plan_type == QO_PLANTYPE_SCAN && b->plan_type == QO_PLANTYPE_SCAN)
     {
+      /* check if it is an unique index and all columns are equi */
+      if (qo_is_all_unique_index_columns_are_equi_terms (a)
+	  && !qo_is_all_unique_index_columns_are_equi_terms (b))
+	{
+	  return PLAN_COMP_LT;
+	}
+      if (!qo_is_all_unique_index_columns_are_equi_terms (a)
+	  && qo_is_all_unique_index_columns_are_equi_terms (b))
+	{
+	  return PLAN_COMP_GT;
+	}
+
       /* check multi range optimization */
       if (qo_is_iscan_with_multi_range_opt (a)
 	  && !qo_is_iscan_with_multi_range_opt (b))
@@ -3920,6 +4042,7 @@ qo_plan_cmp (QO_PLAN * a, QO_PLAN * b)
 	  return PLAN_COMP_GT;
 	}
 
+      /* check covering index scan */
       if (qo_plan_coverage_index (a) && qo_is_seq_scan (b))
 	{
 	  return PLAN_COMP_LT;
@@ -4531,6 +4654,7 @@ qo_plan_fprint (QO_PLAN * plan, FILE * f, int howfar, const char *title)
   qo_plan_print_subqueries (plan, f, howfar);
   qo_plan_print_sort_spec (plan, f, howfar);
   qo_plan_print_costs (plan, f, howfar);
+  qo_plan_print_analytic_eval (plan, f, howfar);
 }
 
 /*
@@ -5655,6 +5779,7 @@ qo_find_best_nljoin_inner_plan_on_info (QO_PLAN * outer,
   temp->top_rooted = false;
   temp->well_rooted = false;
   temp->iscan_sort_list = NULL;
+  temp->analytic_eval_list = NULL;
 
   temp->plan_un.join.join_type = join_type;	/* set nl-join type */
   temp->plan_un.join.outer = outer;	/* set outer */
@@ -8259,12 +8384,14 @@ qo_generate_index_scan (QO_INFO * infop, QO_NODE * nodep,
 	   * two situations is true:
 	   *  - we have key filter terms and the index cover all segments
 	   *  - we have filter predicate and force index is used
+	   *  - we have a loose scan candidate
 	   *  - a special index scan for b-tree key or node info
 	   */
 	  if ((bitset_cardinality (&(index_entryp->key_filter_terms))
 	       && index_entryp->cover_segments)
 	      || (index_entryp->constraints->filter_predicate
-		  && index_entryp->force) || special_index_scan)
+		  && index_entryp->force)
+	      || (index_entryp->ils_prefix_len > 0) || special_index_scan)
 	    {
 	      bitset_assign (&kf_terms, &(index_entryp->key_filter_terms));
 	      planp = qo_index_scan_new (infop, nodep, ni_entryp,
@@ -8867,10 +8994,9 @@ qo_search_planner (QO_PLANNER * planner)
 #if 1
 	      /* Currently we do not consider the following optimization. */
 	      if ((have_range_terms == true)
-		  || (index_entry->force
-		      && index_entry->constraints->filter_predicate)
-		  /* Force index scan if special_index_scan is true */
-		  || special_index_scan)
+		  || (index_entry->constraints->filter_predicate &&
+		      index_entry->force)
+		  || (index_entry->ils_prefix_len > 0) || special_index_scan)
 		/* Currently, CUBRID does not allow null values in index.
 		 * The filter index expression must contain at least one
 		 * term different than "is null". Otherwise, the index will
@@ -10546,6 +10672,27 @@ qo_index_scan_order_by_new (QO_INFO * info, QO_NODE * node,
   plan = qo_top_plan_new (plan);
 
   return plan;
+}
+
+/*
+ * qo_is_all_unique_index_columns_are_equi_terms () - 
+ *   check if the current plan uses and 
+ *   index scan with all_unique_index_columns_are_equi_terms 
+ *
+ * return    : true/false
+ * plan (in) : plan to verify
+ */
+bool
+qo_is_all_unique_index_columns_are_equi_terms (QO_PLAN * plan)
+{
+  if (qo_is_iscan (plan) && plan->plan_un.scan.index
+      && plan->plan_un.scan.index->head
+      && (plan->plan_un.scan.index->head->
+	  all_unique_index_columns_are_equi_terms))
+    {
+      return true;
+    }
+  return false;
 }
 
 /*

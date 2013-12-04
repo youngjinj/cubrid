@@ -117,6 +117,28 @@
   (MVCC_IS_DISABLED (rec_header_p)			    \
     || MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header_p))
 
+#define MVCC_SET_SNAPSHOT_DATA(snapshot, fnc, low_act_mvccid, \
+			       high_comp_mvccid, act_ids, cnt_act_ids, \
+			       is_valid) \
+  do { \
+  (snapshot)->snapshot_fnc = fnc; \
+  (snapshot)->lowest_active_mvccid = low_act_mvccid; \
+  (snapshot)->highest_completed_mvccid = high_comp_mvccid; \
+  (snapshot)->active_ids = act_ids; \
+  (snapshot)->cnt_active_ids = cnt_act_ids; \
+  (snapshot)->valid = is_valid;	\
+    } while (0)
+
+/* clear MVCC snapshot data - do not free active_ids since they are reused */
+#define MVCC_CLEAR_SNAPSHOT_DATA(snapshot) \
+  do { \
+  (snapshot)->snapshot_fnc = NULL; \
+  (snapshot)->lowest_active_mvccid = MVCCID_NULL; \
+  (snapshot)->highest_completed_mvccid = MVCCID_NULL; \
+  (snapshot)->cnt_active_ids = 0; \
+  (snapshot)->valid = false;	\
+    } while (0)
+
 typedef struct mvcc_snapshot MVCC_SNAPSHOT;
 
 typedef bool (*MVCC_SNAPSHOT_FUNC) (THREAD_ENTRY * thread_p,
@@ -134,11 +156,39 @@ struct mvcc_snapshot
 
   unsigned int cnt_active_ids;	/* count active ids */
 
-  MVCCID *active_child_ids;	/* active children */
-
-  unsigned int cnt_active_child_ids;	/* count active child ids */
-
   bool valid;
+};
+
+/* MVCC INFO - such structure is attached to each active transaction */
+typedef struct mvcc_info MVCC_INFO;
+struct mvcc_info
+{
+  MVCC_SNAPSHOT mvcc_snapshot;	/* MVCC Snapshot */
+  MVCCID mvcc_id;		/* MVCC ID - increase with each transaction
+				 * that modified data
+				 */
+  /* transaction_lowest_active_mvccid - the lowest active mvcc id when we
+   * start the current transaction
+   */
+  MVCCID transaction_lowest_active_mvccid;
+
+  /* recent_snapshot_lowest_active_mvccid - the lowest active mvcc id computed
+   * for the most recent snapshot of current transaction. This field help to
+   * know faster whether an mvcc id is active or not. Thus, mvccid older than
+   * this field are not active anymore
+   */
+  MVCCID recent_snapshot_lowest_active_mvccid;
+  MVCC_INFO *next, *prev;	/* link to the next/previous active mvcc info */
+};
+
+/* MVCC INFO BLOCK Structure */
+typedef struct mvcc_info_block MVCC_INFO_BLOCK;
+struct mvcc_info_block
+{
+  MVCC_INFO *block;		/* mvcc info block - each block contains
+				 * NUM_TOTAL_TRAN_INDICES entries
+				 */
+  MVCC_INFO_BLOCK *next_block;	/* next mvcc info block */
 };
 
 typedef enum mvcc_satisfies_delete_result MVCC_SATISFIES_DELETE_RESULT;
@@ -146,7 +196,9 @@ enum mvcc_satisfies_delete_result
 {
   DELETE_RECORD_INVISIBLE,	/* invisible - created after scan started */
   DELETE_RECORD_CAN_DELETE,	/* is visible and valid - can be deleted */
-  DELETE_RECORD_DELETED,	/* deleted by committed transaction */
+  DELETE_RECORD_DELETED,	/* deleted by committed transaction or
+				 * deleted by the current transaction
+				 */
   DELETE_RECORD_IN_PROGRESS	/* deleted by other in progress transaction */
 };				/* Heap record satisfies delete result */
 

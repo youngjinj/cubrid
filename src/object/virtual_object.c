@@ -117,7 +117,7 @@ vid_is_new_oobj (MOP mop)
   int return_code = 0;
 
   return_code = mop && mop->is_vid
-    && ws_find (mop->class_mop, (MOBJ *) & class_p) != WS_FIND_MOP_DELETED
+    && ws_find (ws_class_mop (mop), (MOBJ *) & class_p) != WS_FIND_MOP_DELETED
     && (mop->oid_info.vid_info->flags & VID_NEW);
 
   return return_code;
@@ -1182,7 +1182,7 @@ vid_build_non_upd_object (MOP mop, DB_VALUE * seq)
 #endif /* CUBRID_DEBUG */
       if (!mop->pinned)
 	{
-	  obj_free_memory ((SM_CLASS *) mop->class_mop->object,
+	  obj_free_memory ((SM_CLASS *) ws_class_mop (mop)->object,
 			   (MOBJ) mop->object);
 	}
     }

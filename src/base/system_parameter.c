@@ -363,6 +363,8 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_HA_MAX_PROCESS_DEREG_CONFIRM "ha_max_process_dereg_confirm"
 
+#define PRM_NAME_HA_UNACCEPTABLE_PROC_RESTART_TIMEDIFF "ha_unacceptable_proc_restart_timediff"
+
 #define PRM_NAME_HA_CHANGEMODE_INTERVAL_IN_MSEC "ha_changemode_interval_in_msecs"
 
 #define PRM_NAME_HA_MAX_HEARTBEAT_GAP "ha_max_heartbeat_gap"
@@ -433,7 +435,7 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_TCP_SNDBUF_SIZE "tcp_sndbuf_size"
 
-#define PRM_NAME_TCP_NODELAY "tcp_nodealy"
+#define PRM_NAME_TCP_NODELAY "tcp_nodelay"
 
 #define PRM_NAME_TCP_KEEPALIVE "tcp_keepalive"
 
@@ -519,7 +521,15 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_QUERY_TRACE "query_trace"
 #define PRM_NAME_QUERY_TRACE_FORMAT "query_trace_format"
 
+#define PRM_NAME_MAX_RECURSION_SQL_DEPTH "max_recursion_sql_depth"
+
 #define PRM_NAME_UPDATE_USE_ATTRIBUTE_REFERENCES "update_use_attribute_references"
+
+#define PRM_NAME_PB_AIN_RATIO "data_ain_ratio"
+#define PRM_NAME_PB_AOUT_RATIO "data_aout_ratio"
+
+#define PRM_NAME_MAX_AGG_HASH_SIZE "max_agg_hash_size"
+#define PRM_NAME_AGG_HASH_RESPECT_ORDER "agg_hash_respect_order"
 
 #define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
 #define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
@@ -572,6 +582,8 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_SIZE_UNIT       0x00001000	/* has size unit interface */
 #define PRM_TIME_UNIT       0x00002000	/* has time unit interface */
 #define PRM_DIFFER_UNIT     0x00004000	/* parameter unit need to be changed */
+#define PRM_FOR_HA_CONTEXT  0x00008000	/* should be replicated into HA log
+					 * applier */
 
 #define PRM_DEPRECATED      0x40000000	/* is deprecated */
 #define PRM_OBSOLETED       0x80000000	/* is obsoleted */
@@ -618,6 +630,7 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_HAS_SIZE_UNIT(x)      (x & PRM_SIZE_UNIT)
 #define PRM_HAS_TIME_UNIT(x)      (x & PRM_TIME_UNIT)
 #define PRM_DIFFERENT_UNIT(x)     (x & PRM_DIFFER_UNIT)
+#define PRM_IS_FOR_HA_CONTEXT(x)  (x & PRM_FOR_HA_CONTEXT)
 #define PRM_IS_DEPRECATED(x)      (x & PRM_DEPRECATED)
 #define PRM_IS_OBSOLETED(x)       (x & PRM_OBSOLETED)
 
@@ -1323,6 +1336,12 @@ static int prm_ha_max_process_dereg_confirm_default =
   HB_DEFAULT_MAX_PROCESS_DEREG_CONFIRM;
 static unsigned int prm_ha_max_process_dereg_confirm_flag = 0;
 
+int PRM_HA_UNACCEPTABLE_PROC_RESTART_TIMEDIFF =
+  HB_DEFAULT_UNACCEPTABLE_PROC_RESTART_TIMEDIFF_IN_MSECS;
+static int prm_ha_unacceptable_proc_restart_timediff_default =
+  HB_DEFAULT_UNACCEPTABLE_PROC_RESTART_TIMEDIFF_IN_MSECS;
+static unsigned int prm_ha_unacceptable_proc_restart_timediff_flag = 0;
+
 int PRM_HA_CHANGEMODE_INTERVAL_IN_MSECS =
   HB_DEFAULT_CHANGEMODE_INTERVAL_IN_MSECS;
 static int prm_ha_changemode_interval_in_msecs_default =
@@ -1476,12 +1495,12 @@ int PRM_TCP_SNDBUF_SIZE = -1;
 static int prm_tcp_sndbuf_size_default = -1;
 static unsigned int prm_tcp_sndbuf_size_flag = 0;
 
-int PRM_TCP_NODELAY = -1;
-static int prm_tcp_nodelay_default = -1;
+bool PRM_TCP_NODELAY = false;
+static bool prm_tcp_nodelay_default = false;
 static unsigned int prm_tcp_nodelay_flag = 0;
 
-int PRM_TCP_KEEPALIVE = 1;
-static int prm_tcp_keepalive_default = 1;
+bool PRM_TCP_KEEPALIVE = true;
+static bool prm_tcp_keepalive_default = true;
 static unsigned int prm_tcp_keepalive_flag = 0;
 
 bool PRM_CSQL_SINGLE_LINE_MODE = false;
@@ -1658,9 +1677,36 @@ static int prm_query_trace_format_lower = QUERY_TRACE_TEXT;
 static int prm_query_trace_format_upper = QUERY_TRACE_JSON;
 static unsigned int prm_query_trace_format_flag = 0;
 
+int PRM_MAX_RECURSION_SQL_DEPTH = 400;
+static int prm_max_recursion_sql_depth_default = 400;
+static unsigned int prm_max_recursion_sql_depth_flag = 0;
+
+UINT64 PRM_MAX_AGG_HASH_SIZE = 2 * 1024 * 1024;	/* 2 MB */
+static UINT64 prm_max_agg_hash_size_default = 2 * 1024 * 1024;	/* 2 MB */
+static UINT64 prm_max_agg_hash_size_lower = 32 * 1024;	/* 32 KB */
+static UINT64 prm_max_agg_hash_size_upper = 128 * 1024 * 1024;	/* 128 MB */
+static unsigned int prm_max_agg_hash_size_flag = 0;
+
+bool PRM_AGG_HASH_RESPECT_ORDER = true;
+static bool prm_agg_hash_respect_order_default = true;
+static unsigned int prm_agg_hash_respect_order_flag = 0;
+
 bool PRM_UPDATE_USE_ATTRIBUTE_REFERENCES = false;
 static bool prm_update_use_attribute_references_default = false;
 static unsigned int prm_update_use_attribute_references_flag = 0;
+
+float PRM_PB_AIN_RATIO = 0.25f;
+static float prm_pb_ain_ratio_default = 0.25f;
+static float prm_pb_ain_ratio_upper = 1.0f;
+static float prm_pb_ain_ratio_lower = 0.0f;
+static unsigned int prm_pb_ain_ratio_flag = 0;
+
+float PRM_PB_AOUT_RATIO = 0.5f;
+static float prm_pb_aout_ratio_default = 0.5f;
+static float prm_pb_aout_ratio_upper = 3.0;
+static float prm_pb_aout_ratio_lower = 0;
+static unsigned int prm_pb_aout_ratio_flag = 0;
+
 
 bool PRM_MVCC_ENABLED = false;
 static bool prm_mvcc_enabled_default = false;
@@ -2571,7 +2617,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_DEFAULT_WEEK_FORMAT,
-   (PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_FOR_SESSION),
+   (PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_FOR_SESSION
+    | PRM_FOR_HA_CONTEXT),
    PRM_INTEGER,
    (void *) &prm_week_format_flag,
    (void *) &prm_week_format_default,
@@ -2654,7 +2701,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_STRING_MAX_SIZE_BYTES,
    (PRM_USER_CHANGE | PRM_FOR_SERVER | PRM_FOR_CLIENT | PRM_FOR_SESSION |
-    PRM_SIZE_UNIT),
+    PRM_SIZE_UNIT | PRM_FOR_HA_CONTEXT),
    PRM_BIGINT,
    (void *) &prm_string_max_size_bytes_flag,
    (void *) &prm_string_max_size_bytes_default,
@@ -2665,7 +2712,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_ADD_COLUMN_UPDATE_HARD_DEFAULT,
-   (PRM_USER_CHANGE | PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_FOR_SESSION),
+   (PRM_USER_CHANGE | PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_FOR_SESSION
+    | PRM_FOR_HA_CONTEXT),
    PRM_BOOLEAN,
    (void *) &prm_add_column_update_hard_default_flag,
    (void *) &prm_add_column_update_hard_default_default,
@@ -2676,7 +2724,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_RETURN_NULL_ON_FUNCTION_ERRORS,
    (PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_FOR_SESSION |
-    PRM_FOR_QRY_STRING),
+    PRM_FOR_QRY_STRING | PRM_FOR_HA_CONTEXT),
    PRM_BOOLEAN,
    (void *) &prm_return_null_on_function_errors_flag,
    (void *) &prm_return_null_on_function_errors_default,
@@ -2686,7 +2734,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_ALTER_TABLE_CHANGE_TYPE_STRICT,
-   (PRM_USER_CHANGE | PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_FOR_SESSION),
+   (PRM_USER_CHANGE | PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_FOR_SESSION
+    | PRM_FOR_HA_CONTEXT),
    PRM_BOOLEAN,
    (void *) &prm_alter_table_change_type_strict_flag,
    (void *) &prm_alter_table_change_type_strict_default,
@@ -2792,7 +2841,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_COMPAT_NUMERIC_DIVISION_SCALE,
-   (PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_FOR_SESSION),
+   (PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_FOR_SESSION
+    | PRM_FOR_HA_CONTEXT),
    PRM_BOOLEAN,
    (void *) &prm_compat_numeric_division_scale_flag,
    (void *) &prm_compat_numeric_division_scale_default,
@@ -3120,6 +3170,16 @@ static SYSPRM_PARAM prm_Def[] = {
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_UNACCEPTABLE_PROC_RESTART_TIMEDIFF,
+   (PRM_FOR_CLIENT | PRM_FOR_HA | PRM_TIME_UNIT),
+   PRM_INTEGER,
+   (void *) &prm_ha_unacceptable_proc_restart_timediff_flag,
+   (void *) &prm_ha_unacceptable_proc_restart_timediff_default,
+   (void *) &PRM_HA_UNACCEPTABLE_PROC_RESTART_TIMEDIFF,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
   {PRM_NAME_HA_CHANGEMODE_INTERVAL_IN_MSEC,
    (PRM_FOR_CLIENT | PRM_HIDDEN | PRM_FOR_HA),
    PRM_INTEGER,
@@ -3301,7 +3361,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_COMPAT_PRIMARY_KEY,
-   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION),
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION | PRM_FOR_HA_CONTEXT),
    PRM_BOOLEAN,
    (void *) &prm_compat_primary_key_flag,
    (void *) &prm_compat_primary_key_default,
@@ -3489,7 +3549,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_TCP_NODELAY,
    (PRM_FOR_SERVER | PRM_FOR_CLIENT | PRM_HIDDEN),
-   PRM_INTEGER,
+   PRM_BOOLEAN,
    (void *) &prm_tcp_nodelay_flag,
    (void *) &prm_tcp_nodelay_default,
    (void *) &PRM_TCP_NODELAY,
@@ -3499,7 +3559,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_TCP_KEEPALIVE,
    (PRM_FOR_SERVER | PRM_FOR_CLIENT),
-   PRM_INTEGER,
+   PRM_BOOLEAN,
    (void *) &prm_tcp_keepalive_flag,
    (void *) &prm_tcp_keepalive_default,
    (void *) &PRM_TCP_KEEPALIVE,
@@ -3730,7 +3790,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_INTL_NUMBER_LANG,
-   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION | PRM_FOR_QRY_STRING),
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION | PRM_FOR_QRY_STRING
+    | PRM_FOR_HA_CONTEXT),
    PRM_STRING,
    (void *) &prm_intl_number_lang_flag,
    (void *) &prm_intl_number_lang_default,
@@ -3740,7 +3801,8 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_INTL_DATE_LANG,
-   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION | PRM_FOR_QRY_STRING),
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION | PRM_FOR_QRY_STRING
+    | PRM_FOR_HA_CONTEXT),
    PRM_STRING,
    (void *) &prm_intl_date_lang_flag,
    (void *) &prm_intl_date_lang_default,
@@ -3860,7 +3922,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_INTL_COLLATION,
-   (PRM_FOR_CLIENT | PRM_FOR_SESSION | PRM_USER_CHANGE),
+   (PRM_FOR_CLIENT | PRM_FOR_SESSION | PRM_USER_CHANGE | PRM_FOR_HA_CONTEXT),
    PRM_STRING,
    (void *) &prm_intl_collation_flag,
    (void *) &prm_intl_collation_default,
@@ -3923,6 +3985,17 @@ static SYSPRM_PARAM prm_Def[] = {
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_MAX_RECURSION_SQL_DEPTH,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_INTEGER,
+   (void *) &prm_max_recursion_sql_depth_flag,
+   (void *) &prm_max_recursion_sql_depth_default,
+   (void *) &PRM_MAX_RECURSION_SQL_DEPTH,
+   (void *) NULL,
+   (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
   {PRM_NAME_UPDATE_USE_ATTRIBUTE_REFERENCES,
    (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_FOR_SESSION),
    PRM_BOOLEAN,
@@ -3932,6 +4005,50 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) NULL,
    (void *) NULL,
    (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_PB_AIN_RATIO,
+   (PRM_FOR_SERVER | PRM_RELOADABLE),
+   PRM_FLOAT,
+   (void *) &prm_pb_ain_ratio_flag,
+   (void *) &prm_pb_ain_ratio_default,
+   (void *) &PRM_PB_AIN_RATIO,
+   (void *) &prm_pb_ain_ratio_upper,
+   (void *) &prm_pb_ain_ratio_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_PB_AOUT_RATIO,
+   (PRM_FOR_SERVER | PRM_RELOADABLE),
+   PRM_FLOAT,
+   (void *) &prm_pb_aout_ratio_flag,
+   (void *) &prm_pb_aout_ratio_default,
+   (void *) &PRM_PB_AOUT_RATIO,
+   (void *) &prm_pb_aout_ratio_upper,
+   (void *) &prm_pb_aout_ratio_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_MAX_AGG_HASH_SIZE,
+   (PRM_FOR_SERVER | PRM_TEST_CHANGE),
+   PRM_BIGINT,
+   (void *) &prm_max_agg_hash_size_flag,
+   (void *) &prm_max_agg_hash_size_default,
+   (void *) &PRM_MAX_AGG_HASH_SIZE,
+   (void *) &prm_max_agg_hash_size_upper,
+   (void *) &prm_max_agg_hash_size_lower,
+   (void *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_AGG_HASH_RESPECT_ORDER,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_BOOLEAN,
+   (void *) &prm_agg_hash_respect_order_flag,
+   (void *) &prm_agg_hash_respect_order_default,
+   (void *) &PRM_AGG_HASH_RESPECT_ORDER,
+   (void *) NULL,
+   (void *) NULL,
+   (void *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_MVCC_ENABLED,
@@ -4340,10 +4457,17 @@ typedef enum
   PRM_PRINT_ID
 } PRM_PRINT_MODE;
 
+typedef enum
+{
+  PRM_PRINT_CURR_VAL = 0,
+  PRM_PRINT_DEFAULT_VAL
+} PRM_PRINT_VALUE_MODE;
+
 static void prm_the_file_has_been_loaded (const char *path);
 static int prm_print_value (const SYSPRM_PARAM * prm, char *buf, size_t len);
 static int prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
-		      PRM_PRINT_MODE print_mode);
+		      PRM_PRINT_MODE print_mode,
+		      PRM_PRINT_VALUE_MODE print_value_mode);
 static int sysprm_load_and_init_internal (const char *db_name,
 					  const char *conf_file, bool reload,
 					  bool check_intl_param);
@@ -4489,7 +4613,7 @@ sysprm_dump_parameters (FILE * fp)
 	{
 	  continue;
 	}
-      prm_print (prm, buf, LINE_MAX, PRM_PRINT_NAME);
+      prm_print (prm, buf, LINE_MAX, PRM_PRINT_NAME, PRM_PRINT_CURR_VAL);
       fprintf (fp, "%s\n", buf);
     }
 
@@ -5567,7 +5691,7 @@ SYSPRM_ERR
 sysprm_validate_change_parameters (const char *data, bool check,
 				   SYSPRM_ASSIGN_VALUE ** assignments_ptr)
 {
-  char buf[PRM_DEFAULT_BUFFER_SIZE], *p = NULL, *name = NULL, *value = NULL;
+  char buf[LINE_MAX], *p = NULL, *name = NULL, *value = NULL;
   SYSPRM_PARAM *prm = NULL;
   SYSPRM_ERR err = PRM_ERR_NO_ERROR;
   SYSPRM_ASSIGN_VALUE *assignments = NULL, *last_assign = NULL;
@@ -5581,7 +5705,7 @@ sysprm_validate_change_parameters (const char *data, bool check,
       return PRM_ERR_BAD_VALUE;
     }
 
-  if (intl_mbs_ncpy (buf, data, PRM_DEFAULT_BUFFER_SIZE) == NULL)
+  if (intl_mbs_ncpy (buf, data, sizeof (buf)) == NULL)
     {
       return PRM_ERR_BAD_VALUE;
     }
@@ -5710,6 +5834,91 @@ sysprm_validate_change_parameters (const char *data, bool check,
   sysprm_free_assign_values (&assignments);
   return err;
 }
+
+/*
+ * sysprm_make_default_values () -
+ *
+ * return		 : SYSPRM_ERR
+ * data (in)		 : string containing "parameter = value" assignments
+ * default_val_buf(out)	 : string containing "parameter = def_value"
+ *			   assignements created from data argument
+ * buf_size(in)		 : size available in default_val_buf
+ *
+ */
+SYSPRM_ERR
+sysprm_make_default_values (const char *data, char *default_val_buf,
+			    const int buf_size)
+{
+  char buf[LINE_MAX], *p = NULL, *out_p = NULL;
+  char *name = NULL, *value = NULL;
+  int rem_size, n;
+  SYSPRM_ERR err = PRM_ERR_NO_ERROR;
+  SYSPRM_PARAM *prm = NULL;
+
+  if (intl_mbs_ncpy (buf, data, sizeof (buf)) == NULL)
+    {
+      return PRM_ERR_BAD_VALUE;
+    }
+
+  p = buf;
+  out_p = default_val_buf;
+  rem_size = buf_size - 1;
+  do
+    {
+      /* parse data */
+      SYSPRM_ASSIGN_VALUE *assign = NULL;
+
+      /* get parameter name and value */
+      err = prm_get_next_param_value (&p, &name, &value);
+      if (err != PRM_ERR_NO_ERROR || name == NULL || value == NULL)
+	{
+	  break;
+	}
+
+      prm = prm_find (name, NULL);
+      if (prm == NULL)
+	{
+	  err = PRM_ERR_UNKNOWN_PARAM;
+	  break;
+	}
+
+      if (PRM_ID_INTL_COLLATION == sysprm_get_id (prm))
+	{
+	  n =
+	    snprintf (out_p, rem_size, "%s=%s", PRM_NAME_INTL_COLLATION,
+		      lang_get_collation_name (LANG_GET_BINARY_COLLATION
+					       (LANG_SYS_CODESET)));
+	}
+      else if (PRM_ID_INTL_DATE_LANG == sysprm_get_id (prm))
+	{
+	  n =
+	    snprintf (out_p, rem_size, "%s=%s", PRM_NAME_INTL_DATE_LANG,
+		      lang_get_Lang_name ());
+	}
+      else if (PRM_ID_INTL_NUMBER_LANG == sysprm_get_id (prm))
+	{
+	  n =
+	    snprintf (out_p, rem_size, "%s=%s", PRM_NAME_INTL_NUMBER_LANG,
+		      lang_get_Lang_name ());
+	}
+      else
+	{
+	  n =
+	    prm_print (prm, out_p, rem_size, PRM_PRINT_NAME,
+		       PRM_PRINT_DEFAULT_VAL);
+	}
+
+      out_p += n;
+      rem_size -= n;
+
+      n = snprintf (out_p, rem_size, ";");
+      out_p += n;
+      rem_size -= n;
+    }
+  while (p && rem_size > 0);
+
+  return err;
+}
 #endif /* !SERVER_MODE */
 
 /*
@@ -5773,11 +5982,12 @@ sysprm_change_parameter_values (const SYSPRM_ASSIGN_VALUE * assignments,
  */
 static int
 prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
-	   PRM_PRINT_MODE print_mode)
+	   PRM_PRINT_MODE print_mode, PRM_PRINT_VALUE_MODE print_value_mode)
 {
   int n = 0, id = -1;
   int error = NO_ERROR;
   char left_side[PRM_DEFAULT_BUFFER_SIZE];
+  void *prm_value;
 
   if (len == 0)
     {
@@ -5804,9 +6014,18 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
       snprintf (left_side, PRM_DEFAULT_BUFFER_SIZE, "%s=", prm->name);
     }
 
+  if (print_value_mode == PRM_PRINT_DEFAULT_VAL)
+    {
+      prm_value = prm->default_value;
+    }
+  else
+    {
+      prm_value = prm->value;
+    }
+
   if (PRM_IS_INTEGER (prm))
     {
-      int val = PRM_GET_INT (prm->value);
+      int val = PRM_GET_INT (prm_value);
       int left_side_len = strlen (left_side);
 
       if (PRM_DIFFERENT_UNIT (prm->static_flag) &&
@@ -5824,7 +6043,7 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
       if (PRM_HAS_SIZE_UNIT (prm->static_flag))
 	{
 	  UINT64 dup_val;
-	  val = PRM_GET_INT (prm->value);
+	  val = PRM_GET_INT (prm_value);
 
 	  if (PRM_DIFFERENT_UNIT (prm->static_flag))
 	    {
@@ -5849,7 +6068,7 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
       else if (PRM_HAS_TIME_UNIT (prm->static_flag))
 	{
 	  INT64 dup_val;
-	  val = PRM_GET_INT (prm->value);
+	  val = PRM_GET_INT (prm_value);
 
 	  if (PRM_DIFFERENT_UNIT (prm->static_flag) && val >= 0)
 	    {
@@ -5880,7 +6099,7 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
     }
   else if (PRM_IS_BIGINT (prm))
     {
-      UINT64 val = PRM_GET_BIGINT (prm->value);
+      UINT64 val = PRM_GET_BIGINT (prm_value);
       int left_side_len = strlen (left_side);
 
       if (PRM_DIFFERENT_UNIT (prm->static_flag))
@@ -5908,11 +6127,11 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
   else if (PRM_IS_BOOLEAN (prm))
     {
       n = snprintf (buf, len, "%s%c", left_side,
-		    (PRM_GET_BOOL (prm->value) ? 'y' : 'n'));
+		    (PRM_GET_BOOL (prm_value) ? 'y' : 'n'));
     }
   else if (PRM_IS_FLOAT (prm))
     {
-      float val = PRM_GET_FLOAT (prm->value);
+      float val = PRM_GET_FLOAT (prm_value);
       int left_side_len = strlen (left_side);
 
       if (PRM_DIFFERENT_UNIT (prm->static_flag) &&
@@ -5929,7 +6148,7 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
       if (PRM_HAS_SIZE_UNIT (prm->static_flag))
 	{
 	  UINT64 dup_val;
-	  val = PRM_GET_FLOAT (prm->value);
+	  val = PRM_GET_FLOAT (prm_value);
 
 	  if (PRM_DIFFERENT_UNIT (prm->static_flag))
 	    {
@@ -5959,8 +6178,8 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
   else if (PRM_IS_STRING (prm))
     {
       n = snprintf (buf, len, "%s\"%s\"", left_side,
-		    (PRM_GET_STRING (prm->value) ?
-		     PRM_GET_STRING (prm->value) : ""));
+		    (PRM_GET_STRING (prm_value) ?
+		     PRM_GET_STRING (prm_value) : ""));
     }
   else if (PRM_IS_KEYWORD (prm))
     {
@@ -5968,14 +6187,14 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
 
       if (intl_mbs_casecmp (prm->name, PRM_NAME_ER_LOG_LEVEL) == 0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, er_log_level_words,
 				 DIM (er_log_level_words));
 	}
       else if (intl_mbs_casecmp (prm->name,
 				 PRM_NAME_LOG_ISOLATION_LEVEL) == 0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, isolation_level_words,
 				 DIM (isolation_level_words));
 	}
@@ -5983,7 +6202,7 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
 				 PRM_NAME_PB_DEBUG_PAGE_VALIDATION_LEVEL) ==
 	       0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL,
 				 pgbuf_debug_page_validation_level_words,
 				 DIM
@@ -5994,36 +6213,36 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
 				    PRM_NAME_HA_MODE_FOR_SA_UTILS_ONLY) == 0)
 
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, ha_mode_words, DIM (ha_mode_words));
 	}
       else if (intl_mbs_casecmp (prm->name, PRM_NAME_HA_SERVER_STATE) == 0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, ha_server_state_words,
 				 DIM (ha_server_state_words));
 	}
       else if (intl_mbs_casecmp (prm->name,
 				 PRM_NAME_HA_LOG_APPLIER_STATE) == 0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, ha_log_applier_state_words,
 				 DIM (ha_log_applier_state_words));
 	}
       else if (intl_mbs_casecmp (prm->name, PRM_NAME_COMPAT_MODE) == 0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, compat_words, DIM (compat_words));
 	}
       else if (intl_mbs_casecmp (prm->name, PRM_NAME_CHECK_PEER_ALIVE) == 0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, check_peer_alive_words,
 				 DIM (check_peer_alive_words));
 	}
       else if (intl_mbs_casecmp (prm->name, PRM_NAME_QUERY_TRACE_FORMAT) == 0)
 	{
-	  keyvalp = prm_keyword (PRM_GET_INT (prm->value),
+	  keyvalp = prm_keyword (PRM_GET_INT (prm_value),
 				 NULL, query_trace_format_words,
 				 DIM (query_trace_format_words));
 	}
@@ -6038,8 +6257,7 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
 	}
       else
 	{
-	  n = snprintf (buf, len, "%s%d", left_side,
-			PRM_GET_INT (prm->value));
+	  n = snprintf (buf, len, "%s%d", left_side, PRM_GET_INT (prm_value));
 	}
     }
   else if (PRM_IS_INTEGER_LIST (prm))
@@ -6047,7 +6265,7 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len,
       int *int_list, list_size, i;
       char *s;
 
-      int_list = PRM_GET_INTEGER_LIST (prm->value);
+      int_list = PRM_GET_INTEGER_LIST (prm_value);
       if (int_list)
 	{
 	  list_size = int_list[0];
@@ -7890,7 +8108,7 @@ sysprm_set_to_default (const char *pname, bool set_to_force)
 
   if (set_to_force)
     {
-      prm_print (prm, val, LINE_MAX, PRM_PRINT_NONE);
+      prm_print (prm, val, LINE_MAX, PRM_PRINT_NONE, PRM_PRINT_CURR_VAL);
       prm_set_force (prm, val);
     }
 
@@ -10034,7 +10252,8 @@ sysprm_print_parameters_for_qry_string (void)
 {
   int i, n, len = LINE_MAX;
   char buf[LINE_MAX];
-  char *ptr = NULL, *q = NULL, size;
+  char *ptr = NULL, *q = NULL;
+  int size;
 
   memset (buf, 0, LINE_MAX);
   ptr = buf;
@@ -10043,7 +10262,8 @@ sysprm_print_parameters_for_qry_string (void)
     {
       if (PRM_PRINT_QRY_STRING (i))
 	{
-	  n = prm_print (GET_PRM (i), ptr, len, PRM_PRINT_ID);
+	  n = prm_print (GET_PRM (i), ptr, len, PRM_PRINT_ID,
+			 PRM_PRINT_CURR_VAL);
 	  ptr += n;
 	  len -= n;
 
@@ -10051,6 +10271,94 @@ sysprm_print_parameters_for_qry_string (void)
 	  ptr += n;
 	  len -= n;
 	}
+    }
+
+  /* verify the length of the printed parameters does not exceed LINE_MAX */
+  assert (len > 0);
+
+  size = (LINE_MAX - len) * sizeof (char);
+  if (size == 0)
+    {
+      return NULL;
+    }
+
+  q = (char *) malloc (size + 1);
+  if (q == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      size + 1);
+      return NULL;
+    }
+
+  memcpy (q, buf, size + 1);
+
+  return q;
+}
+
+/*
+ * sysprm_print_parameters_for_ha_repl () - print parameters for HA
+ *					    replication
+ *
+ * return : Printed string of system parameters which should be reproduced
+ *	    in HA log applier context before HA replication
+ */
+char *
+sysprm_print_parameters_for_ha_repl (void)
+{
+  int i, n, len = LINE_MAX;
+  char buf[LINE_MAX];
+  char *ptr = NULL, *q = NULL;
+  int size;
+
+  memset (buf, 0, LINE_MAX);
+  ptr = buf;
+
+  for (i = 0; i < NUM_PRM; i++)
+    {
+      unsigned int flag = GET_PRM_STATIC_FLAG (i);
+
+      if (!PRM_IS_FOR_HA_CONTEXT (flag))
+	{
+	  continue;
+	}
+
+      if (i == PRM_ID_INTL_COLLATION || i == PRM_ID_INTL_DATE_LANG
+	  || i == PRM_ID_INTL_NUMBER_LANG)
+	{
+	  char *val = prm_get_string_value (i);
+
+	  if (val == NULL)
+	    {
+	      continue;
+	    }
+
+	  if (i == PRM_ID_INTL_COLLATION
+	      && strcasecmp (val, lang_get_collation_name
+			     (LANG_GET_BINARY_COLLATION
+			      (LANG_SYS_CODESET))) == 0)
+	    {
+	      continue;
+	    }
+
+	  if ((i == PRM_ID_INTL_DATE_LANG || i == PRM_ID_INTL_NUMBER_LANG)
+	      && strcasecmp (val, lang_get_Lang_name ()) == 0)
+	    {
+	      continue;
+	    }
+	}
+      else if (!PRM_IS_DIFFERENT (*(GET_PRM_DYNAMIC_FLAG (i))))
+	{
+	  continue;
+	}
+
+      n = prm_print (GET_PRM (i), ptr, len, PRM_PRINT_NAME,
+		     PRM_PRINT_CURR_VAL);
+      ptr += n;
+      len -= n;
+
+      n = snprintf (ptr, len, ";");
+      ptr += n;
+      len -= n;
     }
 
   /* verify the length of the printed parameters does not exceed LINE_MAX */

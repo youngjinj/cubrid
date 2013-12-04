@@ -653,6 +653,7 @@ locator_lock (MOP mop, LOCK lock)
   bool is_prefetch;
   bool mvcc_enabled;
 
+  mop = ws_mvcc_latest_version (mop);
   oid = ws_oid (mop);
 
   if (WS_ISVID (mop))
@@ -1652,6 +1653,7 @@ locator_lock_nested (MOP mop, LOCK lock, int prune_level,
 	  if (!OID_ISNULL (&lockset->objects[i].oid)
 	      && (xmop = ws_mop (&lockset->objects[i].oid, NULL)) != NULL)
 	    {
+	      xmop = ws_mvcc_latest_version (xmop);
 	      locator_cache_lock_set (xmop, NULL, lockset);
 	      /*
 	       * Indicate that the object was fetched as a composite object
@@ -3732,7 +3734,9 @@ locator_cache_have_object (MOP * mop_p, MOBJ * object_p, RECDES * recdes_p,
 	    }
 	  return error_code;
 	}
-      *mop_p = ws_updated_mop (&obj->oid, &obj->updated_oid, class_mop);
+      *mop_p =
+	ws_mvcc_updated_mop (&obj->oid, &obj->updated_oid, class_mop,
+			     LC_ONEOBJ_IS_UPDATED_BY_ME (obj));
       if (*mop_p == NULL)
 	{
 #if defined(CUBRID_DEBUG)
@@ -4214,7 +4218,8 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 	      /* There are two cases when OID can change after update:
 	       * 1. when operation is LC_FLUSH_UPDATE_PRUNE.
 	       * 2. MVCC implementation of LC_FLUSH_UPDATE.
-	       /* TODO: Must investigate what happens with MVCC and pruning */
+	       */
+	      /* TODO: Must investigate what happens with MVCC and pruning */
 	      if (error_code != ER_LC_PARTIALLY_FAILED_TO_FLUSH
 		  || obj->error_code == NO_ERROR)
 		{
@@ -4227,10 +4232,54 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 			  && !OID_EQ (WS_OID (mop_toid->mop),
 				      &obj->updated_oid))
 			{
-			  error_code =
-			    ws_update_oid_and_class (mop_toid->mop,
-						     &obj->updated_oid,
-						     &obj->class_oid);
+			  MOP new_mop;
+			  MOP new_class_mop =
+			    ws_mop (&obj->class_oid, sm_Root_class_mop);
+			  if (new_class_mop == NULL)
+			    {
+			      /* Error */
+			      error_code = ER_FAILED;
+			    }
+			  else
+			    {
+			      new_mop =
+				ws_mop (&obj->updated_oid, new_class_mop);
+			      if (new_mop == NULL)
+				{
+				  error_code = ER_FAILED;
+				}
+			      else
+				{
+				  if (!mop_toid->mop->decached
+				      && mop_toid->mop->object != NULL)
+				    {
+				      /* Move buffered object to new mop */
+				      new_mop->object = mop_toid->mop->object;
+				      mop_toid->mop->object = NULL;
+				    }
+
+				  if (WS_ISDIRTY (mop_toid->mop))
+				    {
+				      /* Reset dirty flag in old mop and set
+				       * it in the new mop.
+				       */
+				      WS_RESET_DIRTY (mop_toid->mop);
+				      ws_dirty (new_mop);
+				    }
+
+				  /* Set MVCC link */
+				  mop_toid->mop->mvcc_link = new_mop;
+				  /* Mvcc is link is not yet permanent */
+				  mop_toid->mop->permanent_mvcc_link = 0;
+
+				  /* Add object to class */
+				  ws_set_class (new_mop, new_class_mop);
+
+				  /* Update mvcc snapshot version */
+				  new_mop->mvcc_snapshot_version =
+				    ws_get_mvcc_snapshot_version ();
+				}
+			    }
 			}
 		    }
 		  else if (obj->operation == LC_FLUSH_UPDATE_PRUNE)
@@ -4914,7 +4963,7 @@ locator_mflush (MOP mop, void *mf)
   else if (operation == LC_FLUSH_UPDATE_PRUNE
 	   || (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
 	       && operation == LC_FLUSH_UPDATE
-	       && mop->class_mop != sm_Root_class_mop))
+	       && ws_class_mop (mop) != sm_Root_class_mop))
     {
       /* We have to keep track of updated objects from partitioned classes.
        * If this object will be moved in another partition we have to mark it
@@ -6644,6 +6693,7 @@ locator_check_object_and_get_class (MOP obj_mop, MOP * out_class_mop)
   int error_code = NO_ERROR;
   MOP class_mop;
 
+  obj_mop = ws_mvcc_latest_version (obj_mop);
   if (obj_mop == NULL || obj_mop->object == NULL)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
@@ -6701,6 +6751,7 @@ locator_add_oidset_object (LC_OIDSET * oidset, MOP obj_mop)
   MOP class_mop;
   LC_OIDMAP *oid_map_p;
 
+  obj_mop = ws_mvcc_latest_version (obj_mop);
   if (locator_check_object_and_get_class (obj_mop, &class_mop) != NO_ERROR)
     {
       return NULL;
@@ -6722,14 +6773,14 @@ locator_add_oidset_object (LC_OIDSET * oidset, MOP obj_mop)
       /*
        * Since this is the first time we've been here, compute the estimated
        * storage size.  This could be rather expensive, may want to just
-       * keep an approxomate size guess in the class rather than walking
+       * keep an approximate size guess in the class rather than walking
        * over the object.  If this turns out to be an expensive operation
        * (which should be unlikely relative to the cost of a server call), we can
        * just put -1 here and the heap manager will use some internal statistics
        * to make a good guess.
        */
       oid_map_p->est_size =
-	tf_object_size ((MOBJ) (obj_mop->class_mop->object),
+	tf_object_size ((MOBJ) (ws_class_mop (obj_mop)->object),
 			(MOBJ) (obj_mop->object));
     }
 

@@ -758,7 +758,8 @@ enum pt_custom_print
 				 */
   PT_SUPPRESS_BIGINT_CAST = 0x4000000,
   PT_SUPPRESS_COLLATE_PRINT = 0x8000000,
-  PT_CHARSET_COLLATE_FULL = 0x10000000
+  PT_CHARSET_COLLATE_FULL = 0x10000000,
+  PT_CHARSET_COLLATE_USER_ONLY = 0x20000000
 };
 
 /* all statement node types should be assigned their API statement enumeration */
@@ -1153,13 +1154,15 @@ typedef enum
   PT_HINT_USE_INSERT_IDX = 0x400000,	/* 0100 0000 0000 0000 0000 0000 */
   /* do not generate SORT-LIMIT plan */
   PT_HINT_NO_SORT_LIMIT = 0x800000,	/* 1000 0000 0000 0000 0000 0000 */
-  PT_HINT_SELECT_RECORD_INFO = 0x1000000,	/* 0001 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_NO_HASH_AGGREGATE = 0x1000000,	/* 0001 0000 0000 0000 0000 0000 0000 */
+  /* no hash aggregate evaluation */
+  PT_HINT_SELECT_RECORD_INFO = 0x2000000,	/* 0010 0000 0000 0000 0000 0000 0000 */
   /* SELECT record info from tuple header instead of data */
-  PT_HINT_SELECT_PAGE_INFO = 0x2000000,	/* 0010 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_PAGE_INFO = 0x4000000,	/* 0100 0000 0000 0000 0000 0000 0000 */
   /* SELECT page header information from heap file instead of record data */
-  PT_HINT_SELECT_KEY_INFO = 0x4000000,	/* 0100 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_KEY_INFO = 0x8000000,	/* 1000 0000 0000 0000 0000 0000 0000 */
   /* SELECT key information from index b-tree instead of table record data */
-  PT_HINT_SELECT_BTREE_NODE_INFO = 0x8000000	/* 1000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_BTREE_NODE_INFO = 0x10000000	/* 0001 0000 0000 0000 0000 0000 0000 */
     /* SELECT b-tree node information */
 } PT_HINT_ENUM;
 
@@ -1459,22 +1462,23 @@ typedef enum
 					   one as a rewritten view */
   PT_SPEC_FLAG_CONTAINS_OID = 0x10,	/* classoid and oid were added in the
 					   derived table's select list */
-  PT_SPEC_FLAG_RECORD_INFO_SCAN = 0x20,	/* spec will be scanned for record
+  PT_SPEC_FLAG_FOR_UPDATE_CLAUSE = 0x20,	/* Used with FOR UPDATE clause */
+  PT_SPEC_FLAG_RECORD_INFO_SCAN = 0x40,	/* spec will be scanned for record
 					 * information instead of record data
 					 */
-  PT_SPEC_FLAG_PAGE_INFO_SCAN = 0x40,	/* spec's heap file will scanned page
+  PT_SPEC_FLAG_PAGE_INFO_SCAN = 0x80,	/* spec's heap file will scanned page
 					 * by page for page information.
 					 * records will not be scanned.
 					 */
-  PT_SPEC_FLAG_KEY_INFO_SCAN = 0x80,	/* one of the spec's indexes will be
+  PT_SPEC_FLAG_KEY_INFO_SCAN = 0x100,	/* one of the spec's indexes will be
 					 * scanned for key information.
 					 */
-  PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN = 0x100,	/* one of the spec's indexes will
+  PT_SPEC_FLAG_BTREE_NODE_INFO_SCAN = 0x200,	/* one of the spec's indexes will
 						 * be scanned for b-tree node info
 						 */
-  PT_SPEC_FLAG_MVCC_COND_REEV = 0x200,	/* the spec is used in mvcc condition
+  PT_SPEC_FLAG_MVCC_COND_REEV = 0x400,	/* the spec is used in mvcc condition
 					 * reevaluation */
-  PT_SPEC_FLAG_MVCC_ASSIGN_REEV = 0x400	/* the spec is used in UPDATE
+  PT_SPEC_FLAG_MVCC_ASSIGN_REEV = 0x800	/* the spec is used in UPDATE
 					 * assignment reevaluation */
 } PT_SPEC_FLAG;
 
@@ -1845,6 +1849,7 @@ struct pt_create_entity_info
 						 * for CREATE SELECT
 						 */
   unsigned or_replace:1;	/* OR REPLACE clause for create view */
+  unsigned if_not_exists:1;	/* IF NOT EXISTS clause for create table | class */
   PT_HINT_ENUM hint;		/* hint flag */
 };
 
@@ -2501,6 +2506,7 @@ struct pt_name_info
 #define PT_NAME_GENERATED_DERIVED_SPEC 1024	/* attribute generated from
 						 * derived spec
 						 */
+#define PT_NAME_FOR_UPDATE	   2048	/* Table name in FOR UPDATE clause */
 
 
   short flag;
@@ -2624,6 +2630,7 @@ struct pt_select_info
   PT_NODE *jdbc_life_time;	/* jdbc cache life time */
   struct qo_summary *qo_summary;
   PT_NODE *check_where;		/* with check option predicate */
+  PT_NODE *for_update;		/* FOR UPDATE clause tables list */
   QFILE_LIST_ID *push_list;	/* list file descriptor pushed to server */
   PT_HINT_ENUM hint;
   int flavor;
@@ -2652,7 +2659,12 @@ struct pt_select_info
 							 * MERGE and UPDATE we sometimes
 							 * want to allow OIDs of partially
 							 * updatable views */
-#define PT_SELECT_INFO_MVCC_LOCK_NEEDED	    4096	/* lock returned rows */
+#define PT_SELECT_INFO_IS_UPD_DEL_QUERY	4096	/* set if select was built for
+						   an UPDATE or DELETE statement */
+#define PT_SELECT_INFO_FOR_UPDATE	8192	/* FOR UPDATE clause is active */
+#define PT_SELECT_INFO_DISABLE_LOOSE_SCAN   16384	/* loose scan not possible
+							   on query */
+#define PT_SELECT_INFO_MVCC_LOCK_NEEDED	    32768	/* lock returned rows */
 
 #define PT_SELECT_INFO_IS_FLAGED(s, f)  \
           ((s)->info.query.q.select.flag & (short) (f))
@@ -2688,7 +2700,6 @@ struct pt_query_info
   PT_NODE *order_by;		/* PT_EXPR (list) */
   PT_NODE *orderby_for;		/* PT_EXPR (list) */
   PT_NODE *into_list;		/* PT_VALUE (list) */
-  PT_NODE *for_update;		/* PT_EXPR (list) */
   PT_NODE *qcache_hint;		/* enable/disable query cache */
   PT_NODE *limit;		/* PT_VALUE (list) limit clause parameter(s) */
   void *xasl;			/* xasl proc pointer */
@@ -3050,6 +3061,7 @@ struct pt_stored_proc_info
   PT_NODE *java_method;
   PT_NODE *owner;		/* for ALTER PROCEDURE/FUNCTION name OWNER TO new_owner */
   PT_MISC_TYPE type;
+  unsigned or_replace:1;	/* OR REPLACE clause */
   PT_TYPE_ENUM ret_type;
 };
 
@@ -3250,6 +3262,7 @@ struct pt_agg_find_info
   int out_of_context_count;	/* # of aggregate functions that do not belong
 				   to any statement within the stack */
   bool stop_on_subquery;	/* walk subqueries? */
+  bool disable_loose_scan;	/* true if loose index scan cannot be used */
 };
 
 struct pt_agg_name_info
@@ -3335,6 +3348,7 @@ struct parser_node
   unsigned do_not_replace_orderby:1;	/* when checking query in create/alter
 					   view, do not replace order by */
   unsigned is_added_by_parser:1;	/* is added by parser during parsing */
+  unsigned is_alias_enabled_expr:1;	/* node allowed to have alias */
   PT_STATEMENT_INFO info;	/* depends on 'node_type' field */
 };
 

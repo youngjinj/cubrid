@@ -110,6 +110,9 @@ struct db_object
    * table.
    */
   struct db_object *commit_link;	/* link for obj to be reset at commit/abort */
+  struct db_object *mvcc_link;	/* Used by MVCC to link mops for different
+				 * object versions.
+				 */
   void *version;		/* versioning information */
   LOCK lock;			/* object lock */
   int mvcc_snapshot_version;	/* The snapshot version at the time mop object
@@ -134,6 +137,13 @@ struct db_object
   unsigned is_temp:1;		/* set if template MOP (for triggers) */
   unsigned released:1;		/* set by code that knows that an instance can be released, used currently by the loader only */
   unsigned decached:1;		/* set if mop is decached by calling ws_decache function */
+  unsigned permanent_mvcc_link:1;	/* is set to true when new MVCC version is
+					 * committed. Updates done by current
+					 * transaction may be reverted, therefore
+					 * the mvcc link is not permanent. On
+					 * rollback, mvcc link is removed. On
+					 * commit mvcc link is made permanent.
+					 */
 };
 
 
@@ -331,7 +341,7 @@ typedef struct mop_iterator
      }                                                              \
   } while (0)
 
-#define WS_ISDIRTY(mop) ((mop)->dirty)
+#define WS_ISDIRTY(mop) (ws_is_dirty (mop))
 
 #define WS_SET_DIRTY(mop)            \
   do {                               \
@@ -355,6 +365,7 @@ typedef struct mop_iterator
 
 #define WS_SET_DELETED(mop)          \
   do {                               \
+    assert ((mop)->mvcc_link == NULL); \
     (mop)->deleted = 1;              \
     WS_PUT_COMMIT_MOP(mop);          \
   } while (0)
@@ -500,7 +511,8 @@ extern void ws_area_init (void);
 
 /* MOP allocation functions */
 extern MOP ws_mop (OID * oid, MOP class_mop);
-extern MOP ws_updated_mop (OID * oid, OID * new_oid, MOP class_mop);
+extern MOP ws_mvcc_updated_mop (OID * oid, OID * new_oid, MOP class_mop,
+				bool updated_by_me);
 extern MOP ws_vmop (MOP class_mop, int flags, DB_VALUE * keys);
 extern bool ws_rehash_vmop (MOP mop, MOBJ class_obj, DB_VALUE * newkey);
 #if defined (ENABLE_UNUSED_FUNCTION)
@@ -536,6 +548,7 @@ extern void ws_gc_disable (void);
 
 /* Dirty list maintenance */
 extern void ws_dirty (MOP op);
+extern int ws_is_dirty (MOP mop);
 extern void ws_clean (MOP op);
 extern int ws_map_dirty (MAPFUNC function, void *args,
 			 bool reverse_dirty_link);
@@ -751,4 +764,7 @@ extern void ws_free_flush_error (WS_FLUSH_ERR * flush_err);
 extern int ws_get_mvcc_snapshot_version ();
 extern void ws_increment_mvcc_snapshot_version ();
 extern bool ws_is_mop_fetched_with_current_snapshot (MOP mop);
+extern MOP ws_mvcc_latest_version (MOP mop);
+
+extern bool ws_is_same_object (MOP mop1, MOP mop2);
 #endif /* _WORK_SPACE_H_ */

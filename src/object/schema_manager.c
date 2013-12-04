@@ -2326,12 +2326,12 @@ sm_get_class (MOP obj)
 	}
       else
 	{
-	  if (obj->class_mop == NULL)
+	  if (ws_class_mop (obj) == NULL)
 	    {
 	      /* force class load through object load */
 	      (void) au_fetch_class (obj, NULL, AU_FETCH_READ, AU_SELECT);
 	    }
-	  op = obj->class_mop;
+	  op = ws_class_mop (obj);
 	}
     }
 
@@ -2594,12 +2594,12 @@ sm_fetch_all_objects (DB_OBJECT * op, DB_FETCH_MODE purpose)
 	}
       else
 	{
-	  if (op->class_mop == NULL)
+	  if (ws_class_mop (op) == NULL)
 	    {
 	      /* force load */
 	      (void) au_fetch_class (op, &class_, AU_FETCH_READ, AU_SELECT);
 	    }
-	  classmop = op->class_mop;
+	  classmop = ws_class_mop (op);
 	}
       if (classmop != NULL)
 	{
@@ -3427,15 +3427,15 @@ sm_check_object_domain (TP_DOMAIN * domain, MOP object)
 	  /* fetch the class if it hasn't been cached, should this be a write
 	     lock ?  don't need to pin, only forcing the class fetch
 	   */
-	  if (object->class_mop == NULL)
+	  if (ws_class_mop (object) == NULL)
 	    {
 	      au_fetch_instance (object, NULL, AU_FETCH_READ, AU_SELECT);
 	    }
 
 	  /* if its still NULL, assume an authorization error and go on */
-	  if (object->class_mop != NULL)
+	  if (ws_class_mop (object) != NULL)
 	    {
-	      ok = domain_search (domain->class_mop, object->class_mop);
+	      ok = domain_search (domain->class_mop, ws_class_mop (object));
 	    }
 	}
     }
@@ -3461,6 +3461,7 @@ int
 sm_coerce_object_domain (TP_DOMAIN * domain, MOP object, MOP * dest_object)
 {
   int ok;
+  MOP object_class_mop;
   SM_CLASS *class_;
 
   ok = 0;
@@ -3487,21 +3488,22 @@ sm_coerce_object_domain (TP_DOMAIN * domain, MOP object, MOP * dest_object)
 	  /* fetch the class if it hasn't been cached, should this be a write lock ?
 	     don't need to pin, only forcing the class fetch
 	   */
-	  if (object->class_mop == NULL)
+	  if (ws_class_mop (object) == NULL)
 	    {
 	      au_fetch_instance (object, NULL, AU_FETCH_READ, AU_SELECT);
 	    }
 
 	  /* if its still NULL, assume an authorization error and go on */
-	  if (object->class_mop != NULL)
+	  object_class_mop = ws_class_mop (object);
+	  if (object_class_mop != NULL)
 	    {
-	      if (domain->class_mop == object->class_mop)
+	      if (domain->class_mop == object_class_mop)
 		{
 		  ok = 1;
 		}
 	      else
 		{
-		  if (au_fetch_class_force (object->class_mop, &class_,
+		  if (au_fetch_class_force (object_class_mop, &class_,
 					    AU_FETCH_READ) == NO_ERROR)
 		    {
 		      /* Coerce a view to a real class. */
@@ -3509,20 +3511,20 @@ sm_coerce_object_domain (TP_DOMAIN * domain, MOP object, MOP * dest_object)
 			{
 			  object = vid_get_referenced_mop (object);
 			  if (object
-			      && (au_fetch_class_force (object->class_mop,
+			      && (au_fetch_class_force (object_class_mop,
 							&class_,
 							AU_FETCH_READ) ==
 				  NO_ERROR)
 			      && (class_->class_type == SM_CLASS_CT))
 			    {
 			      ok = domain_search (domain->class_mop,
-						  object->class_mop);
+						  object_class_mop);
 			    }
 			}
 		      else
 			{
 			  ok = domain_search (domain->class_mop,
-					      object->class_mop);
+					      object_class_mop);
 			}
 		    }
 		}
@@ -5861,6 +5863,7 @@ sm_flush_and_decache_objects (MOP obj, int decache)
 {
   int error = NO_ERROR;
   MOBJ mem;
+  MOP object_class_mop;
   SM_CLASS *class_;
 
   if (obj != NULL)
@@ -5918,9 +5921,10 @@ sm_flush_and_decache_objects (MOP obj, int decache)
 	}
       else
 	{
-	  if (obj->class_mop != NULL)
+	  object_class_mop = ws_class_mop (obj);
+	  if (object_class_mop != NULL)
 	    {
-	      if (locator_flush_class (obj->class_mop) != NO_ERROR)
+	      if (locator_flush_class (object_class_mop) != NO_ERROR)
 		{
 		  return er_errid ();
 		}
@@ -5932,10 +5936,11 @@ sm_flush_and_decache_objects (MOP obj, int decache)
 		}
 	      else
 		{
+		  object_class_mop = ws_class_mop (obj);
 		  switch (class_->class_type)
 		    {
 		    case SM_CLASS_CT:
-		      if (locator_flush_all_instances (obj->class_mop,
+		      if (locator_flush_all_instances (object_class_mop,
 						       decache,
 						       LC_STOP_ON_ERROR) !=
 			  NO_ERROR)
@@ -5963,9 +5968,10 @@ sm_flush_and_decache_objects (MOP obj, int decache)
 	      if (error == NO_ERROR)
 		{
 		  /* don't need to pin here, we only wanted to check authorization */
-		  if (obj->class_mop != NULL)
+		  if (ws_class_mop (obj) != NULL)
 		    {
-		      if (locator_flush_class (obj->class_mop) != NO_ERROR)
+		      if (locator_flush_class (ws_class_mop (obj)) !=
+			  NO_ERROR)
 			{
 			  return er_errid ();
 			}
@@ -5981,7 +5987,8 @@ sm_flush_and_decache_objects (MOP obj, int decache)
 			  switch (class_->class_type)
 			    {
 			    case SM_CLASS_CT:
-			      if (locator_flush_all_instances (obj->class_mop,
+			      if (locator_flush_all_instances (ws_class_mop
+							       (obj),
 							       decache,
 							       LC_STOP_ON_ERROR)
 				  != NO_ERROR)
@@ -6495,7 +6502,8 @@ sm_get_attribute_descriptor (DB_OBJECT * op, const char *name,
 		       ? DB_FETCH_CLREAD_INSTWRITE
 		       : DB_FETCH_CLREAD_INSTREAD);
 
-      classmop = (locator_is_class (op, class_purpose)) ? op : op->class_mop;
+      classmop =
+	(locator_is_class (op, class_purpose)) ? op : ws_class_mop (op);
 
       desc = classobj_make_descriptor (classmop, class_, (SM_COMPONENT *) att,
 				       for_update);
@@ -6550,7 +6558,8 @@ sm_get_method_descriptor (DB_OBJECT * op, const char *name,
   if (!error && method != NULL)
     {
       /* class must have been fetched at this point */
-      classmop = (locator_is_class (op, DB_FETCH_READ)) ? op : op->class_mop;
+      classmop =
+	(locator_is_class (op, DB_FETCH_READ)) ? op : ws_class_mop (op);
 
       desc = classobj_make_descriptor (classmop, class_,
 				       (SM_COMPONENT *) method, 0);
@@ -6727,7 +6736,8 @@ sm_get_descriptor_component (MOP op, SM_DESCRIPTOR * desc,
   /* handle common case quickly, allow either an instance MOP or
      class MOP to be used here */
   if (desc->map != NULL
-      && (desc->map->classobj == op || desc->map->classobj == op->class_mop)
+      && (desc->map->classobj == op
+	  || desc->map->classobj == ws_class_mop (op))
       && (!for_update || desc->map->write_access))
     {
       *comp_ptr = desc->map->comp;
@@ -6739,14 +6749,14 @@ sm_get_descriptor_component (MOP op, SM_DESCRIPTOR * desc,
       class_ = NULL;
 
       /* get the class MOP for this thing, avoid fetching if possible */
-      if (op->class_mop == NULL)
+      if (ws_class_mop (op) == NULL)
 	{
 	  if (fetch_descriptor_class (op, desc, for_update, &class_))
 	    {
 	      return er_errid ();
 	    }
 	}
-      classmop = (IS_CLASS_MOP (op)) ? op : op->class_mop;
+      classmop = (IS_CLASS_MOP (op)) ? op : ws_class_mop (op);
 
       /* search the descriptor map for this class */
       for (d = desc->map, prev = NULL; d != NULL && d->classobj != classmop;
@@ -8800,7 +8810,7 @@ retain_former_ids (SM_TEMPLATE * flat)
       int error = NO_ERROR;
 
       if (flat->current->partition_of != NULL &&
-	  !(flat->current->partition_of->deleted))
+	  !db_is_deleted (flat->current->partition_of))
 	{
 	  int save;
 

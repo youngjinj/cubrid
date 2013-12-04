@@ -1090,7 +1090,7 @@ $ LOADDB
 1021 S-a detectat un ciclu de deadlock. %1$s.
 1022 Valoare invalidă "%d" pentru lungimea indexului prefixat.
 1023 Cod de eroare rezervat pentru HA.
-1024 Cod de eroare rezervat pentru HA.
+1024 log writer: failed to get log page(s) starting from page id %1$lld.
 1025 HA delay info: The replication delay (%1$d secs) has exceeded the limit (%2$d secs).
 1026 HA delay info: The replication delay (%1$d secs) is decreased below the acceptable level (%2$d secs).
 1027 log applier: eşec la schimbarea stării de aplicare din '%1$s' în '%2$s'.
@@ -1203,13 +1203,14 @@ $ LOADDB
 1134 Applylogdb for %1$s already exists.
 1135 A previous link of B+tree(%1$s) is corrupted.: vpid = (%2$d, %3$d)
 1136 A previous link of B+tree(%1$s) is repaired.: vpid = (%2$d, %3$d)
-1137 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
-1138 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
-1139 Handshake error (peer host %1$s): HA replication delayed.
-1140 Handshake error (peer host %1$s): replica-only client to non-replica server.
-1141 Handshake error (peer host %1$s): unidentified server version.
-1142 Handshake error (peer host %1$s): remote access to server not allowed.
-1143 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1137 The query has been rejected due to attempt to exceed the maximum allowed nesting level(%d).
+1138 Handshake error (peer host %1$s): incompatible interruptibility. (client: %2$s, server: %3$s)
+1139 Handshake error (peer host %1$s): incompatible read/write mode. (client: %2$s, server: %3$s)
+1140 Handshake error (peer host %1$s): HA replication delayed.
+1141 Handshake error (peer host %1$s): replica-only client to non-replica server.
+1142 Handshake error (peer host %1$s): unidentified server version.
+1143 Handshake error (peer host %1$s): remote access to server not allowed.
+1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Ultima eroare
@@ -1642,6 +1643,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 278 O singură tabelă din interiorul unei vizualizări poate fi actualizată.
 279 Inserarea în mai multe tabele nu este permisă.
 280 '%s' type is vclass, drop vclass with cascade constraints is not allowed.
+281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Memorie virtuală epuizată: nu s-au putut aloca %d bytes.

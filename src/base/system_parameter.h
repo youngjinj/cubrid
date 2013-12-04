@@ -234,6 +234,7 @@ enum param_id
   PRM_ID_HA_PROCESS_DEREG_CONFIRM_INTERVAL_IN_MSECS,
   PRM_ID_HA_MAX_PROCESS_START_CONFIRM,
   PRM_ID_HA_MAX_PROCESS_DEREG_CONFIRM,
+  PRM_ID_HA_UNACCEPTABLE_PROC_RESTART_TIMEDIFF_IN_MSECS,
   PRM_ID_HA_CHANGEMODE_INTERVAL_IN_MSECS,
   PRM_ID_HA_MAX_HEARTBEAT_GAP,
   PRM_ID_HA_PING_HOSTS,
@@ -317,7 +318,12 @@ enum param_id
   PRM_ID_SQL_TRACE_IOREADS,
   PRM_ID_QUERY_TRACE,
   PRM_ID_QUERY_TRACE_FORMAT,
+  PRM_ID_MAX_RECURSION_SQL_DEPTH,
   PRM_ID_UPDATE_USE_ATTRIBUTE_REFERENCES,
+  PRM_ID_PB_AIN_RATIO,
+  PRM_ID_PB_AOUT_RATIO,
+  PRM_ID_MAX_AGG_HASH_SIZE,
+  PRM_ID_AGG_HASH_RESPECT_ORDER,
   PRM_ID_MVCC_ENABLED,
   PRM_ID_MVCC_CLEAN_PAGE_RATIO,
   PRM_ID_AUTO_VACUUM_ENABLED,
@@ -475,10 +481,14 @@ extern void sysprm_update_client_session_parameters (SESSION_PARAM *
 
 #if !defined (SERVER_MODE)
 extern char *sysprm_print_parameters_for_qry_string (void);
+extern char *sysprm_print_parameters_for_ha_repl (void);
 extern SYSPRM_ERR sysprm_validate_change_parameters (const char *data,
 						     bool check,
 						     SYSPRM_ASSIGN_VALUE **
 						     assignments_ptr);
+extern SYSPRM_ERR
+sysprm_make_default_values (const char *data, char *default_val_buf,
+			    const int buf_size);
 extern void sysprm_init_intl_param (void);
 #endif /* !SERVER_MODE */
 

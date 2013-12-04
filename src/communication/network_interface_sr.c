@@ -71,6 +71,7 @@
 #include "es.h"
 #include "es_posix.h"
 #include "event_log.h"
+#include "tsc_timer.h"
 #include "vacuum.h"
 
 #define NET_COPY_AREA_SENDRECV_SIZE (OR_INT_SIZE * 3)
@@ -83,7 +84,8 @@
 unsigned int db_on_server = 1;
 
 static int server_capabilities (void);
-static int check_client_capabilities (int client_cap, int rel_compare,
+static int check_client_capabilities (THREAD_ENTRY * thread_p, int client_cap,
+				      int rel_compare,
 				      REL_COMPATIBILITY * compatibility,
 				      const char *client_host);
 static void sbtree_find_unique_internal (THREAD_ENTRY * thread_p,
@@ -225,8 +227,8 @@ server_capabilities (void)
  *
  */
 static int
-check_client_capabilities (int client_cap, int rel_compare,
-			   REL_COMPATIBILITY * compatibility,
+check_client_capabilities (THREAD_ENTRY * thread_p, int client_cap,
+			   int rel_compare, REL_COMPATIBILITY * compatibility,
 			   const char *client_host)
 {
   int server_cap;
@@ -267,6 +269,15 @@ check_client_capabilities (int client_cap, int rel_compare,
 		    "NET_CAP_REMOTE_DISABLED server %s %d client %s %d\n",
 		    boot_Host_name, server_cap & NET_CAP_REMOTE_DISABLED,
 		    client_host, client_cap & NET_CAP_REMOTE_DISABLED);
+    }
+
+  if (client_cap & NET_CAP_HA_IGNORE_REPL_DELAY)
+    {
+      thread_p->conn_entry->ignore_repl_delay = true;
+
+      er_log_debug (ARG_FILE_LINE,
+		    "NET_CAP_HA_IGNORE_REPL_DELAY client %s %d\n",
+		    client_host, client_cap & NET_CAP_HA_IGNORE_REPL_DELAY);
     }
 
   return client_cap;
@@ -372,7 +383,7 @@ server_ping_with_handshake (THREAD_ENTRY * thread_p, unsigned int rid,
    * 3. check if the client has a capability to make it compatible.
    */
   compat = rel_get_net_compatible (client_release, server_release);
-  if (check_client_capabilities (client_capabilities,
+  if (check_client_capabilities (thread_p, client_capabilities,
 				 rel_compare (client_release, server_release),
 				 &compat, client_host) != client_capabilities)
     {
@@ -2799,9 +2810,19 @@ stran_server_commit (THREAD_ENTRY * thread_p, unsigned int rid,
     }
   else if (ha_state == HA_SERVER_STATE_STANDBY)
     {
+      /* be aware that the order of if conditions
+       * is important
+       */
       if (BOOT_CSQL_CLIENT_TYPE (client_type))
 	{
 	  thread_p->conn_entry->reset_on_commit = false;
+	}
+      else if (client_type == BOOT_CLIENT_BROKER)
+	{
+	  reset_on_commit = true;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_commit(): "
+			"(standby && read-write broker) "
+			"DB_CONNECTION_STATUS_RESET\n");
 	}
       else if (BOOT_NORMAL_CLIENT_TYPE (client_type)
 	       && thread_p->conn_entry->reset_on_commit == true)
@@ -2815,19 +2836,15 @@ stran_server_commit (THREAD_ENTRY * thread_p, unsigned int rid,
       else if (BOOT_BROKER_AND_DEFAULT_CLIENT_TYPE (client_type)
 	       && css_is_ha_repl_delayed () == true)
 	{
-	  reset_on_commit = true;
+	  if (thread_p->conn_entry->ignore_repl_delay == false)
+	    {
+	      reset_on_commit = true;
+	      er_log_debug (ARG_FILE_LINE, "stran_server_commit: "
+			    "(standby && replication delay "
+			    "&& broker and default client) "
+			    "DB_CONNECTION_STATUS_RESET\n");
+	    }
 	  thread_p->conn_entry->reset_on_commit = false;
-	  er_log_debug (ARG_FILE_LINE, "stran_server_commit: "
-			"(standby && replication delay "
-			"&& broker and default client) "
-			"DB_CONNECTION_STATUS_RESET\n");
-	}
-      else if (client_type == BOOT_CLIENT_BROKER)
-	{
-	  reset_on_commit = true;
-	  er_log_debug (ARG_FILE_LINE, "stran_server_commit(): "
-			"(standby && read-write broker) "
-			"DB_CONNECTION_STATUS_RESET\n");
 	}
     }
   else if (ha_state == HA_SERVER_STATE_ACTIVE
@@ -2871,7 +2888,7 @@ stran_server_abort (THREAD_ENTRY * thread_p, unsigned int rid,
 		    char *request, int reqlen)
 {
   TRAN_STATE state;
-  int reset_on_commit;
+  int reset_on_commit = false;
   OR_ALIGNED_BUF (OR_INT_SIZE + OR_INT_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
   char *ptr;
@@ -2909,9 +2926,19 @@ stran_server_abort (THREAD_ENTRY * thread_p, unsigned int rid,
     }
   else if (ha_state == HA_SERVER_STATE_STANDBY)
     {
+      /* be aware that the order of if conditions
+       * is important
+       */
       if (BOOT_CSQL_CLIENT_TYPE (client_type))
 	{
 	  thread_p->conn_entry->reset_on_commit = false;
+	}
+      else if (client_type == BOOT_CLIENT_BROKER)
+	{
+	  reset_on_commit = true;
+	  er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
+			"(standby && read-write broker) "
+			"DB_CONNECTION_STATUS_RESET\n");
 	}
       else if (BOOT_NORMAL_CLIENT_TYPE (client_type)
 	       && thread_p->conn_entry->reset_on_commit == true)
@@ -2926,19 +2953,15 @@ stran_server_abort (THREAD_ENTRY * thread_p, unsigned int rid,
       else if (BOOT_BROKER_AND_DEFAULT_CLIENT_TYPE (client_type)
 	       && css_is_ha_repl_delayed () == true)
 	{
-	  reset_on_commit = true;
+	  if (thread_p->conn_entry->ignore_repl_delay == false)
+	    {
+	      reset_on_commit = true;
+	      er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
+			    "(standby && replication delay "
+			    "&& default and broker client) "
+			    "DB_CONNECTION_STATUS_RESET\n");
+	    }
 	  thread_p->conn_entry->reset_on_commit = false;
-	  er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
-			"(standby && replication delay "
-			"&& default and broker client) "
-			"DB_CONNECTION_STATUS_RESET\n");
-	}
-      else if (client_type == BOOT_CLIENT_BROKER)
-	{
-	  reset_on_commit = true;
-	  er_log_debug (ARG_FILE_LINE, "stran_server_abort(): "
-			"(standby && read-write broker) "
-			"DB_CONNECTION_STATUS_RESET\n");
 	}
     }
   else if (ha_state == HA_SERVER_STATE_ACTIVE
@@ -2959,10 +2982,7 @@ stran_server_abort (THREAD_ENTRY * thread_p, unsigned int rid,
 		    "(maintenance && remote normal client type) "
 		    "DB_CONNECTION_STATUS_RESET\n");
     }
-  else
-    {
-      reset_on_commit = false;
-    }
+
   ptr = or_pack_int (ptr, (int) reset_on_commit);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
@@ -3207,7 +3227,6 @@ void
 stran_is_blocked (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
 		  int reqlen)
 {
-#if defined(ENABLE_UNUSED_FUNCTION)
   int tran_index;
   bool blocked;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
@@ -3220,7 +3239,6 @@ stran_is_blocked (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
   (void) or_pack_int (reply, blocked ? 1 : 0);
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
-#endif /* ENABLE_UNUSED_FUNCTION */
 }
 
 /*
@@ -3943,7 +3961,6 @@ sboot_check_db_consistency (THREAD_ENTRY * thread_p, unsigned int rid,
     }
 
 function_exit:
-#if defined (CALLBACK_CONSOLE_PRINT)
   /*
    * To indicate results we really only need 2 ints, but the remote
    * bo and callback routine was expecting to receive 3 ints.
@@ -3951,9 +3968,6 @@ function_exit:
   ptr = or_pack_int (reply, (int) END_CALLBACK);
   ptr = or_pack_int (ptr, success);
   ptr = or_pack_int (ptr, 0xEEABCDFFL);	/* padding, not used */
-#else
-  (void) or_pack_int (reply, success);
-#endif
   css_send_data_to_client (thread_p->conn_entry, rid, reply,
 			   OR_ALIGNED_BUF_SIZE (a_reply));
 }
@@ -4619,49 +4633,22 @@ void
 sqst_update_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
 			char *request, int reqlen)
 {
-  int error, do_now, with_fullscan;
+  int error, with_fullscan;
   OID classoid;
-  BTID btid;
   char *ptr;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
 
   ptr = or_unpack_oid (request, &classoid);
-  ptr = or_unpack_int (ptr, &do_now);
   ptr = or_unpack_int (ptr, &with_fullscan);
-  ptr = or_unpack_btid (ptr, &btid);
 
-  if (do_now)
+  error =
+    xstats_update_statistics (thread_p, &classoid,
+			      (with_fullscan ? STATS_WITH_FULLSCAN :
+			       STATS_WITH_SAMPLING));
+  if (error != NO_ERROR)
     {
-      if (BTID_IS_NULL (&btid))
-	{
-	  error =
-	    xstats_update_statistics (thread_p, &classoid, NULL,
-				      (with_fullscan ? STATS_WITH_FULLSCAN :
-				       STATS_WITH_SAMPLING));
-	}
-      else
-	{
-	  BTID_LIST b;
-
-	  b.next = NULL;
-	  BTID_COPY (&b.btid, &btid);
-	  error =
-	    xstats_update_statistics (thread_p, &classoid, &b,
-				      (with_fullscan ? STATS_WITH_FULLSCAN :
-				       STATS_WITH_SAMPLING));
-	}
-      if (error != NO_ERROR)
-	{
-	  return_error_to_client (thread_p, rid);
-	}
-    }
-  else
-    {
-      /* Just mark the class as "updating statistics is required". */
-      log_add_to_modified_class_list (thread_p, &classoid, &btid,
-				      UPDATE_STATS_ACTION_SET);
-      error = NO_ERROR;
+      return_error_to_client (thread_p, rid);
     }
 
   (void) or_pack_errcode (reply, error);
@@ -5802,8 +5789,10 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   int query_timeout;
 
   int response_time = 0;
-  struct timeval start;
-  struct timeval end;
+
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL tv_diff;
+
   int queryinfo_string_length = 0;
   char queryinfo_string[QUERY_INFO_BUF_SIZE];
 
@@ -5821,7 +5810,8 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
     {
       xmnt_server_start_stats (thread_p, false);
       xmnt_server_copy_stats (thread_p, &base_stats);
-      gettimeofday (&start, NULL);
+
+      tsc_getticks (&start_tick);
 
       if (trace_slow_msec >= 0)
 	{
@@ -5977,10 +5967,10 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 
   if (trace_slow_msec >= 0 || trace_ioreads > 0)
     {
-      gettimeofday (&end, NULL);
-      response_time =
-	(end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec -
-					      start.tv_usec) / 1000;
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&tv_diff, end_tick, start_tick);
+      response_time = (tv_diff.tv_sec * 1000) + (tv_diff.tv_usec / 1000);
+
       xmnt_server_copy_stats (thread_p, &current_stats);
       mnt_calc_diff_stats (&diff_stats, &current_stats, &base_stats);
 
@@ -8284,7 +8274,7 @@ sbtree_get_statistics (THREAD_ENTRY * thread_p, unsigned int rid,
   stat_info.pkeys_size = 0;	/* do not request pkeys info */
   stat_info.pkeys = NULL;
 
-  success = btree_get_stats (thread_p, &stat_info, STATS_WITH_FULLSCAN);
+  success = btree_get_stats (thread_p, &stat_info, STATS_WITH_SAMPLING);
   if (success != NO_ERROR)
     {
       return_error_to_client (thread_p, rid);
@@ -8769,7 +8759,7 @@ srepl_set_info (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
   char *reply = OR_ALIGNED_BUF_START (a_reply);
   char *ptr;
   REPL_INFO repl_info = { 0, NULL };
-  REPL_INFO_SCHEMA repl_schema = { 0, NULL, NULL, NULL };
+  REPL_INFO_SCHEMA repl_schema = { 0, NULL, NULL, NULL, NULL };
 
   if (!LOG_CHECK_LOG_APPLIER (thread_p)
       && log_does_allow_replication () == true)
@@ -8783,6 +8773,7 @@ srepl_set_info (THREAD_ENTRY * thread_p, unsigned int rid, char *request,
 	    ptr = or_unpack_string_nocopy (ptr, &repl_schema.name);
 	    ptr = or_unpack_string_nocopy (ptr, &repl_schema.ddl);
 	    ptr = or_unpack_string_nocopy (ptr, &repl_schema.db_user);
+	    ptr = or_unpack_string_nocopy (ptr, &repl_schema.sys_prm_context);
 
 	    repl_info.info = (char *) &repl_schema;
 	    break;

@@ -3910,6 +3910,11 @@ spage_get_record_data (PAGE_PTR page_p, SPAGE_SLOT * slot_p,
   assert (slot_p != NULL);
   assert (record_descriptor_p != NULL);
 
+  if (slot_p->record_type == REC_DEAD)
+    {
+      return SP_ERROR;
+    }
+
   /*
    * If peeking, the address of the data in the descriptor is set to the
    * address of the record in the buffer. Otherwise, the record is copied
@@ -4716,6 +4721,11 @@ spage_find_slot (PAGE_PTR page_p, SPAGE_HEADER * page_header_p,
 
   if (is_unknown_slot_check)
     {
+      if (slot_p->record_type == REC_DEAD)
+	{
+	  /* This is not unknown slot, even though it doesn't have data */
+	  return slot_p;
+	}
       if (spage_is_unknown_slot (slot_id, page_header_p, slot_p))
 	{
 	  return NULL;

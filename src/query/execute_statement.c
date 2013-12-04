@@ -6581,6 +6581,7 @@ update_object_tuple (PARSER_CONTEXT * parser,
   CLIENT_UPDATE_INFO *assign = NULL;
   CLIENT_UPDATE_CLASS_INFO *cls_info = NULL;
   bool flush_del = false;
+  MOP object_class_mop;
 
   for (idx = 0; idx < classes_cnt && error == NO_ERROR; idx++)
     {
@@ -6610,16 +6611,16 @@ update_object_tuple (PARSER_CONTEXT * parser,
 
       /* if this is the first tuple or the class has changed to a new subclass
        * then fetch new class */
+      object_class_mop = ws_class_mop (object);
       if (cls_info->class_mop == NULL
-	  || (object->class_mop != NULL
-	      && ws_mop_compare (object->class_mop,
-				 cls_info->class_mop) != 0))
+	  || (object_class_mop != NULL
+	      && ws_mop_compare (object_class_mop, cls_info->class_mop) != 0))
 	{
-	  cls_info->class_mop = object->class_mop;
+	  cls_info->class_mop = object_class_mop;
 
-	  if (object->class_mop != NULL)
+	  if (object_class_mop != NULL)
 	    {
-	      error = au_fetch_class (object->class_mop, &smclass,
+	      error = au_fetch_class (object_class_mop, &smclass,
 				      AU_FETCH_READ, AU_SELECT);
 	      if (error != NO_ERROR)
 		{

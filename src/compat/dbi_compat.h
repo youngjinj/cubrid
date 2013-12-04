@@ -1276,8 +1276,8 @@
 
 #define ER_SM_INVALID_PREFIX_LENGTH                 -1022
 
-/* Please note that error codes from -1023 to -1024 are reserved for HA */
-
+/* Please note that error code -1023 is reserved for HA */
+#define ER_HA_LW_FAILED_GET_LOG_PAGE                -1024
 #define ER_HA_REPL_DELAY_DETECTED                   -1025
 #define ER_HA_REPL_DELAY_RESOLVED                   -1026
 #define ER_HA_LA_UNEXPECTED_EOF_IN_ARCHIVE_LOG      -1028
@@ -1446,14 +1446,16 @@
 #define ER_BTREE_CORRUPT_PREV_LINK                  -1135
 #define ER_BTREE_REPAIR_PREV_LINK                   -1136
 
-#define ER_NET_HS_INCOMPAT_INTERRUPTIBILITY         -1137
-#define ER_NET_HS_INCOMPAT_RW_MODE                  -1138
-#define ER_NET_HS_HA_REPL_DELAY                     -1139
-#define ER_NET_HS_HA_REPLICA_ONLY                   -1140
-#define ER_NET_HS_REMOTE_DISABLED                   -1141
-#define ER_NET_HS_UNKNOWN_SERVER_REL                -1142
+#define ER_MAX_RECURSION_SQL_DEPTH                  -1137
 
-#define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1143
+#define ER_NET_HS_INCOMPAT_INTERRUPTIBILITY         -1138
+#define ER_NET_HS_INCOMPAT_RW_MODE                  -1139
+#define ER_NET_HS_HA_REPL_DELAY                     -1140
+#define ER_NET_HS_HA_REPLICA_ONLY                   -1141
+#define ER_NET_HS_REMOTE_DISABLED                   -1142
+#define ER_NET_HS_UNKNOWN_SERVER_REL                -1143
+
+#define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1144
 
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 
@@ -1962,7 +1964,6 @@ typedef unsigned int SESSION_ID;
 /* uninitialized value for row count */
 #define DB_ROW_COUNT_NOT_SET -2
 
-
 /*
  * DB_MAX_IDENTIFIER_LENGTH -
  * This constant defines the maximum length of an identifier
@@ -2327,6 +2328,14 @@ typedef unsigned int SESSION_ID;
 
 #define DB_UTIME_MIN       (DB_UINT32_MIN + 1)
 #define DB_UTIME_MAX       DB_UINT32_MAX
+
+/* abnormal DB host status */
+#define DB_HS_NORMAL                    0x00000000
+#define DB_HS_CONN_TIMEOUT              0x00000001
+#define DB_HS_CONN_FAILURE              0x00000002
+#define DB_HS_MISMATCHED_RW_MODE        0x00000004
+#define DB_HS_HA_DELAYED                0x00000008
+#define DB_HS_NON_PREFFERED_HOSTS       0x00000010
 
 /* This defines the basic type identifier constants.  These are used in
    the domain specifications of attributes and method arguments and
@@ -3433,7 +3442,7 @@ extern DB_OBJLIST *db_get_superclasses (DB_OBJECT * obj);
 extern DB_OBJLIST *db_get_subclasses (DB_OBJECT * obj);
 extern DB_ATTRIBUTE *db_get_attribute (DB_OBJECT * obj, const char *name);
 extern DB_ATTRIBUTE *db_get_attribute_by_name (const char *class_name,
-					       const char *atrribute_name);
+					       const char *attribute_name);
 extern DB_ATTRIBUTE *db_get_attributes (DB_OBJECT * obj);
 extern DB_ATTRIBUTE *db_get_class_attribute (DB_OBJECT * obj,
 					     const char *name);
@@ -4017,4 +4026,11 @@ extern int db_get_ha_server_state (char *buffer, int maxlen);
 
 extern void db_clear_host_connected (void);
 extern char *db_get_database_version (void);
+
+extern void db_clear_host_status (void);
+extern void db_set_host_status (char *hostname, int status);
+extern void db_set_connected_host_status (char *host_connected);
+extern bool db_does_connected_host_have_status (int status);
+extern bool db_need_reconnect (void);
+extern bool db_need_ignore_repl_delay (void);
 #endif /* _DBI_COMPAT_H_ */

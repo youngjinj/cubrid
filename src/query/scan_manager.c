@@ -47,6 +47,7 @@
 #include "query_manager.h"
 #include "xasl_support.h"
 #include "xserver_interface.h"
+#include "tsc_timer.h"
 #include "mvcc.h"
 
 /* this must be the last header file included!!! */
@@ -339,6 +340,7 @@ scan_init_index_scan (INDX_SCAN_ID * isidp, OID * oid_buf)
   memset ((void *) (&(isidp->multi_range_opt)), 0, sizeof (MULTI_RANGE_OPT));
   isidp->duplicate_key_locked = false;
   scan_init_iss (isidp);
+  isidp->for_update = false;
 }
 
 /*
@@ -2397,14 +2399,13 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	  break;
 	}
 
-      if (key_cnt != 1 || range != GE_LE)
+      if (key_cnt != 1)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE,
 		  0);
 	  goto exit_on_error;
 	}
 
-      key_vals[0].range = GE_LE;
       n = btree_range_search (thread_p,
 			      &indx_infop->indx_id.i.btid,
 			      s_id->scan_op_type,
@@ -2417,8 +2418,8 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 			      ISCAN_OID_BUFFER_SIZE,
 			      &key_filter,
 			      iscan_id, false, iscan_id->need_count_only,
-			      key_limit_upper, key_limit_lower, true);
-      key_vals[0].range = range;
+			      key_limit_upper, key_limit_lower, true,
+			      indx_infop->ils_prefix_len);
       iscan_id->oid_list.oid_cnt = n;
       if (iscan_id->oid_list.oid_cnt == -1)
 	{
@@ -2430,6 +2431,12 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
       if (BTREE_END_OF_SCAN (BTS))
 	{
 	  iscan_id->curr_keyno++;
+	}
+      else if (indx_infop->ils_prefix_len > 0)
+	{
+	  /* adjust range */
+	  btree_ils_adjust_range (thread_p, &key_vals[iscan_id->curr_keyno],
+				  &BTS->cur_key, indx_infop->ils_prefix_len);
 	}
 
       if (iscan_id->multi_range_opt.use)
@@ -2510,7 +2517,8 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 			      ISCAN_OID_BUFFER_SIZE,
 			      &key_filter,
 			      iscan_id, false, iscan_id->need_count_only,
-			      key_limit_upper, key_limit_lower, true);
+			      key_limit_upper, key_limit_lower, true,
+			      indx_infop->ils_prefix_len);
       key_vals[0].range = saved_range;
       iscan_id->oid_list.oid_cnt = n;
       if (iscan_id->oid_list.oid_cnt == -1)
@@ -2523,6 +2531,12 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
       if (BTREE_END_OF_SCAN (BTS))
 	{
 	  iscan_id->curr_keyno++;
+	}
+      else if (indx_infop->ils_prefix_len > 0)
+	{
+	  /* adjust range */
+	  btree_ils_adjust_range (thread_p, &key_vals[iscan_id->curr_keyno],
+				  &BTS->cur_key, indx_infop->ils_prefix_len);
 	}
 
       if (iscan_id->multi_range_opt.use)
@@ -2562,13 +2576,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	      continue;
 	    }
 
-	  if (range != GE_LE)
-	    {
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_QPROC_INVALID_XASLNODE, 0);
-	      goto exit_on_error;
-	    }
-
 	  n = btree_range_search (thread_p,
 				  &indx_infop->indx_id.i.btid,
 				  s_id->scan_op_type,
@@ -2581,8 +2588,8 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 				  ISCAN_OID_BUFFER_SIZE,
 				  &key_filter,
 				  iscan_id, false, iscan_id->need_count_only,
-				  key_limit_upper, key_limit_lower, true);
-	  key_vals[iscan_id->curr_keyno].range = range;
+				  key_limit_upper, key_limit_lower, true,
+				  indx_infop->ils_prefix_len);
 	  iscan_id->oid_list.oid_cnt = n;
 	  if (iscan_id->oid_list.oid_cnt == -1)
 	    {
@@ -2606,6 +2613,14 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 		    }
 		  *key_limit_upper = iscan_id->key_limit_upper;
 		}
+	    }
+	  else if (indx_infop->ils_prefix_len > 0)
+	    {
+	      /* adjust range */
+	      btree_ils_adjust_range (thread_p,
+				      &key_vals[iscan_id->curr_keyno],
+				      &BTS->cur_key,
+				      indx_infop->ils_prefix_len);
 	    }
 
 	  if (iscan_id->multi_range_opt.use)
@@ -2715,7 +2730,8 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 				  ISCAN_OID_BUFFER_SIZE,
 				  &key_filter,
 				  iscan_id, false, iscan_id->need_count_only,
-				  key_limit_upper, key_limit_lower, true);
+				  key_limit_upper, key_limit_lower, true,
+				  indx_infop->ils_prefix_len);
 	  key_vals[iscan_id->curr_keyno].range = saved_range;
 	  iscan_id->oid_list.oid_cnt = n;
 	  if (iscan_id->oid_list.oid_cnt == -1)
@@ -2740,6 +2756,14 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 		    }
 		  *key_limit_upper = iscan_id->key_limit_upper;
 		}
+	    }
+	  else if (indx_infop->ils_prefix_len > 0)
+	    {
+	      /* adjust range */
+	      btree_ils_adjust_range (thread_p,
+				      &key_vals[iscan_id->curr_keyno],
+				      &BTS->cur_key,
+				      indx_infop->ils_prefix_len);
 	    }
 
 	  if (iscan_id->multi_range_opt.use)
@@ -3177,7 +3201,8 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 		      int num_attrs_range,
 		      ATTR_ID * attrids_range,
 		      HEAP_CACHE_ATTRINFO * cache_range,
-		      bool iscan_oid_order, QUERY_ID query_id)
+		      bool iscan_oid_order, QUERY_ID query_id,
+		      bool for_update)
 {
   int ret = NO_ERROR;
   INDX_SCAN_ID *isidp;
@@ -3185,7 +3210,6 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   BTID *btid;
   VPID Root_vpid;
   PAGE_PTR Root;
-  RECDES Rec;
   BTREE_ROOT_HEADER root_header;
   BTREE_SCAN *BTS;
   int coverage_enabled;
@@ -3210,12 +3234,15 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     {
       return ER_FAILED;
     }
-  if (spage_get_record (Root, HEADER, &Rec, PEEK) != S_SUCCESS)
+
+  (void) pgbuf_check_page_ptype (thread_p, Root, PAGE_BTREE);
+
+  if (btree_read_root_header (Root, &root_header) != NO_ERROR)
     {
       pgbuf_unfix_and_init (thread_p, Root);
       return ER_FAILED;
     }
-  btree_read_root_header (&Rec, &root_header);
+
   pgbuf_unfix_and_init (thread_p, Root);
 
   /* initialize INDEX_SCAN_ID structure */
@@ -3451,6 +3478,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   }
 
   isidp->duplicate_key_locked = false;
+  isidp->for_update = for_update;
 
   return ret;
 
@@ -3545,7 +3573,6 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   BTID *btid = NULL;
   VPID root_vpid;
   PAGE_PTR root_page = NULL;
-  RECDES rec;
   BTREE_ROOT_HEADER root_header;
   BTREE_SCAN *bts = NULL;
   int func_index_col_id;
@@ -3563,18 +3590,14 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   root_vpid.pageid = btid->root_pageid;
   root_vpid.volid = btid->vfid.volid;
 
-  root_page = pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-			 PGBUF_UNCONDITIONAL_LATCH);
+  root_page =
+    pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+	       PGBUF_UNCONDITIONAL_LATCH);
   if (root_page == NULL)
     {
       return ER_FAILED;
     }
-  if (spage_get_record (root_page, HEADER, &rec, PEEK) != S_SUCCESS)
-    {
-      pgbuf_unfix_and_init (thread_p, root_page);
-      return ER_FAILED;
-    }
-  btree_read_root_header (&rec, &root_header);
+  btree_read_root_header (root_page, &root_header);
   pgbuf_unfix_and_init (thread_p, root_page);
 
   /* initialize INDEX_SCAN_ID structure */
@@ -3775,7 +3798,6 @@ scan_open_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   INDEX_NODE_SCAN_ID *idx_nsid_p = NULL;
   VPID root_vpid;
   PAGE_PTR root_page = NULL;
-  RECDES rec;
   BTREE_ROOT_HEADER root_header;
   DB_TYPE single_node_type = DB_TYPE_NULL;
   BTID *btid = NULL;
@@ -3804,18 +3826,14 @@ scan_open_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   root_vpid.pageid = btid->root_pageid;
   root_vpid.volid = btid->vfid.volid;
 
-  root_page = pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-			 PGBUF_UNCONDITIONAL_LATCH);
+  root_page =
+    pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+	       PGBUF_UNCONDITIONAL_LATCH);
   if (root_page == NULL)
     {
       return ER_FAILED;
     }
-  if (spage_get_record (root_page, HEADER, &rec, PEEK) != S_SUCCESS)
-    {
-      pgbuf_unfix_and_init (thread_p, root_page);
-      return ER_FAILED;
-    }
-  btree_read_root_header (&rec, &root_header);
+  btree_read_root_header (root_page, &root_header);
   pgbuf_unfix_and_init (thread_p, root_page);
 
   /* construct BTID_INT structure */
@@ -4964,11 +4982,14 @@ scan_next_scan_local (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   SCAN_CODE status;
 
   UINT64 old_fetches, old_ioreads;
-  struct timeval scan_start, scan_end;
+
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL tv_diff;
 
   if (thread_is_on_trace (thread_p))
     {
-      gettimeofday (&scan_start, NULL);
+      tsc_getticks (&start_tick);
+
       old_fetches = mnt_get_pb_fetches (thread_p);
       old_ioreads = mnt_get_pb_ioreads (thread_p);
     }
@@ -5022,8 +5043,10 @@ scan_next_scan_local (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
   if (thread_is_on_trace (thread_p))
     {
-      gettimeofday (&scan_end, NULL);
-      ADD_TIMEVAL (scan_id->stats.elapsed_scan, scan_start, scan_end);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&tv_diff, end_tick, start_tick);
+      TSC_ADD_TIMEVAL (scan_id->stats.elapsed_scan, tv_diff);
+
       scan_id->stats.num_fetches +=
 	mnt_get_pb_fetches (thread_p) - old_fetches;
       scan_id->stats.num_ioreads +=
@@ -5080,8 +5103,8 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
 	      MVCC_REEV_DATA mvcc_reev_data;
 
-	      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
-	      mvcc_reev_data.type = REEV_DATA_SCAN;
+	      SET_MVCC_SELECT_REEV_DATA (&mvcc_reev_data, &mvcc_sel_reev_data,
+					 V_TRUE, NULL);
 
 	      mvcc_sel_reev_data.data_filter = &data_filter;
 	      mvcc_sel_reev_data.key_filter = NULL;
@@ -5089,10 +5112,11 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      mvcc_sel_reev_data.qualification = &scan_id->qualification;
 	      COPY_OID (&current_oid, &hsidp->curr_oid);
 	      sp_scan =
-		heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
-					  &current_oid, &recdes,
-					  &hsidp->scan_range.scan_cache,
-					  scan_id->fixed, &mvcc_reev_data);
+		heap_mvcc_get_version_for_delete (thread_p, &hsidp->hfid,
+						  &current_oid, NULL, &recdes,
+						  &hsidp->scan_range.
+						  scan_cache, scan_id->fixed,
+						  &mvcc_reev_data);
 	      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
 		  || (sp_scan == S_SUCCESS
 		      && mvcc_reev_data.filter_result == V_FALSE))
@@ -5124,8 +5148,9 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
 		      MVCC_REEV_DATA mvcc_reev_data;
 
-		      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
-		      mvcc_reev_data.type = REEV_DATA_SCAN;
+		      SET_MVCC_SELECT_REEV_DATA (&mvcc_reev_data,
+						 &mvcc_sel_reev_data,
+						 V_TRUE, NULL);
 
 		      mvcc_sel_reev_data.data_filter = &data_filter;
 		      mvcc_sel_reev_data.key_filter = NULL;
@@ -5134,11 +5159,13 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 			&scan_id->qualification;
 		      COPY_OID (&current_oid, &hsidp->curr_oid);
 		      sp_scan =
-			heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
-						  &current_oid, &recdes,
-						  &hsidp->scan_cache,
-						  scan_id->fixed,
-						  &mvcc_reev_data);
+			heap_mvcc_get_version_for_delete (thread_p,
+							  &hsidp->hfid,
+							  &current_oid, NULL,
+							  &recdes,
+							  &hsidp->scan_cache,
+							  scan_id->fixed,
+							  &mvcc_reev_data);
 		      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
 			  || (sp_scan == S_SUCCESS
 			      && mvcc_reev_data.filter_result == V_FALSE))
@@ -5174,8 +5201,10 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
 		      MVCC_REEV_DATA mvcc_reev_data;
 
-		      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
-		      mvcc_reev_data.type = REEV_DATA_SCAN;
+		      SET_MVCC_SELECT_REEV_DATA (&mvcc_reev_data,
+						 &mvcc_sel_reev_data,
+						 V_TRUE, NULL);
+
 
 		      mvcc_sel_reev_data.data_filter = &data_filter;
 		      mvcc_sel_reev_data.key_filter = NULL;
@@ -5184,11 +5213,13 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 			&scan_id->qualification;
 		      COPY_OID (&current_oid, &hsidp->curr_oid);
 		      sp_scan =
-			heap_mvcc_get_for_delete (thread_p, &hsidp->hfid,
-						  &current_oid, &recdes,
-						  &hsidp->scan_cache,
-						  scan_id->fixed,
-						  &mvcc_reev_data);
+			heap_mvcc_get_version_for_delete (thread_p,
+							  &hsidp->hfid,
+							  &current_oid, NULL,
+							  &recdes,
+							  &hsidp->scan_cache,
+							  scan_id->fixed,
+							  &mvcc_reev_data);
 		      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
 			  || (sp_scan == S_SUCCESS
 			      && mvcc_reev_data.filter_result == V_FALSE))
@@ -5504,7 +5535,9 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   RECDES recdes;
   QFILE_TUPLE_RECORD tplrec = { NULL, 0 };
   TRAN_ISOLATION isolation;
-  struct timeval lookup_start, lookup_end;
+
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL tv_diff;
 
   isidp = &scan_id->s.isid;
 
@@ -5778,7 +5811,7 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
 	  if (thread_is_on_trace (thread_p))
 	    {
-	      gettimeofday (&lookup_start, NULL);
+	      tsc_getticks (&start_tick);
 	    }
 
 	  if (mvcc_Enabled == false || !scan_id->mvcc_select_lock_needed)
@@ -5793,8 +5826,8 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      MVCC_SCAN_REEV_DATA mvcc_sel_reev_data;
 	      MVCC_REEV_DATA mvcc_reev_data;
 
-	      mvcc_reev_data.select_reev_data = &mvcc_sel_reev_data;
-	      mvcc_reev_data.type = REEV_DATA_SCAN;
+	      SET_MVCC_SELECT_REEV_DATA (&mvcc_reev_data, &mvcc_sel_reev_data,
+					 V_TRUE, NULL);
 
 	      if (isidp->range_pred.regu_list != NULL)
 		{
@@ -5832,14 +5865,15 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		  mvcc_sel_reev_data.data_filter = NULL;
 		}
 	      mvcc_sel_reev_data.qualification = &scan_id->qualification;
-	      sp_scan = heap_mvcc_get_for_delete (thread_p,
-						  &isidp->hfid,
-						  isidp->curr_oidp,
-						  &recdes,
-						  &isidp->
-						  scan_cache,
-						  scan_id->fixed,
-						  &mvcc_reev_data);
+	      sp_scan = heap_mvcc_get_version_for_delete (thread_p,
+							  &isidp->hfid,
+							  isidp->curr_oidp,
+							  NULL,
+							  &recdes,
+							  &isidp->
+							  scan_cache,
+							  scan_id->fixed,
+							  &mvcc_reev_data);
 	      if (sp_scan == S_SUCCESS)
 		{
 		  switch (mvcc_reev_data.filter_result)
@@ -6033,9 +6067,10 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
 	  if (thread_is_on_trace (thread_p))
 	    {
-	      gettimeofday (&lookup_end, NULL);
-	      ADD_TIMEVAL (scan_id->stats.elapsed_lookup,
-			   lookup_start, lookup_end);
+	      tsc_getticks (&end_tick);
+	      tsc_elapsed_time_usec (&tv_diff, end_tick, start_tick);
+	      TSC_ADD_TIMEVAL (scan_id->stats.elapsed_lookup, tv_diff);
+
 	      scan_id->stats.data_qualified_rows++;
 	    }
 	}

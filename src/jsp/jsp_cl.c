@@ -548,27 +548,27 @@ jsp_create_stored_procedure (PARSER_CONTEXT * parser, PT_NODE * statement)
   if (jsp_is_exist_stored_procedure (name))
     {
       if (statement->info.sp.or_replace)
-        {
-          /* drop existing stored procedure */
-          err = tran_system_savepoint (SAVEPOINT_CREATE_STORED_PROC);
-          if (err != NO_ERROR)
-            {
-              return err;
-            }
-          has_savepoint = true;
+	{
+	  /* drop existing stored procedure */
+	  err = tran_system_savepoint (SAVEPOINT_CREATE_STORED_PROC);
+	  if (err != NO_ERROR)
+	    {
+	      return err;
+	    }
+	  has_savepoint = true;
 
-          err = drop_stored_procedure (name, type);
-          if (err != NO_ERROR)
-            {
-              goto error_exit;
-            }
-        }
+	  err = drop_stored_procedure (name, type);
+	  if (err != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
+	}
       else
-        {
-          er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_ALREADY_EXIST, 1,
-              name);
-          return er_errid ();
-        }
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_ALREADY_EXIST, 1,
+		  name);
+	  return er_errid ();
+	}
     }
 
   for (p = param_list, param_count = 0; p != NULL; p = p->next, param_count++)
@@ -584,7 +584,7 @@ jsp_create_stored_procedure (PARSER_CONTEXT * parser, PT_NODE * statement)
     }
 
   err = jsp_add_stored_procedure (name, type, ret_type, param_list,
-				   java_method);
+				  java_method);
   if (err != NO_ERROR)
     {
       goto error_exit;
@@ -1135,7 +1135,8 @@ drop_stored_procedure (const char *name, PT_MISC_TYPE expected_type)
     }
   owner = DB_GET_OBJECT (&owner_val);
 
-  if (owner != Au_user && !au_is_dba_group_member (Au_user))
+  if (!ws_is_same_object (owner, Au_user)
+      && !au_is_dba_group_member (Au_user))
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_DROP_NOT_ALLOWED, 0);
       err = er_errid ();
