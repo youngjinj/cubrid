@@ -60,6 +60,13 @@ typedef struct oid_block_list
   OID oid_array[OID_BLOCK_ARRAY_SIZE];
 } OID_BLOCK_LIST;
 
+#define SORT_SPEC_EQ(a, b) \
+  ((a)->info.sort_spec.pos_descr.pos_no \
+    == (b)->info.sort_spec.pos_descr.pos_no \
+   && (a)->info.sort_spec.asc_or_desc == (b)->info.sort_spec.asc_or_desc \
+   && (a)->info.sort_spec.nulls_first_or_last \
+    == (b)->info.sort_spec.nulls_first_or_last)
+
 /*
  *       	         CATALOG STRUCTURES
  */
@@ -148,6 +155,7 @@ typedef struct indx_info
 				 * the index is a function index */
   KEY_RANGE iss_range;		/* placeholder range used for ISS; must be
 				   created on the broker */
+  int ils_prefix_len;		/* index loose scan prefix length */
 } INDX_INFO;			/* index information structure */
 
 

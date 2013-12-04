@@ -207,9 +207,7 @@ extern int xtran_server_2pc_attach_global_tran (THREAD_ENTRY * thread_p,
 						int gtrid);
 extern TRAN_STATE xtran_server_2pc_prepare_global_tran (THREAD_ENTRY *
 							thread_p, int gtrid);
-#if defined (ENABLE_UNUSED_FUNCTION)
 extern bool xtran_is_blocked (THREAD_ENTRY * thread_p, int tran_index);
-#endif
 extern bool xtran_server_has_updated (THREAD_ENTRY * thread_p);
 extern int xtran_server_is_active_and_has_updated (THREAD_ENTRY * thread_p);
 extern int xtran_wait_server_active_trans (THREAD_ENTRY * thrd);
@@ -314,8 +312,7 @@ extern char *xstats_get_statistics_from_server (THREAD_ENTRY * thread_p,
 						unsigned int timestamp,
 						int *length);
 extern int xstats_update_statistics (THREAD_ENTRY * thread_p,
-				     OID * classoid, BTID_LIST * btids,
-				     bool with_fullscan);
+				     OID * classoid, bool with_fullscan);
 extern int xstats_update_all_statistics (THREAD_ENTRY * thread_p,
 					 bool with_fullscan);
 

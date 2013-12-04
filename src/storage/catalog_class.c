@@ -3563,8 +3563,7 @@ catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p)
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
-				   MULTI_ROW_DELETE, NULL)
-      != NO_ERROR)
+				   MULTI_ROW_DELETE, NULL) != NO_ERROR)
     {
       error = er_errid ();
       goto error;
@@ -3987,8 +3986,7 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
     {
       if (IS_SUBSET (attrs[i]))
 	{
-	  error =
-	    catcls_delete_subset (thread_p, &attrs[i]);
+	  error = catcls_delete_subset (thread_p, &attrs[i]);
 	  if (error != NO_ERROR)
 	    {
 	      goto error;
@@ -4949,7 +4947,7 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 
   /* link the old version by new version */
   //if (heap_mvcc_update_to_row_version (thread_p, hfid_p, class_oid_p, oid_p,
-		//		       &new_oid, scan_p) == NULL)
+  //                     &new_oid, scan_p) == NULL)
   //  {
   //    error = er_errid ();
   //    goto error;

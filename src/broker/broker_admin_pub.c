@@ -150,8 +150,6 @@ static int shard_shm_check_max_file_open_limit (T_BROKER_INFO * br_info,
 static void get_shard_db_password (T_BROKER_INFO * br_info_p);
 static void get_upper_str (char *upper_str, int len, char *value);
 
-static void rename_access_log_file_name (char *access_log_file,
-					 struct tm *ct);
 static void rename_error_log_file_name (char *error_log_file, struct tm *ct);
 
 static int br_activate (T_BROKER_INFO * br_info, int master_shm_id,
@@ -1429,8 +1427,14 @@ admin_reset_cmd (int master_shm_id, const char *broker_name)
     }
   else
     {
-      for (i = 0; i < shm_as_p->num_appl_server && i < APPL_SERVER_NUM_LIMIT;
-	   i++)
+      int limit_appl_index = shm_br->br_info[br_index].appl_server_max_num;
+
+      if (limit_appl_index > APPL_SERVER_NUM_LIMIT)
+	{
+	  limit_appl_index = APPL_SERVER_NUM_LIMIT;
+	}
+
+      for (i = 0; i < limit_appl_index; i++)
 	{
 	  shm_as_p->as_info[i].reset_flag = TRUE;
 	}
@@ -2201,6 +2205,30 @@ admin_conf_change (int master_shm_id, const char *br_name,
 	    }
 	}
     }
+  else if (strcasecmp (conf_name, "MAX_NUM_DELAYED_HOSTS_LOOKUP") == 0)
+    {
+      int max_num_delayed_hosts_lookup;
+      char *end_p = NULL;
+
+      max_num_delayed_hosts_lookup = (int) strtol (conf_value, &end_p, 10);
+      if (errno == ERANGE || (end_p && *end_p != '\0')
+	  || max_num_delayed_hosts_lookup <
+	  DEFAULT_MAX_NUM_DELAYED_HOSTS_LOOKUP)
+	{
+	  sprintf (admin_err_msg, "invalid value : %s", conf_value);
+	  goto set_conf_error;
+	}
+
+      if (br_info_p->max_num_delayed_hosts_lookup ==
+	  max_num_delayed_hosts_lookup)
+	{
+	  sprintf (admin_err_msg, "same as previous value : %s", conf_value);
+	  goto set_conf_error;
+	}
+
+      br_info_p->max_num_delayed_hosts_lookup = max_num_delayed_hosts_lookup;
+      shm_as_p->max_num_delayed_hosts_lookup = max_num_delayed_hosts_lookup;
+    }
   else if (strcasecmp (conf_name, "RECONNECT_TIME") == 0)
     {
       int rctime;
@@ -2354,6 +2382,21 @@ admin_conf_change (int master_shm_id, const char *br_name,
 	}
       br_info_p->access_log = access_log_flag;
       shm_as_p->access_log = access_log_flag;
+    }
+  else if (strcasecmp (conf_name, "ACCESS_LOG_MAX_SIZE") == 0)
+    {
+      int size;
+
+      size = (int) ut_size_string_to_kbyte (conf_value, "M");
+
+      if (size < 0)
+	{
+	  sprintf (admin_err_msg, "invalid value : %s", conf_value);
+	  goto set_conf_error;
+	}
+
+      br_info_p->access_log_max_size = size;
+      shm_as_p->access_log_max_size = size;
     }
   else if (strcasecmp (conf_name, "KEEP_CONNECTION") == 0)
     {
@@ -2666,6 +2709,9 @@ admin_acl_status_cmd (int master_shm_id, const char *broker_name)
   int br_index;
   T_SHM_BROKER *shm_br;
   T_SHM_APPL_SERVER *shm_appl;
+  char line_buf[LINE_MAX];
+  char str[32];
+  int len = 0;
 
   shm_br =
     (T_SHM_BROKER *) uw_shm_open (master_shm_id, SHM_BROKER,
@@ -2737,30 +2783,62 @@ admin_acl_status_cmd (int master_shm_id, const char *broker_name)
 	      fprintf (stdout, "%s:%s:%s\n", shm_appl->access_info[j].dbname,
 		       shm_appl->access_info[j].dbuser,
 		       shm_appl->access_info[j].ip_files);
+
+	      len = 0;
+	      len += sprintf (line_buf + len, "%16s ", "CLIENT IP");
+	      len += sprintf (line_buf + len, "%25s", "LAST ACCESS TIME");
+	      fprintf (stdout, "%s\n", line_buf);
+
+	      for (k = 0; k < len; k++)
+		{
+		  line_buf[k] = '=';
+		}
+	      line_buf[k] = '\0';
+	      fprintf (stdout, "%s\n", line_buf);
+
 	      for (k = 0; k < shm_appl->access_info[j].ip_info.num_list; k++)
 		{
 		  int address_index = k * IP_BYTE_COUNT;
 
+		  len = 0;
 		  for (m = 0;
 		       m <
 		       shm_appl->access_info[j].ip_info.
 		       address_list[address_index]; m++)
 		    {
-		      fprintf (stdout, "%d%s",
-			       shm_appl->access_info[j].ip_info.
-			       address_list[address_index + m + 1],
-			       ((m != 3) ? "." : ""));
+		      len += sprintf (str + len, "%d%s",
+				      shm_appl->access_info[j].ip_info.
+				      address_list[address_index + m + 1],
+				      ((m != 3) ? "." : ""));
 		    }
 
 		  if (m != 4)
 		    {
-		      fprintf (stdout, "*");
+		      len += sprintf (str + len, "*");
 		    }
 
-		  fprintf (stdout, "\n");
+		  len = sprintf (line_buf, "%16.16s ", str);
+
+		  if (shm_appl->access_info[j].ip_info.last_access_time[k] !=
+		      0)
+		    {
+		      struct tm cur_tm;
+		      localtime_r (&shm_appl->access_info[j].ip_info.
+				   last_access_time[k], &cur_tm);
+		      cur_tm.tm_year += 1900;
+
+		      sprintf (str, "%02d-%02d-%02d %02d:%02d:%02d",
+			       cur_tm.tm_year, cur_tm.tm_mon + 1,
+			       cur_tm.tm_mday, cur_tm.tm_hour,
+			       cur_tm.tm_min, cur_tm.tm_sec);
+		      len += sprintf (line_buf + len, "%25.25s", str);
+		    }
+
+		  fprintf (stdout, "%s\n", line_buf);
 		}
 	      fprintf (stdout, "\n");
 	    }
+	  fprintf (stdout, "\n");
 	  uw_shm_detach (shm_appl);
 	}
     }
@@ -2785,29 +2863,61 @@ admin_acl_status_cmd (int master_shm_id, const char *broker_name)
 	  fprintf (stdout, "%s:%s:%s\n", shm_appl->access_info[j].dbname,
 		   shm_appl->access_info[j].dbuser,
 		   shm_appl->access_info[j].ip_files);
+
+	  len = 0;
+	  len += sprintf (line_buf + len, "%16s ", "CLIENT IP");
+	  len += sprintf (line_buf + len, "%25s", "LAST ACCESS TIME");
+	  fprintf (stdout, "%s\n", line_buf);
+
+	  for (k = 0; k < len; k++)
+	    {
+	      line_buf[k] = '=';
+	    }
+	  line_buf[k] = '\0';
+	  fprintf (stdout, "%s\n", line_buf);
+
 	  for (k = 0; k < shm_appl->access_info[j].ip_info.num_list; k++)
 	    {
 	      int address_index = k * IP_BYTE_COUNT;
 
+	      len = 0;
 	      for (m = 0;
 		   m <
 		   shm_appl->access_info[j].ip_info.
 		   address_list[address_index]; m++)
 		{
-		  fprintf (stdout, "%d%s",
-			   shm_appl->access_info[j].ip_info.
-			   address_list[address_index + m + 1],
-			   ((m != 3) ? "." : ""));
+		  len += sprintf (str + len, "%d%s",
+				  shm_appl->access_info[j].ip_info.
+				  address_list[address_index + m + 1],
+				  ((m != 3) ? "." : ""));
 		}
 
 	      if (m != 4)
 		{
-		  fprintf (stdout, "*");
+		  len += sprintf (str + len, "*");
 		}
-	      fprintf (stdout, "\n");
+
+	      len = sprintf (line_buf, "%16.16s ", str);
+
+	      if (shm_appl->access_info[j].ip_info.last_access_time[k] != 0)
+		{
+		  struct tm cur_tm;
+		  localtime_r (&shm_appl->access_info[j].ip_info.
+			       last_access_time[k], &cur_tm);
+		  cur_tm.tm_year += 1900;
+
+		  sprintf (str, "%02d-%02d-%02d %02d:%02d:%02d",
+			   cur_tm.tm_year, cur_tm.tm_mon + 1,
+			   cur_tm.tm_mday, cur_tm.tm_hour,
+			   cur_tm.tm_min, cur_tm.tm_sec);
+		  len += sprintf (line_buf + len, "%25.25s", str);
+		}
+
+	      fprintf (stdout, "%s\n", line_buf);
 	    }
 	  fprintf (stdout, "\n");
 	}
+      fprintf (stdout, "\n");
       uw_shm_detach (shm_appl);
     }
 
@@ -3230,18 +3340,10 @@ br_inactivate (T_BROKER_INFO * br_info)
 
   if (br_info->log_backup == ON)
     {
-      if (br_info->shard_flag == OFF)
-	{
-	  rename_access_log_file_name (br_info->access_log_file, &ct);
-	}
       rename_error_log_file_name (br_info->error_log_file, &ct);
     }
   else
     {
-      if (br_info->shard_flag == OFF)
-	{
-	  unlink (br_info->access_log_file);
-	}
       unlink (br_info->error_log_file);
     }
 
@@ -3767,17 +3869,6 @@ get_cubrid_version ()
 }
 #endif /* ENABLE_UNUSED_FUNCTION */
 #endif /* !WINDOWS */
-
-static void
-rename_access_log_file_name (char *access_log_file, struct tm *ct)
-{
-  char cmd_buf[BUFSIZ];
-
-  sprintf (cmd_buf, "%s.%02d%02d%02d.%02d%02d",
-	   access_log_file,
-	   ct->tm_year, ct->tm_mon + 1, ct->tm_mday, ct->tm_hour, ct->tm_min);
-  rename (access_log_file, cmd_buf);
-}
 
 static void
 rename_error_log_file_name (char *error_log_file, struct tm *ct)

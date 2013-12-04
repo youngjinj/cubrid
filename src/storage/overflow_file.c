@@ -185,6 +185,8 @@ overflow_insert_internal (THREAD_ENTRY * thread_p, const VFID * ovf_vfid,
       return NULL;
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, vfid_fhdr_pgptr, PAGE_FTAB);
+
   /*
    * Guess the number of pages. The total number of pages is found by
    * dividing length by pagesize - the smallest header. Then, we make sure
@@ -326,6 +328,8 @@ overflow_insert_internal (THREAD_ENTRY * thread_p, const VFID * ovf_vfid,
 	{
 	  goto exit_on_error;
 	}
+
+      (void) pgbuf_set_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
 
       /* Is this the first page ? */
       if (i == 0)
@@ -479,6 +483,8 @@ overflow_traverse (THREAD_ENTRY * thread_p, const VFID * ovf_vfid,
 	  goto exit_on_error;
 	}
 
+      (void) pgbuf_check_page_ptype (thread_p, pgptr, PAGE_OVERFLOW);
+
       vpid = next_vpid;
       overflow_next_vpid (ovf_vpid, &next_vpid, pgptr);
 
@@ -569,11 +575,29 @@ overflow_update (THREAD_ENTRY * thread_p, const VFID * ovf_vfid,
   length = recdes->length;
   while (length > 0)
     {
-      addr.pgptr = pgbuf_fix (thread_p, &next_vpid, OLD_PAGE,
-			      PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
-      if (addr.pgptr == NULL)
+      if (isnewpage == true)
 	{
-	  goto exit_on_error;
+	  addr.pgptr = pgbuf_fix (thread_p, &next_vpid, NEW_PAGE,
+				  PGBUF_LATCH_WRITE,
+				  PGBUF_UNCONDITIONAL_LATCH);
+	  if (addr.pgptr == NULL)
+	    {
+	      goto exit_on_error;
+	    }
+
+	  (void) pgbuf_set_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
+	}
+      else
+	{
+	  addr.pgptr = pgbuf_fix (thread_p, &next_vpid, OLD_PAGE,
+				  PGBUF_LATCH_WRITE,
+				  PGBUF_UNCONDITIONAL_LATCH);
+	  if (addr.pgptr == NULL)
+	    {
+	      goto exit_on_error;
+	    }
+
+	  (void) pgbuf_check_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
 	}
 
       addr_vpid_ptr = pgbuf_get_vpid_ptr (addr.pgptr);
@@ -746,6 +770,9 @@ overflow_update (THREAD_ENTRY * thread_p, const VFID * ovf_vfid,
 		  goto exit_on_error;
 		}
 
+	      (void) pgbuf_check_page_ptype (thread_p, addr.pgptr,
+					     PAGE_OVERFLOW);
+
 	      tmp_vpid = next_vpid;
 	      rest_parts = (OVERFLOW_REST_PART *) addr.pgptr;
 	      next_vpid = rest_parts->next_vpid;
@@ -884,6 +911,8 @@ overflow_get_length (THREAD_ENTRY * thread_p, const VPID * ovf_vpid)
       return -1;
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, pgptr, PAGE_OVERFLOW);
+
   length = ((OVERFLOW_FIRST_PART *) pgptr)->length;
 
   pgbuf_unfix_and_init (thread_p, pgptr);
@@ -936,6 +965,8 @@ overflow_get_nbytes (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
     {
       return S_ERROR;
     }
+
+  (void) pgbuf_check_page_ptype (thread_p, pgptr, PAGE_OVERFLOW);
 
   first_part = (OVERFLOW_FIRST_PART *) pgptr;
   if (mvcc_snapshot != NULL)
@@ -1060,6 +1091,9 @@ overflow_get_nbytes (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
 	      recdes->length = 0;
 	      return S_ERROR;
 	    }
+
+	  (void) pgbuf_check_page_ptype (thread_p, pgptr, PAGE_OVERFLOW);
+
 	  rest_parts = (OVERFLOW_REST_PART *) pgptr;
 	  copyfrom = (char *) rest_parts->data;
 	  next_vpid = rest_parts->next_vpid;
@@ -1133,6 +1167,8 @@ overflow_get_capacity (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
       return ER_FAILED;
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, pgptr, PAGE_OVERFLOW);
+
   first_part = (OVERFLOW_FIRST_PART *) pgptr;
   remain_length = first_part->length;
 
@@ -1178,6 +1214,8 @@ overflow_get_capacity (THREAD_ENTRY * thread_p, const VPID * ovf_vpid,
 	    {
 	      goto exit_on_error;
 	    }
+
+	  (void) pgbuf_check_page_ptype (thread_p, pgptr, PAGE_OVERFLOW);
 
 	  rest_parts = (OVERFLOW_REST_PART *) pgptr;
 	  hdr_length = offsetof (OVERFLOW_REST_PART, data);
@@ -1349,6 +1387,19 @@ overflow_rv_newpage_logical_dump_undo (FILE * fp, int length_ignore,
 }
 
 /*
+ * overflow_rv_newpage_insert_redo () -
+ *   return: 0 if no error, or error code
+ *   rcv(in): Recovery structure
+ */
+int
+overflow_rv_newpage_insert_redo (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
+{
+  (void) pgbuf_set_page_ptype (thread_p, rcv->pgptr, PAGE_OVERFLOW);
+
+  return log_rv_copy_char (thread_p, rcv);
+}
+
+/*
  * overflow_rv_newpage_link_undo () - Undo allocation of new overflow page and the
  *                               reference to it
  *   return: 0 if no error, or error code
@@ -1402,6 +1453,19 @@ overflow_rv_link_dump (FILE * fp, int length_ignore, void *data)
   vpid = (VPID *) data;
   fprintf (fp, "Overflow Reference to Volid = %d|Pageid = %d\n",
 	   vpid->volid, vpid->pageid);
+}
+
+/*
+ * overflow_rv_page_update_redo () -
+ *   return: 0 if no error, or error code
+ *   rcv(in): Recovery structure
+ */
+int
+overflow_rv_page_update_redo (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
+{
+  (void) pgbuf_set_page_ptype (thread_p, rcv->pgptr, PAGE_OVERFLOW);
+
+  return log_rv_copy_char (thread_p, rcv);
 }
 
 /*

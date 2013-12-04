@@ -199,7 +199,7 @@ Available command:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
@@ -231,6 +231,10 @@ Available command:\n\
 36 The server was not configured for HA.\n
 38 The server configured for HA is not listed in ha_db_list.\n
 39 The server configured for HA is not listed in ha_node_list.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 WARNING: -t option is ignored in stand-alone mode execution.\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 Last committed line : %d
 114 error-control-file
 115 input file to control error(s) during loading
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: Import objects and schemas to the database.\n\
 usage: %s loaddb [OPTION] database-name\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 Only %d out of %d objects dumped successfully.\n
 47 output directory is too long.\n
 48 LSA : %d %d \n
+49 Password:
 60 \
 unloaddb: Export objects and schemas from the database.\n\
 usage: %s unloaddb [OPTION] database-name\n\
 \n\
 valid options:\n\
+  -u, --user=ID               user ID for database access; default: "dba"\n\
+  -p, --password=PASS         user password; default: none\n\
   -i, --input-class-file=FILE input FILE of table names; default: dump all classes\n\
       --include-reference     include referenced tables; with -i option; default: disabled\n\
       --input-class-only      include specified class only; with -i option; default: disabled\n\

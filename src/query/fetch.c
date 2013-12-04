@@ -97,6 +97,16 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
   peek_third = NULL;
   peek_fourth = NULL;
 
+  if (thread_get_recursion_depth (thread_p)
+      > prm_get_integer_value (PRM_ID_MAX_RECURSION_SQL_DEPTH))
+    {
+      int error = ER_MAX_RECURSION_SQL_DEPTH;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1,
+	      prm_get_integer_value (PRM_ID_MAX_RECURSION_SQL_DEPTH));
+      return error;
+    }
+  thread_inc_recursion_depth (thread_p);
+
   /* fetch values */
   switch (arithptr->opcode)
     {
@@ -1100,7 +1110,8 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 	   */
 	  (void) pr_clone_value (peek_right, arithptr->value);
 	  *peek_dbval = peek_left;
-	  return NO_ERROR;
+
+	  goto fetch_peek_arith_end;
 	}
       break;
 
@@ -3567,15 +3578,15 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 	}
       break;
 
-    default:
-      break;
-
     case T_WIDTH_BUCKET:
       if (db_width_bucket (arithptr->value, peek_left,
 			   peek_right, peek_third, peek_fourth) != NO_ERROR)
 	{
 	  goto error;
 	}
+      break;
+
+    default:
       break;
     }
 
@@ -3598,9 +3609,13 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 	}
     }
 
+fetch_peek_arith_end:
+  thread_dec_recursion_depth (thread_p);
+
   return NO_ERROR;
 
 error:
+  thread_dec_recursion_depth (thread_p);
 
   return ER_FAILED;
 }
@@ -3763,7 +3778,7 @@ fetch_peek_dbval (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 
     case TYPE_AGGREGATE:	/* fetch aggregation function value */
       /* The result value of the aggregate node MUST already have been evaluated */
-      *peek_dbval = regu_var->value.aggptr->value;
+      *peek_dbval = regu_var->value.aggptr->accumulator.value;
       break;
 
     case TYPE_FUNC:		/* fetch function value */

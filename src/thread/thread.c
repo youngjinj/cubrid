@@ -74,6 +74,7 @@
 #include "heartbeat.h"
 #endif
 
+#include "tsc_timer.h"
 
 #if defined(HPUX)
 #define thread_initialize_key()
@@ -1255,6 +1256,7 @@ thread_initialize_entry (THREAD_ENTRY * entry_p)
   entry_p->log_data_ptr = NULL;
 
   (void) thread_rc_track_initialize (entry_p);
+  thread_clear_recursion_depth (entry_p);
 
   entry_p->sort_stats_active = false;
 
@@ -1604,7 +1606,9 @@ thread_suspend_wakeup_and_unlock_entry (THREAD_ENTRY * thread_p,
 {
   int r;
   int old_status;
-  struct timeval start, end;
+
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL tv_diff;
 
   assert (thread_p->status == TS_RUN || thread_p->status == TS_CHECK);
   old_status = thread_p->status;
@@ -1614,7 +1618,7 @@ thread_suspend_wakeup_and_unlock_entry (THREAD_ENTRY * thread_p,
 
   if (thread_p->event_stats.trace_slow_query == true)
     {
-      gettimeofday (&start, NULL);
+      tsc_getticks (&start_tick);
     }
 
   r = pthread_cond_wait (&thread_p->wakeup_cond, &thread_p->th_entry_lock);
@@ -1627,14 +1631,16 @@ thread_suspend_wakeup_and_unlock_entry (THREAD_ENTRY * thread_p,
 
   if (thread_p->event_stats.trace_slow_query == true)
     {
-      gettimeofday (&end, NULL);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&tv_diff, end_tick, start_tick);
+
       if (suspended_reason == THREAD_LOCK_SUSPENDED)
 	{
-	  ADD_TIMEVAL (thread_p->event_stats.lock_waits, start, end);
+	  TSC_ADD_TIMEVAL (thread_p->event_stats.lock_waits, tv_diff);
 	}
       else if (suspended_reason == THREAD_PGBUF_SUSPENDED)
 	{
-	  ADD_TIMEVAL (thread_p->event_stats.latch_waits, start, end);
+	  TSC_ADD_TIMEVAL (thread_p->event_stats.latch_waits, tv_diff);
 	}
     }
 
@@ -3301,17 +3307,6 @@ thread_check_ha_delay_info_thread (void *arg_p)
 	}
 
       /* do its job */
-      delay_limit_in_secs =
-	prm_get_integer_value (PRM_ID_HA_DELAY_LIMIT_IN_SECS);
-      acceptable_delay_in_secs =
-	delay_limit_in_secs -
-	prm_get_integer_value (PRM_ID_HA_DELAY_LIMIT_DELTA_IN_SECS);
-
-      if (acceptable_delay_in_secs < 0)
-	{
-	  acceptable_delay_in_secs = 0;
-	}
-
       csect_enter (tsd_ptr, CSECT_HA_SERVER_STATE, INF_WAIT);
 
       server_state = css_ha_server_state ();
@@ -3319,12 +3314,27 @@ thread_check_ha_delay_info_thread (void *arg_p)
       if (server_state == HA_SERVER_STATE_ACTIVE
 	  || server_state == HA_SERVER_STATE_TO_BE_STANDBY)
 	{
+	  css_unset_ha_repl_delayed ();
+	  mnt_x_ha_repl_delay (tsd_ptr, 0);
+
 	  log_append_ha_server_state (tsd_ptr, server_state);
+
 	  csect_exit (tsd_ptr, CSECT_HA_SERVER_STATE);
 	}
       else
 	{
 	  csect_exit (tsd_ptr, CSECT_HA_SERVER_STATE);
+
+	  delay_limit_in_secs =
+	    prm_get_integer_value (PRM_ID_HA_DELAY_LIMIT_IN_SECS);
+	  acceptable_delay_in_secs =
+	    delay_limit_in_secs -
+	    prm_get_integer_value (PRM_ID_HA_DELAY_LIMIT_DELTA_IN_SECS);
+
+	  if (acceptable_delay_in_secs < 0)
+	    {
+	      acceptable_delay_in_secs = 0;
+	    }
 
 	  error_code =
 	    catcls_get_apply_info_log_record_time (tsd_ptr, &log_record_time);
@@ -4223,6 +4233,7 @@ thread_set_info (THREAD_ENTRY * thread_p, int client_id, int rid,
   thread_p->tran_next_wait = NULL;
 
   (void) thread_rc_track_clear_all (thread_p);
+  thread_clear_recursion_depth (thread_p);
 }
 
 /*
@@ -5422,4 +5433,60 @@ thread_need_clear_trace (THREAD_ENTRY * thread_p)
     }
 
   return thread_p->clear_trace;
+}
+
+/*
+ * thread_get_recursion_depth() -
+ */
+int
+thread_get_recursion_depth (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  return thread_p->xasl_recursion_depth;
+}
+
+/*
+ * thread_inc_recursion_depth() -
+ */
+void
+thread_inc_recursion_depth (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  thread_p->xasl_recursion_depth++;
+}
+
+/*
+ * thread_dec_recursion_depth() -
+ */
+void
+thread_dec_recursion_depth (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  thread_p->xasl_recursion_depth--;
+}
+
+/*
+ * thread_clear_recursion_depth() -
+ */
+void
+thread_clear_recursion_depth (THREAD_ENTRY * thread_p)
+{
+  if (thread_p == NULL)
+    {
+      thread_p = thread_get_thread_entry_info ();
+    }
+
+  thread_p->xasl_recursion_depth = 0;
 }

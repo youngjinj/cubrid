@@ -82,6 +82,7 @@ stats_client_unpack_statistics (char *buf_p)
   CLASS_STATS *class_stats_p;
   ATTR_STATS *attr_stats_p;
   BTREE_STATS *btree_stats_p;
+  int max_unique_keys;
   int i, j, k;
 
   if (buf_p == NULL)
@@ -112,6 +113,13 @@ stats_client_unpack_statistics (char *buf_p)
     {
       assert (false);
       class_stats_p->heap_num_pages = 0;
+    }
+
+  /* to get the doubtful statistics to be updated, need to clear timestamp */
+  if (class_stats_p->heap_num_objects == 0
+      || class_stats_p->heap_num_pages == 0)
+    {
+      class_stats_p->time_stamp = 0;
     }
 
   class_stats_p->n_attrs = OR_GET_INT (buf_p);
@@ -213,6 +221,14 @@ stats_client_unpack_statistics (char *buf_p)
 	}
     }
 
+  /* correct estimated num_objects with unique keys */
+  max_unique_keys = OR_GET_INT (buf_p);
+  buf_p += OR_INT_SIZE;
+  if (max_unique_keys > 0)
+    {
+      class_stats_p->heap_num_objects = max_unique_keys;
+    }
+
   return class_stats_p;
 }
 
@@ -310,7 +326,7 @@ stats_dump (const char *class_name_p, FILE * file_p)
       attr_stats_p = &(class_stats_p->attr_stats[i]);
 
       name_p = sm_get_att_name (class_mop, attr_stats_p->id);
-      fprintf (file_p, " Atrribute: %s\n", (name_p ? name_p : "not found"));
+      fprintf (file_p, " Attribute: %s\n", (name_p ? name_p : "not found"));
       fprintf (file_p, "    id: %d\n", attr_stats_p->id);
       fprintf (file_p, "    Type: ");
 

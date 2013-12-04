@@ -199,7 +199,7 @@ commandដែលមាន:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          ឈ្មោះbroker\n\
     off         ឈ្មោះbroker\n\
     reset       ឈ្មោះbroker\n\
@@ -231,6 +231,10 @@ commandដែលមាន:\n\
 36 The server was not configured for HA.\n
 38 ៣៨កំព្យួទ័របំរើសេវាដែលបានត្រូវកំណត់អោយHAមិនចេញពីបញ្ជី ha_db_list.\n
 39 ៣៩កំព្យួទ័របំរើសេវាដែលបានត្រូវកំណត់អោយHAមិនចេញពី ha_node_list.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 WARNING: ជម្រើស -t មិនស្គាល់ក្នុងប្រតិបត្តិការ stand-alone mode។\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 lineដែលត្រូវបានប្រតិបត្តិចុងក្រោយ : %d
 114 error-control-file
 115 input file នឹងគ្រប់គ្រង error(s)ក្នុងអម្លុងដំណើរការផ្ទុក
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: នាំចូម objects និង schemas ទៅកាន់ដែលតាបេស\n\
 usage: %s loaddb [OPTION] ឈ្មោះដែលតាបេស\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 តែ %d ដែលពុំមាន %d objectsប៉ុណ្ណោះ ត្រូវបានបោះចោលដោយជោគជ័យ។\n
 47 បញ្ជីឈ្មោះoutputវែងពេក។\n
 48 LSA : %d %d \n
+49 កំណត់សម្គាល់សម្ងាត់:
 60 \
 unloaddb: នាំចេញ objects និង schemas ពីដែលតាបេស។\n\
 usage: %s unloaddb [OPTION] ឈ្មោះដែលតាបេស\n\
 \n\
 ជម្រើសសុពល:\n\
+  -u, --user=ID               user ID សម្រាប់សិទ្ធិចូលដែលតាបេស; default: "publdba"\n\
+  -p, --password=PASS         កំណត់សម្គាល់សម្ងាត់user; default: none\n\
   -i, --input-class-file=FILE បញ្ជូល FILE នៃឈ្មោះតារាង; default: បោះចោល classesទាំងអស់\n\
       --include-reference     មាន តារាងដែលត្រូវបានសំអាង; ជាមួយជម្រើស -i ; default: ដែលមិនអាច\n\
       --input-class-only      មានតែ classកំណត់ពិសេស; ជាមួយជម្រើស -i ; default: ដែលមិនអាច\n\

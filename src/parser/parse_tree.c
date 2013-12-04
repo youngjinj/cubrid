@@ -313,8 +313,11 @@ parser_create_node (const PARSER_CONTEXT * parser)
   if (free_list->node == NULL)
     {
       /* do not need to use mutex : only used by one parser(and one thread) */
-      if ((free_list->node = parser_create_node_block (parser)) == NULL)
-	return NULL;
+      free_list->node = parser_create_node_block (parser);
+      if (free_list->node == NULL)
+	{
+	  return NULL;
+	}
     }
 
   node = free_list->node;
@@ -887,6 +890,12 @@ parser_free_node (const PARSER_CONTEXT * parser, PT_NODE * node)
 
   assert_release (node->node_type != PT_LAST_NODE_NUMBER);
 
+  if (node->node_type == PT_SPEC)
+    {
+      /* prevent same spec_id on a parser tree */
+      return;
+    }
+
   /* find free list for for this id */
   idhash = parser->id % HASH_NUMBER;
 #if defined(SERVER_MODE)
@@ -918,7 +927,9 @@ parser_free_node (const PARSER_CONTEXT * parser, PT_NODE * node)
   /* before we free this node, see if we need to clear a db_value */
   if (node->node_type == PT_VALUE
       && node->info.value.db_value_is_in_workspace)
-    db_value_clear (&node->info.value.db_value);
+    {
+      db_value_clear (&node->info.value.db_value);
+    }
 
   /*
    * Always set the node type to maximum.  This may
@@ -1246,15 +1257,20 @@ parser_free_parser (PARSER_CONTEXT * parser)
   pt_unregister_parser (parser);
 
   if (parser->error_buffer)
-    free ((char *) parser->error_buffer);
+    {
+      free ((char *) parser->error_buffer);
+    }
 
   if (parser->host_variables)
     {
       DB_VALUE *hv;
       int i;
+
       for (i = 0, hv = parser->host_variables;
 	   i < parser->host_var_count + parser->auto_param_count; i++, hv++)
-	db_value_clear (hv);
+	{
+	  db_value_clear (hv);
+	}
       free_and_init (parser->host_variables);
     }
 

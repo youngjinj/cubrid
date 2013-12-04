@@ -351,6 +351,7 @@ static char *get_backslash_escape_string (void);
 static void update_query_execution_count (T_APPL_SERVER_INFO * as_info_p,
 					  char stmt_type);
 static bool need_reconnect_on_rctime (void);
+static void report_abnormal_host_status (int err_code);
 
 
 static char cas_u_type[] = { 0,	/* 0 */
@@ -560,13 +561,19 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd,
 
       db_set_preferred_hosts (shm_appl->preferred_hosts);
       db_set_connect_order (shm_appl->connect_order);
+      db_set_max_num_delayed_hosts_lookup (shm_appl->
+					   max_num_delayed_hosts_lookup);
 
       err_code = db_restart_ex (program_name, db_name, db_user, db_passwd,
 				NULL, client_type);
+
+      report_abnormal_host_status (err_code);
+
       if (err_code < 0)
 	{
 	  goto connect_error;
 	}
+
       cas_log_debug (ARG_FILE_LINE,
 		     "ux_database_connect: db_login(%s) db_restart(%s) at %s",
 		     db_user, db_name, host_connected);
@@ -696,6 +703,8 @@ ux_database_reconnect (void)
 
   db_set_preferred_hosts (shm_appl->preferred_hosts);
   db_set_connect_order (shm_appl->connect_order);
+  db_set_max_num_delayed_hosts_lookup (shm_appl->
+				       max_num_delayed_hosts_lookup);
 
   err_code = db_restart_ex (program_name, database_name, database_user,
 			    database_passwd, NULL, client_type);
@@ -1165,7 +1174,6 @@ ux_end_tran (int tran_type, bool reset_con_status)
   if (cas_get_db_connect_status () == -1	/* DB_CONNECTION_STATUS_RESET */
       || need_reconnect_on_rctime ())
     {
-      db_clear_reconnect_reason ();
       as_info->reset_flag = TRUE;
     }
 #endif /* !LIBCAS_FOR_JSP */
@@ -2620,6 +2628,23 @@ ux_set_lock_timeout (int lock_timeout)
   (void) tran_reset_wait_times (lock_timeout);
 }
 
+void
+ux_set_cas_change_mode (int mode, T_NET_BUF * net_buf)
+{
+#if !defined(LIBCAS_FOR_JSP)
+  int prev_mode;
+
+  prev_mode = as_info->cas_change_mode;
+  as_info->cas_change_mode = mode;
+
+  net_buf_cp_int (net_buf, 0, NULL);	/* result code */
+  net_buf_cp_int (net_buf, prev_mode, NULL);	/* result msg */
+#else
+  net_buf_cp_int (net_buf, 0, NULL);	/* result code */
+  net_buf_cp_int (net_buf, CAS_CHANGE_MODE_UNKNOWN, NULL);	/* result msg */
+#endif
+}
+
 int
 ux_fetch (T_SRV_HANDLE * srv_handle, int cursor_pos, int fetch_count,
 	  char fetch_flag, int result_set_index, T_NET_BUF * net_buf,
@@ -3905,29 +3930,132 @@ prepare_column_info_set (T_NET_BUF * net_buf, char ut, short scale, int prec,
 
   net_buf_cp_byte (net_buf, is_non_null);
 
-  if (client_version >= CAS_MAKE_VER (8, 3, 0))
+  if (client_version < CAS_MAKE_VER (8, 3, 0))
     {
-      if (default_value == NULL)
-	{
-	  net_buf_cp_int (net_buf, 1, NULL);
-	  net_buf_cp_byte (net_buf, '\0');
-	}
-      else
-	{
-	  int len = strlen (default_value) + 1;
-
-	  net_buf_cp_int (net_buf, len, NULL);
-	  net_buf_cp_str (net_buf, default_value, len);
-	}
-
-      net_buf_cp_byte (net_buf, auto_increment);
-      net_buf_cp_byte (net_buf, unique_key);
-      net_buf_cp_byte (net_buf, primary_key);
-      net_buf_cp_byte (net_buf, reverse_index);
-      net_buf_cp_byte (net_buf, reverse_unique);
-      net_buf_cp_byte (net_buf, foreign_key);
-      net_buf_cp_byte (net_buf, shared);
+      return;
     }
+
+  if (default_value == NULL)
+    {
+      net_buf_cp_int (net_buf, 1, NULL);
+      net_buf_cp_byte (net_buf, '\0');
+    }
+  else
+    {
+      int len = strlen (default_value) + 1;
+
+      net_buf_cp_int (net_buf, len, NULL);
+      net_buf_cp_str (net_buf, default_value, len);
+    }
+
+  net_buf_cp_byte (net_buf, auto_increment);
+  net_buf_cp_byte (net_buf, unique_key);
+  net_buf_cp_byte (net_buf, primary_key);
+  net_buf_cp_byte (net_buf, reverse_index);
+  net_buf_cp_byte (net_buf, reverse_unique);
+  net_buf_cp_byte (net_buf, foreign_key);
+  net_buf_cp_byte (net_buf, shared);
+}
+
+static const char *
+get_column_default_as_string (DB_ATTRIBUTE * attr, bool * alloc)
+{
+  DB_VALUE *def = NULL;
+  int len, err;
+  char *default_value_string = NULL;
+
+  *alloc = false;
+
+  /* Get default value string */
+  def = db_attribute_default (attr);
+  if (def == NULL)
+    {
+      return default_value_string;
+    }
+
+  if (db_value_is_null (def))
+    {
+      return "NULL";
+    }
+
+  switch (attr->default_value.default_expr)
+    {
+    case DB_DEFAULT_SYSDATE:
+      return "SYS_DATE";
+    case DB_DEFAULT_SYSDATETIME:
+      return "SYS_DATETIME";
+    case DB_DEFAULT_SYSTIMESTAMP:
+      return "SYS_TIMESTAMP";
+    case DB_DEFAULT_UNIX_TIMESTAMP:
+      return "UNIX_TIMESTAMP";
+    case DB_DEFAULT_USER:
+      return "USER";
+    case DB_DEFAULT_CURR_USER:
+      return "CURRENT_USER";
+    case DB_DEFAULT_NONE:
+      break;
+    }
+
+  switch (db_value_type (def))
+    {
+    case DB_TYPE_UNKNOWN:
+      break;
+
+    case DB_TYPE_SET:
+    case DB_TYPE_MULTISET:
+    case DB_TYPE_SEQUENCE:	/* DB_TYPE_LIST */
+      *alloc = true;
+      serialize_collection_as_string (def, &default_value_string);
+      break;
+
+    case DB_TYPE_CHAR:
+    case DB_TYPE_NCHAR:
+    case DB_TYPE_VARCHAR:
+    case DB_TYPE_VARNCHAR:
+      {
+	int def_size = DB_GET_STRING_SIZE (def);
+	char *def_str_p = DB_GET_STRING (def);
+	if (def_str_p)
+	  {
+	    default_value_string = (char *) malloc (def_size + 3);
+	    if (default_value_string != NULL)
+	      {
+		*alloc = true;
+		default_value_string[0] = '\'';
+		memcpy (default_value_string + 1, def_str_p, def_size);
+		default_value_string[def_size + 1] = '\'';
+		default_value_string[def_size + 2] = '\0';
+	      }
+	  }
+      }
+      break;
+
+    default:
+      {
+	DB_VALUE tmp_val;
+
+	err = db_value_coerce (def, &tmp_val,
+			       db_type_to_db_domain (DB_TYPE_VARCHAR));
+	if (err == NO_ERROR)
+	  {
+	    int def_size = DB_GET_STRING_SIZE (&tmp_val);
+	    char *def_str_p = DB_GET_STRING (&tmp_val);
+
+	    default_value_string = (char *) malloc (def_size + 1);
+	    if (default_value_string != NULL)
+	      {
+		*alloc = true;
+		memcpy (default_value_string, def_str_p, def_size);
+		default_value_string[def_size] = '\0';
+	      }
+	  }
+
+	db_value_clear (&tmp_val);
+      }
+      break;
+    }
+
+  return default_value_string;
 }
 
 static void
@@ -3947,15 +4075,8 @@ set_column_info (T_NET_BUF * net_buf, char ut,
   char reverse_unique = 0;
   char foreign_key = 0;
   char shared = 0;
-  char *default_value_string = NULL;
-  char *enum_values = NULL;
-  int enum_values_cnt = 0;
+  const char *default_value_string = NULL;
   bool alloced_default_value_string = false;
-  int def_size = 0;
-  char *def_str_p = NULL;
-  DB_VALUE default_value;
-
-  db_make_null (&default_value);
 
   if (client_version >= CAS_MAKE_VER (8, 3, 0))
     {
@@ -3972,53 +4093,8 @@ set_column_info (T_NET_BUF * net_buf, char ut,
       reverse_unique = db_attribute_is_reverse_unique (attr);
       shared = db_attribute_is_shared (attr);
       foreign_key = db_attribute_is_foreign_key (attr);
-
-      /* Get default value string */
-      def = db_attribute_default (attr);
-      if (def)
-	{
-	  switch (db_value_type (def))
-	    {
-	    case DB_TYPE_UNKNOWN:
-	      break;
-
-	    case DB_TYPE_SET:
-	    case DB_TYPE_MULTISET:
-	    case DB_TYPE_SEQUENCE:	/* DB_TYPE_LIST */
-	      alloced_default_value_string = true;
-	      serialize_collection_as_string (def, &default_value_string);
-	      break;
-
-	    case DB_TYPE_CHAR:
-	    case DB_TYPE_NCHAR:
-	      def_size = DB_GET_STRING_SIZE (def);
-	      def_str_p = DB_GET_STRING (def);
-	      if (def_str_p)
-		{
-		  default_value_string = (char *) malloc (def_size + 1);
-		  if (default_value_string != NULL)
-		    {
-		      alloced_default_value_string = true;
-		      memcpy (default_value_string, def_str_p, def_size);
-		      default_value_string[def_size] = '\0';
-		    }
-		}
-	      break;
-
-	    case DB_TYPE_VARCHAR:
-	    case DB_TYPE_VARNCHAR:
-	      default_value_string = db_get_char (def, &len);
-	      break;
-
-	    default:
-	      err = db_value_coerce (def, &default_value,
-				     db_type_to_db_domain (DB_TYPE_VARCHAR));
-	      if (err == NO_ERROR)
-		{
-		  default_value_string = db_get_char (&default_value, &len);
-		}
-	    }
-	}
+      default_value_string =
+	get_column_default_as_string (attr, &alloced_default_value_string);
     }
 
   prepare_column_info_set (net_buf,
@@ -4039,9 +4115,8 @@ set_column_info (T_NET_BUF * net_buf, char ut,
 
   if (alloced_default_value_string)
     {
-      FREE_MEM (default_value_string);
+      free ((char *) default_value_string);
     }
-  db_value_clear (&default_value);
 }
 
 static int
@@ -8113,7 +8188,7 @@ class_attr_info (char *class_name, DB_ATTRIBUTE * attr, char *attr_pattern,
       attr_table->shared = 0;
     }
 
-  if (db_attribute_is_unique (attr))
+  if (db_attribute_is_unique (attr) || db_attribute_is_reverse_unique (attr))
     {
       attr_table->unique = 1;
     }
@@ -9844,7 +9919,7 @@ static bool
 need_reconnect_on_rctime (void)
 {
 #if !defined(LIBCAS_FOR_JSP)
-  if (shm_appl->cas_rctime > 0 && db_get_need_reconnect ())
+  if (shm_appl->cas_rctime > 0 && db_need_reconnect ())
     {
       if ((time (NULL) - as_info->last_connect_time) > shm_appl->cas_rctime)
 	{
@@ -9853,4 +9928,112 @@ need_reconnect_on_rctime (void)
     }
 #endif /* !LIBCAS_FOR_JSP */
   return false;
+}
+
+static void
+report_abnormal_host_status (int err_code)
+{
+#if !defined(LIBCAS_FOR_JSP)
+  bool reset_after_endtran = false;
+  char *hostlist[MAX_NUM_DB_HOSTS * 2 + 1];
+  char **hostlist_p;
+  char buf[LINE_MAX], *p, *last;
+  int list_size = DIM (hostlist);
+
+  if (db_get_host_list_with_given_status
+      (hostlist, list_size, DB_HS_CONN_FAILURE) > 0)
+    {
+      hostlist_p = hostlist;
+
+      p = buf;
+      last = p + sizeof (buf);
+      p +=
+	snprintf (p, MAX (last - p, 0), "WARNING: failed to connect to %s",
+		  *hostlist_p++);
+      while (*hostlist_p != NULL)
+	{
+	  p += snprintf (p, MAX (last - p, 0), ", %s", *hostlist_p++);
+	}
+      snprintf (p, MAX (last - p, 0), ".");
+
+      cas_log_write_and_end (0, false, buf);
+    }
+
+  if (db_get_host_list_with_given_status
+      (hostlist, list_size, DB_HS_CONN_TIMEOUT) > 0)
+    {
+      hostlist_p = hostlist;
+
+      p = buf;
+      last = p + sizeof (buf);
+      p +=
+	snprintf (p, MAX (last - p, 0), "WARNING: attempt to connect to %s",
+		  *hostlist_p++);
+      while (*hostlist_p != NULL)
+	{
+	  p += snprintf (p, MAX (last - p, 0), ", %s", *hostlist_p++);
+	}
+      snprintf (p, MAX (last - p, 0), " timed out.");
+
+      cas_log_write_and_end (0, false, buf);
+    }
+
+  if (err_code == NO_ERROR && db_need_reconnect () == true)
+    {
+      if (db_does_connected_host_have_status (DB_HS_MISMATCHED_RW_MODE))
+	{
+	  if (shm_appl->access_mode == READ_WRITE_ACCESS_MODE)
+	    {
+	      reset_after_endtran = true;
+	      cas_log_write_and_end (0, false,
+				     "WARNING: connected to HA standby DB host.");
+	    }
+	  else
+	    {
+	      cas_log_write_and_end (0, false,
+				     "WARNING: connected to HA active DB host.");
+	    }
+	}
+
+      if (db_get_host_list_with_given_status
+	  (hostlist, list_size, DB_HS_HA_DELAYED) > 0)
+	{
+	  hostlist_p = hostlist;
+	  p = buf;
+	  last = p + sizeof (buf);
+	  p +=
+	    snprintf (p, MAX (last - p, 0),
+		      "WARNING: HA replication delay detected on %s",
+		      *hostlist_p++);
+
+	  while (*hostlist_p != NULL)
+	    {
+	      p += snprintf (p, MAX (last - p, 0), ", %s", *hostlist_p++);
+	    }
+	  snprintf (p, MAX (last - p, 0), ".");
+
+	  cas_log_write_and_end (0, false, buf);
+	}
+
+      if (db_does_connected_host_have_status (DB_HS_HA_DELAYED))
+	{
+	  cas_log_write_and_end (0, false, "WARNING: connected to host "
+				 "with HA replication delay.");
+	}
+
+      if (db_does_connected_host_have_status (DB_HS_NON_PREFFERED_HOSTS))
+	{
+	  cas_log_write_and_end (0, false,
+				 "WARNING: connected to non-preferred host.");
+	}
+
+      if (reset_after_endtran == false && shm_appl->cas_rctime > 0)
+	{
+	  cas_log_write_and_end (0, false,
+				 "WARNING: connection will be reset "
+				 "in %d sec(s) or later.",
+				 shm_appl->cas_rctime);
+	}
+    }
+#endif /* !LIBCAS_FOR_JSP */
 }

@@ -47,12 +47,15 @@ static ACCESS_INFO *access_control_find_access_info (ACCESS_INFO ai[],
 static int access_control_read_ip_info (IP_INFO * ip_info, char *filename,
 					char *admin_err_msg);
 static void access_control_repath_file (char *path);
-static int access_control_check_right_internal (char *dbname,
-						char *dbuser,
+static int access_control_check_right_internal (T_SHM_APPL_SERVER * shm_as_p,
+						char *dbname, char *dbuser,
 						unsigned char *address);
-static int access_control_check_ip (IP_INFO * ip_info,
-				    unsigned char *address);
+static int access_control_check_ip (T_SHM_APPL_SERVER * shm_as_p,
+				    IP_INFO * ip_info, unsigned char *address,
+				    int info_index);
 static char *access_control_trim (char *str);
+static int record_ip_access_time (T_SHM_APPL_SERVER * shm_as_p,
+				  int info_index, int list_index);
 
 int
 access_control_set_shm (T_SHM_APPL_SERVER * shm_as_p,
@@ -329,7 +332,8 @@ access_control_read_ip_info (IP_INFO * ip_info, char *filename,
   char buf[LINE_MAX];
   char *save;
   FILE *fd_ip_list;
-  unsigned char i, ln = 0;
+  unsigned char i;
+  unsigned int ln = 0;
 
   fd_ip_list = fopen (filename, "r");
 
@@ -368,9 +372,9 @@ access_control_read_ip_info (IP_INFO * ip_info, char *filename,
       if (ip_info->num_list >= ACL_MAX_IP_COUNT)
 	{
 	  sprintf (admin_err_msg,
-		   "Error while loading ip info file(%s)"
+		   "Error while loading ip info file(%s) line(%d)"
 		   " - max ip count(%d) exceeded.",
-		   filename, ACL_MAX_IP_COUNT);
+		   filename, ln, ACL_MAX_IP_COUNT);
 	  goto error;
 	}
 
@@ -382,7 +386,8 @@ access_control_read_ip_info (IP_INFO * ip_info, char *filename,
 	  if (token == NULL)
 	    {
 	      sprintf (admin_err_msg,
-		       "Error while loading ip info file(%s)", filename);
+		       "Error while loading ip info file(%s) line(%d)",
+		       filename, ln);
 	      goto error;
 	    }
 
@@ -401,7 +406,8 @@ access_control_read_ip_info (IP_INFO * ip_info, char *filename,
 		  (p && *p != '\0') || (adr > 255 || adr < 0))
 		{
 		  sprintf (admin_err_msg,
-			   "Error while loading ip info file(%s)", filename);
+			   "Error while loading ip info file(%s) line(%d)",
+			   filename, ln);
 		  goto error;
 		}
 
@@ -413,11 +419,13 @@ access_control_read_ip_info (IP_INFO * ip_info, char *filename,
 	  if (i == 3 && token != NULL)
 	    {
 	      sprintf (admin_err_msg,
-		       "Error while loading ip info file(%s)", filename);
+		       "Error while loading ip info file(%s) line(%d)",
+		       filename, ln);
 	      goto error;
 	    }
 	}
       ip_info->address_list[address_index] = i;
+      ip_info->last_access_time[ip_info->num_list] = 0;
       ip_info->num_list++;
     }
 
@@ -454,12 +462,14 @@ access_control_check_right (T_SHM_APPL_SERVER * shm_as_p,
 #endif
     }
 
-  return (access_control_check_right_internal (dbname, dbuser, address));
+  return (access_control_check_right_internal
+	  (shm_as_p, dbname, dbuser, address));
 }
 
 static int
-access_control_check_right_internal (char *dbname,
-				     char *dbuser, unsigned char *address)
+access_control_check_right_internal (T_SHM_APPL_SERVER * shm_as_p,
+				     char *dbname, char *dbuser,
+				     unsigned char *address)
 {
   int i;
   char *address_ptr;
@@ -486,7 +496,8 @@ access_control_check_right_internal (char *dbname,
 	      || strncasecmp (access_info[i].dbuser, dbuser,
 			      ACL_MAX_DBUSER_LENGTH) == 0))
 	{
-	  if (access_control_check_ip (&access_info[i].ip_info, address) == 0)
+	  if (access_control_check_ip
+	      (shm_as_p, &access_info[i].ip_info, address, i) == 0)
 	    {
 	      ret_val = 0;
 	      break;
@@ -503,7 +514,8 @@ access_control_check_right_internal (char *dbname,
 }
 
 static int
-access_control_check_ip (IP_INFO * ip_info, unsigned char *address)
+access_control_check_ip (T_SHM_APPL_SERVER * shm_as_p, IP_INFO * ip_info,
+			 unsigned char *address, int info_index)
 {
   int i;
 
@@ -521,15 +533,45 @@ access_control_check_ip (IP_INFO * ip_info, unsigned char *address)
 
       if (ip_info->address_list[address_index] == 0)
 	{
+	  record_ip_access_time (shm_as_p, info_index, i);
 	  return 0;
 	}
       else if (memcmp ((void *) &ip_info->address_list[address_index + 1],
 		       (void *) address,
 		       ip_info->address_list[address_index]) == 0)
 	{
+	  record_ip_access_time (shm_as_p, info_index, i);
 	  return 0;
 	}
     }
 
   return -1;
+}
+
+static int
+record_ip_access_time (T_SHM_APPL_SERVER * shm_as_p, int info_index,
+		       int list_index)
+{
+#if defined (WINDOWS)
+  char acl_sem_name[BROKER_NAME_LEN];
+#endif
+  if (access_info_changed != shm_as_p->acl_chn)
+    {
+      return -1;
+    }
+#if defined (WINDOWS)
+  MAKE_ACL_SEM_NAME (acl_sem_name, shm_as_p->broker_name);
+  uw_sem_wait (acl_sem_name);
+#else
+  uw_sem_wait (&shm_as_p->acl_sem);
+#endif
+  shm_as_p->access_info[info_index].ip_info.last_access_time[list_index] =
+    time (NULL);
+#if defined (WINDOWS)
+  uw_sem_post (acl_sem_name);
+#else
+  uw_sem_post (&shm_as_p->acl_sem);
+#endif
+
+  return 0;
 }

@@ -91,6 +91,7 @@ struct aggregate_info
   OUTPTR_LIST *out_list;
   VAL_LIST *value_list;
   REGU_VARIABLE_LIST regu_list;
+  REGU_VARIABLE_LIST scan_regu_list;
   PT_NODE *out_names;
   DB_VALUE **grbynum_valp;
   const char *class_name;
@@ -101,6 +102,7 @@ typedef struct analytic_info ANALYTIC_INFO;
 struct analytic_info
 {
   ANALYTIC_TYPE *head_list;
+  PT_NODE *sort_lists;
   PT_NODE *select_node;
   PT_NODE *select_list;
   VAL_LIST *val_list;

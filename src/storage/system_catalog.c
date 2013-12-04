@@ -627,6 +627,8 @@ catalog_initialize_new_page (THREAD_ENTRY * thread_p, const VFID * vfid_p,
       return false;
     }
 
+  (void) pgbuf_set_page_ptype (thread_p, page_p, PAGE_CATALOG);
+
   spage_initialize (thread_p, page_p, ANCHORED_DONT_REUSE_SLOTS,
 		    MAX_ALIGNMENT, SAFEGUARD_RVSPACE);
 
@@ -695,6 +697,8 @@ catalog_get_new_page (THREAD_ENTRY * thread_p, VPID * page_id_p,
       (void) file_dealloc_page (thread_p, &catalog_Id.vfid, page_id_p);
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
+
   return page_p;
 }
 
@@ -753,6 +757,8 @@ catalog_find_optimal_page (THREAD_ENTRY * thread_p, int size,
 	      return NULL;
 	    }
 
+	  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
+
 	  if (spage_get_record (page_p, CATALOG_HEADER_SLOT, &record, COPY) !=
 	      S_SUCCESS)
 	    {
@@ -795,6 +801,8 @@ catalog_find_optimal_page (THREAD_ENTRY * thread_p, int size,
 	{
 	  return NULL;
 	}
+
+      (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
 
       /* if the page is an overflow page or has itself an overflow page,
        * it can only have one record and cannot be used for other purposes,
@@ -1351,6 +1359,9 @@ catalog_get_record_from_page (THREAD_ENTRY * thread_p,
       return ER_FAILED;
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, catalog_record_p->page_p,
+				 PAGE_CATALOG);
+
   if (spage_get_record (catalog_record_p->page_p, catalog_record_p->slotid,
 			&catalog_record_p->recdes, PEEK) != S_SUCCESS)
     {
@@ -1557,14 +1568,14 @@ catalog_fetch_btree_statistics (THREAD_ENTRY * thread_p,
       return ER_FAILED;
     }
 
-  if (spage_get_record (root_page_p, CATALOG_HEADER_SLOT, &record, PEEK) !=
-      S_SUCCESS)
+  (void) pgbuf_check_page_ptype (thread_p, root_page_p, PAGE_BTREE);
+
+  if (btree_read_root_header (root_page_p, &root_header) != NO_ERROR)
     {
       pgbuf_unfix_and_init (thread_p, root_page_p);
       return ER_FAILED;
     }
 
-  btree_read_root_header (&record, &root_header);
   pgbuf_unfix_and_init (thread_p, root_page_p);
 
   btree_stats_p->key_type = root_header.key_type;
@@ -1616,6 +1627,8 @@ catalog_drop_representation_helper (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
   VPID overflow_vpid, new_overflow_vpid;
   PGLENGTH new_space;
   RECDES record = { 0, -1, REC_HOME, NULL };
+
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
 
   if (recdes_allocate_data_area (&record, DB_PAGESIZE) != NO_ERROR)
     {
@@ -1681,6 +1694,8 @@ catalog_drop_representation_helper (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 	  return ER_FAILED;
 	}
 
+      (void) pgbuf_check_page_ptype (thread_p, overflow_page_p, PAGE_CATALOG);
+
       spage_get_record (overflow_page_p, CATALOG_HEADER_SLOT, &record, PEEK);
       new_overflow_vpid.pageid =
 	CATALOG_GET_PGHEADER_OVFL_PGID_PAGEID (record.data);
@@ -1719,6 +1734,8 @@ catalog_drop_disk_representation_from_page (THREAD_ENTRY * thread_p,
     {
       return ER_FAILED;
     }
+
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
 
   if (catalog_drop_representation_helper (thread_p, page_p, page_id_p,
 					  slot_id) != NO_ERROR)
@@ -1768,6 +1785,8 @@ catalog_drop_representation_class_from_page (THREAD_ENTRY * thread_p,
 	{
 	  return ER_FAILED;
 	}
+
+      (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
     }
 
   if (catalog_drop_representation_helper (thread_p, page_p, page_id_p,
@@ -1815,6 +1834,8 @@ catalog_get_representation_record (THREAD_ENTRY * thread_p, OID * oid_p,
       return NULL;
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
+
   if (spage_get_record (page_p, oid_p->slotid, record_p, is_peek) !=
       S_SUCCESS)
     {
@@ -1855,6 +1876,8 @@ static int
 catalog_adjust_directory_count (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 				RECDES * record_p, int delta)
 {
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
+
   spage_get_record (page_p, CATALOG_HEADER_SLOT, record_p, COPY);
 
   log_append_undo_recdes2 (thread_p, RVCT_UPDATE, &catalog_Id.vfid, page_p,
@@ -2252,7 +2275,7 @@ catalog_get_representation_item (THREAD_ENTRY * thread_p, OID * class_id_p,
 	  || mht_count (catalog_Hash_table) > CATALOG_HASH_SIZE)
 	{
 	  /* hash table full */
-	  (void) mht_clear (catalog_Hash_table);
+	  (void) mht_clear (catalog_Hash_table, NULL, NULL);
 	  catalog_key_value_entry_point = 0;
 	}
 
@@ -2617,6 +2640,8 @@ catalog_create (THREAD_ENTRY * thread_p, CTID * catalog_id_p,
       return NULL;
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
+
   if (catalog_is_header_initialized == false)
     {
       catalog_initialize_max_space (&catalog_Max_space);
@@ -2695,6 +2720,8 @@ catalog_reclaim_space (THREAD_ENTRY * thread_p)
 	    {
 	      return ER_FAILED;
 	    }
+
+	  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
 
 	  /* page is empty?  */
 	  if (spage_number_of_records (page_p) <= 1)
@@ -3017,6 +3044,8 @@ catalog_update_class_info (THREAD_ENTRY * thread_p, OID * class_id_p,
     {
       return NULL;
     }
+
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
 
   recdes_set_data_area (&record, aligned_data, CATALOG_CLS_INFO_SIZE);
   if (spage_get_record (page_p, repr_item.slot_id, &record, COPY) !=
@@ -4033,6 +4062,8 @@ start:
       return NULL;
     }
 
+  (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_CATALOG);
+
   recdes_set_data_area (&record, aligned_data, CATALOG_CLS_INFO_SIZE);
   if (spage_get_record (page_p, repr_item.slot_id, &record, COPY) !=
       S_SUCCESS)
@@ -4478,6 +4509,8 @@ catalog_check_class_consistency (THREAD_ENTRY * thread_p, OID * class_oid_p)
 	  return DISK_ERROR;
 	}
 
+      (void) pgbuf_check_page_ptype (thread_p, repr_page_p, PAGE_CATALOG);
+
       if (spage_get_record (repr_page_p, repr_item.slot_id, &record,
 			    PEEK) != S_SUCCESS)
 	{
@@ -4922,7 +4955,7 @@ catalog_clear_hash_table ()
   rv = pthread_mutex_lock (&catalog_Hash_table_lock);
   if (catalog_Hash_table != NULL)
     {
-      (void) mht_clear (catalog_Hash_table);
+      (void) mht_clear (catalog_Hash_table, NULL, NULL);
       catalog_key_value_entry_point = 0;
     }
   pthread_mutex_unlock (&catalog_Hash_table_lock);
@@ -4946,6 +4979,8 @@ catalog_rv_new_page_redo (THREAD_ENTRY * thread_p, LOG_RCV * recv_p)
   aligned_data = PTR_ALIGN (data, MAX_ALIGNMENT);
 
   catalog_clear_hash_table ();
+
+  (void) pgbuf_set_page_ptype (thread_p, recv_p->pgptr, PAGE_CATALOG);
 
   spage_initialize (thread_p, recv_p->pgptr, ANCHORED_DONT_REUSE_SLOTS,
 		    MAX_ALIGNMENT, SAFEGUARD_RVSPACE);

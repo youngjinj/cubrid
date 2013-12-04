@@ -1569,6 +1569,8 @@ proxy_socket_io_new_client (SOCKET lsnr_fd)
   int error;
 #endif
 
+  proxy_info_p->num_connect_requests++;
+
 #if defined(WINDOWS)
   client_fd = lsnr_fd;
   client_ip = accept_ip_addr;
@@ -1823,6 +1825,8 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
       if (access_control_check_right (shm_as_p, db_name, db_user, ip_addr) <
 	  0)
 	{
+	  proxy_info_p->num_connect_rejected++;
+
 	  snprintf (err_msg, sizeof (err_msg),
 		    "Authorization error.(Address is rejected)");
 	  proxy_context_set_error_with_msg (ctx_p, DBMS_ERROR_INDICATOR,
@@ -1855,7 +1859,7 @@ proxy_process_client_register (T_SOCKET_IO * sock_io_p)
   strncpy (ctx_p->database_user, db_user, SRV_CON_DBUSER_SIZE - 1);
   strncpy (ctx_p->database_passwd, db_passwd, SRV_CON_DBPASSWD_SIZE - 1);
 
-  if (proxy_info_p->fixed_conn_info == false)
+  if (proxy_info_p->fixed_shard_user == false)
     {
       event_p = proxy_event_new_with_rsp (driver_info,
 					  PROXY_EVENT_CLIENT_REQUEST,
@@ -5162,7 +5166,7 @@ proxy_check_authorization (T_PROXY_CONTEXT * ctx_p, const char *db_name,
 	  goto authorization_error;
 	}
 
-      if (proxy_info_p->fixed_conn_info == false)
+      if (proxy_info_p->fixed_shard_user == false)
 	{
 	  return 0;
 	}
@@ -5180,7 +5184,7 @@ proxy_check_authorization (T_PROXY_CONTEXT * ctx_p, const char *db_name,
 	  goto authorization_error;
 	}
 
-      if (proxy_info_p->fixed_conn_info == false)
+      if (proxy_info_p->fixed_shard_user == false)
 	{
 	  return 0;
 	}

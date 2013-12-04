@@ -288,7 +288,7 @@ ws_make_mop (OID * oid)
       /* Initialize mvcc snapshot version to be sure it doesn't match with
        * current mvcc snapshot version.
        */
-      op->mvcc_snapshot_version = ws_get_mvcc_snapshot_version () -1;
+      op->mvcc_snapshot_version = ws_get_mvcc_snapshot_version () - 1;
 
       /* this is NULL only for the Null_object hack */
       if (oid != NULL)
@@ -2732,7 +2732,7 @@ ws_reset_classname_cache (void)
        * don't need to map over entries because the name strings
        * are part of the class structure
        */
-      (void) mht_clear (Classname_cache);
+      (void) mht_clear (Classname_cache, NULL, NULL);
     }
 }
 #endif /* ENABLE_UNUSED_FUNCTION */
@@ -3853,7 +3853,7 @@ ws_abort_mops (bool only_unpinned)
 	   * If the object has an exclusive lock, decache the object. As
 	   * a security measure we also check for the dirty bit.
 	   */
-	  if (ws_get_lock (mop) == X_LOCK || WS_ISDIRTY (mop))
+	  if (IS_WRITE_EXCLUSIVE_LOCK (ws_get_lock (mop)) || WS_ISDIRTY (mop))
 	    {
 	      ws_decache (mop);
 	    }
@@ -3904,7 +3904,8 @@ ws_decache_allxlockmops_but_norealclasses (void)
 	{
 	  save_hash_link = mop->hash_link;
 	  if (mop->pinned == 0
-	      && (ws_get_lock (mop) == X_LOCK || WS_ISDIRTY (mop))
+	      && (IS_WRITE_EXCLUSIVE_LOCK (ws_get_lock (mop))
+		  || WS_ISDIRTY (mop))
 	      && (mop->class_mop != sm_Root_class_mop || mop->object == NULL
 		  || ((SM_CLASS *) mop->object)->class_type == SM_CLASS_CT))
 	    {
@@ -4229,7 +4230,7 @@ ws_dump (FILE * fpp)
   fprintf (fpp, "%d instance mops (%d cached, %d uncached)\n", instances,
 	   cached_instances, instances - cached_instances);
 
-  fprintf (fpp, "%d unkown mops\n", unknown);
+  fprintf (fpp, "%d unknown mops\n", unknown);
   if (weird)
     {
       fprintf (fpp, "*** %d unknown mops with cached objects\n", weird);

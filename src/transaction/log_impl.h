@@ -498,17 +498,21 @@ struct logwr_info
   pthread_mutex_t wr_list_mutex;
   pthread_cond_t flush_start_cond;
   pthread_mutex_t flush_start_mutex;
+  pthread_cond_t flush_wait_cond;
+  pthread_mutex_t flush_wait_mutex;
   pthread_cond_t flush_end_cond;
   pthread_mutex_t flush_end_mutex;
   bool skip_flush;
+  bool flush_completed;
 };
 
 #define LOGWR_INFO_INITIALIZER                                 \
   {NULL,                                                       \
     PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,       \
     PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,       \
+    PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,       \
     PTHREAD_MUTEX_INITIALIZER,                                 \
-    false}
+    false, false}
 
 typedef struct log_append_info LOG_APPEND_INFO;
 struct log_append_info
@@ -635,29 +639,12 @@ struct log_clientids		/* see BOOT_CLIENT_CREDENTIAL */
   int process_id;
 };
 
-typedef enum update_stats_action_type UPDATE_STATS_ACTION_TYPE;
-enum update_stats_action_type
-{
-  UPDATE_STATS_ACTION_SET,
-  UPDATE_STATS_ACTION_KEEP,
-  UPDATE_STATS_ACTION_RESET
-};
-
-typedef struct btid_list BTID_LIST;
-struct btid_list
-{
-  BTID_LIST *next;
-  BTID btid;
-};
-
 typedef struct modified_class_entry MODIFIED_CLASS_ENTRY;
 struct modified_class_entry
 {
   MODIFIED_CLASS_ENTRY *next;
-  BTID_LIST *btid_list;
   OID class_oid;
   LOG_LSA last_modified_lsa;
-  bool need_update_stats;
 };
 
 /* there can be following transitions in transient lobs
@@ -848,9 +835,10 @@ struct log_tdes
 				   unique_stat_info array
 				 */
   int max_unique_btrees;	/* size of unique_stat_info array */
-  BTREE_UNIQUE_STATS *unique_stat_info;	/* Store local statistical info for
-					   multiple row update performed by client.
-					 */
+  BTREE_UNIQUE_STATS *tran_unique_stats;	/* Store local statistical info
+						   for multiple row update 
+						   performed by client.
+						 */
 #if defined(_AIX)
   sig_atomic_t interrupt;
 #else				/* _AIX */

@@ -641,6 +641,7 @@ db_compile_statement_local (DB_SESSION * session)
       && is_schema_repl_log_statment (statement)
       && log_does_allow_replication () == true)
     {
+      unsigned int save_custom;
       if (session->ddl_stmts_for_replication == NULL)
 	{
 	  int size = sizeof (char *) * session->dimension;
@@ -656,8 +657,11 @@ db_compile_statement_local (DB_SESSION * session)
 	  memset (session->ddl_stmts_for_replication, '\0', size);
 	}
 
+      save_custom = parser->custom_print;
+      parser->custom_print |= PT_CHARSET_COLLATE_USER_ONLY;
       session->ddl_stmts_for_replication[stmt_ndx] =
 	parser_print_tree_with_quotes (parser, statement);
+      parser->custom_print = save_custom;
 
       assert_release (session->ddl_stmts_for_replication[stmt_ndx] != NULL);
     }
@@ -3510,7 +3514,7 @@ db_get_all_chosen_classes (int (*p) (MOBJ o))
     {
       /* make sure we have a user */
       last = NULL;
-      lmops = locator_get_all_class_mops (DB_FETCH_CLREAD_INSTREAD, p);
+      lmops = locator_get_all_class_mops (DB_FETCH_READ, p);
       /* probably should make sure
        * we push here because the list could be long */
       if (lmops != NULL)

@@ -3600,14 +3600,12 @@ do_update_stats (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  if (statement->info.update_stats.with_fullscan)
 	    {
 	      assert (statement->info.update_stats.with_fullscan == 1);
-	      error =
-		sm_update_statistics (obj, NULL, true, STATS_WITH_FULLSCAN);
+	      error = sm_update_statistics (obj, STATS_WITH_FULLSCAN);
 	    }
 	  else
 	    {
 	      assert (statement->info.update_stats.with_fullscan == 0);
-	      error =
-		sm_update_statistics (obj, NULL, true, STATS_WITH_SAMPLING);
+	      error = sm_update_statistics (obj, STATS_WITH_SAMPLING);
 	    }
 	}			/* for (cls = ...) */
     }
@@ -4305,7 +4303,7 @@ do_get_optimization_param (PARSER_CONTEXT * parser, PT_NODE * statement)
   DB_VALUE *val;
   PT_NODE *into_var;
   const char *into_name;
-  char cost[2];
+  char *cost;
   int error = NO_ERROR;
 
   val = db_value_create ();
@@ -4335,10 +4333,20 @@ do_get_optimization_param (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    return ER_OBJ_INVALID_ARGUMENTS;
 	  }
 
+	/* 'cost' is referenced by 'val', it should be allocated from heap,
+	 * and will be freed when free 'val' if set 'need_clear' to
+	 * 'true' */
+	cost = db_private_alloc (NULL, 2);
+	if (cost == NULL)
+	  {
+	    return ER_OUT_OF_VIRTUAL_MEMORY;
+	  }
+
 	qo_get_optimization_param (cost, QO_PARAM_COST,
 				   DB_GET_STRING (&plan));
 	pr_clear_value (&plan);
 	db_make_string (val, cost);
+	val->need_clear = true;
       }
     default:
       /*
@@ -8063,14 +8071,16 @@ update_real_class (PARSER_CONTEXT * parser, PT_NODE * statement)
 
   while (spec)
     {
+      /* Safety check: make sure that we have access to the class. We're only
+       * setting a weak lock here which guarantees that the schema for the
+       * classes which are updated in this query is not changed. The correct
+       * lock for this operation will be set server side when the SELECT part
+       * of the operation is being performed.
+       */
       if (spec->info.spec.flag & PT_SPEC_FLAG_UPDATE)
 	{
 	  class_obj = spec->info.spec.flat_entity_list->info.name.db_object;
-
-	  /* The IX lock on the class is sufficient.
-	   * DB_FETCH_QUERY_WRITE => DB_FETCH_CLREAD_INSTWRITE
-	   */
-	  if (!locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTWRITE))
+	  if (!locator_fetch_class (class_obj, DB_FETCH_READ))
 	    {
 	      goto exit_on_error;
 	    }
@@ -8846,30 +8856,6 @@ do_execute_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  continue;		/* continue to next UPDATE statement */
 	}
 
-      spec = statement->info.update.spec;
-      while (spec)
-	{
-	  if (spec->info.spec.flag & PT_SPEC_FLAG_UPDATE)
-	    {
-	      flat = spec->info.spec.flat_entity_list;
-	      class_obj = (flat) ? flat->info.name.db_object : NULL;
-	      /* The IX lock on the class is sufficient.
-	         DB_FETCH_QUERY_WRITE => DB_FETCH_CLREAD_INSTWRITE */
-	      if (locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTWRITE)
-		  == NULL)
-		{
-		  err = er_errid ();
-		  break;	/* stop while loop if error */
-		}
-	    }
-
-	  spec = spec->next;
-	}
-      if (err != NO_ERROR)
-	{
-	  break;		/* stop while loop if error */
-	}
-
       /*
        * Server-side update or OID list update case:
        *  execute the prepared(stored) XASL (UPDATE_PROC or SELECT statement)
@@ -9088,7 +9074,7 @@ static int delete_object_by_oid (const PARSER_CONTEXT * parser,
 				 const PT_NODE * statement);
 #endif /* ENABLE_UNUSED_FUNCTION */
 static int delete_list_by_oids (PARSER_CONTEXT * parser,
-				QFILE_LIST_ID * list_id);
+				PT_NODE * statement, QFILE_LIST_ID * list_id);
 static int build_xasl_for_server_delete (PARSER_CONTEXT * parser,
 					 PT_NODE * statement);
 static int delete_real_class (PARSER_CONTEXT * parser, PT_NODE * statement);
@@ -9242,10 +9228,12 @@ delete_object_by_oid (const PARSER_CONTEXT * parser,
  * delete_list_by_oids() - Deletes every oid in a list file
  *   return: Error code if delete fails
  *   parser(in): Parser context
+ *   statement(in): Delete statement
  *   list_id(in): A list file of oid's
  */
 static int
-delete_list_by_oids (PARSER_CONTEXT * parser, QFILE_LIST_ID * list_id)
+delete_list_by_oids (PARSER_CONTEXT * parser, PT_NODE * statement,
+		     QFILE_LIST_ID * list_id)
 {
   int error = NO_ERROR;
   int cursor_status;
@@ -9254,12 +9242,32 @@ delete_list_by_oids (PARSER_CONTEXT * parser, QFILE_LIST_ID * list_id)
   int count = 0, attrs_cnt = 0, idx;	/* how many objects were deleted? */
   const char *savepoint_name = NULL;
   int *flush_to_server = NULL;
-  DB_OBJECT *mop = NULL;
+  DB_OBJECT *mop = NULL, *class_obj = NULL;
   bool has_savepoint = false, is_cursor_open = false;
+  PT_NODE *spec;
 
   if (list_id == NULL)
     {
       return NO_ERROR;
+    }
+
+  spec = statement->info.delete_.spec;
+  while (spec)
+    {
+      if (spec->info.spec.flag & PT_SPEC_FLAG_DELETE)
+	{
+	  class_obj = spec->info.spec.flat_entity_list->info.name.db_object;
+	  /* place IX lock on the class. This should have been done already
+	   * when the list_id was produced but this is the last opportunity
+	   * we have before actually deleting objects.
+	   */
+	  if (locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTWRITE)
+	      == NULL)
+	    {
+	      return er_errid ();
+	    }
+	}
+      spec = spec->next;
     }
 
   /* if the list file contains more than 1 object we need to savepoint
@@ -9576,9 +9584,10 @@ delete_real_class (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    {
 	      has_virt_object = true;
 	    }
-	  /* The IX lock on the class is sufficient.
-	     DB_FETCH_QUERY_WRITE => DB_FETCH_CLREAD_INSTWRITE */
-	  class_ = locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTWRITE);
+	  /* place weak lock here, we will upgrade it once the actual
+	   * DELETE operation starts
+	   */
+	  class_ = locator_fetch_class (class_obj, DB_FETCH_READ);
 	  if (!class_)
 	    {
 	      return er_errid ();
@@ -9643,10 +9652,11 @@ delete_real_class (PARSER_CONTEXT * parser, PT_NODE * statement)
 	}
 
       /* delete each oid */
-      error = delete_list_by_oids (parser, oid_list);
+      error = delete_list_by_oids (parser, statement, oid_list);
       regu_free_listid (oid_list);
       pt_end_query (parser);
     }
+
   return error;
 }
 
@@ -10128,29 +10138,16 @@ do_execute_delete (PARSER_CONTEXT * parser, PT_NODE * statement)
       while (node && err == NO_ERROR)
 	{
 	  flat = node->info.spec.flat_entity_list;
-	  class_obj = (flat) ? flat->info.name.db_object : NULL;
-
-	  if (node->info.spec.flag & PT_SPEC_FLAG_DELETE)
+	  if (flat != NULL)
 	    {
-	      /* The IX lock on the class is sufficient.
-	         DB_FETCH_QUERY_WRITE => DB_FETCH_CLREAD_INSTWRITE */
-	      if (locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTWRITE)
-		  == NULL)
+	      /* flush necessary objects before execute */
+	      err = sm_flush_objects (flat->info.name.db_object);
+	      if (err != NO_ERROR)
 		{
-		  err = er_errid ();
-		  break;	/* stop while loop if error */
+		  break;
 		}
 	    }
-
-	  /* flush necessary objects before execute */
-	  err = sm_flush_objects (class_obj);
-
 	  node = node->next;
-	}
-
-      if (err != NO_ERROR)
-	{
-	  break;		/* stop while loop if error */
 	}
 
       /* Request that the server executes the stored XASL, which is
@@ -10218,7 +10215,7 @@ do_execute_delete (PARSER_CONTEXT * parser, PT_NODE * statement)
 	      AU_SAVE_AND_DISABLE (au_save);	/* this prevents authorization
 						   checking during execution */
 	      /* delete each oid */
-	      err = delete_list_by_oids (parser, list_id);
+	      err = delete_list_by_oids (parser, statement, list_id);
 	      AU_RESTORE (au_save);
 	      if (old_wait_msecs >= -1)
 		{
@@ -11830,6 +11827,7 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
      rest of do_insert is sensitive to er_errid(). */
   er_clear ();
 
+  /* fetch the class for instance write purpose */
   if (!locator_fetch_class (class_->info.name.db_object,
 			    DB_FETCH_CLREAD_INSTWRITE))
     {
@@ -14454,10 +14452,6 @@ do_replicate_schema (PARSER_CONTEXT * parser, PT_NODE * statement)
       repl_schema.statement_type = CUBRID_STMT_DROP_SERIAL;
       break;
 
-    case PT_DROP_VARIABLE:
-      repl_schema.statement_type = CUBRID_STMT_DROP_LABEL;
-      break;
-
     case PT_CREATE_STORED_PROCEDURE:
       repl_schema.statement_type = CUBRID_STMT_CREATE_STORED_PROCEDURE;
       break;
@@ -14520,6 +14514,7 @@ do_replicate_schema (PARSER_CONTEXT * parser, PT_NODE * statement)
       break;
 
     case PT_UPDATE_STATS:	/* UPDATE STATISTICS statements are not replicated intentionally. */
+    case PT_DROP_VARIABLE:	/* DROP VARIABLE statements are not replicated intentionally. */
     default:
       return NO_ERROR;
     }
@@ -14535,6 +14530,7 @@ do_replicate_schema (PARSER_CONTEXT * parser, PT_NODE * statement)
     }
   repl_schema.ddl = parser->ddl_stmt_for_replication;
   repl_schema.db_user = db_get_user_name ();
+  repl_schema.sys_prm_context = sysprm_print_parameters_for_ha_repl ();
 
   assert_release (repl_schema.db_user != NULL);
 
@@ -14543,6 +14539,10 @@ do_replicate_schema (PARSER_CONTEXT * parser, PT_NODE * statement)
   error = locator_flush_replication_info (&repl_info);
 
   db_string_free (repl_schema.db_user);
+  if (repl_schema.sys_prm_context)
+    {
+      free (repl_schema.sys_prm_context);
+    }
 
   return error;
 }
@@ -15957,14 +15957,6 @@ do_execute_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
     }
   class_obj = flat->info.name.db_object;
 
-  /* The IX lock on the class is sufficient.
-   * DB_FETCH_QUERY_WRITE => DB_FETCH_CLREAD_INSTWRITE */
-  if (locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTWRITE) == NULL)
-    {
-      err = er_errid ();
-      goto exit;
-    }
-
   if (statement->info.merge.flags & PT_MERGE_INFO_SERVER_OP)
     {
       /* server side execution */
@@ -16059,6 +16051,13 @@ do_execute_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    {
 	      goto exit;
 	    }
+	}
+
+      /* make sure we have a correct lock on the class */
+      if (locator_fetch_class (class_obj, DB_FETCH_CLREAD_INSTWRITE) == NULL)
+	{
+	  err = er_errid ();
+	  goto exit;
 	}
 
       /* get results from insert's select query */

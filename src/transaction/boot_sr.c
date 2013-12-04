@@ -82,6 +82,7 @@
 #include "connection_error.h"
 #include "connection_sr.h"
 #include "server_support.h"
+#include "tsc_timer.h"
 #endif /* SERVER_MODE */
 #include "serial.h"
 #include "server_interface.h"
@@ -143,6 +144,8 @@ extern int catcls_get_db_collation (THREAD_ENTRY * thread_p,
 extern int catcls_find_and_set_serial_class_oid (THREAD_ENTRY * thread_p);
 
 #if defined(SA_MODE)
+int thread_Recursion_depth = 0;
+
 extern void boot_client_all_finalize (bool is_er_final);
 #endif /* SA_MODE */
 
@@ -1543,7 +1546,8 @@ boot_add_temp_volume (THREAD_ENTRY * thread_p, DKNPAGES min_npages)
   DKNPAGES ext_npages, part_npages;
   DBDEF_VOL_EXT_INFO ext_info;
 #if defined (SERVER_MODE)
-  struct timeval start, end;
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL tv_diff;
 #endif /* SERVER_MODE */
 
   if (boot_Temp_volumes_max_pages == -2)
@@ -1703,7 +1707,7 @@ boot_add_temp_volume (THREAD_ENTRY * thread_p, DKNPAGES min_npages)
 	  ext_info.extend_npages = ext_info.max_npages;
 
 #if defined(SERVER_MODE)
-	  gettimeofday (&start, NULL);
+	  tsc_getticks (&start_tick);
 #endif /* SERVER_MODE */
 
 	  temp_volid = boot_add_volume (thread_p, &ext_info);
@@ -1714,8 +1718,10 @@ boot_add_temp_volume (THREAD_ENTRY * thread_p, DKNPAGES min_npages)
 	    }
 
 #if defined(SERVER_MODE)
-	  gettimeofday (&end, NULL);
-	  ADD_TIMEVAL (thread_p->event_stats.temp_expand_time, start, end);
+	  tsc_getticks (&end_tick);
+	  tsc_elapsed_time_usec (&tv_diff, end_tick, start_tick);
+	  TSC_ADD_TIMEVAL (thread_p->event_stats.temp_expand_time, tv_diff);
+
 	  thread_p->event_stats.temp_expand_pages += possible_max_npages;
 #endif /* SERVER_MODE */
 	}
@@ -2519,6 +2525,7 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
   char lob_pathbuf[LOB_PATH_PREFIX_MAX + PATH_MAX];
   char dbtxt_label[PATH_MAX];
   char fixed_pathbuf[PATH_MAX];
+  char original_namebuf[PATH_MAX];
 #if defined (NDEBUG)
   char format[BOOT_FORMAT_MAX_LENGTH];
 #endif
@@ -2561,6 +2568,9 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
   set_area_init ();
   pr_area_init ();
   tp_init ();
+
+  /* Initialize tsc-timer */
+  tsc_init ();
 
   /* Clear error structure */
   er_clear ();
@@ -2786,8 +2796,18 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
 	   * Note: we do not call xboot_delete since it shuttdown the system and
 	   *       update database.txt that we have a read copy of its content.
 	   */
-	  error_code = boot_remove_all_volumes (thread_p, boot_Db_full_name,
-						log_path, log_prefix,
+
+	  /* Note: for database replacement, we need to remove the old database 
+	   *       with its original path!
+	   */
+	  memset (original_namebuf, 0, sizeof (original_namebuf));
+
+	  /* Compose the original full name of the database */
+	  snprintf (original_namebuf, sizeof (original_namebuf), "%s%c%s",
+		    dir->pathname, PATH_SEPARATOR, dir->name);
+
+	  error_code = boot_remove_all_volumes (thread_p, original_namebuf,
+						dir->logpath, log_prefix,
 						false, true);
 	  if (error_code != NO_ERROR)
 	    {
@@ -3289,6 +3309,9 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
   /* initialize the type/doain module (also sets up an area) */
   tp_init ();
 
+  /* Initialize tsc-timer */
+  tsc_init ();
+
 #if defined(DIAG_DEVEL)
   init_diag_mgr (server_name, thread_num_worker_threads (), NULL);
 #endif /* DIAG_DEVEL */
@@ -3433,8 +3456,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
     }
 
   oid_set_root (&boot_Db_parm->rootclass_oid);
-  error_code =
-    catcls_find_and_set_serial_class_oid (thread_p);
+  error_code = catcls_find_and_set_serial_class_oid (thread_p);
   if (error_code != NO_ERROR)
     {
       fileio_dismount_all (thread_p);
@@ -3808,6 +3830,9 @@ xboot_restart_from_backup (THREAD_ENTRY * thread_p, int print_restart,
   area_init (false);
 
   tp_init ();
+
+  /* Initialize tsc-timer */
+  tsc_init ();
 
   if (boot_restart_server (thread_p, print_restart, db_name, true, true,
 			   r_args) != NO_ERROR)
@@ -6193,6 +6218,9 @@ xboot_emergency_patch (THREAD_ENTRY * thread_p, const char *db_name,
       (void) lang_set_charset (INTL_CODESET_ISO88591);
 
       tp_init ();
+
+      /* Initialize tsc-timer */
+      tsc_init ();
 
       error_code =
 	catcls_get_server_lang_charset (thread_p, &db_charset_db_root,

@@ -248,6 +248,11 @@ client_capabilities (void)
       capabilities |= NET_CAP_UPDATE_DISABLED;
     }
 
+  if (db_need_ignore_repl_delay ())
+    {
+      capabilities |= NET_CAP_HA_IGNORE_REPL_DELAY;
+    }
+
   return capabilities;
 }
 
@@ -328,11 +333,7 @@ check_server_capabilities (int server_cap, int client_type, int rel_compare,
 					 NET_CAP_UPDATE_DISABLED));
 	  server_cap ^= NET_CAP_UPDATE_DISABLED;
 
-	  db_set_reconnect_reason (DB_RC_MISMATCHED_RW_MODE);
-	}
-      else
-	{
-	  db_unset_reconnect_reason (DB_RC_MISMATCHED_RW_MODE);
+	  db_set_host_status (net_Server_host, DB_HS_MISMATCHED_RW_MODE);
 	}
     }
 
@@ -347,7 +348,7 @@ check_server_capabilities (int server_cap, int client_type, int rel_compare,
 	      net_Server_host);
       server_cap ^= NET_CAP_HA_REPL_DELAY;
 
-      db_set_reconnect_reason (DB_RC_HA_REPL_DELAY);
+      db_set_host_status (net_Server_host, DB_HS_HA_DELAYED);
     }
 
   /* network protocol compatibility */
@@ -2694,8 +2695,12 @@ net_client_request_with_logwr_context (LOGWR_CONTEXT * ctx_ptr,
 	      if (request_error != ctx_ptr->last_error)
 		{
 		  /* By server error or shutdown */
-		  error = ER_NET_SERVER_CRASHED;
-		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
+		  error = request_error;
+		  if (error != ER_HA_LW_FAILED_GET_LOG_PAGE)
+		    {
+		      error = ER_NET_SERVER_CRASHED;
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
+		    }
 		}
 
 	      ctx_ptr->shutdown = true;

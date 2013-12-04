@@ -199,7 +199,7 @@ Mevcut komut:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
@@ -231,6 +231,10 @@ Mevcut komut:\n\
 36 Sunucu HA için yapılandırıldı.\n
 38 HA için ayarlanan sunucu ha_db_list.\n görülmedi. \n Listesinde
 39 HA için ayarlanan sunucu in_ ha_node_list.\n görülmedi. \n Listesinde
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 UYARI: -t seçeneği stand-alone modu yürütülmesine göz ardı edilir.\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 Son kararlı hattı: %d
 114 hata-kontrol-dosyası
 115 yükleme sırasında bir hata(lar) kontrol etmek için giriş dosyası
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: Veritabanına veri alma nesneler ve şemalar.\n\
 kullanım: %s loaddb [SEÇENEK] database-name\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 %d nesneleri yalnızca %d tanesinde başarılı atılıyor.\n
 47 çıkış dizin çok uzun.\n
 48 LSA : %d %d \n
+49 Şifre:
 60 \
 unloaddb: Veritabanındaki nesneleri ve şemalar verin.\n\
 kullanım: %s unloaddb [SEÇENEK] database-name\n\
 \n\
 geçerli seçenekler:\n\
+  -u, --user=ID               veritabanı erişimi için kullanıcı kimliği; varsayılan: "dba"\n\
+  -p, --password=PASS         kullanıcı şifresi; varsayılan: hiçbir\n\
   -i, --input-class-file=FILE tablo adlarının giriş FILE varsayılan: tüm sınıflar dökümü\n\
       --include-reference     başvurulan tablolar arasında; ile-i seçeneği; varsayılan: Engelli\n\
       --input-class-only      sadece belirtilen sınıf arasında; ile-i seçeneği; varsayılan: devre dışı\n\

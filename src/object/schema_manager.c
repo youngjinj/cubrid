@@ -3840,9 +3840,6 @@ sm_get_statistics_force (MOP classop)
  *    cache them with the class.
  *   return: NO_ERROR on success, non-zero for ERROR
  *   classop(in): class object
- *   btid(in): btree id
- *   do_now(in): update statistics right now or
- *               delay it until a transaction is committed
  *   with_fullscan(in): true iff WITH FULLSCAN
  *
  * NOTE: We will delay updating statistics until a transaction is committed
@@ -3850,8 +3847,7 @@ sm_get_statistics_force (MOP classop)
  *       "alter table ..." or "create index ...".
  */
 int
-sm_update_statistics (MOP classop, BTID * btid, bool do_now,
-		      bool with_fullscan)
+sm_update_statistics (MOP classop, bool with_fullscan)
 {
   int error = NO_ERROR;
   SM_CLASS *class_;
@@ -3877,8 +3873,7 @@ sm_update_statistics (MOP classop, BTID * btid, bool do_now,
 	  return er_errid ();
 	}
 
-      error = stats_update_statistics (WS_OID (classop), btid,
-				       (do_now ? 1 : 0),
+      error = stats_update_statistics (WS_OID (classop),
 				       (with_fullscan ? 1 : 0));
       if (error == NO_ERROR)
 	{
@@ -4008,7 +4003,7 @@ sm_update_catalog_statistics (const char *class_name, bool with_fullscan)
   obj = db_find_class (class_name);
   if (obj != NULL)
     {
-      error = sm_update_statistics (obj, NULL, true, with_fullscan);
+      error = sm_update_statistics (obj, with_fullscan);
     }
   else
     {
@@ -5262,64 +5257,86 @@ sm_find_index (MOP classop, char **att_names, int num_atts,
   SM_CLASS_CONSTRAINT *con = NULL;
   SM_ATTRIBUTE *att1, *att2;
   BTID *index = NULL;
-
+  bool force_local_index = false;
   index = NULL;
+
   error = au_fetch_class (classop, &class_, AU_FETCH_READ, AU_SELECT);
-  if (error == NO_ERROR)
+  if (error != NO_ERROR)
     {
-      /* never use an unique index upon a class hierarchy */
-      if (unique_index_only && (class_->inheritance || class_->users))
+      return NULL;
+    }
+
+  if (class_->partition_of && class_->users == NULL)
+    {
+      /* this is a partition, we can only use local indexes */
+      force_local_index = true;
+    }
+
+  if (unique_index_only)
+    {
+      /* unique indexes are global indexes on class hierarchies and we cannot
+       * use them. The exception is when the class hierarchy is actually a
+       * partitioning hierarchy. In this case, we want to use any global/local
+       * index if class_ points to the partitioned class and only local
+       * indexes if class_ points to a partition */
+      if ((class_->inheritance || class_->users)
+	  && class_->partition_of == NULL)
 	{
+	  /* never use an unique index upon a class hierarchy */
 	  return NULL;
 	}
+    }
 
-      for (con = class_->constraints; con != NULL; con = con->next)
+  for (con = class_->constraints; con != NULL; con = con->next)
+    {
+      if (!SM_IS_CONSTRAINT_INDEX_FAMILY (con->type))
 	{
-	  if (!SM_IS_CONSTRAINT_INDEX_FAMILY (con->type))
+	  continue;
+	}
+
+      if (unique_index_only)
+	{
+	  if (!SM_IS_CONSTRAINT_UNIQUE_FAMILY (con->type))
 	    {
 	      continue;
 	    }
-
-	  if (unique_index_only
-	      && !SM_IS_CONSTRAINT_UNIQUE_FAMILY (con->type))
+	  if (force_local_index && sm_is_global_only_constraint (con))
 	    {
 	      continue;
 	    }
+	}
 
-	  if (skip_prefix_index && num_atts > 0
-	      && con->attributes[0] != NULL
-	      && con->attrs_prefix_length && con->attrs_prefix_length[0] > 0)
-	    {
-	      continue;
-	    }
+      if (skip_prefix_index && num_atts > 0 && con->attributes[0] != NULL
+	  && con->attrs_prefix_length && con->attrs_prefix_length[0] > 0)
+	{
+	  continue;
+	}
 
-	  if (num_atts > 0)
-	    {
-	      for (i = 0; i < num_atts; i++)
-		{
-		  att1 = con->attributes[i];
-		  if (att1 == NULL)
-		    {
-		      break;
-		    }
+      if (num_atts == 0)
+	{
+	  /* we don't care about attributes, any index is a good one */
+	  break;
+	}
 
-		  att2 = classobj_find_attribute (class_, att_names[i], 0);
-		  if (att2 == NULL || att1->id != att2->id)
-		    {
-		      break;
-		    }
-		}
-
-	      if ((i == num_atts) && con->attributes[i] == NULL)
-		{
-		  /* found it */
-		  break;
-		}
-	    }
-	  else
+      for (i = 0; i < num_atts; i++)
+	{
+	  att1 = con->attributes[i];
+	  if (att1 == NULL)
 	    {
 	      break;
 	    }
+
+	  att2 = classobj_find_attribute (class_, att_names[i], 0);
+	  if (att2 == NULL || att1->id != att2->id)
+	    {
+	      break;
+	    }
+	}
+
+      if ((i == num_atts) && con->attributes[i] == NULL)
+	{
+	  /* found it */
+	  break;
 	}
     }
 
@@ -11101,7 +11118,7 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_,
 
   if (num_index > 0)
     {
-      if (sm_update_statistics (classop, NULL, false, STATS_WITH_SAMPLING))
+      if (sm_update_statistics (classop, STATS_WITH_SAMPLING))
 	{
 	  goto structure_error;
 	}
@@ -12730,7 +12747,32 @@ update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res)
 	}
       else
 	{
-	  class_->owner = Au_user;	/* remember the owner id */
+	  /* making object relation is not complete,
+	     so cannot use sm_is_partition(), sm_partitioned_class_type() */
+	  if (template_->inheritance != NULL
+	      && template_->partition_parent_atts != NULL)
+	    {
+	      SM_CLASS *super_class = NULL;
+	      int au_save;
+	      AU_DISABLE (au_save);
+	      error =
+		au_fetch_class (template_->inheritance->op, &super_class,
+				AU_FETCH_READ, AU_SELECT);
+	      AU_ENABLE (au_save);
+
+	      if (error != NO_ERROR)
+		{
+		  abort_subclasses (newsubs);
+		  classobj_free_template (flat);
+		  classobj_free_class (class_);
+		  goto end;
+		}
+	      class_->owner = super_class->owner;
+	    }
+	  else
+	    {
+	      class_->owner = Au_user;	/* remember the owner id */
+	    }
 
 	  /* NOTE: Garbage collection can occur in the following function
 	     as a result of the allocation of the class MOP.  We must
@@ -12770,23 +12812,6 @@ update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res)
       error = install_new_representation (template_->op, class_, flat);
       if (error == NO_ERROR)
 	{
-	  MOP newop = NULL;
-	  bool old_val = sm_Disable_updating_statistics;
-	  int is_partition = DB_NOT_PARTITIONED_CLASS;
-	  error = sm_partitioned_class_type (template_->op, &is_partition,
-					     NULL, NULL);
-	  if (error != NO_ERROR)
-	    {
-	      goto cleanup;
-	    }
-	  if (is_partition == DB_PARTITIONED_CLASS)
-	    {
-	      /* Delay updating statistics until subclasses have been updated
-	       * also. When allocate_disk_structures is called, subclasses
-	       * do not have new indexes yet.
-	       */
-	      sm_Disable_updating_statistics = true;
-	    }
 	  /* This used to be done toward the end but since the
 	   * unique btid has to be inherited, the disk structures
 	   * have to be created before we update the subclasses.
@@ -12800,7 +12825,6 @@ update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res)
 		  error = update_subclasses (newsubs);
 		  if (error == NO_ERROR)
 		    {
-		      newop = template_->op;
 		      if (classmop != NULL)
 			{
 			  *classmop = template_->op;
@@ -12813,20 +12837,9 @@ update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res)
 		    }
 		}
 	    }
-	  if (is_partition == DB_PARTITIONED_CLASS)
-	    {
-	      sm_Disable_updating_statistics = old_val;
-	      if (error == NO_ERROR)
-		{
-		  error =
-		    sm_update_statistics (newop, NULL, false,
-					  STATS_WITH_SAMPLING);
-		}
-	    }
 	}
     }
 
-cleanup:
   if (error != NO_ERROR)
     {
       classobj_free_template (flat);
@@ -13581,8 +13594,7 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
       free_and_init (sub_partitions);
     }
 
-
-  /* should be had checked before if this index already exist */
+  /* should be checked before if this index already exist */
 
   /* make sure the catalog can handle another representation */
   error = check_catalog_space (classop, class_);
@@ -13729,8 +13741,7 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
        * looks at the statistics structures, not the schema structures.
        */
       assert_release (!BTID_IS_NULL (&index));
-      if (sm_update_statistics (classop, &index, false, STATS_WITH_SAMPLING)
-	  != NO_ERROR)
+      if (sm_update_statistics (classop, STATS_WITH_SAMPLING) != NO_ERROR)
 	{
 	  goto severe_error;
 	}
@@ -14521,9 +14532,7 @@ sm_add_constraint (MOP classop, DB_CONSTRAINT_TYPE constraint_type,
 
 	  if (error == NO_ERROR)
 	    {
-	      error =
-		sm_update_statistics (newmop, NULL, false,
-				      STATS_WITH_SAMPLING);
+	      error = sm_update_statistics (newmop, STATS_WITH_SAMPLING);
 	    }
 	  else
 	    {

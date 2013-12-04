@@ -176,9 +176,7 @@ extern int log_drop_lob_locator (const char *locator);
 
 extern TRAN_STATE tran_server_commit (bool retain_lock);
 extern TRAN_STATE tran_server_abort (void);
-#if defined(ENABLE_UNUSED_FUNCTION)
 extern bool tran_is_blocked (int tran_index);
-#endif
 extern int tran_server_has_updated (void);
 extern int tran_server_is_active_and_has_updated (void);
 extern int tran_wait_server_active_trans (void);
@@ -273,8 +271,7 @@ extern INT64 largeobjmgr_length (LOID * loid);
 extern char *stats_get_statistics_from_server (OID * classoid,
 					       unsigned int timestamp,
 					       int *length_ptr);
-extern int stats_update_statistics (OID * classoid, BTID * btid, int do_now,
-				    int with_fullscan);
+extern int stats_update_statistics (OID * classoid, int with_fullscan);
 extern int stats_update_all_statistics (int with_fullscan);
 
 extern int btree_add_index (BTID * btid, TP_DOMAIN * key_type,

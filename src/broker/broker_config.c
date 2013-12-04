@@ -50,6 +50,7 @@
 #include "cas_sql_log2.h"
 #include "shard_shm.h"
 #include "shard_metadata.h"
+#include "util_func.h"
 
 #include "ini_parser.h"
 
@@ -294,7 +295,12 @@ broker_config_read_internal (const char *conf_file,
 #if defined (_UC_ADMIN_SO_)
 #define PRINTERROR(...)	sprintf(admin_err_msg, __VA_ARGS__)
 #else /* _UC_ADMIN_SO_ */
-#define PRINTERROR(...)	fprintf(stderr, __VA_ARGS__)
+#define PRINTERROR(...)	\
+  do {\
+    PRINT_AND_LOG_ERR_MSG(__VA_ARGS__); \
+  } \
+  while (0)
+
 #endif /* !_UC_ADMIN_SO_ */
   int num_brs = 0;
   int num_proxy = 0;
@@ -510,12 +516,18 @@ broker_config_read_internal (const char *conf_file,
 	ini_getstr (ini, sec_name, "ERROR_LOG_DIR", DEFAULT_ERR_DIR, &lineno);
       MAKE_FILEPATH (br_info[num_brs].err_log_dir, ini_string,
 		     CONF_LOG_FILE_LEN);
+
+      ini_string = ini_getstr (ini, sec_name, "ACCESS_LOG_DIR",
+			       DEFAULT_ACCESS_LOG_DIR, &lineno);
+      MAKE_FILEPATH (br_info[num_brs].access_log_dir, ini_string,
+		     CONF_LOG_FILE_LEN);
       ini_string = ini_getstr (ini, sec_name, "DATABASES_CONNECTION_FILE",
 			       DEFAULT_EMPTY_STRING, &lineno);
       MAKE_FILEPATH (br_info[num_brs].db_connection_file, ini_string,
 		     BROKER_INFO_PATH_MAX);
 
-      strcpy (br_info[num_brs].access_log_file, CUBRID_BASE_DIR);
+      strcpy (br_info[num_brs].access_log_file,
+	      br_info[num_brs].access_log_dir);
       strcpy (br_info[num_brs].error_log_file, CUBRID_BASE_DIR);
 
       br_info[num_brs].max_prepared_stmt_count =
@@ -635,10 +647,28 @@ broker_config_read_internal (const char *conf_file,
 
       br_info[num_brs].access_log =
 	conf_get_value_table_on_off (ini_getstr (ini, sec_name, "ACCESS_LOG",
-						 "ON", &lineno));
+						 "OFF", &lineno));
       if (br_info[num_brs].access_log < 0)
 	{
 	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
+      strncpy (size_str,
+	       ini_getstr (ini, sec_name, "ACCESS_LOG_MAX_SIZE",
+			   DEFAULT_ACCESS_LOG_MAX_SIZE, &lineno),
+	       sizeof (size_str));
+      br_info[num_brs].access_log_max_size =
+	(int) ut_size_string_to_kbyte (size_str, "K");
+
+      if (br_info[num_brs].access_log_max_size < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+      else if (br_info[num_brs].access_log_max_size > MAX_ACCESS_LOG_MAX_SIZE)
+	{
+	  errcode = PARAM_BAD_RANGE;
 	  goto conf_error;
 	}
 
@@ -769,6 +799,16 @@ broker_config_read_internal (const char *conf_file,
 						  "CONNECT_ORDER",
 						  "SEQ", &lineno));
       if (br_info[num_brs].connect_order < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
+      br_info[num_brs].max_num_delayed_hosts_lookup =
+	ini_getint (ini, sec_name, "MAX_NUM_DELAYED_HOSTS_LOOKUP",
+		    DEFAULT_MAX_NUM_DELAYED_HOSTS_LOOKUP, &lineno);
+      if (br_info[num_brs].max_num_delayed_hosts_lookup <
+	  DEFAULT_MAX_NUM_DELAYED_HOSTS_LOOKUP)
 	{
 	  errcode = PARAM_BAD_VALUE;
 	  goto conf_error;
@@ -1236,8 +1276,9 @@ broker_config_read (const char *conf_file, T_BROKER_INFO * br_info,
   if (!is_conf_found)
     {
       err = -1;
-      fprintf (stderr, "Error: can't find %s\n",
-	       (conf_file == NULL) ? default_conf_file_path : conf_file);
+      PRINT_AND_LOG_ERR_MSG ("Error: can't find %s\n",
+			     (conf_file ==
+			      NULL) ? default_conf_file_path : conf_file);
     }
 
   return err;
@@ -1336,6 +1377,9 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 	{
 	  fprintf (fp, "ACCESS_LOG\t\t=%s\n", tmp_str);
 	}
+      fprintf (fp, "ACCESS_LOG_MAX_SIZE\t=%dK\n",
+	       (br_info[i].access_log_max_size));
+      fprintf (fp, "ACCESS_LOG_DIR\t\t=%s\n", br_info[i].access_log_dir);
       fprintf (fp, "ACCESS_LIST\t\t=%s\n", br_info[i].acl_file);
       fprintf (fp, "MAX_STRING_LENGTH\t=%d\n", br_info[i].max_string_length);
       tmp_str =
@@ -1364,6 +1408,10 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
 	{
 	  fprintf (fp, "CONNECT_ORDER\t\t=%s\n", tmp_str);
 	}
+
+      fprintf (fp, "MAX_NUM_DELAYED_HOSTS_LOOKUP\t=%d\n",
+	       br_info[i].max_num_delayed_hosts_lookup);
+
       fprintf (fp, "RECONNECT_TIME\t\t=%d\n", br_info[i].cas_rctime);
 
       tmp_str = get_conf_string (br_info[i].replica_only_flag, tbl_on_off);

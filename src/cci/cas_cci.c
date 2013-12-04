@@ -131,6 +131,7 @@ int wsa_initialize ();
 #define CCI_DS_DEFAULT_AUTOCOMMIT_DEFAULT 		-1
 #define CCI_DS_DEFAULT_ISOLATION_DEFAULT 		TRAN_UNKNOWN_ISOLATION
 #define CCI_DS_DEFAULT_LOCK_TIMEOUT_DEFAULT 		CCI_LOCK_TIMEOUT_DEFAULT
+#define CCI_DS_LOGIN_TIMEOUT_DEFAULT			-1
 
 #define CON_HANDLE_ID_FACTOR            1000000
 #define CON_ID(a) ((a) / CON_HANDLE_ID_FACTOR)
@@ -191,6 +192,8 @@ static int cci_end_tran_internal (T_CON_HANDLE * con_handle, char type);
 static void get_last_error (T_CON_HANDLE * con_handle,
 			    T_CCI_ERROR * dest_err_buf);
 
+static int convert_cas_mode_to_driver_mode (int cas_mode);
+static int convert_driver_mode_to_cas_mode (int driver_mode);
 
 /************************************************************************
  * INTERFACE VARIABLES							*
@@ -233,7 +236,8 @@ static const char *datasource_key[] = {
   CCI_DS_PROPERTY_DISCONNECT_ON_QUERY_TIMEOUT,
   CCI_DS_PROPERTY_DEFAULT_AUTOCOMMIT,
   CCI_DS_PROPERTY_DEFAULT_ISOLATION,
-  CCI_DS_PROPERTY_DEFAULT_LOCK_TIMEOUT
+  CCI_DS_PROPERTY_DEFAULT_LOCK_TIMEOUT,
+  CCI_DS_PROPERTY_MAX_POOL_SIZE
 };
 
 CCI_MALLOC_FUNCTION cci_malloc = malloc;
@@ -707,10 +711,10 @@ cci_disconnect (int mapped_conn_id, T_CCI_ERROR * err_buf)
       hm_release_connection (mapped_conn_id, &con_handle);
 
       if (cci_end_tran_internal (con_handle, CCI_TRAN_ROLLBACK) != NO_ERROR)
-        {
-          qe_con_close (con_handle);
-          con_handle->con_status = CCI_CON_STATUS_OUT_TRAN;
-        }
+	{
+	  qe_con_close (con_handle);
+	  con_handle->con_status = CCI_CON_STATUS_OUT_TRAN;
+	}
 
       cci_datasource_release_internal (con_handle->datasource, con_handle);
       if (con_handle->log_trace_api)
@@ -845,7 +849,11 @@ reset_connect (T_CON_HANDLE * con_handle, T_REQ_HANDLE * req_handle)
   T_CCI_ERROR err_buf;
 
   req_handle_content_free (req_handle, 1);
+
+  SET_START_TIME_FOR_LOGIN (con_handle);
   error = cas_connect_with_ret (con_handle, &err_buf, &connect_done);
+  SET_START_TIME_FOR_QUERY (con_handle, req_handle);
+
   if (error < 0 || !connect_done)
     {
       return error;
@@ -2057,6 +2065,116 @@ ret:
   return error;
 }
 
+static int
+convert_cas_mode_to_driver_mode (int cas_mode)
+{
+  int driver_mode = 0;
+
+  switch (cas_mode)
+    {
+    case CAS_CHANGE_MODE_AUTO:
+      driver_mode = CCI_CAS_CHANGE_MODE_AUTO;
+      break;
+    case CAS_CHANGE_MODE_KEEP:
+      driver_mode = CCI_CAS_CHANGE_MODE_KEEP;
+      break;
+    default:
+      driver_mode = CCI_CAS_CHANGE_MODE_UNKNOWN;
+      break;
+    }
+
+  return driver_mode;
+}
+
+static int
+convert_driver_mode_to_cas_mode (int driver_mode)
+{
+  int cas_mode = 0;
+
+  switch (driver_mode)
+    {
+    case CCI_CAS_CHANGE_MODE_AUTO:
+      cas_mode = CAS_CHANGE_MODE_AUTO;
+      break;
+    case CCI_CAS_CHANGE_MODE_KEEP:
+      cas_mode = CAS_CHANGE_MODE_KEEP;
+      break;
+    default:
+      cas_mode = CAS_CHANGE_MODE_UNKNOWN;
+      break;
+    }
+
+  return cas_mode;
+}
+
+int
+cci_set_cas_change_mode (int mapped_conn_id, int driver_mode,
+			 T_CCI_ERROR * err_buf)
+{
+  T_CON_HANDLE *con_handle = NULL;
+  int error = CCI_ER_NO_ERROR;
+  int cas_mode;
+
+#ifdef CCI_DEBUG
+  CCI_DEBUG_PRINT (print_debug_msg
+		   ("cci_set_cas_change_mode %d %d", mapped_conn_id,
+		    driver_mode));
+#endif
+
+  reset_error_buffer (err_buf);
+  error = hm_get_connection (mapped_conn_id, &con_handle);
+  if (error != CCI_ER_NO_ERROR)
+    {
+      set_error_buffer (err_buf, error, NULL);
+      return error;
+    }
+  reset_error_buffer (&(con_handle->err_buf));
+
+  cas_mode = convert_driver_mode_to_cas_mode (driver_mode);
+  if (cas_mode == CAS_CHANGE_MODE_UNKNOWN)
+    {
+      error = CCI_ER_INVALID_ARGS;
+      goto ret;
+    }
+
+  if (IS_OUT_TRAN_STATUS (con_handle))
+    {
+      error = cas_connect (con_handle, &(con_handle->err_buf));
+    }
+
+  if (error >= 0)
+    {
+      cas_mode = qe_set_cas_change_mode (con_handle, cas_mode,
+					 &(con_handle->err_buf));
+      if (cas_mode < 0)
+	{
+	  error = cas_mode;
+	}
+      else
+	{
+	  driver_mode = convert_cas_mode_to_driver_mode (cas_mode);
+	  if (driver_mode == CCI_CAS_CHANGE_MODE_UNKNOWN)
+	    {
+	      error = CCI_ER_COMMUNICATION;
+	    }
+	}
+    }
+
+ret:
+  set_error_buffer (&(con_handle->err_buf), error, NULL);
+  get_last_error (con_handle, err_buf);
+  con_handle->used = false;
+
+  if (error < 0)
+    {
+      return error;
+    }
+  else
+    {
+      return driver_mode;
+    }
+}
+
 int
 cci_close_query_result (int mapped_stmt_id, T_CCI_ERROR * err_buf)
 {
@@ -3191,6 +3309,55 @@ cci_execute_result (int mapped_stmt_id, T_CCI_QUERY_RESULT ** qr,
 
   set_error_buffer (&(con_handle->err_buf), error, NULL);
   get_last_error (con_handle, err_buf);
+  con_handle->used = false;
+
+  return error;
+}
+
+int
+cci_set_login_timeout (int mapped_conn_id, int timeout, T_CCI_ERROR * err_buf)
+{
+  T_CON_HANDLE *con_handle = NULL;
+  int error = CCI_ER_NO_ERROR;
+
+  reset_error_buffer (err_buf);
+  error = hm_get_connection (mapped_conn_id, &con_handle);
+  if (error != CCI_ER_NO_ERROR)
+    {
+      set_error_buffer (err_buf, error, NULL);
+      return error;
+    }
+  reset_error_buffer (&(con_handle->err_buf));
+
+  con_handle->login_timeout = timeout;
+  con_handle->used = false;
+
+  return error;
+}
+
+int
+cci_get_login_timeout (int mapped_conn_id, int *val, T_CCI_ERROR * err_buf)
+{
+  T_CON_HANDLE *con_handle = NULL;
+  int error = CCI_ER_NO_ERROR;
+
+  reset_error_buffer (err_buf);
+
+  if (val == NULL)
+    {
+      set_error_buffer (err_buf, CCI_ER_INVALID_ARGS, NULL);
+      return CCI_ER_INVALID_ARGS;
+    }
+
+  error = hm_get_connection (mapped_conn_id, &con_handle);
+  if (error != CCI_ER_NO_ERROR)
+    {
+      set_error_buffer (err_buf, error, NULL);
+      return error;
+    }
+  reset_error_buffer (&(con_handle->err_buf));
+
+  *val = con_handle->login_timeout;
   con_handle->used = false;
 
   return error;
@@ -5663,6 +5830,23 @@ cci_datasource_create (T_CCI_PROPERTIES * prop, T_CCI_ERROR * err_buf)
       goto create_datasource_error;
     }
 
+  if (!cci_property_get_int (prop, CCI_DS_KEY_MAX_POOL_SIZE,
+			     &ds->max_pool_size, ds->pool_size,
+			     1, INT_MAX, err_buf))
+    {
+      goto create_datasource_error;
+    }
+  if (ds->max_pool_size < ds->pool_size)
+    {
+      err_buf->err_code = CCI_ER_PROPERTY_TYPE;
+      if (err_buf->err_msg)
+	{
+	  snprintf (err_buf->err_msg, 1023,
+		    "'max_pool_size' should be greater than 'pool_size'");
+	}
+      goto create_datasource_error;
+    }
+
   if (!cci_property_get_int (prop, CCI_DS_KEY_MAX_WAIT, &ds->max_wait,
 			     CCI_DS_MAX_WAIT_DEFAULT, 1, INT_MAX,
 			     &latest_err_buf))
@@ -5711,7 +5895,16 @@ cci_datasource_create (T_CCI_PROPERTIES * prop, T_CCI_ERROR * err_buf)
       goto create_datasource_error;
     }
 
-  ds->con_handles = CALLOC (ds->pool_size, sizeof (T_CCI_CONN));
+  if (!cci_property_get_int (prop, CCI_DS_KEY_LOGIN_TIMEOUT,
+			     &ds->login_timeout,
+			     CCI_DS_LOGIN_TIMEOUT_DEFAULT,
+			     CCI_DS_LOGIN_TIMEOUT_DEFAULT, INT_MAX,
+			     &latest_err_buf))
+    {
+      goto create_datasource_error;
+    }
+
+  ds->con_handles = CALLOC (ds->max_pool_size, sizeof (T_CCI_CONN));
   if (ds->con_handles == NULL)
     {
       set_error_buffer (&latest_err_buf, CCI_ER_NO_MORE_MEMORY,
@@ -5738,7 +5931,7 @@ cci_datasource_create (T_CCI_PROPERTIES * prop, T_CCI_ERROR * err_buf)
   pthread_cond_init ((pthread_cond_t *) ds->cond, NULL);
 
   ds->num_idle = ds->pool_size;
-  for (i = 0; i < ds->pool_size; i++)
+  for (i = 0; i < ds->max_pool_size; i++)
     {
       T_CON_HANDLE *handle;
       int id;
@@ -5775,7 +5968,7 @@ create_datasource_error:
 
   if (ds->con_handles != NULL)
     {
-      for (i = 0; i < ds->pool_size; i++)
+      for (i = 0; i < ds->max_pool_size; i++)
 	{
 	  if (ds->con_handles[i] > 0)
 	    {
@@ -5814,18 +6007,12 @@ cci_datasource_destroy (T_CCI_DATASOURCE * ds)
       return;
     }
 
-  FREE_MEM (ds->user);
-  FREE_MEM (ds->pass);
-  FREE_MEM (ds->url);
-
-  pthread_mutex_destroy ((pthread_mutex_t *) ds->mutex);
-  FREE_MEM (ds->mutex);
-  pthread_cond_destroy ((pthread_cond_t *) ds->cond);
-  FREE_MEM (ds->cond);
+  /* critical section begin */
+  pthread_mutex_lock ((pthread_mutex_t *) ds->mutex);
 
   if (ds->con_handles)
     {
-      for (i = 0; i < ds->pool_size; i++)
+      for (i = 0; i < ds->max_pool_size; i++)
 	{
 	  T_CCI_CONN id = ds->con_handles[i];
 	  if (id == 0)
@@ -5847,7 +6034,142 @@ cci_datasource_destroy (T_CCI_DATASOURCE * ds)
       FREE_MEM (ds->con_handles);
     }
 
+  /* critical section end */
+  pthread_mutex_unlock ((pthread_mutex_t *) ds->mutex);
+
+  FREE_MEM (ds->user);
+  FREE_MEM (ds->pass);
+  FREE_MEM (ds->url);
+
+  pthread_mutex_destroy ((pthread_mutex_t *) ds->mutex);
+  FREE_MEM (ds->mutex);
+  pthread_cond_destroy ((pthread_cond_t *) ds->cond);
+  FREE_MEM (ds->cond);
+
   FREE_MEM (ds);
+}
+
+int
+cci_datasource_change_property (T_CCI_DATASOURCE * ds, const char *key,
+				const char *val)
+{
+  T_CCI_ERROR err_buf;
+  T_CCI_PROPERTIES *properties;
+  int error = NO_ERROR;
+
+  properties = cci_property_create ();
+  if (properties == NULL)
+    {
+      return CCI_ER_NO_MORE_MEMORY;
+    }
+
+  /* critical section begin */
+  pthread_mutex_lock ((pthread_mutex_t *) ds->mutex);
+
+  if (!cci_property_set (properties, (char *) key, (char *) val))
+    {
+      error = CCI_ER_NO_PROPERTY;
+      goto change_property_end;
+    }
+
+  if (strcasecmp (key, CCI_DS_PROPERTY_DEFAULT_AUTOCOMMIT) == 0)
+    {
+      int v;
+
+      if (!cci_property_get_bool_internal (properties,
+					   CCI_DS_KEY_DEFAULT_AUTOCOMMIT,
+					   &v,
+					   CCI_DS_DEFAULT_AUTOCOMMIT_DEFAULT,
+					   &err_buf))
+	{
+	  error = err_buf.err_code;
+	  goto change_property_end;
+	}
+
+      ds->default_autocommit = v;
+    }
+  else if (strcasecmp (key, CCI_DS_PROPERTY_DEFAULT_ISOLATION) == 0)
+    {
+      T_CCI_TRAN_ISOLATION v;
+
+      if (!cci_property_get_isolation (properties,
+				       CCI_DS_KEY_DEFAULT_ISOLATION,
+				       &v,
+				       CCI_DS_DEFAULT_ISOLATION_DEFAULT,
+				       &err_buf))
+	{
+	  error = err_buf.err_code;
+	  goto change_property_end;
+	}
+
+      ds->default_isolation = v;
+    }
+  else if (strcasecmp (key, CCI_DS_PROPERTY_DEFAULT_LOCK_TIMEOUT) == 0)
+    {
+      int v;
+
+      if (!cci_property_get_int (properties, CCI_DS_KEY_DEFAULT_LOCK_TIMEOUT,
+				 &v, CCI_DS_DEFAULT_LOCK_TIMEOUT_DEFAULT,
+				 CCI_DS_DEFAULT_LOCK_TIMEOUT_DEFAULT,
+				 INT_MAX, &err_buf))
+	{
+	  error = err_buf.err_code;
+	  goto change_property_end;
+	}
+
+      ds->default_lock_timeout = v;
+    }
+  else if (strcasecmp (key, CCI_DS_PROPERTY_LOGIN_TIMEOUT) == 0)
+    {
+      int v;
+
+      if (!cci_property_get_int (properties, CCI_DS_KEY_LOGIN_TIMEOUT, &v,
+				 CCI_DS_LOGIN_TIMEOUT_DEFAULT,
+				 CCI_DS_LOGIN_TIMEOUT_DEFAULT, INT_MAX,
+				 &err_buf))
+	{
+	  error = err_buf.err_code;
+	  goto change_property_end;
+	}
+
+      ds->login_timeout = v;
+    }
+  else if (strcasecmp (key, CCI_DS_PROPERTY_POOL_SIZE) == 0)
+    {
+      int v;
+
+      if (!cci_property_get_int (properties, CCI_DS_KEY_POOL_SIZE, &v,
+				 ds->max_pool_size, 1, INT_MAX, &err_buf))
+	{
+	  error = err_buf.err_code;
+	  goto change_property_end;
+	}
+
+
+      if (v > ds->max_pool_size)
+	{
+	  error = CCI_ER_PROPERTY_TYPE;
+	  goto change_property_end;
+	}
+
+      ds->num_idle += (v - ds->pool_size);
+      ds->pool_size = v;
+    }
+  else
+    {
+      error = CCI_ER_NO_PROPERTY;
+    }
+
+change_property_end:
+  pthread_mutex_unlock ((pthread_mutex_t *) ds->mutex);
+  /* critical section end */
+
+  if (properties)
+    {
+      cci_property_destroy (properties);
+    }
+
+  return error;
 }
 
 T_CCI_CONN
@@ -5867,7 +6189,7 @@ cci_datasource_borrow (T_CCI_DATASOURCE * ds, T_CCI_ERROR * err_buf)
 
   /* critical section begin */
   pthread_mutex_lock ((pthread_mutex_t *) ds->mutex);
-  if (ds->num_idle == 0)
+  if (ds->num_idle <= 0)
     {
       /* wait max_wait msecs */
       struct timespec ts;
@@ -5883,7 +6205,7 @@ cci_datasource_borrow (T_CCI_DATASOURCE * ds, T_CCI_ERROR * err_buf)
 	  ts.tv_nsec -= 1000000000;
 	}
 
-      while (ds->num_idle == 0)
+      while (ds->num_idle <= 0)
 	{
 	  r = pthread_cond_timedwait ((pthread_cond_t *) ds->cond,
 				      (pthread_mutex_t *) ds->mutex, &ts);
@@ -5905,7 +6227,7 @@ cci_datasource_borrow (T_CCI_DATASOURCE * ds, T_CCI_ERROR * err_buf)
 
   assert (ds->num_idle > 0);
 
-  for (i = 0; i < ds->pool_size; i++)
+  for (i = 0; i < ds->max_pool_size; i++)
     {
       if (ds->con_handles[i] > 0)
 	{
@@ -5940,6 +6262,10 @@ cci_datasource_borrow (T_CCI_DATASOURCE * ds, T_CCI_ERROR * err_buf)
 	{
 	  cci_set_isolation_level (mapped_id, ds->default_isolation, err_buf);
 	}
+      if (ds->login_timeout != CCI_DS_LOGIN_TIMEOUT_DEFAULT)
+	{
+	  cci_set_login_timeout (mapped_id, ds->login_timeout, err_buf);
+	}
     }
 
   return mapped_id;
@@ -5969,7 +6295,7 @@ cci_datasource_release_internal (T_CCI_DATASOURCE * ds,
 
   /* critical section begin */
   pthread_mutex_lock ((pthread_mutex_t *) ds->mutex);
-  for (i = 0; i < ds->pool_size; i++)
+  for (i = 0; i < ds->max_pool_size; i++)
     {
       if (ds->con_handles[i] == -(con_handle->id))
 	{
@@ -5978,7 +6304,7 @@ cci_datasource_release_internal (T_CCI_DATASOURCE * ds,
 	}
     }
 
-  if (i == ds->pool_size)
+  if (i == ds->max_pool_size)
     {
       /* could not found con_handles */
       pthread_mutex_unlock ((pthread_mutex_t *) ds->mutex);

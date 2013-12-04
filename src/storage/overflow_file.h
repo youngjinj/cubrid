@@ -75,10 +75,14 @@ extern int overflow_rv_newpage_logical_undo (THREAD_ENTRY * thread_p,
 extern void overflow_rv_newpage_logical_dump_undo (FILE * fp,
 						   int length_ignore,
 						   void *data);
+extern int overflow_rv_newpage_insert_redo (THREAD_ENTRY * thread_p,
+					    LOG_RCV * rcv);
 extern int overflow_rv_newpage_link_undo (THREAD_ENTRY * thread_p,
 					  LOG_RCV * rcv);
 extern int overflow_rv_link (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern void overflow_rv_link_dump (FILE * fp, int length_ignore, void *data);
+extern int overflow_rv_page_update_redo (THREAD_ENTRY * thread_p,
+					 LOG_RCV * rcv);
 extern void overflow_rv_page_dump (FILE * fp, int length, void *data);
 extern char *overflow_get_first_page_data (char *page_ptr);
 #endif /* _OVERFLOW_FILE_H_ */

@@ -6,10 +6,6 @@
 #define OWFS_EBASE			10000
 #define OWFS_FBASE			20000
 
-#define OWFS_EEXITCODEBASE	50
-#define OWFS_FEXITCODEBASE	100
-#define OWFS_MEXITCODEBASE	150
-
 enum owfs_errno {
 	/* error that can be avoided when try with valid arguments */
 	__OWFS_ESTART__ = OWFS_EBASE,
@@ -24,7 +20,7 @@ enum owfs_errno {
 	OWFS_ENOTINIT,		/*  9: not initialized */
 	OWFS_EAGAIN,		/* 10: try again */
 	OWFS_EACCESS,		/* 11: ACL or access permission denied */
-	OWFS_ENOTSYMLINK,	/* 12: symbolic link operation with regular file */
+	OWFS_ENOTSYMLINK,	/* 12: symbolic link operation with regular file: NOT USED */
 	OWFS_ERPC,			/* 13: error of RPC layer */
 	OWFS_ELOCK,			/* 14: fail to acquire a lock from DS */
 	OWFS_ENOTEMPTY,		/* 15: directory is not empty */
@@ -32,6 +28,11 @@ enum owfs_errno {
 	OWFS_EISDIR,		/* 17: pathname is a directory */
 	OWFS_EPROGRESS,		/* 18: same operation is already progressing */
 	OWFS_ESTOPPED, 		/* 19: operation is stopped */
+	OWFS_ENOTSUPP,		/* 20: operation is not supported */
+	OWFS_ENOTLINK,		/* 21: pathname is not a link */
+	OWFS_EISLINK,		/* 22: pathname is a link */
+	OWFS_EFILECHANGED,	/* 23: file is changed during operation */
+	OWFS_EISREFERENCE,	/* 24: operation not permitted for a reference file */
 	__OWFS_EEND__,
 
 	/* error that should trigger some recovery mechanism */

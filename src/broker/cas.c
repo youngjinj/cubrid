@@ -89,7 +89,8 @@ static const int DEFAULT_CHECK_INTERVAL = 1;
    ||((func_code) == CAS_FC_GET_DB_VERSION) \
    ||((func_code) == CAS_FC_GET_ATTR_TYPE_STR) \
    ||((func_code) == CAS_FC_CURSOR_CLOSE) \
-   ||((func_code) == CAS_FC_END_SESSION))
+   ||((func_code) == CAS_FC_END_SESSION)  \
+   ||((func_code) == CAS_FC_CAS_CHANGE_MODE))
 
 static FN_RETURN process_request (SOCKET sock_fd, T_NET_BUF * net_buf,
 				  T_REQ_INFO * req_info);
@@ -227,7 +228,8 @@ static T_SERVER_FUNC server_fn_table[] = {
   fn_not_supported,		/* CAS_FC_GET_LAST_INSERT_ID */
   fn_not_supported,		/* CAS_FC_PREPARE_AND_EXECUTE */
   fn_not_supported,		/* CAS_FC_CURSOR_CLOSE */
-  fn_not_supported		/* CAS_FC_GET_SHARD_INFO */
+  fn_not_supported,		/* CAS_FC_GET_SHARD_INFO */
+  fn_not_supported		/* CAS_FC_SET_CAS_CHANGE_MODE */
 };
 #else /* CAS_FOR_ORACLE || CAS_FOR_MYSQL */
 static T_SERVER_FUNC server_fn_table[] = {
@@ -273,7 +275,8 @@ static T_SERVER_FUNC server_fn_table[] = {
   fn_get_last_insert_id,	/* CAS_FC_GET_LAST_INSERT_ID */
   fn_prepare_and_execute,	/* CAS_FC_PREPARE_AND_EXECUTE */
   fn_cursor_close,		/* CAS_FC_CURSOR_CLOSE */
-  fn_not_supported		/* CAS_FC_GET_SHARD_INFO */
+  fn_not_supported,		/* CAS_FC_GET_SHARD_INFO */
+  fn_set_cas_change_mode	/* CAS_FC_SET_CAS_CHANGE_MODE */
 };
 #endif /* CAS_FOR_ORACLE || CAS_FOR_MYSQL */
 
@@ -321,7 +324,8 @@ static const char *server_func_name[] = {
   "fn_get_last_insert_id",
   "fn_prepare_and_execute",
   "fn_cursor_close",
-  "fn_get_shard_info"
+  "fn_get_shard_info",
+  "fn_set_cas_change_mode"
 };
 #endif /* !LIBCAS_FOR_JSP */
 
@@ -817,6 +821,7 @@ cas_main (void)
   };
   FN_RETURN fn_ret = FN_KEEP_CONN;
   char client_ip_str[16];
+  bool is_new_connection;
 
   prev_cas_info[CAS_INFO_STATUS] = CAS_INFO_RESERVED_DEFAULT;
 
@@ -980,7 +985,7 @@ cas_main (void)
 	cas_log_write_and_end (0, false, "CLIENT IP %s", client_ip_str);
 	setsockopt (client_sock_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one,
 		    sizeof (one));
-	ut_set_keepalive (client_sock_fd, 1800);
+	ut_set_keepalive (client_sock_fd);
 
 	unset_hang_check_time ();
 
@@ -1125,6 +1130,14 @@ cas_main (void)
 				   as_info->driver_version);
 #if !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL)
 	    cas_set_session_id (req_info.client_version, db_sessionid);
+	    if (db_get_session_id () != DB_EMPTY_SESSION)
+	      {
+		is_new_connection = false;
+	      }
+	    else
+	      {
+		is_new_connection = true;
+	      }
 #endif /* !CAS_FOR_ORACLE && !CAS_FOR_MYSQL */
 
 	    set_hang_check_time ();
@@ -1151,6 +1164,8 @@ cas_main (void)
 		  {
 		    char err_msg[1024];
 
+		    as_info->num_connect_rejected++;
+
 		    sprintf (err_msg,
 			     "Authorization error.(Address is rejected)");
 
@@ -1170,7 +1185,7 @@ cas_main (void)
 		      {
 			cas_access_log (&cas_start_time, shm_as_index,
 					client_ip_addr, db_name, db_user,
-					false);
+					ACL_REJECTED);
 		      }
 
 		    unset_hang_check_time ();
@@ -1223,8 +1238,19 @@ cas_main (void)
 
 #if !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL)
 	    session_id = db_get_session_id ();
-	    cas_log_write_and_end (0, false, "connect db %s user %s url %s"
-				   " session id %u", db_name, db_user, url,
+
+	    if (shm_appl->access_log == ON)
+	      {
+		ACCESS_LOG_TYPE type =
+		  (is_new_connection) ? NEW_CONNECTION : CLIENT_CHANGED;
+
+		cas_access_log (&cas_start_time, shm_as_index,
+				client_ip_addr, db_name, db_user, type);
+	      }
+
+	    cas_log_write_and_end (0, false, "connect db %s@%s user %s url %s"
+				   " session id %u", as_info->database_name,
+				   as_info->database_host, db_user, url,
 				   session_id);
 #else
 	    cas_log_write_and_end (0, false, "connect db %s user %s url %s",
@@ -1326,13 +1352,6 @@ cas_main (void)
 #if !defined(CAS_FOR_ORACLE) && !defined(CAS_FOR_MYSQL)
 	    cas_log_error_handler_end ();
 #endif /* !CAS_FOR_ORACLE && !CAS_FOR_MYSQL */
-
-	    if (shm_appl->access_log == ON)
-	      {
-		cas_access_log (&cas_start_time, shm_as_index,
-				client_ip_addr, db_name, db_user, true);
-	      }
-
 	  }
 
 	CLOSE_SOCKET (client_sock_fd);
@@ -1659,7 +1678,7 @@ process_request (SOCKET sock_fd, T_NET_BUF * net_buf, T_REQ_INFO * req_info)
 
 	  if (need_database_reconnect ())
 	    {
-	      assert (as_info->fixed_conn_info == false);
+	      assert (as_info->fixed_shard_user == false);
 
 	      set_db_connection_info ();
 
@@ -2149,7 +2168,8 @@ process_request (SOCKET sock_fd, T_NET_BUF * net_buf, T_REQ_INFO * req_info)
 #ifndef LIBCAS_FOR_JSP
   if (as_info->reset_flag
       && ((as_info->con_status != CON_STATUS_IN_TRAN
-	   && as_info->num_holdable_results < 1)
+	   && as_info->num_holdable_results < 1
+	   && as_info->cas_change_mode == CAS_CHANGE_MODE_AUTO)
 	  || (cas_get_db_connect_status () == -1)))
     {
       cas_log_debug (ARG_FILE_LINE,
@@ -2535,6 +2555,19 @@ net_read_header_keep_con_on (SOCKET clt_sock_fd,
 static void
 set_db_connection_info (void)
 {
+  if (as_info->fixed_shard_user)
+    {
+      strncpy (as_info->database_user,
+	       shm_appl->shard_conn_info[shm_shard_id].db_user,
+	       SRV_CON_DBUSER_SIZE - 1);
+      as_info->database_user[SRV_CON_DBUSER_SIZE - 1] = '\0';
+
+      strncpy (as_info->database_passwd,
+	       shm_appl->shard_conn_info[shm_shard_id].db_password,
+	       SRV_CON_DBPASSWD_SIZE - 1);
+      as_info->database_passwd[SRV_CON_DBUSER_SIZE - 1] = '\0';
+    }
+
   strncpy (cas_db_user, as_info->database_user, SRV_CON_DBUSER_SIZE - 1);
   cas_db_user[SRV_CON_DBUSER_SIZE - 1] = '\0';
 
@@ -2549,7 +2582,7 @@ set_db_connection_info (void)
 static void
 clear_db_connection_info (void)
 {
-  if (as_info->fixed_conn_info)
+  if (as_info->fixed_shard_user)
     {
       return;
     }
@@ -2604,10 +2637,11 @@ set_cas_info_size (void)
 int
 restart_is_needed (void)
 {
-  if (as_info->num_holdable_results > 0)
+  if (as_info->num_holdable_results > 0
+      || as_info->cas_change_mode == CAS_CHANGE_MODE_KEEP)
     {
       /* we do not want to restart the CAS when there are open
-         holdable results */
+         holdable results or cas_change_mode is CAS_CHANGE_MODE_KEEP */
       return 0;
     }
 #if defined(WINDOWS)

@@ -201,8 +201,10 @@ extern "C"
 /* database connection URL */
 #define CCI_DS_PROPERTY_URL				"url"
 
-/* number of connection that are created when the pool is started */
+/* number of connection that are borrowed */
 #define CCI_DS_PROPERTY_POOL_SIZE			"pool_size"
+/* number of connection that are created when the pool is started */
+#define CCI_DS_PROPERTY_MAX_POOL_SIZE			"max_pool_size"
 /* max wait msec for a connection to be returned, or -1 to wait indefinitely */
 #define CCI_DS_PROPERTY_MAX_WAIT			"max_wait"
 /* enable prepared statement pooling */
@@ -228,6 +230,14 @@ extern "C"
     CCI_AUTOCOMMIT_FALSE = 0,
     CCI_AUTOCOMMIT_TRUE
   } CCI_AUTOCOMMIT_MODE;
+
+  /* for cci cas_change mode support */
+  typedef enum
+  {
+    CCI_CAS_CHANGE_MODE_UNKNOWN = 0,
+    CCI_CAS_CHANGE_MODE_AUTO = 1,
+    CCI_CAS_CHANGE_MODE_KEEP = 2
+  } CCI_CAS_CHANGE_MODE_MODE;
 
 #define SET_AUTOCOMMIT_FROM_CASINFO(c) \
   (c)->autocommit_mode = \
@@ -634,7 +644,8 @@ extern "C"
     CCI_DS_KEY_DISCONNECT_ON_QUERY_TIMEOUT,
     CCI_DS_KEY_DEFAULT_AUTOCOMMIT,
     CCI_DS_KEY_DEFAULT_ISOLATION,
-    CCI_DS_KEY_DEFAULT_LOCK_TIMEOUT
+    CCI_DS_KEY_DEFAULT_LOCK_TIMEOUT,
+    CCI_DS_KEY_MAX_POOL_SIZE
   } T_CCI_DATASOURCE_KEY;
 
 #if !defined(CAS)
@@ -740,6 +751,8 @@ extern "C"
 				   void *value, T_CCI_ERROR * err_buf);
   extern int cci_set_db_parameter (int con_handle, T_CCI_DB_PARAM param_name,
 				   void *value, T_CCI_ERROR * err_buf);
+  extern int cci_set_cas_change_mode (int mapped_conn_id, int mode,
+				      T_CCI_ERROR * err_buf);
   extern long cci_escape_string (int con_h_id, char *to, const char *from,
 				 unsigned long length, T_CCI_ERROR * err_buf);
   extern int cci_close_query_result (int req_handle, T_CCI_ERROR * err_buf);
@@ -774,6 +787,11 @@ extern "C"
 				 CCI_AUTOCOMMIT_MODE autocommit_mode);
   extern int cci_set_holdability (int con_handle_id, int holdable);
   extern int cci_get_holdability (int con_handle_id);
+  extern int cci_set_login_timeout (int mapped_conn_id, int timeout,
+				    T_CCI_ERROR * err_buf);
+  extern int cci_get_login_timeout (int mapped_conn_id, int *timeout,
+				    T_CCI_ERROR * err_buf);
+
   extern int cci_get_class_num_objs (int conn_handle, char *class_name,
 				     int flag, int *num_objs, int *num_pages,
 				     T_CCI_ERROR * err_buf);
@@ -930,6 +948,9 @@ extern "C"
 					   T_CCI_ERROR * err_buf);
   extern int cci_datasource_release (T_CCI_DATASOURCE * date_source,
 				     T_CCI_CONN conn, T_CCI_ERROR * err_buf);
+  extern int cci_datasource_change_property (T_CCI_DATASOURCE * ds,
+					     const char *key,
+					     const char *val);
 
   extern int cci_set_query_timeout (int req_h_id, int timeout);
   extern int cci_get_query_timeout (int req_h_id);

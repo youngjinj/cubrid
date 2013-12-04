@@ -90,25 +90,25 @@ struct db_object
 
   VID_OID oid_info;		/* local copy of the OID or VID pointer */
   struct db_object *class_mop;	/* pointer to class mop */
-				/* Do not ever set this to NULL without
-				 * removing object from class link.
-				 */
+  /* Do not ever set this to NULL without
+   * removing object from class link.
+   */
   void *object;			/* pointer to attribute values */
 
   struct db_object *class_link;	/* link for class instances list */
-				/* Careful whenever looping through object
-				 * using class_link to save it and
-				 * advance using this saved class link if
-				 * the current mop can be removed from class.
-				 */
+  /* Careful whenever looping through object
+   * using class_link to save it and
+   * advance using this saved class link if
+   * the current mop can be removed from class.
+   */
   struct db_object *dirty_link;	/* link for dirty list */
   struct db_object *hash_link;	/* link for workspace hash table */
-				/* Careful whenever looping through objects
-				 * using hash_link to save it and advance
-				 * using this saved hash link if the current
-				 * mop can be removed or relocated in hash
-				 * table.
-				 */
+  /* Careful whenever looping through objects
+   * using hash_link to save it and advance
+   * using this saved hash link if the current
+   * mop can be removed or relocated in hash
+   * table.
+   */
   struct db_object *commit_link;	/* link for obj to be reset at commit/abort */
   void *version;		/* versioning information */
   LOCK lock;			/* object lock */
@@ -508,7 +508,7 @@ extern MOP ws_new_mop (OID * oid, MOP class_mop);
 #endif
 extern void ws_update_oid (MOP mop, OID * newoid);
 extern int ws_update_oid_and_class (MOP mop, OID * new_oid,
-				  OID * new_class_oid);
+				    OID * new_class_oid);
 extern DB_VALUE *ws_keys (MOP vid, unsigned int *flags);
 
 /* Reference mops */

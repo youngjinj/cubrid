@@ -199,7 +199,7 @@ Commandes disponibles:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
@@ -231,6 +231,10 @@ Commandes disponibles:\n\
 36 Le serveur n'a pas été configuré pour HA.\n
 38 Le serveur configuré pour HA n'apparaît pas dans ha_db_list.\n
 39 Le serveur configuré pour HA n'apparaît pas dans ha_node_list.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 AVERTISSEMENT: l'option -t est ignoré dans le mode d'exécution autonome.\n
@@ -424,6 +428,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 Dernière ligne validée: %d
 114 error-control-file
 115 fichier d'entrée pour le contrôle d'erreur(s) pendant le chargement
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: Importe les objets et les schémas dans la base de données.\n\
 usage: %s loaddb [OPTION] database-name\n\
@@ -473,11 +480,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 Seulement %d de  %d objets sauvegardées avec succès.\n
 47 répertoire de sortie est trop long.\n
 48 LSA : %d %d \n
+49 Mot de passe:
 60 \
 unloaddb: Exporte des objets et des schémas de la base de données.\n\
 usage: %s unloaddb [OPTION] database-name\n\
 \n\
 options valids:\n\
+  -u, --user=ID               ID d'utilisateur pour l'accès à la base de données, par défaut: "dba"\n\
+  -p, --password=MOT-DE-PASSE MOT DE PASSE d'utilisateur; par défaut: aucun\n\
   -i, --input-class-file=FICHIER   FICHIER d'entrée des noms de tables; par défaut: sauvegarde toutes les classes\n\
       --include-reference     comprennent les tables référencées; avec l'option -i; par défaut: désactivé\n\
       --input-class-only      comprennent seulement la classe spécifiée; avec l'option -i; par défaut: désactivé\n\

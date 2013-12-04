@@ -2172,13 +2172,17 @@ obj_print_help_class (MOP op, OBJ_PRINT_TYPE prt_type)
 	  if (prt_type == OBJ_PRINT_SHOW_CREATE_TABLE)
 	    {
 	      DB_VALUE ptype;
+	      int save;
 
+	      AU_DISABLE (save);
 	      DB_MAKE_NULL (&ptype);
 	      if (db_get (class_->partition_of, PARTITION_ATT_PTYPE, &ptype)
 		  != NO_ERROR)
 		{
+		  AU_ENABLE (save);
 		  goto error_exit;
 		}
+	      AU_ENABLE (save);
 	      is_print_partition =
 		(DB_GET_INTEGER (&ptype) != PT_PARTITION_HASH);
 	      pr_clear_value (&ptype);
@@ -3010,7 +3014,7 @@ help_class_names (const char *qualifier)
     }
 
   names = NULL;
-  mops = db_fetch_all_classes (DB_FETCH_CLREAD_INSTREAD);
+  mops = db_fetch_all_classes (DB_FETCH_READ);
 
   /* vector fetch as many as possible
      (void)db_fetch_list(mops, DB_FETCH_READ, 0);

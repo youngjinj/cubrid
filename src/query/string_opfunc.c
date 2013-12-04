@@ -574,7 +574,7 @@ db_string_compare (const DB_VALUE * string1, const DB_VALUE * string2,
  * Arguments:
  *                string1: (IN) Left side of compare.
  *                string2: (IN) Right side of compare.
- *                 result: (OUT) string such that >= string1, and < string2.
+ *                 result: (OUT) string such that > string1, and <= string2.
  *
  * Returns: int
  *
@@ -690,7 +690,7 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
       INTL_CODESET codeset;
       int num_bits = -1;
       int collation_id;
-      bool bit_use_str1_size = false;
+      bool bit_use_str2_size = false;
 
       string1 = (unsigned char *) DB_GET_STRING (db_string1);
       size1 = (int) DB_GET_STRING_SIZE (db_string1);
@@ -750,37 +750,32 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
 
       if (result_type == DB_TYPE_VARBIT)
 	{
-	  int pos;
+	  int size;
 	  const unsigned char *t2;
 
-	  for (pos = 0, t = string1, t2 = string2;
-	       pos < size1 && pos < size2 && *t++ == *t2++; pos++)
+	  for (size = 1, t = string1, t2 = string2;
+	       size <= size1 && size <= size2; size++, t++, t2++)
 	    {
-	      ;
+	      if (*t != *t2)
+		{
+		  size++;
+		  break;
+		}
 	    }
 
 	  if (!(key_domain->is_desc))
 	    {			/* normal index */
-	      /* check if matched size is exactly string1 or in string2 there
-	       * is exactly one more byte after matched part */
-	      if (pos == size1 || pos + 1 == size2)
-		{
-		  key = string1;
-		  pos = size1;
-		  /* We need all the string1 bits. We may not use all of the
-		   * bits in the last byte. */
-		  bit_use_str1_size = true;
-		}
-	      else
-		{
-		  assert (pos < size2);
+	      key = string2;
 
-		  key = (unsigned char *) string2;
-		  pos += 1;
-		  /* We will take all the bits for the differentiating byte.
-		   * This is fine since in this branch we are guaranteed not
-		   * to be at the end of either string. */
-		  bit_use_str1_size = false;
+	      /* search until non-zero differentiating byte */
+	      t2++;
+	      size++;
+
+	      bit_use_str2_size = false;
+	      if (size >= size2)
+		{
+		  size = size2;
+		  bit_use_str2_size = true;
 		}
 	    }
 	  else
@@ -788,29 +783,29 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
 	      /* reverse index */
 	      assert (key_domain->is_desc);
 
-	      if (pos == size1)
+	      t++;
+	      size++;
+
+	      if (size >= size1)
 		{
-		  key = (unsigned char *) string1;
-		  pos = size1;
-		  /* We need all the string1 bits. We may not use all of the
-		   * bits in the last byte. */
-		  bit_use_str1_size = true;
+		  /* str1 exhaused or at last byte, we use string2 as key */
+		  key = string2;
+		  size = size2;
+		  bit_use_str2_size = true;
 		}
 	      else
 		{
-		  assert (pos < size1);
-		  key = (unsigned char *) string1;
-		  pos += 1;
-		  /* We will take all the bits for the differentiating byte.
-		   * This is fine since in this branch we are guaranteed not
-		   * to be at the end of either string */
-		  bit_use_str1_size = false;
+		  /* pos is already at the next diffentiating byte */
+		  assert (size < size1);
+		  key = string1;
+		  bit_use_str2_size = false;
 		}
 	    }
 
-	  result_size = pos;
-	  num_bits = bit_use_str1_size ? (db_string1->data.ch.medium.size)
-	    : (result_size * BYTE_SIZE);
+	  num_bits = bit_use_str2_size ? (db_string2->data.ch.medium.size)
+	    : (size * BYTE_SIZE);
+
+	  result_size = (num_bits + 7) / 8;
 	}
       else
 	{
@@ -864,11 +859,11 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
 
       if (!key_domain->is_desc)
 	{
-	  assert (c1 <= 0 && c2 < 0);
+	  assert (c1 < 0 && c2 <= 0);
 	}
       else
 	{
-	  assert (c1 >= 0 && c2 > 0);
+	  assert (c1 > 0 && c2 >= 0);
 	}
     }
 #endif
@@ -2619,7 +2614,7 @@ exit:
 
 /*
  * db_string_shaone - sha1 encrypt function
- *   return: If success, return 0. 
+ *   return: If success, return 0.
  *   src(in): source string
  *	 result(out): the encrypted data.
  * Note:
@@ -2686,7 +2681,7 @@ error:
 
 /*
  * db_string_shatwo - sha2 encrypt function
- *   return: If success, return 0. 
+ *   return: If success, return 0.
  *   src(in): source string
  *	 hash_len(in): the hash length
  *	 result(out): the encrypted data.
@@ -2777,7 +2772,7 @@ error:
 
 /*
  * db_string_aes_encrypt - aes encrypt function
- *   return: If success, return 0. 
+ *   return: If success, return 0.
  *   src(in): source string
  *	 key(in): the encrypt key
  *	 result(out): the encrypted data.
@@ -2848,7 +2843,7 @@ error:
 
 /*
  * db_string_aes_decrypt - aes decrypt function
- *   return: If success, return 0. 
+ *   return: If success, return 0.
  *   src(in): source string
  *	 key(in): the encrypt key
  *	 result(out): the decrypted data.
@@ -15910,6 +15905,11 @@ date_to_char (const DB_VALUE * src_value,
 	  switch (cur_format)
 	    {
 	    case DT_CC:
+	      if (month == 0 && day == 0 && year == 0)
+		{
+		  goto zerodate_exit;
+		}
+
 	      tmp_int = (year / 100) + 1;
 	      sprintf (&result_buf[i], "%02d\n", tmp_int);
 	      i += 2;
@@ -15933,33 +15933,12 @@ date_to_char (const DB_VALUE * src_value,
 	      break;
 
 	    case DT_MONTH:
-	      if (*cur_format_str_ptr == 'm')
-		{
-		  token_case_mode = 1;
-		}
-	      else if (*(cur_format_str_ptr + 1) == 'O')
-		{
-		  token_case_mode = 2;
-		}
-	      else
-		{
-		  token_case_mode = 0;
-		}
-
-	      error_status =
-		print_string_date_token (SDT_MONTH, date_lang_id, codeset,
-					 month - 1, token_case_mode,
-					 &result_buf[i], &token_size);
-
-	      if (error_status != NO_ERROR)
-		{
-		  goto exit;
-		}
-
-	      i += token_size;
-	      break;
-
 	    case DT_MON:
+	      if (month == 0 && day == 0 && year == 0)
+		{
+		  goto zerodate_exit;
+		}
+
 	      if (*cur_format_str_ptr == 'm')
 		{
 		  token_case_mode = 1;
@@ -15973,14 +15952,25 @@ date_to_char (const DB_VALUE * src_value,
 		  token_case_mode = 0;
 		}
 
-	      error_status =
-		print_string_date_token (SDT_MONTH_SHORT, date_lang_id,
-					 codeset,
-					 month - 1, token_case_mode,
-					 &result_buf[i], &token_size);
+	      if (cur_format == DT_MONTH)
+		{
+		  error_status =
+		    print_string_date_token (SDT_MONTH, date_lang_id, codeset,
+					     month - 1, token_case_mode,
+					     &result_buf[i], &token_size);
+		}
+	      else		/* cur_format == DT_MON */
+		{
+		  error_status =
+		    print_string_date_token (SDT_MONTH_SHORT, date_lang_id,
+					     codeset, month - 1,
+					     token_case_mode, &result_buf[i],
+					     &token_size);
+		}
 
 	      if (error_status != NO_ERROR)
 		{
+		  db_private_free_and_init (NULL, result_buf);
 		  goto exit;
 		}
 
@@ -15988,6 +15978,11 @@ date_to_char (const DB_VALUE * src_value,
 	      break;
 
 	    case DT_Q:
+	      if (month == 0 && day == 0 && year == 0)
+		{
+		  goto zerodate_exit;
+		}
+
 	      result_buf[i] = '1' + ((month - 1) / 3);
 	      i++;
 	      break;
@@ -15998,42 +15993,23 @@ date_to_char (const DB_VALUE * src_value,
 	      break;
 
 	    case DT_DAY:
-	      tmp_int = get_day (month, day, year);
-
-	      if (*cur_format_str_ptr == 'd')
-		{
-		  token_case_mode = 1;
-		}
-	      else if (*(cur_format_str_ptr + 1) == 'A')
-		{
-		  token_case_mode = 2;
-		}
-	      else
-		{
-		  token_case_mode = 0;
-		}
-
-	      error_status =
-		print_string_date_token (SDT_DAY, date_lang_id, codeset,
-					 tmp_int, token_case_mode,
-					 &result_buf[i], &token_size);
-
-	      if (error_status != NO_ERROR)
-		{
-		  goto exit;
-		}
-
-	      i += token_size;
-	      break;
-
 	    case DT_DY:
+	      if (month == 0 && day == 0 && year == 0)
+		{
+		  goto zerodate_exit;
+		}
+
 	      tmp_int = get_day (month, day, year);
 
 	      if (*cur_format_str_ptr == 'd')
 		{
 		  token_case_mode = 1;
 		}
-	      else if (*(cur_format_str_ptr + 1) == 'Y')
+	      else if (*(cur_format_str_ptr + 1) == 'A')	/* "DAY" */
+		{
+		  token_case_mode = 2;
+		}
+	      else if (*(cur_format_str_ptr + 1) == 'Y')	/* "DY" */
 		{
 		  token_case_mode = 2;
 		}
@@ -16042,13 +16018,25 @@ date_to_char (const DB_VALUE * src_value,
 		  token_case_mode = 0;
 		}
 
-	      error_status =
-		print_string_date_token (SDT_DAY_SHORT, date_lang_id, codeset,
-					 tmp_int, token_case_mode,
-					 &result_buf[i], &token_size);
+	      if (cur_format == DT_DAY)
+		{
+		  error_status =
+		    print_string_date_token (SDT_DAY, date_lang_id, codeset,
+					     tmp_int, token_case_mode,
+					     &result_buf[i], &token_size);
+		}
+	      else		/* cur_format == DT_DY */
+		{
+		  error_status =
+		    print_string_date_token (SDT_DAY_SHORT, date_lang_id,
+					     codeset, tmp_int,
+					     token_case_mode, &result_buf[i],
+					     &token_size);
+		}
 
 	      if (error_status != NO_ERROR)
 		{
+		  db_private_free_and_init (NULL, result_buf);
 		  goto exit;
 		}
 
@@ -16056,6 +16044,11 @@ date_to_char (const DB_VALUE * src_value,
 	      break;
 
 	    case DT_D:
+	      if (month == 0 && day == 0 && year == 0)
+		{
+		  goto zerodate_exit;
+		}
+
 	      tmp_int = get_day (month, day, year);
 	      result_buf[i] = '0' + tmp_int + 1;	/* sun=1 */
 	      i += 1;
@@ -16267,6 +16260,14 @@ exit:
       db_private_free (NULL, initial_buf_format);
     }
   return error_status;
+
+zerodate_exit:
+  if (result_buf != NULL)
+    {
+      db_private_free_and_init (NULL, result_buf);
+    }
+  DB_MAKE_NULL (result_str);
+  goto exit;
 }
 
 /*

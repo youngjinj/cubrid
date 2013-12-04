@@ -199,7 +199,7 @@ Lệnh có thể dùng :\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          tên-trung gian\n\
     off         tên-trung gian\n\
     reset       tên-trung gian\n\
@@ -231,6 +231,10 @@ Lệnh có thể dùng :\n\
 36 The server was not configured for HA.\n
 38 Máy chủ được cấu hình cho HA không được liệt kê trong ha_db_list.\n
 39 Máy chủ được cấu hình cho HA không được liệt kê trong ha_node_list.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 CẢNH BÁO: tùy chọn -t bị bỏ qua trong thực thi chế độ độc lập.\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 Dòng cam kết cuối : %d
 114 lỗi-kiểm soát-tệp tin
 115 tệp tin đầu vào đến lỗi kiểm soát trong quá trình tải
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: Nhập đối tượng và lược đồ đến cơ sở dữ liệu.\n\
 cách sử dụng: %s loaddb [TÙY CHỌN] tên-cơ sở dữ liệu\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 Chỉ %d trong số %d đối tượng được kết xuất thành công.\n
 47 thư mục đầu ra quá dài.\n
 48 LSA : %d %d \n
+49 Mật mã:
 60 \
 unloaddb: Xuất đối tượng và lược đồ từ cơ sở dữ liệu.\n\
 cách sử dụng: %s unloaddb [TÙY CHỌN] tên-cơ sở dữ liệu\n\
 \n\
 các tùy chọn hợp lệ:\n\
+  -u, --user=ID               ID người dùng cho truy cập cơ sở dữ liệu; mặc định: "dba"\n\
+  -p, --password=PASS         mật mã người dùng; mặc định: không có \n\
   -i, --input-class-file=FILE tệp tin đầu vào của tên bảng; mặc định: kết xuất tất cả các lớp\n\
       --include-reference     bao gồm các bảng đã tham chiếu; với tùy chọn -i; mặc định: tắt\n\
       --input-class-only      chỉ bao gồm lớp được chỉ định; với tùy chọn -i; mặc định: tắt\n\

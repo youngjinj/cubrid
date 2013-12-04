@@ -475,6 +475,12 @@ static int do_find_auto_increment_serial (MOP * auto_increment_obj,
 static int do_check_fk_constraints_internal (DB_CTMPL * ctemplate,
 					     PT_NODE * constraints,
 					     bool is_partitioned);
+
+static int get_index_type_qualifiers (MOP obj, bool * is_reverse,
+				      bool * is_unique,
+				      const char *index_name);
+
+
 /*
  * Function Group :
  * DO functions for alter statement
@@ -525,7 +531,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
   SM_CLASS_CONSTRAINT *sm_constraint = NULL;
   DB_CONSTRAINT_TYPE ctype;
   bool partition_savepoint = false;
-  bool old_disable_stats = sm_Disable_updating_statistics;
   const PT_ALTER_CODE alter_code = alter->info.alter.code;
   SM_CONSTRAINT_FAMILY constraint_family;
   unsigned int save_custom;
@@ -1057,6 +1062,19 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 	      pt_evaluate_tree (parser, d->info.data_default.default_value,
 				&src_val, 1);
 
+	      /* Fix CUBRIDSUS-8035. FOR Primary Key situation, we will
+	       * throw another ERROR in function dbt_change_default, so
+	       * I excluded it from here.
+	       */
+	      if (DB_IS_NULL (&src_val)
+		  && (def_attr->flags & SM_ATTFLAG_NON_NULL)
+		  && !(def_attr->flags & SM_ATTFLAG_PRIMARY_KEY))
+		{
+		  ERROR1 (error, ER_CANNOT_HAVE_NOTNULL_DEFAULT_NULL,
+			  attr_name);
+		  break;
+		}
+
 	      if (n->info.name.meta_class == PT_META_ATTR)
 		{
 		  error = dbt_change_default (ctemplate, attr_name, 1,
@@ -1267,12 +1285,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 	}
       partition_savepoint = true;
 
-      if (alter_code != PT_ANALYZE_PARTITION)
-	{
-	  /* Disable updating statistics until partitioning schema
-	   * modification is finished */
-	  sm_Disable_updating_statistics = true;
-	}
 
       error = do_alter_partitioning_pre (parser, alter, &pinfo);
       if (ctemplate->partition_of == NULL
@@ -1289,7 +1301,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 
     case PT_RENAME_CONSTRAINT:
     case PT_RENAME_INDEX:
-      sm_Disable_updating_statistics = true;
 
       old_name =
 	alter->info.alter.alter_clause.rename.old_name->info.name.original;
@@ -1336,16 +1347,10 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 	{
 	  goto alter_partition_fail;
 	}
-      /* assume that sm_Disable_updating_statistics was used
-       * in Rename constraint/index */
-      sm_Disable_updating_statistics = old_disable_stats;
       return error;
     }
 
   vclass = dbt_finish_class (ctemplate);
-  /* assume that sm_Disable_updating_statistics was used
-   * in Rename constraint/index */
-  sm_Disable_updating_statistics = old_disable_stats;
 
   /* the dbt_finish_class() failed, the template was not freed */
   if (vclass == NULL)
@@ -1437,14 +1442,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 	{
 	  goto alter_partition_fail;
 	}
-      if (alter_code != PT_ANALYZE_PARTITION)
-	{
-	  /* update statistics here */
-	  sm_Disable_updating_statistics = old_disable_stats;
-	  error =
-	    sm_update_statistics (pinfo.root_op, NULL, false,
-				  STATS_WITH_SAMPLING);
-	}
       break;
 
     default:
@@ -1454,7 +1451,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
   return error;
 
 alter_partition_fail:
-  sm_Disable_updating_statistics = old_disable_stats;
   if (partition_savepoint && error != NO_ERROR
       && error != ER_LK_UNILATERALLY_ABORTED)
     {
@@ -1540,32 +1536,52 @@ do_alter_clause_drop_index (PARSER_CONTEXT * const parser,
   int error_code = NO_ERROR;
   const PT_ALTER_CODE alter_code = alter->info.alter.code;
   DB_OBJECT *obj = NULL;
+  DB_CONSTRAINT_TYPE index_type;
+  bool is_reverse;
+  bool is_unique;
 
   assert (alter_code == PT_DROP_INDEX_CLAUSE);
   assert (alter->info.alter.constraint_list != NULL);
   assert (alter->info.alter.constraint_list->next == NULL);
   assert (alter->info.alter.constraint_list->node_type == PT_NAME);
 
+  index_type =
+    get_reverse_unique_index_type (alter->info.alter.alter_clause.index.
+				   reverse,
+				   alter->info.alter.alter_clause.index.
+				   unique);
+
   obj = db_find_class (alter->info.alter.entity_name->info.name.original);
   if (obj == NULL)
     {
       error_code = er_errid ();
+      return error_code;
     }
+
+  if (index_type == DB_CONSTRAINT_INDEX)
+    {
+      error_code =
+	get_index_type_qualifiers (obj, &is_reverse, &is_unique,
+				   alter->info.alter.constraint_list->info.
+				   name.original);
+      if (error_code != NO_ERROR)
+	{
+	  return error_code;
+	}
+    }
+  else
+    {
+      is_reverse = alter->info.alter.alter_clause.index.reverse;
+      is_unique = alter->info.alter.alter_clause.index.unique;
+    }
+
   error_code =
     create_or_drop_index_helper (parser, alter->info.alter.constraint_list->
 				 info.name.original,
-				 alter->info.alter.alter_clause.index.reverse,
-				 alter->info.alter.alter_clause.index.unique,
+				 (const bool) is_reverse,
+				 (const bool) is_unique,
 				 NULL, NULL, NULL, NULL, -1, 0, NULL,
 				 obj, DO_INDEX_DROP);
-  if (error_code != NO_ERROR)
-    {
-      goto error_exit;
-    }
-
-  return error_code;
-
-error_exit:
   return error_code;
 }
 
@@ -2964,86 +2980,69 @@ do_drop_index (PARSER_CONTEXT * parser, const PT_NODE * statement)
 {
   PT_NODE *cls = NULL;
   DB_OBJECT *obj = NULL;
-  bool free_cls = false;
   const char *index_name = NULL;
   int error_code = NO_ERROR;
   const char *class_name = NULL;
+  DB_CONSTRAINT_TYPE index_type;
+  bool is_reverse;
+  bool is_unique;
 
   CHECK_MODIFICATION_ERROR ();
 
   index_name = statement->info.index.index_name ?
     statement->info.index.index_name->info.name.original : NULL;
 
+  if (index_name == NULL)
+    {
+      error_code = ER_SM_INVALID_DEF_CONSTRAINT_NAME_PARAMS;
+      return error_code;
+    }
+
   if (statement->info.index.indexed_class)
     {
       cls = statement->info.index.indexed_class->info.spec.flat_entity_list;
     }
 
-  if (cls == NULL)
-    {
-      DB_CONSTRAINT_TYPE index_type;
+  assert (cls != NULL);
 
-      if (index_name == NULL)
-	{
-	  error_code = ER_SM_INVALID_DEF_CONSTRAINT_NAME_PARAMS;
-	  goto error_exit;
-	}
-      index_type =
-	get_reverse_unique_index_type (statement->info.index.reverse,
-				       statement->info.index.unique);
-      cls = pt_find_class_of_index (parser, index_name, index_type);
+  index_type =
+    get_reverse_unique_index_type (statement->info.index.reverse,
+				   statement->info.index.unique);
 
-      if (cls == NULL)
-	{
-	  error_code = er_errid ();
-	  goto error_exit;
-	}
-      free_cls = true;
-      class_name = cls->info.name.original;
-    }
-  else
-    {
-      class_name = cls->info.name.resolved;
-    }
-
+  class_name = cls->info.name.resolved;
   obj = db_find_class (class_name);
+
   if (obj == NULL)
     {
       error_code = er_errid ();
-      goto error_exit;
+      return error_code;
     }
 
-  /* A call to pt_check_user_owns_class does not actually have any
-   * effect here, and it conflicts with resolved spec names. This check
-   * is already performed in name resolving. */
-
-  if (free_cls)
+  if (index_type == DB_CONSTRAINT_INDEX)
     {
-      parser_free_tree (parser, cls);
-      cls = NULL;
-      free_cls = false;
+      error_code =
+	get_index_type_qualifiers (obj, &is_reverse, &is_unique, index_name);
+      if (error_code != NO_ERROR)
+	{
+	  return error_code;
+	}
+    }
+  else
+    {
+      is_reverse = statement->info.index.reverse;
+      is_unique = statement->info.index.unique;
     }
 
   error_code =
     create_or_drop_index_helper (parser, index_name,
-				 statement->info.index.reverse,
-				 statement->info.index.unique,
+				 (const bool) is_reverse,
+				 (const bool) is_unique,
 				 statement->info.index.indexed_class,
 				 statement->info.index.column_names, NULL,
 				 NULL, statement->info.index.func_pos,
 				 statement->info.index.func_no_args,
 				 statement->info.index.function_expr,
 				 obj, DO_INDEX_DROP);
-  return error_code;
-
-error_exit:
-  if (free_cls)
-    {
-      assert (cls != NULL);
-      parser_free_tree (parser, cls);
-      cls = NULL;
-      free_cls = false;
-    }
   return error_code;
 }
 
@@ -3060,7 +3059,6 @@ do_alter_index_rebuild (PARSER_CONTEXT * parser, const PT_NODE * statement)
   DB_OBJECT *obj;
   PT_NODE *n, *c;
   PT_NODE *cls = NULL;
-  bool free_cls = false;
   int i, nnames;
   DB_CONSTRAINT_TYPE ctype;
   char **attnames = NULL;
@@ -3095,47 +3093,15 @@ do_alter_index_rebuild (PARSER_CONTEXT * parser, const PT_NODE * statement)
       cls = statement->info.index.indexed_class->info.spec.flat_entity_list;
     }
 
-  if (cls == NULL)
-    {
-      if (index_name == NULL)
-	{
-	  error = ER_SM_INVALID_DEF_CONSTRAINT_NAME_PARAMS;
-	  goto error_exit;
-	}
-      ctype = get_reverse_unique_index_type (statement->info.index.reverse,
-					     statement->info.index.unique);
-      cls = pt_find_class_of_index (parser, index_name, ctype);
+  assert (cls != NULL);
 
-      if (cls == NULL)
-	{
-	  error = er_errid ();
-	  goto error_exit;
-	}
-      free_cls = true;
-
-      class_name = cls->info.name.original;
-    }
-  else
-    {
-      class_name = cls->info.name.resolved;
-    }
+  class_name = cls->info.name.resolved;
 
   obj = db_find_class (class_name);
   if (obj == NULL)
     {
       error = er_errid ();
       goto error_exit;
-    }
-
-  /* A call to pt_check_user_owns_class does not actually have any
-   * effect here, and it conflicts with resolved spec names. This check
-   * is already performed in name resolving. */
-
-  if (free_cls)
-    {
-      parser_free_tree (parser, cls);
-      cls = NULL;
-      free_cls = false;
     }
 
   ctype = get_reverse_unique_index_type (statement->info.index.reverse,
@@ -3605,13 +3571,6 @@ end:
   return error;
 
 error_exit:
-  if (free_cls)
-    {
-      assert (cls != NULL);
-      parser_free_tree (parser, cls);
-      cls = NULL;
-      free_cls = false;
-    }
 
   if (do_rollback == true)
     {
@@ -3643,7 +3602,6 @@ do_alter_index_rename (PARSER_CONTEXT * parser, const PT_NODE * statement)
   const char *index_name = NULL;
   const char *new_index_name = NULL;
   bool do_rollback = false;
-  bool old_disable_stats = sm_Disable_updating_statistics;
 
   index_name =
     statement->info.index.index_name ? statement->info.index.index_name->info.
@@ -3685,8 +3643,6 @@ do_alter_index_rename (PARSER_CONTEXT * parser, const PT_NODE * statement)
 
   do_rollback = true;
 
-  /* We do not need to update statistics in Renaming index */
-  sm_Disable_updating_statistics = true;
 
   ctemplate = smt_edit_class_mop (obj, AU_INDEX);
   if (ctemplate == NULL)
@@ -3714,8 +3670,6 @@ do_alter_index_rename (PARSER_CONTEXT * parser, const PT_NODE * statement)
     }
 
 end:
-  /* roll back the state of sm_Disable_updating_statistics */
-  sm_Disable_updating_statistics = old_disable_stats;
 
   return error;
 
@@ -4256,6 +4210,7 @@ compile_partition_expression (PARSER_CONTEXT * parser, PT_NODE * entity_name,
 
   /* perform semantic check on the expression */
   expr = pinfo->info.partition.expr;
+  mq_clear_ids (parser, expr, NULL);
   if (pt_semantic_quick_check_node (parser, &spec, &expr) == NULL)
     {
       return NULL;
@@ -5593,17 +5548,6 @@ do_create_partition_constraints (PARSER_CONTEXT * parser, PT_NODE * alter,
       return er_errid ();
     }
 
-  if (smclass->stats == NULL)
-    {
-      if ((error = er_errid ()) == NO_ERROR)
-	{
-	  /* set an error if none was set yet */
-	  error = ER_PARTITION_WORK_FAILED;
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_PARTITION_WORK_FAILED,
-		  0);
-	}
-      return error;
-    }
 
   for (cons = smclass->constraints; cons != NULL; cons = cons->next)
     {
@@ -5618,6 +5562,7 @@ do_create_partition_constraints (PARSER_CONTEXT * parser, PT_NODE * alter,
 	  return error;
 	}
     }
+
   return error;
 }
 
@@ -6747,9 +6692,8 @@ do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
       while (name)
 	{
 	  assert (name->info.name.db_object != NULL);
-	  error =
-	    sm_update_statistics (name->info.name.db_object, NULL, false,
-				  STATS_WITH_SAMPLING);
+	  error = sm_update_statistics (name->info.name.db_object,
+					STATS_WITH_SAMPLING);
 	  if (error != NO_ERROR)
 	    {
 	      return error;
@@ -6768,9 +6712,7 @@ do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
 	{
 	  return error;
 	}
-      error =
-	sm_update_statistics (pinfo->root_op, NULL, false,
-			      STATS_WITH_SAMPLING);
+      error = sm_update_statistics (pinfo->root_op, STATS_WITH_SAMPLING);
       if (error != NO_ERROR)
 	{
 	  return error;
@@ -6791,8 +6733,7 @@ do_analyze_partition (PARSER_CONTEXT * parser, PT_NODE * alter,
 	      continue;
 	    }
 
-	  error =
-	    sm_update_statistics (obj->op, NULL, false, STATS_WITH_SAMPLING);
+	  error = sm_update_statistics (obj->op, STATS_WITH_SAMPLING);
 	  if (error != NO_ERROR)
 	    {
 	      return error;
@@ -9133,6 +9074,12 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
     {
     case PT_CLASS:
 
+      if (node->info.create_entity.if_not_exists == 1
+	  && db_find_class (class_name))
+	{
+	  goto error_exit;
+	}
+
       for (tbl_opt = node->info.create_entity.table_option_list;
 	   tbl_opt != NULL; tbl_opt = tbl_opt->next)
 	{
@@ -9856,7 +9803,7 @@ do_alter_clause_change_attribute (PARSER_CONTEXT * const parser,
 
   /* force exclusive lock on class, even though it should have been already
    * acquired*/
-  if (locator_fetch_class (class_obj, DB_FETCH_QUERY_WRITE) == NULL)
+  if (locator_fetch_class (class_obj, DB_FETCH_WRITE) == NULL)
     {
       error = ER_FAILED;
       goto exit;
@@ -9924,8 +9871,7 @@ do_alter_clause_change_attribute (PARSER_CONTEXT * const parser,
 
 	  /* force exclusive lock on class, even though it should have been already
 	   * acquired */
-	  if (locator_fetch_class (user_list->op, DB_FETCH_QUERY_WRITE) ==
-	      NULL)
+	  if (locator_fetch_class (user_list->op, DB_FETCH_WRITE) == NULL)
 	    {
 	      error = ER_FAILED;
 	      goto exit;
@@ -10356,7 +10302,7 @@ do_alter_change_default_cs_coll (PARSER_CONTEXT * const parser,
     }
 
   /* get exclusive lock on class */
-  if (locator_fetch_class (class_obj, DB_FETCH_QUERY_WRITE) == NULL)
+  if (locator_fetch_class (class_obj, DB_FETCH_WRITE) == NULL)
     {
       error = ER_FAILED;
       goto exit;
@@ -14566,4 +14512,73 @@ pt_replace_names_index_expr (PARSER_CONTEXT * parser, PT_NODE * node,
     }
 
   return node;
+}
+
+/*
+ * get_index_type_qualifiers() - get qualifiers of the index type that
+ *                               matches the index name.
+ * return: NO_ERROR or error code
+ * obj(in): Memory Object Pointer
+ * is_reverse(out): TRUE if the index type has the reverse feature.
+ * is_unique(out): TRUE if the index type has the unique feature.
+ * index_name(in): the name of index
+ *
+ * note:
+ *    Only index types that satisfy the SM_IS_INDEX_FAMILY
+ *    condition will be searched for.
+ */
+
+static int
+get_index_type_qualifiers (MOP obj, bool * is_reverse, bool * is_unique,
+			   const char *index_name)
+{
+  int error_code = NO_ERROR;
+  SM_CLASS_CONSTRAINT *sm_all_constraints = NULL;
+  SM_CLASS_CONSTRAINT *sm_constraint = NULL;
+
+  if (obj == NULL)
+    {
+      error_code = ER_FAILED;
+      return error_code;
+    }
+
+  sm_all_constraints = sm_class_constraints (obj);
+  sm_constraint =
+    classobj_find_constraint_by_name (sm_all_constraints, index_name);
+  if (sm_all_constraints == NULL || sm_constraint == NULL)
+    {
+      error_code = ER_SM_NO_INDEX;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 1, index_name);
+      return error_code;
+    }
+
+  if (!SM_IS_INDEX_FAMILY (sm_constraint->type))
+    {
+      error_code = ER_SM_CONSTRAINT_HAS_DIFFERENT_TYPE;
+      return error_code;
+    }
+
+  switch (sm_constraint->type)
+    {
+    case SM_CONSTRAINT_INDEX:
+      *is_reverse = false;
+      *is_unique = false;
+      break;
+    case SM_CONSTRAINT_UNIQUE:
+      *is_reverse = false;
+      *is_unique = true;
+      break;
+    case SM_CONSTRAINT_REVERSE_INDEX:
+      *is_reverse = true;
+      *is_unique = false;
+      break;
+    case SM_CONSTRAINT_REVERSE_UNIQUE:
+      *is_reverse = true;
+      *is_unique = true;
+      break;
+    default:
+      break;
+    }
+
+  return error_code;
 }

@@ -136,7 +136,7 @@ static int rv;
 
 /* Assume that locator end with <path>/<meta_name>.<key_name> */
 #define LOCATOR_KEY(locator_) (strrchr (locator_, '.') + 1)
-#define LOCATOR_META(locator_) (strrchr (locator_, '/') + 1)
+#define LOCATOR_META(locator_) (strrchr (locator_, PATH_SEPARATOR) + 1)
 #define PUT_LOCATOR_META(meta_name_, locator_) \
    do { \
      char *key_, *meta_; \
@@ -396,9 +396,6 @@ static bool log_is_class_being_modified_internal (THREAD_ENTRY * thread_p,
 static void log_cleanup_modified_class (THREAD_ENTRY * thread_p,
 					MODIFIED_CLASS_ENTRY * class,
 					void *arg);
-static void log_update_stats_on_modified_class (THREAD_ENTRY * thread_p,
-						MODIFIED_CLASS_ENTRY * class,
-						void *arg);
 static void log_map_modified_class_list (THREAD_ENTRY * thread_p,
 					 LOG_TDES * tdes, bool release,
 					 void
@@ -409,9 +406,7 @@ static void log_map_modified_class_list (THREAD_ENTRY * thread_p,
 static void log_cleanup_modified_class_list (THREAD_ENTRY * thread_p,
 					     LOG_TDES * tdes, bool release,
 					     bool decache_classrepr);
-static void log_update_stats_on_modified_class_list (THREAD_ENTRY * thread_p,
-						     LOG_TDES * tdes,
-						     bool release);
+
 /*
  * log_rectype_string - RETURN TYPE OF LOG RECORD IN STRING FORMAT
  *
@@ -5026,7 +5021,6 @@ log_append_donetime (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
  * return:
  *
  *   class_oid(in):
- *   update_stats_action(in):
  *
  * NOTE: Function for LOG_TDES.modified_class_list
  *       This list keeps the following information:
@@ -5040,12 +5034,10 @@ log_append_donetime (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
  */
 int
 log_add_to_modified_class_list (THREAD_ENTRY * thread_p,
-				const OID * class_oid, BTID * btid,
-				UPDATE_STATS_ACTION_TYPE update_stats_action)
+				const OID * class_oid)
 {
   LOG_TDES *tdes;
   MODIFIED_CLASS_ENTRY *t = NULL;
-  BTID_LIST *b = NULL;
   int tran_index;
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
@@ -5075,46 +5067,11 @@ log_add_to_modified_class_list (THREAD_ENTRY * thread_p,
 
       COPY_OID (&t->class_oid, class_oid);
       LSA_SET_NULL (&t->last_modified_lsa);
-      t->need_update_stats = false;
-      t->btid_list = NULL;
       t->next = tdes->modified_class_list;
       tdes->modified_class_list = t;
     }
 
-  switch (update_stats_action)
-    {
-    case UPDATE_STATS_ACTION_SET:
-      /* In this case, we do not update "last_modified_lsa", because
-       * this is aimed at delaying updating statistics of this class
-       * until "the transaction is committed". This is not a modification.
-       */
-      t->need_update_stats = true;
-      if (btid && !BTID_IS_NULL (btid))
-	{
-	  b = (BTID_LIST *) malloc (sizeof (BTID_LIST));
-	  if (b == NULL)
-	    {
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (BTID_LIST));
-	      return ER_OUT_OF_VIRTUAL_MEMORY;
-	    }
-
-	  BTID_COPY (&b->btid, btid);
-	  b->next = t->btid_list;
-	  t->btid_list = b;
-	}
-      break;
-    case UPDATE_STATS_ACTION_KEEP:
-      LSA_COPY (&t->last_modified_lsa, &tdes->tail_lsa);
-      break;
-    case UPDATE_STATS_ACTION_RESET:
-      LSA_COPY (&t->last_modified_lsa, &tdes->tail_lsa);
-      t->need_update_stats = false;
-      break;
-    default:
-      assert (false);
-      break;
-    }
+  LSA_COPY (&t->last_modified_lsa, &tdes->tail_lsa);
 
   return NO_ERROR;
 }
@@ -5222,29 +5179,6 @@ log_cleanup_modified_class (THREAD_ENTRY * thread_p,
 }
 
 /*
- * log_update_stats_on_modified_class -
- *
- * return:
- *
- *   class(in):
- *   arg(in): not used
- *
- * NOTE: Function for LOG_TDES.modified_class_list
- *       This will be used to update statistics on the modified classes
- *       when a transaction is committed.
- */
-static void
-log_update_stats_on_modified_class (THREAD_ENTRY * thread_p,
-				    MODIFIED_CLASS_ENTRY * class, void *arg)
-{
-  if (class->need_update_stats)
-    {
-      (void) xstats_update_statistics (thread_p, &class->class_oid,
-				       class->btid_list, STATS_WITH_SAMPLING);
-    }
-}
-
-/*
  * log_map_modified_class_list -
  *
  * return:
@@ -5267,7 +5201,6 @@ log_map_modified_class_list (THREAD_ENTRY * thread_p,
 					  void *arg), void *arg)
 {
   MODIFIED_CLASS_ENTRY *t;
-  BTID_LIST *b;
 
   t = tdes->modified_class_list;
   while (t != NULL)
@@ -5280,13 +5213,6 @@ log_map_modified_class_list (THREAD_ENTRY * thread_p,
       if (release)
 	{
 	  tdes->modified_class_list = t->next;
-	  b = t->btid_list;
-	  while (b != NULL)
-	    {
-	      t->btid_list = b->next;
-	      free_and_init (b);
-	      b = t->btid_list;
-	    }
 	  free_and_init (t);
 	  t = tdes->modified_class_list;
 	}
@@ -5318,25 +5244,6 @@ log_cleanup_modified_class_list (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 }
 
 /*
- * log_update_stats_on_modified_class_list -
- *
- * return:
- *
- *   tdes(in):
- *   bool(in): release the memory or not
- *
- * NOTE: Function for LOG_TDES.modified_class_list
- */
-static void
-log_update_stats_on_modified_class_list (THREAD_ENTRY * thread_p,
-					 LOG_TDES * tdes, bool release)
-{
-  (void) log_map_modified_class_list (thread_p, tdes, release,
-				      log_update_stats_on_modified_class,
-				      NULL);
-}
-
-/*
  * log_rollback_classrepr_cache - Decache class repr to rollback
  *
  * return:
@@ -5358,7 +5265,6 @@ log_rollback_classrepr_cache (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 	{
 	  (void) heap_classrepr_decache (thread_p, &t->class_oid);
 	  LSA_SET_NULL (&t->last_modified_lsa);
-	  t->need_update_stats = false;
 	}
     }
 }
@@ -5913,14 +5819,6 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 {
   qmgr_clear_trans_wakeup (thread_p, tdes->tran_index, false, false);
 
-  if (!LSA_ISNULL (&tdes->tail_lsa))
-    {
-      /* Do postponed update statistics operation. We should do this before
-       * changing tdes->state. If not, logs will not be written.
-       */
-      log_update_stats_on_modified_class_list (thread_p, tdes, false);
-    }
-
   tdes->state = TRAN_UNACTIVE_WILL_COMMIT;
   if (tdes->num_new_tmp_files + tdes->num_new_tmp_tmp_files > 0)
     {
@@ -6238,14 +6136,14 @@ log_commit (THREAD_ENTRY * thread_p, int tran_index, bool retain_lock)
 	}
     }
 
-  if (tdes->unique_stat_info != NULL)
+  if (tdes->tran_unique_stats != NULL)
     {
 #if defined(CUBRID_DEBUG)
       er_log_debug (ARG_FILE_LINE,
 		    "log_commit: Warning, unique statistical information "
 		    "kept in transaction entry is not freed.");
 #endif /* CUBRID_DEBUG */
-      free_and_init (tdes->unique_stat_info);
+      free_and_init (tdes->tran_unique_stats);
       tdes->num_unique_btrees = 0;
       tdes->max_unique_btrees = 0;
     }
@@ -6381,14 +6279,14 @@ log_abort (THREAD_ENTRY * thread_p, int tran_index)
 	}
     }
 
-  if (tdes->unique_stat_info != NULL)
+  if (tdes->tran_unique_stats != NULL)
     {
 #if defined(CUBRID_DEBUG)
       er_log_debug (ARG_FILE_LINE,
 		    "log_abort: Warning, unique statistical information "
 		    "kept in transaction entry is not freed.");
 #endif /* CUBRID_DEBUG */
-      free_and_init (tdes->unique_stat_info);
+      free_and_init (tdes->tran_unique_stats);
       tdes->num_unique_btrees = 0;
       tdes->max_unique_btrees = 0;
     }

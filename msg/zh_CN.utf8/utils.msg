@@ -199,7 +199,7 @@ cubrid 管理工具，版本 %s\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
@@ -231,6 +231,10 @@ cubrid 管理工具，版本 %s\n\
 36 服务器没有为HA进行设置.\n
 38 为HA配置的服务器没有列在 ha_db_list 列表中.\n
 39 为HA配置的服务器没有列在 ha_node_list 列表中.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 警告: 在单机模式下 -t 选项将被忽略.\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 最后提交的行 : %d
 114 错误控制文件
 115 在加载过程中输入文件来控制错误
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: 将对象和结构导入到数据库.\n\
 usage: %s loaddb [选项] 数据库名\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 只有 %d 个对象在 %d 个对象之中被成功转储.\n
 47 输出目录过长.\n
 48 LSA : %d %d \n
+49 密码:
 60 \
 unloaddb: 从数据库导出对象和结构.\n\
 usage: %s unloaddb [选项] 数据库名\n\
 \n\
 可用选项:\n\
+  -u, --user=ID               访问数据库的用户ID; 默认: "dba"\n\
+  -p, --password=PASS         用户密码; 默认: 空\n\
   -i, --input-class-file=FILE 指定包含表名的输入文件; 默认: 转储所有类\n\
       --include-reference     和-i选项一起使用.当卸载了指定数据库类，卸载对象的引用; 默认: disabled\n\
       --input-class-only      和-i选项一起使用. 只创建与输入文件中的表相关的方案(schema)文件; 默认: 未启用\n\

@@ -135,6 +135,9 @@ static FUNCTION_TYPE *stx_restore_function_type (THREAD_ENTRY * thread_p,
 						 char *ptr);
 static ANALYTIC_TYPE *stx_restore_analytic_type (THREAD_ENTRY * thread_p,
 						 char *ptr);
+static ANALYTIC_EVAL_TYPE *stx_restore_analytic_eval_type (THREAD_ENTRY *
+							   thread_p,
+							   char *ptr);
 static QFILE_SORTED_LIST_ID *stx_restore_srlist_id (THREAD_ENTRY * thread_p,
 						    char *ptr);
 static QFILE_LIST_ID *stx_restore_list_id (THREAD_ENTRY * thread_p,
@@ -289,6 +292,8 @@ static char *stx_build_function_type (THREAD_ENTRY * thread_p, char *tmp,
 				      FUNCTION_TYPE * ptr);
 static char *stx_build_analytic_type (THREAD_ENTRY * thread_p, char *tmp,
 				      ANALYTIC_TYPE * ptr);
+static char *stx_build_analytic_eval_type (THREAD_ENTRY * thread_p, char *tmp,
+					   ANALYTIC_EVAL_TYPE * ptr);
 static char *stx_build_srlist_id (THREAD_ENTRY * thread_p, char *tmp,
 				  QFILE_SORTED_LIST_ID * ptr);
 static char *stx_build_string (THREAD_ENTRY * thread_p, char *tmp, char *ptr);
@@ -715,6 +720,41 @@ stx_restore_analytic_type (THREAD_ENTRY * thread_p, char *ptr)
     }
 
   return analytic;
+}
+
+static ANALYTIC_EVAL_TYPE *
+stx_restore_analytic_eval_type (THREAD_ENTRY * thread_p, char *ptr)
+{
+  ANALYTIC_EVAL_TYPE *analytic_eval;
+
+  if (ptr == NULL)
+    {
+      return NULL;
+    }
+
+  analytic_eval =
+    (ANALYTIC_EVAL_TYPE *) stx_get_struct_visited_ptr (thread_p, ptr);
+  if (analytic_eval != NULL)
+    {
+      return analytic_eval;
+    }
+
+  analytic_eval =
+    (ANALYTIC_EVAL_TYPE *) stx_alloc_struct (thread_p,
+					     sizeof (*analytic_eval));
+  if (analytic_eval == NULL)
+    {
+      stx_set_xasl_errcode (thread_p, ER_OUT_OF_VIRTUAL_MEMORY);
+      return NULL;
+    }
+
+  if (stx_mark_struct_visited (thread_p, ptr, analytic_eval) == ER_FAILED
+      || stx_build_analytic_eval_type (thread_p, ptr, analytic_eval) == NULL)
+    {
+      return NULL;
+    }
+
+  return analytic_eval;
 }
 
 static QFILE_SORTED_LIST_ID *
@@ -3108,6 +3148,66 @@ stx_build_buildlist_proc (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
+  ptr = or_unpack_int (ptr, (int *) &stx_build_list_proc->g_hash_eligible);
+  memset (&stx_build_list_proc->agg_hash_context, 0,
+	  sizeof (AGGREGATE_HASH_CONTEXT));
+
+  ptr = or_unpack_int (ptr,
+		       (int *) &stx_build_list_proc->g_output_first_tuple);
+  ptr = or_unpack_int (ptr, (int *) &stx_build_list_proc->g_hkey_size);
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      stx_build_list_proc->g_hk_scan_regu_list = NULL;
+    }
+  else
+    {
+      stx_build_list_proc->g_hk_scan_regu_list =
+	stx_restore_regu_variable_list (thread_p,
+					&xasl_unpack_info->
+					packed_xasl[offset]);
+      if (stx_build_list_proc->g_hk_scan_regu_list == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      stx_build_list_proc->g_hk_sort_regu_list = NULL;
+    }
+  else
+    {
+      stx_build_list_proc->g_hk_sort_regu_list =
+	stx_restore_regu_variable_list (thread_p,
+					&xasl_unpack_info->
+					packed_xasl[offset]);
+      if (stx_build_list_proc->g_hk_sort_regu_list == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      stx_build_list_proc->g_scan_regu_list = NULL;
+    }
+  else
+    {
+      stx_build_list_proc->g_scan_regu_list =
+	stx_restore_regu_variable_list (thread_p,
+					&xasl_unpack_info->
+					packed_xasl[offset]);
+      if (stx_build_list_proc->g_scan_regu_list == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, (int *) &stx_build_list_proc->g_func_count);
   ptr = or_unpack_int (ptr, (int *) &stx_build_list_proc->g_grbynum_flag);
   ptr = or_unpack_int (ptr, (int *) &stx_build_list_proc->g_with_rollup);
 
@@ -3146,14 +3246,14 @@ stx_build_buildlist_proc (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
     {
-      stx_build_list_proc->a_func_list = NULL;
+      stx_build_list_proc->a_eval_list = NULL;
     }
   else
     {
-      stx_build_list_proc->a_func_list =
-	stx_restore_analytic_type (thread_p, &xasl_unpack_info->
-				   packed_xasl[offset]);
-      if (stx_build_list_proc->a_func_list == NULL)
+      stx_build_list_proc->a_eval_list =
+	stx_restore_analytic_eval_type (thread_p, &xasl_unpack_info->
+					packed_xasl[offset]);
+      if (stx_build_list_proc->a_eval_list == NULL)
 	{
 	  goto error;
 	}
@@ -4862,6 +4962,8 @@ stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
   access_spec->curent = NULL;
   access_spec->pruned = false;
 
+  ptr = or_unpack_int (ptr, &access_spec->flags);
+
   return ptr;
 
 error:
@@ -4903,6 +5005,8 @@ stx_build_indx_info (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, (int *) &(indx_info->groupby_skip));
 
   ptr = or_unpack_int (ptr, (int *) &(indx_info->use_iss));
+
+  ptr = or_unpack_int (ptr, (int *) &(indx_info->ils_prefix_len));
 
   ptr = or_unpack_int (ptr, (int *) &(indx_info->func_idx_col_id));
 
@@ -6022,14 +6126,14 @@ stx_build_aggregate_type (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
     {
-      aggregate->value = NULL;
+      aggregate->accumulator.value = NULL;
     }
   else
     {
-      aggregate->value =
+      aggregate->accumulator.value =
 	stx_restore_db_value (thread_p,
 			      &xasl_unpack_info->packed_xasl[offset]);
-      if (aggregate->value == NULL)
+      if (aggregate->accumulator.value == NULL)
 	{
 	  goto error;
 	}
@@ -6038,20 +6142,20 @@ stx_build_aggregate_type (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
     {
-      aggregate->value2 = NULL;
+      aggregate->accumulator.value2 = NULL;
     }
   else
     {
-      aggregate->value2 =
+      aggregate->accumulator.value2 =
 	stx_restore_db_value (thread_p,
 			      &xasl_unpack_info->packed_xasl[offset]);
-      if (aggregate->value2 == NULL)
+      if (aggregate->accumulator.value2 == NULL)
 	{
 	  goto error;
 	}
     }
 
-  ptr = or_unpack_int (ptr, &aggregate->curr_cnt);
+  ptr = or_unpack_int (ptr, &aggregate->accumulator.curr_cnt);
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
@@ -6213,7 +6317,21 @@ stx_build_analytic_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, &analytic->outptr_idx);
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      analytic->out_value = NULL;
+    }
+  else
+    {
+      analytic->out_value =
+	stx_restore_db_value (thread_p,
+			      &xasl_unpack_info->packed_xasl[offset]);
+      if (analytic->out_value == NULL)
+	{
+	  goto error;
+	}
+    }
 
   ptr = or_unpack_int (ptr, &analytic->offset_idx);
 
@@ -6264,27 +6382,11 @@ stx_build_analytic_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, &offset);
-  if (offset == 0)
-    {
-      analytic->sort_list = NULL;
-    }
-  else
-    {
-      analytic->sort_list =
-	stx_restore_sort_list (thread_p,
-			       &xasl_unpack_info->packed_xasl[offset]);
-      if (analytic->sort_list == NULL)
-	{
-	  goto error;
-	}
-    }
+  ptr = or_unpack_int (ptr, &analytic->sort_prefix_size);
 
-  ptr = or_unpack_int (ptr, &analytic->partition_cnt);
+  ptr = or_unpack_int (ptr, &analytic->sort_list_size);
 
   ptr = or_unpack_int (ptr, &analytic->flag);
-
-  ptr = or_unpack_int (ptr, &analytic->eval_group);
 
   ptr = or_unpack_int (ptr, &tmp_i);
   analytic->from_last = (bool) tmp_i;
@@ -6294,6 +6396,65 @@ stx_build_analytic_type (THREAD_ENTRY * thread_p, char *ptr,
 
   ptr = or_unpack_int (ptr, &tmp_i);
   analytic->is_const_operand = (bool) tmp_i;
+
+  return ptr;
+
+error:
+  stx_set_xasl_errcode (thread_p, ER_OUT_OF_VIRTUAL_MEMORY);
+  return NULL;
+}
+
+static char *
+stx_build_analytic_eval_type (THREAD_ENTRY * thread_p, char *ptr,
+			      ANALYTIC_EVAL_TYPE * analytic_eval)
+{
+  int offset;
+  int type;
+  int tmp_i;
+  XASL_UNPACK_INFO *xasl_unpack_info =
+    stx_get_xasl_unpack_info_ptr (thread_p);
+
+  ptr = or_unpack_int (ptr, &offset);
+  analytic_eval->head =
+    stx_restore_analytic_type (thread_p,
+			       &xasl_unpack_info->packed_xasl[offset]);
+  if (analytic_eval->head == NULL)
+    {
+      goto error;
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      analytic_eval->sort_list = NULL;
+    }
+  else
+    {
+      analytic_eval->sort_list =
+	stx_restore_sort_list (thread_p,
+			       &xasl_unpack_info->packed_xasl[offset]);
+      if (analytic_eval->sort_list == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      analytic_eval->next = NULL;
+    }
+  else
+    {
+      analytic_eval->next =
+	stx_restore_analytic_eval_type (thread_p,
+					&xasl_unpack_info->
+					packed_xasl[offset]);
+      if (analytic_eval->next == NULL)
+	{
+	  goto error;
+	}
+    }
 
   return ptr;
 

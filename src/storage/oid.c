@@ -37,7 +37,7 @@ PAGEID oid_Next_tempid = NULL_PAGEID;
 OID *oid_Root_class_oid = &oid_Root_class;
 
 
-OID * oid_Serial_class_oid = &oid_Serial_class;
+OID *oid_Serial_class_oid = &oid_Serial_class;
 /*
  * oid_set_root() -  Set the value of the root oid to the given value
  *   return: void

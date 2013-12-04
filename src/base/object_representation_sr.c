@@ -391,13 +391,14 @@ orc_diskrep_from_record (THREAD_ENTRY * thread_p, RECDES * record)
 		  continue;
 		}
 
-	      if (spage_get_record (root, HEADER, &rec, PEEK) != S_SUCCESS)
+	      (void) pgbuf_check_page_ptype (thread_p, root, PAGE_BTREE);
+
+	      if (btree_read_root_header (root, &root_header) != NO_ERROR)
 		{
 		  pgbuf_unfix_and_init (thread_p, root);
 		  continue;
 		}
 
-	      btree_read_root_header (&rec, &root_header);
 	      pgbuf_unfix_and_init (thread_p, root);
 
 	      /* construct BTID_INT structure */

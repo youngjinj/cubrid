@@ -199,7 +199,7 @@ Comenzi disponibile:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          nume-broker\n\
     off         nume-broker\n\
     reset       nume-broker\n\
@@ -231,6 +231,10 @@ Comenzi disponibile:\n\
 36 Serverul nu a fost configurat pentru HA.\n
 38 Serverul configurat pentru HA nu se regăseşte în ha_db_list.\n
 39 Serverul configurat pentru HA nu se regăseşte în ha_node_list.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 AVERTIESMENT: opţiunea -t este ignorată în modul de execuţie independent.\n
@@ -434,6 +438,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 Ultima linie salvata (prin commit) : %d
 114 error-control-file
 115 una sau mai multe erori la încărcarea fişierului de intrare de control
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: Importă obiecte şi scheme în baza de date.\n\
 utilizare: %s loaddb [OPŢIUNI] nume-bază-de-date\n\
@@ -488,11 +495,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 Doar %d din %d obiecte vărsate cu succes.\n
 47 directorul de ieşire este prea lung.\n
 48 LSA : %d %d \n
+49 Parola:
 60 \
 unloaddb: Exportă obiecte şi scheme din baza de date.\n\
 utilizare: %s unloaddb [OPŢIUNI] nume-bază-de-date\n\
 \n\
 opţiuni valide:\n\
+  -u, --user=ID                  ID de utilizator pentru acces la baza de date; implicit: "dba"\n\
+  -p, --password=PAROLĂ          parola de utilizator; implicit: nulă\n\
   -i, --input-class-file=FIŞIER  fişier de intrare cu numele tabelelor; implicit: varsă toate clasele\n\
       --include-reference        include tabele referenţiate; cu opţiunea -i; implicit: dezactivat\n\
       --input-class-only         include doar clasa specificată; cu opţiunea -i; implicit: dezactivat\n\

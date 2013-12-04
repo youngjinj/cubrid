@@ -199,7 +199,7 @@ Commandi disponibili:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          nome-broker\n\
     off         nome-broker\n\
     reset       nome-broker\n\
@@ -231,6 +231,10 @@ Commandi disponibili:\n\
 36 Il server non è stato configurato per HA.\n
 38 Il server configurato per HA non è registrato nel ha_db_list.\n
 39 Il server configurato per HA non è registrato nel ha_node_list.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 ATTENZIONE: opzione -t viene ignorata in modalità di esecuzione stand-alone.\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 Ultima linea committed : %d
 114 error-control-file
 115 file di input per il controllo di errori durante il carico
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: Importare oggetti e gli schemi al database.\n\
 uso: %s loaddb [OPZIONE] nome-database\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 Solo %d di %d objects dumped ok.\n
 47 directory di output è troppo lungo.\n
 48 LSA : %d %d \n
+49 Password:
 60 \
 unloaddb: Esportare gli oggetti e gli schemi del database.\n\
 uso: %s unloaddb [OPZIONE] nome-database\n\
 \n\
 opzioni valide:\n\
+  -u, --user=ID               user ID per l'accesso al database; predefinito: "dba"\n\
+  -p, --password=PASS         password utente; predefinito: nessuno\n\
   -i, --input-class-file=FILE FILE di input di nomi di tabelle; predefinito: dump tutte le classi\n\
       --include-reference     includi le tabelle di riferimento, con opzione -i; predefinito: non attivo\n\
       --input-class-only      includi solo le classe specificate, con opzione-i; predefinito: non attivo\n\

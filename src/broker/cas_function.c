@@ -274,23 +274,8 @@ FN_RETURN
 fn_end_session (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf,
 		T_REQ_INFO * req_info)
 {
-  int err_code = 0;
-  cas_log_write (0, false, "end_session %u", db_get_session_id ());
-
-  err_code = ux_end_session ();
-  if (err_code != 0)
-    {
-      err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
-      NET_BUF_ERR_SET (net_buf);
-      cas_log_write (0, false, "failed to end session %u",
-		     db_get_session_id ());
-    }
-  else
-    {
-      net_buf_cp_int (net_buf, err_code, NULL);
-      cas_log_write (0, false, "ended session %u", db_get_session_id ());
-      db_set_session_id (0);
-    }
+  /* ignore all request to close session from drivers */
+  net_buf_cp_int (net_buf, NO_ERROR, NULL);
 
   return FN_KEEP_CONN;
 }
@@ -1005,6 +990,36 @@ fn_set_db_parameter (SOCKET sock_fd, int argc, void **argv,
       NET_BUF_ERR_SET (net_buf);
       return FN_KEEP_CONN;
     }
+
+  return FN_KEEP_CONN;
+}
+
+FN_RETURN
+fn_set_cas_change_mode (SOCKET sock_fd, int argc, void **argv,
+			T_NET_BUF * net_buf, T_REQ_INFO * req_info)
+{
+  int mode;
+
+  if (argc < 1)
+    {
+      ERROR_INFO_SET (CAS_ER_ARGS, CAS_ERROR_INDICATOR);
+      NET_BUF_ERR_SET (net_buf);
+      return FN_KEEP_CONN;
+    }
+
+  net_arg_get_int (&mode, argv[0]);
+
+  if (mode != CAS_CHANGE_MODE_AUTO && mode != CAS_CHANGE_MODE_KEEP)
+    {
+      ERROR_INFO_SET (CAS_ER_ARGS, CAS_ERROR_INDICATOR);
+      NET_BUF_ERR_SET (net_buf);
+      return FN_KEEP_CONN;
+    }
+
+  cas_log_write (0, true, "set_cas_change_mode %s",
+		 mode == CAS_CHANGE_MODE_AUTO ? "AUTO" : "KEEP");
+
+  ux_set_cas_change_mode (mode, net_buf);
 
   return FN_KEEP_CONN;
 }

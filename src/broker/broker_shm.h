@@ -196,6 +196,7 @@ typedef struct ip_info IP_INFO;
 struct ip_info
 {
   unsigned char address_list[ACL_MAX_IP_COUNT * IP_BYTE_COUNT];
+  time_t last_access_time[ACL_MAX_IP_COUNT];
   int num_list;
 };
 
@@ -342,7 +343,7 @@ struct t_appl_server_info
   INT64 num_error_queries;
   INT64 num_interrupts;
   char auto_commit_mode;
-  bool fixed_conn_info;
+  bool fixed_shard_user;
   char database_name[MAX_HA_DBNAME_LENGTH];
 #if defined(AIX)
   char database_host[MAXHOSTNAMELEN];
@@ -354,8 +355,10 @@ struct t_appl_server_info
   char cci_default_autocommit;
   time_t last_connect_time;
   INT64 num_connect_requests;
+  INT64 num_connect_rejected;
   INT64 num_restarts;
   int num_holdable_results;
+  int cas_change_mode;
 
   INT64 num_select_queries;
   INT64 num_insert_queries;
@@ -483,7 +486,7 @@ struct t_proxy_info
   int proxy_access_log_reset;
 
   char port_name[SHM_PROXY_NAME_MAX];
-  bool fixed_conn_info;
+  bool fixed_shard_user;
 
   /* MOVE FROM T_BROKER_INFO */
   char access_log_file[CONF_LOG_FILE_LEN];
@@ -494,6 +497,15 @@ struct t_proxy_info
   INT64 num_hint_id_queries_processed;
   INT64 num_hint_all_queries_processed;
   INT64 num_hint_err_queries_processed;
+
+  INT64 num_proxy_error_processed;
+
+  INT64 num_request_stmt;
+  INT64 num_request_stmt_in_pool;
+
+  INT64 num_connect_requests;
+  INT64 num_connect_rejected;
+  INT64 num_restarts;
 
   /* hang check info */
   time_t claimed_alive_time;
@@ -554,6 +566,7 @@ struct t_shm_appl_server
   int jdbc_cache_life_time;
   int connect_order;
   int replica_only_flag;
+  int max_num_delayed_hosts_lookup;	/* max num of HA delayed hosts to lookup */
 
 #if defined(WINDOWS)
   int as_port;
@@ -576,6 +589,7 @@ struct t_shm_appl_server
   char proxy_log_dir[CONF_LOG_FILE_LEN];
   char port_name[SHM_APPL_SERVER_NAME_MAX];
   int proxy_log_max_size;
+  int access_log_max_size;
   /*to here, these are used only in shard */
 
 #ifdef USE_MUTEX

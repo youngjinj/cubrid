@@ -199,7 +199,7 @@ Comando disponible:\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          broker-name\n\
     off         broker-name\n\
     reset       broker-name\n\
@@ -231,6 +231,10 @@ Comando disponible: \n\
 36 El servidor no ha sido configurado para HA.\n
 38 El servidor configurado para HA no es listado en ha_db_list.\n
 39 El servidor configurado para HA no es listado en ha_node_list.\n
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 ADVERTENCIA: -t opcion es ignorada en modo de ejecucion independiente.\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 Ultima linea cometida: %d
 114 error-control-file
 115 archivo de entrada para controlar error(es) al cargar
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: Importar objetos y esquemas en la base de datos.\n\
 uso: %s loaddb [OPTION] database-name\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 Solo %d de %d objetos botados con exito.\n
 47 directorio de salida es demasiado largo.\n
 48 LSA : %d %d \n
+49 Contrasena:
 60 \
 unloaddb: Exportar objetos y esquemas de la base de datos.\n\
 uso: %s unloaddb [OPTION] database-name\n\
 \n\
 opciones validas:\n\
+  -u, --user=ID               ID de utilizador para acceso a la base de datos; estandar: "dba"\n\
+  -p, --password=PASS         contrasena de utilizador; estandar: ninguna\n\
   -i, --input-class-file=FILE entrar ARCHIVO de nombres de tablas; estandar: botar todas clases\n\
       --include-reference     incluir tablas referenciadas; con opcion -i; estandar: inhabilitado\n\
       --input-class-only      incluir solo la clase especificada; con opcion -i; estandar: inhabilitado\n\

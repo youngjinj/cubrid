@@ -178,6 +178,18 @@ struct execution_info
   char *sql_plan_text;		/* plans for this query */
 };
 
+/* Object for enabling performing aggregate optimizations on class
+ * hierarchies
+ */
+typedef struct hierarchy_aggregate_helper HIERARCHY_AGGREGATE_HELPER;
+struct hierarchy_aggregate_helper
+{
+  BTID *btids;			/* hierarchy indexes */
+  HFID *hfids;			/* HFIDs for classes in the hierarchy */
+  bool is_global_index;		/* if the index used for optimization is a global
+				 * index or not */
+  int count;			/* number of classes in the hierarchy */
+};
 
 extern void qdata_set_value_list_to_null (VAL_LIST * val_list);
 extern int qdata_copy_db_value (DB_VALUE * dbval1, DB_VALUE * dbval2);
@@ -222,12 +234,38 @@ extern int qdata_strcat_dbval (DB_VALUE * dbval1,
 extern int qdata_initialize_aggregate_list (THREAD_ENTRY * thread_p,
 					    AGGREGATE_TYPE * agg_list,
 					    QUERY_ID query_id);
+extern int qdata_aggregate_value_to_accumulator (THREAD_ENTRY * thread_p,
+						 AGGREGATE_ACCUMULATOR * acc,
+						 AGGREGATE_ACCUMULATOR_DOMAIN
+						 * domain,
+						 FUNC_TYPE func_type,
+						 TP_DOMAIN * func_domain,
+						 DB_VALUE * value);
+extern int qdata_aggregate_accumulator_to_accumulator (THREAD_ENTRY *
+						       thread_p,
+						       AGGREGATE_ACCUMULATOR *
+						       acc,
+						       AGGREGATE_ACCUMULATOR_DOMAIN
+						       * acc_dom,
+						       FUNC_TYPE func_type,
+						       TP_DOMAIN *
+						       func_domain,
+						       AGGREGATE_ACCUMULATOR *
+						       new_acc);
 extern int qdata_evaluate_aggregate_list (THREAD_ENTRY * thread_p,
 					  AGGREGATE_TYPE * agg_list,
-					  VAL_DESCR * vd);
+					  VAL_DESCR * vd,
+					  AGGREGATE_ACCUMULATOR *
+					  alt_acc_list);
 extern int qdata_evaluate_aggregate_optimize (THREAD_ENTRY * thread_p,
 					      AGGREGATE_TYPE * agg_ptr,
 					      HFID * hfid);
+extern int qdata_evaluate_aggregate_hierarchy (THREAD_ENTRY * thread_p,
+					       AGGREGATE_TYPE * agg_ptr,
+					       HFID * root_hfid,
+					       BTID * root_btid,
+					       HIERARCHY_AGGREGATE_HELPER *
+					       helper);
 extern int qdata_finalize_aggregate_list (THREAD_ENTRY * thread_p,
 					  AGGREGATE_TYPE * agg_list);
 extern int qdata_initialize_analytic_func (THREAD_ENTRY * thread_p,
@@ -238,7 +276,7 @@ extern int qdata_evaluate_analytic_func (THREAD_ENTRY * thread_p,
 					 VAL_DESCR * vd);
 extern int qdata_finalize_analytic_func (THREAD_ENTRY * thread_p,
 					 ANALYTIC_TYPE * func_p,
-					 bool keep_list_file);
+					 bool is_same_group);
 extern int qdata_get_single_tuple_from_list_id (THREAD_ENTRY * thread_p,
 						QFILE_LIST_ID * list_id,
 						VAL_LIST * single_tuple);
@@ -312,6 +350,18 @@ extern int qdata_tuple_to_values_array (THREAD_ENTRY * thread_p,
 					QFILE_TUPLE_DESCRIPTOR * tuple,
 					DB_VALUE ** values);
 extern int qdata_get_tuple_value_size_from_dbval (DB_VALUE * dbval_p);
+extern int qdata_apply_median_function_coercion (DB_VALUE * f_value,
+						 TP_DOMAIN ** result_dom,
+						 double *d_result,
+						 DB_VALUE * result);
+extern int qdata_interpolate_median_function_values (DB_VALUE * f_value,
+						     DB_VALUE * c_value,
+						     double row_num_d,
+						     double f_row_num_d,
+						     double c_row_num_d,
+						     TP_DOMAIN ** result_dom,
+						     double *d_result,
+						     DB_VALUE * result);
 extern int qdata_get_median_function_result (THREAD_ENTRY * thread_p,
 					     QFILE_LIST_SCAN_ID * scan_id,
 					     TP_DOMAIN * domain,
@@ -326,4 +376,56 @@ extern int qdata_update_interpolate_func_value_and_domain (DB_VALUE * src_val,
 							   dest_val,
 							   TP_DOMAIN **
 							   domain);
+
+/* hash aggregate evaluation routines */
+extern AGGREGATE_HASH_KEY *qdata_alloc_agg_hkey (THREAD_ENTRY * thread_p,
+						 int val_cnt,
+						 bool alloc_vals);
+extern void qdata_free_agg_hkey (THREAD_ENTRY * thread_p,
+				 AGGREGATE_HASH_KEY * key);
+extern AGGREGATE_HASH_VALUE *qdata_alloc_agg_hvalue (THREAD_ENTRY * thread_p,
+						     int func_cnt);
+extern void qdata_free_agg_hvalue (THREAD_ENTRY * thread_p,
+				   AGGREGATE_HASH_VALUE * value);
+extern int qdata_get_agg_hkey_size (AGGREGATE_HASH_KEY * key);
+extern int qdata_get_agg_hvalue_size (AGGREGATE_HASH_VALUE * value,
+				      bool ret_delta);
+extern int qdata_free_agg_hentry (const void *key, void *data, void *args);
+extern unsigned int qdata_hash_agg_hkey (const void *key,
+					 unsigned int ht_size);
+extern DB_VALUE_COMPARE_RESULT qdata_agg_hkey_compare (AGGREGATE_HASH_KEY *
+						       ckey1,
+						       AGGREGATE_HASH_KEY *
+						       ckey2, int *diff_pos);
+extern int qdata_agg_hkey_eq (const void *key1, const void *key2);
+extern AGGREGATE_HASH_KEY *qdata_copy_agg_hkey (THREAD_ENTRY * thread_p,
+						AGGREGATE_HASH_KEY * key);
+extern void qdata_load_agg_hvalue_in_agg_list (AGGREGATE_HASH_VALUE * value,
+					       AGGREGATE_TYPE * agg_list,
+					       bool copy_vals);
+extern int qdata_save_agg_hentry_to_list (THREAD_ENTRY * thread_p,
+					  AGGREGATE_HASH_KEY * key,
+					  AGGREGATE_HASH_VALUE * value,
+					  DB_VALUE * temp_dbval_array,
+					  QFILE_LIST_ID * list_id);
+extern int qdata_load_agg_hentry_from_tuple (THREAD_ENTRY * thread_p,
+					     QFILE_TUPLE tuple,
+					     AGGREGATE_HASH_KEY * key,
+					     AGGREGATE_HASH_VALUE * value,
+					     TP_DOMAIN ** key_dom,
+					     AGGREGATE_ACCUMULATOR_DOMAIN
+					     ** acc_dom);
+extern SCAN_CODE qdata_load_agg_hentry_from_list (THREAD_ENTRY * thread_p,
+						  QFILE_LIST_SCAN_ID *
+						  list_scan_id,
+						  AGGREGATE_HASH_KEY * key,
+						  AGGREGATE_HASH_VALUE *
+						  value, TP_DOMAIN ** key_dom,
+						  AGGREGATE_ACCUMULATOR_DOMAIN
+						  ** acc_dom);
+extern int qdata_save_agg_htable_to_list (THREAD_ENTRY * thread_p,
+					  MHT_TABLE * hash_table,
+					  QFILE_LIST_ID * tuple_list_id,
+					  QFILE_LIST_ID * partial_list_id,
+					  DB_VALUE * temp_dbval_array);
 #endif /* _QUERY_OPFUNC_H_ */

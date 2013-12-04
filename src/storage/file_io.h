@@ -149,6 +149,12 @@ struct fileio_page_reserved
 {
   LOG_LSA lsa;			/* Log Sequence number of page, Page recovery
 				   stuff */
+  INT32 pageid;			/* Page identifier */
+  INT16 volid;			/* Volume identifier where the page reside */
+  unsigned char ptype;		/* Page type */
+  unsigned char pflag_reserve_1;	/* unused - Reserved field */
+  INT64 p_reserve_2;		/* unused - Reserved field */
+  INT64 p_reserve_3;		/* unused - Reserved field */
 };
 
 /* The FILEIO_PAGE */
@@ -400,6 +406,8 @@ extern void *fileio_initialize_pages (THREAD_ENTRY * thread_p, int vdes,
 				      void *io_pgptr, DKNPAGES start_pageid,
 				      DKNPAGES npages, size_t page_size,
 				      int kbytes_to_be_written_per_sec);
+extern void fileio_initialize_res (THREAD_ENTRY * thread_p,
+				   FILEIO_PAGE_RESERVED * prv_p);
 #if defined (ENABLE_UNUSED_FUNCTION)
 extern DKNPAGES fileio_truncate (VOLID volid, DKNPAGES npages_to_resize);
 #endif

@@ -135,6 +135,9 @@ struct qo_index_entry
   /* key filtered terms constrained by the index */
   BITSET key_filter_terms;
 
+  /* true if all unique columns are specified in equal terms */
+  bool all_unique_index_columns_are_equi_terms;
+
   /* true if the index cover all segments */
   bool cover_segments;
 
@@ -157,6 +160,9 @@ struct qo_index_entry
 
   /* true if the index can be used as covering index */
   bool is_iss_candidate;
+
+  /* index loose scan prefix length or -1 if ILS is not used */
+  int ils_prefix_len;
 
   /*
    * the name of the first indexed attribute in a multi column index
@@ -903,9 +909,9 @@ struct qo_env
   bool dump_enable;
 
   /*
-   * Controls whether the plan is dumped.  There are situations like 
+   * Controls whether the plan is dumped.  There are situations like
    * "SHOW COLUMNS" when the plan should not be dumped, even if QO_PARAM_LEVEL
-   * parameter was set to dump a readable version of the plan 
+   * parameter was set to dump a readable version of the plan
    */
   bool plan_dump_enabled;
 

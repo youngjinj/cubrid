@@ -98,7 +98,6 @@ static const BTREE_STATS *stats_find_inherited_index_stats (OR_CLASSREP *
  *                                of a given class
  *   return:
  *   class_id(in): Identifier of the class
- *   btids(in):
  *   with_fullscan(in): true iff WITH FULLSCAN
  *
  * Note: It first retrieves the whole catalog information about this class,
@@ -124,7 +123,7 @@ static const BTREE_STATS *stats_find_inherited_index_stats (OR_CLASSREP *
  */
 int
 xstats_update_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
-			  BTID_LIST * btids, bool with_fullscan)
+			  bool with_fullscan)
 {
   CLS_INFO *cls_info_p = NULL;
   REPR_ID repr_id;
@@ -251,32 +250,10 @@ xstats_update_statistics (THREAD_ENTRY * thread_p, OID * class_id_p,
 	  assert_release (btree_stats_p->pkeys_size > 0);
 	  assert_release (btree_stats_p->pkeys_size <= BTREE_STATS_PKEYS_NUM);
 
-	  if (btids)
+	  if (btree_get_stats (thread_p, btree_stats_p,
+			       with_fullscan) != NO_ERROR)
 	    {
-	      BTID_LIST *b = btids;
-	      while (b != NULL)
-		{
-		  if (!BTID_IS_EQUAL (&b->btid, &btree_stats_p->btid))
-		    {
-		      b = b->next;
-		      continue;
-		    }
-
-		  if (btree_get_stats (thread_p, btree_stats_p,
-				       with_fullscan) != NO_ERROR)
-		    {
-		      goto error;
-		    }
-		  break;
-		}
-	    }
-	  else
-	    {
-	      if (btree_get_stats (thread_p, btree_stats_p,
-				   with_fullscan) != NO_ERROR)
-		{
-		  goto error;
-		}
+	      goto error;
 	    }
 
 	  assert_release (btree_stats_p->keys >= 0);
@@ -348,7 +325,7 @@ error:
  * Note: It performs this by getting the list of all classes existing in the
  *       database and their OID's from the catalog's class collection
  *       (maintained in an extendible hashing structure) and calling the
- *       "stats_update_statistics" function for each one of the elements
+ *       "xstats_update_statistics" function for each one of the elements
  *       of this list one by one.
  */
 int
@@ -368,17 +345,18 @@ xstats_update_all_statistics (THREAD_ENTRY * thread_p, bool with_fullscan)
       class_id.pageid = class_id_item_p->class_id.pageid;
       class_id.slotid = class_id_item_p->class_id.slotid;
 
-      error =
-	xstats_update_statistics (thread_p, &class_id, NULL, with_fullscan);
+      error = xstats_update_statistics (thread_p, &class_id, with_fullscan);
       if (error != NO_ERROR)
 	{
 	  stats_free_class_list (class_id_list_p);
-	  return (error);
+
+	  return error;
 	}
     }
 
   stats_free_class_list (class_id_list_p);
-  return (NO_ERROR);
+
+  return NO_ERROR;
 }
 
 /*
@@ -405,7 +383,7 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
   DISK_REPR *disk_repr_p;
   DISK_ATTR *disk_attr_p;
   BTREE_STATS *btree_stats_p;
-  int npages, estimated_nobjs;
+  int npages, estimated_nobjs, max_unique_keys;
   int i, j, k, size, n_attrs, tot_n_btstats, tot_key_info_size;
   char *buf_p, *start_p;
   int key_size;
@@ -492,6 +470,8 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 
   size += tot_key_info_size;	/* key_type, pkeys[] of BTREE_STATS */
 
+  size += OR_INT_SIZE;		/* max_unique_keys */
+
   start_p = buf_p = (char *) malloc (size);
   if (buf_p == NULL)
     {
@@ -502,7 +482,7 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
   OR_PUT_INT (buf_p, cls_info_p->time_stamp);
   buf_p += OR_INT_SIZE;
 
-  npages = estimated_nobjs = 0;
+  npages = estimated_nobjs = max_unique_keys = 0;
 
   assert (cls_info_p->tot_objects >= 0);
   assert (cls_info_p->tot_pages >= 0);
@@ -579,6 +559,12 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
       for (j = 0, btree_stats_p = disk_attr_p->bt_stats;
 	   j < disk_attr_p->n_btstats; j++, btree_stats_p++)
 	{
+          /* collect maximum unique keys info */
+	  if (btree_is_unique (thread_p, &btree_stats_p->btid))
+	    {
+	      max_unique_keys = MAX (max_unique_keys, btree_stats_p->keys);
+	    }
+
 	  OR_PUT_BTID (buf_p, &btree_stats_p->btid);
 	  buf_p += OR_BTID_ALIGNED_SIZE;
 
@@ -681,6 +667,9 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
 	    }
 	}			/* for (j = 0, ...) */
     }
+
+  OR_PUT_INT (buf_p, max_unique_keys);
+  buf_p += OR_INT_SIZE;
 
   catalog_free_representation (disk_repr_p);
   catalog_free_class_info (cls_info_p);
@@ -999,7 +988,7 @@ stats_dump_class_statistics (CLASS_STATS * class_stats, FILE * fpp)
 
   for (i = 0; i < class_stats->n_attrs; i++)
     {
-      fprintf (fpp, "\n Atrribute :\n");
+      fprintf (fpp, "\n Attribute :\n");
       fprintf (fpp, "    id: %d\n", class_stats->attr_stats[i].id);
       fprintf (fpp, "    Type: ");
 
@@ -1199,8 +1188,7 @@ stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
   for (i = 0; i < partitions_count; i++)
     {
       error =
-	xstats_update_statistics (thread_p, &partitions[i], NULL,
-				  with_fullscan);
+	xstats_update_statistics (thread_p, &partitions[i], with_fullscan);
       if (error != NO_ERROR)
 	{
 	  goto cleanup;
@@ -1417,13 +1405,19 @@ stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
 	    }
 
 	  assert_release (subcls_attr_p->id == disk_attr_p->id);
-	  assert_release (subcls_attr_p->n_btstats == disk_attr_p->n_btstats);
+	  assert_release (subcls_attr_p->n_btstats <= disk_attr_p->n_btstats);
 
 	  if (!(subcls_attr_p->id == disk_attr_p->id
-		&& subcls_attr_p->n_btstats == disk_attr_p->n_btstats))
+		&& subcls_attr_p->n_btstats <= disk_attr_p->n_btstats))
 	    {
 	      error = ER_FAILED;
 	      goto cleanup;
+	    }
+
+	  /* check for partitions schema changes are not yet finished */
+	  if (subcls_attr_p->n_btstats < disk_attr_p->n_btstats)
+	    {
+	      continue;
 	    }
 
 	  for (k = 0, btree_stats_p = disk_attr_p->bt_stats;
@@ -1530,6 +1524,12 @@ stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
 		subcls_disk_rep->variable + (j - subcls_disk_rep->n_fixed);
 	      disk_attr_p =
 		disk_repr_p->variable + (j - disk_repr_p->n_fixed);
+	    }
+
+	  /* check for partitions schema changes are not yet finished */
+	  if (subcls_attr_p->n_btstats < disk_attr_p->n_btstats)
+	    {
+	      continue;
 	    }
 
 	  for (k = 0, btree_stats_p = disk_attr_p->bt_stats;

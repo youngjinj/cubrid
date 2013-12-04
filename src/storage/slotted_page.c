@@ -737,7 +737,7 @@ spage_boot (THREAD_ENTRY * thread_p)
 
   if (spage_Mht_saving != NULL)
     {
-      (void) mht_clear (spage_Mht_saving);
+      (void) mht_clear (spage_Mht_saving, NULL, NULL);
     }
   else
     {
@@ -1135,8 +1135,20 @@ spage_compact (PAGE_PTR page_p)
   SPAGE_SLOT **slot_array = NULL;
   int to_offset;
   int i, j;
+  PAGE_TYPE ptype;
 
   assert (page_p != NULL);
+
+  ptype = pgbuf_get_page_ptype (NULL, page_p);
+  assert_release (ptype < PAGE_LAST);
+  assert_release (ptype != PAGE_UNKNOWN);
+  assert_release (ptype != PAGE_FTAB);
+  assert_release (ptype != PAGE_VOLHEADER);
+  assert_release (ptype != PAGE_VOLBITMAP);
+  assert_release (ptype != PAGE_XASL);
+  assert_release (ptype != PAGE_QRESULT);
+  assert_release (ptype != PAGE_OVERFLOW);
+  assert_release (ptype != PAGE_AREA);
 
   page_header_p = (SPAGE_HEADER *) page_p;
   spage_verify_header (page_p);
@@ -4797,28 +4809,6 @@ spage_add_contiguous_free_space (PAGE_PTR page_p, int space)
 }
 
 /*
- * spage_reduce_contiguous_free_space () -
- *   return:
- *
- *   page_p(in): Pointer to slotted page
- *   space(in):
- */
-static void
-spage_reduce_contiguous_free_space (PAGE_PTR page_p, int space)
-{
-  SPAGE_HEADER *page_header_p;
-
-  page_header_p = (SPAGE_HEADER *) page_p;
-  SPAGE_VERIFY_HEADER (page_header_p);
-
-  page_header_p->total_free -= space;
-  page_header_p->cont_free -= space;
-  page_header_p->offset_to_free_area += space;
-
-  spage_verify_header (page_p);
-}
-
-/*
  * spage_next_record_dont_skip_empty () - Get next slot without skipping
  *					  empty records.
  *
@@ -5122,7 +5112,7 @@ spage_execute_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
   if (vacuum_data_p->all_visible)
     {
       /* TODO: Visibility is not implemented yet */
-      /*page_header_p->flags |= SPAGE_HEADER_FLAG_ALL_VISIBLE;*/
+      /*page_header_p->flags |= SPAGE_HEADER_FLAG_ALL_VISIBLE; */
     }
 
   /* Compact page */
@@ -5294,4 +5284,26 @@ spage_mark_page_for_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr,
     {
       page_header_p->last_mvcc_id = mvcc_id;
     }
+}
+
+/*
+ * spage_reduce_contiguous_free_space () -
+ *   return:
+ *
+ *   page_p(in): Pointer to slotted page
+ *   space(in):
+ */
+static void
+spage_reduce_contiguous_free_space (PAGE_PTR page_p, int space)
+{
+  SPAGE_HEADER *page_header_p;
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  page_header_p->total_free -= space;
+  page_header_p->cont_free -= space;
+  page_header_p->offset_to_free_area += space;
+
+  spage_verify_header (page_p);
 }

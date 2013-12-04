@@ -46,14 +46,14 @@
     (vpid_ptr)->pageid = (pageid_value);		      \
   } while(0)
 
-#define VPID_COPY(dest_ptr, src_ptr)			      \
-  do {							      \
-    (dest_ptr)->volid = (src_ptr)->volid;		      \
-    (dest_ptr)->pageid = (src_ptr)->pageid;		      \
-  } while (0)
-
 /* Set the vpid to an invalid one */
 #define VPID_SET_NULL(vpid_ptr) VPID_SET(vpid_ptr, NULL_VOLID, NULL_PAGEID)
+
+/* copy a VPID */
+#define  VPID_COPY(dest_ptr, src_ptr)                      \
+  do {							   \
+    *(dest_ptr) = *(src_ptr);				   \
+  } while (0)
 
 /* vpid1 == vpid2 ? */
 #define VPID_EQ(vpid_ptr1, vpid_ptr2)                         \
@@ -74,7 +74,7 @@
   } while (0)
 
 /* public page latch mode */
-enum
+typedef enum
 {
   PGBUF_NO_LATCH = 10,
   PGBUF_LATCH_READ,
@@ -84,7 +84,7 @@ enum
   PGBUF_LATCH_INVALID,
   PGBUF_LATCH_FLUSH_INVALID,
   PGBUF_LATCH_VICTIM_INVALID
-};
+} PGBUF_LATCH_MODE;
 
 typedef enum
 {
@@ -241,6 +241,8 @@ extern void pgbuf_get_vpid (PAGE_PTR pgptr, VPID * vpid);
 extern VPID *pgbuf_get_vpid_ptr (PAGE_PTR pgptr);
 extern int pgbuf_get_latch_mode (PAGE_PTR pgptr);
 extern PAGEID pgbuf_get_page_id (PAGE_PTR pgptr);
+extern PAGE_TYPE pgbuf_get_page_ptype (THREAD_ENTRY * thread_p,
+				       PAGE_PTR pgptr);
 extern VOLID pgbuf_get_volume_id (PAGE_PTR pgptr);
 extern const char *pgbuf_get_volume_label (PAGE_PTR pgptr);
 extern void pgbuf_refresh_max_permanent_volume_id (VOLID volid);
@@ -252,10 +254,15 @@ extern void pgbuf_set_lsa_as_temporary (THREAD_ENTRY * thread_p,
 					PAGE_PTR pgptr);
 extern void pgbuf_set_lsa_as_permanent (THREAD_ENTRY * thread_p,
 					PAGE_PTR pgptr);
+extern void pgbuf_set_page_ptype (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
+				  PAGE_TYPE ptype);
 extern bool pgbuf_is_lsa_temporary (PAGE_PTR pgptr);
 extern void pgbuf_invalidate_temporary_file (VOLID volid, PAGEID first_pageid,
 					     DKNPAGES npages,
 					     bool need_invalidate);
+extern bool pgbuf_check_page_ptype (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
+				    PAGE_TYPE ptype);
+
 #if defined(CUBRID_DEBUG)
 extern void pgbuf_dump_if_any_fixed (void);
 #endif

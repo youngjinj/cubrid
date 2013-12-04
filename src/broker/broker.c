@@ -877,7 +877,7 @@ receiver_thr_f (void *arg)
 
       setsockopt (clt_sock_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one,
 		  sizeof (one));
-      ut_set_keepalive (clt_sock_fd, 1800);
+      ut_set_keepalive (clt_sock_fd);
 
       cas_client_type = CAS_CLIENT_NONE;
 
@@ -1619,6 +1619,16 @@ run_appl_server (T_APPL_SERVER_INFO * as_info_p, int br_index, int as_index)
 
 #if !defined(WINDOWS)
   signal (SIGCHLD, SIG_IGN);
+
+  /* shard_cas does not have unix-domain socket */
+  if (br_shard_flag == OFF)
+    {
+      char path[BROKER_PATH_MAX];
+
+      ut_get_as_port_name (path, shm_br->br_info[br_index].name, as_index,
+			   BROKER_PATH_MAX);
+      unlink (path);
+    }
 
   pid = fork ();
   if (pid == 0)
@@ -2664,7 +2674,8 @@ find_idle_cas (void)
 	  && shm_appl->as_info[i].uts_status == UTS_STATUS_BUSY
 	  && shm_appl->as_info[i].cur_keep_con == KEEP_CON_AUTO
 	  && shm_appl->as_info[i].con_status == CON_STATUS_OUT_TRAN
-	  && shm_appl->as_info[i].num_holdable_results < 1)
+	  && shm_appl->as_info[i].num_holdable_results < 1
+	  && shm_appl->as_info[i].cas_change_mode == CAS_CHANGE_MODE_AUTO)
 	{
 	  time_t wait_time = cur_time - shm_appl->as_info[i].last_access_time;
 	  if (wait_time > max_wait_time || wait_cas_id == -1)
@@ -2681,7 +2692,9 @@ find_idle_cas (void)
       CON_STATUS_LOCK (&(shm_appl->as_info[wait_cas_id]),
 		       CON_STATUS_LOCK_BROKER);
       if (shm_appl->as_info[wait_cas_id].con_status == CON_STATUS_OUT_TRAN
-	  && shm_appl->as_info[wait_cas_id].num_holdable_results < 1)
+	  && shm_appl->as_info[wait_cas_id].num_holdable_results < 1
+	  && shm_appl->as_info[wait_cas_id].cas_change_mode ==
+	  CAS_CHANGE_MODE_AUTO)
 	{
 	  idle_cas_id = wait_cas_id;
 	  shm_appl->as_info[wait_cas_id].con_status =
@@ -2766,6 +2779,7 @@ find_drop_as_index (void)
       if (shm_appl->as_info[i].uts_status == UTS_STATUS_BUSY
 	  && shm_appl->as_info[i].con_status == CON_STATUS_OUT_TRAN
 	  && shm_appl->as_info[i].num_holdable_results < 1
+	  && shm_appl->as_info[i].cas_change_mode == CAS_CHANGE_MODE_AUTO
 	  && wait_time > max_wait_time
 	  && wait_time > shm_br->br_info[br_index].time_to_kill
 	  && exist_idle_cas == 0)
@@ -3131,6 +3145,8 @@ run_proxy_server (T_PROXY_INFO * proxy_info_p, int br_index, int proxy_index)
   proxy_info_p->cur_client = 0;
 
 #if !defined(WINDOWS)
+  unlink (proxy_info_p->port_name);
+
   pid = fork ();
   if (pid == 0)
     {
@@ -3223,6 +3239,7 @@ restart_proxy_server (T_PROXY_INFO * proxy_info_p, int br_index,
 
   new_pid = run_proxy_server (proxy_info_p, br_index, proxy_index);
   proxy_info_p->pid = new_pid;
+  proxy_info_p->num_restarts++;
 }
 
 static void

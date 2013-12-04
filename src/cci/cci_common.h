@@ -264,6 +264,7 @@ extern "C"
     char *pass;
     char *url;
 
+    int max_pool_size;
     int pool_size;
     int max_wait;
     bool pool_prepared_statement;
@@ -271,6 +272,7 @@ extern "C"
     int default_autocommit;
     T_CCI_TRAN_ISOLATION default_isolation;
     int default_lock_timeout;
+    int login_timeout;
 
     int num_idle;
     int *con_handles;		/* realloc by pool_size */

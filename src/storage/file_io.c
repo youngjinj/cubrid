@@ -96,6 +96,7 @@
 #endif /* SERVER_MODE */
 
 #include "intl_support.h"
+#include "tsc_timer.h"
 
 
 /*
@@ -1965,9 +1966,10 @@ fileio_initialize_pages (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 					 * and sleep
 					 */
   INT64 time_to_sleep;
-  struct timeval tv;
-  INT64 start_in_millis;
-  INT64 current_in_millis;
+
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL tv_diff;
+
   INT64 page_count_per_sec;
 #endif
 
@@ -1984,8 +1986,7 @@ fileio_initialize_pages (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
       allowed_millis_for_a_sleep =
 	count_of_page_for_a_sleep * 1000 / page_count_per_sec;
 
-      gettimeofday (&tv, NULL);
-      start_in_millis = (tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
+      tsc_getticks (&start_tick);
     }
 #endif
 
@@ -2020,10 +2021,11 @@ fileio_initialize_pages (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
       if (kbytes_to_be_written_per_sec > 0
 	  && (page_id + 1) % count_of_page_for_a_sleep == 0)
 	{
-	  gettimeofday (&tv, NULL);
-	  current_in_millis = (tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
+	  tsc_getticks (&end_tick);
+	  tsc_elapsed_time_usec (&tv_diff, end_tick, start_tick);
 
-	  previous_elapsed_millis = current_in_millis - start_in_millis;
+	  previous_elapsed_millis =
+	    (tv_diff.tv_sec * 1000LL) + (tv_diff.tv_usec / 1000LL);
 
 	  /* calculate time to sleep through subtracting */
 	  time_to_sleep =
@@ -2032,8 +2034,8 @@ fileio_initialize_pages (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 	    {
 	      thread_sleep (time_to_sleep);
 	    }
-	  gettimeofday (&tv, NULL);
-	  start_in_millis = (tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
+
+	  tsc_getticks (&start_tick);
 	}
 #endif
     }
@@ -2497,8 +2499,8 @@ fileio_format (THREAD_ENTRY * thread_p, const char *db_full_name_p,
       return NULL_VOLDES;
     }
 
-  MEM_REGION_INIT ((char *) malloc_io_page_p, page_size);
-  LSA_SET_NULL (&malloc_io_page_p->prv.lsa);
+  memset ((char *) malloc_io_page_p, 0, page_size);
+  (void) fileio_initialize_res (thread_p, &(malloc_io_page_p->prv));
 
   vol_fd = fileio_create (thread_p, db_full_name_p, vol_label_p, vol_id,
 			  is_do_lock, is_do_sync);
@@ -2673,8 +2675,8 @@ fileio_expand (THREAD_ENTRY * thread_p, VOLID vol_id, DKNPAGES npages_toadd,
       return -1;
     }
 
-  LSA_SET_NULL (&malloc_io_page_p->prv.lsa);
-  MEM_REGION_INIT (&malloc_io_page_p->page[0], DB_PAGESIZE);
+  memset ((char *) malloc_io_page_p, 0, IO_PAGESIZE);
+  (void) fileio_initialize_res (thread_p, &(malloc_io_page_p->prv));
 
   start_pageid = (DKNPAGES) (start_offset / IO_PAGESIZE);
   last_pageid = (DKNPAGES) (last_offset / IO_PAGESIZE);
@@ -2801,7 +2803,8 @@ fileio_unformat_and_rename (THREAD_ENTRY * thread_p, const char *vol_label_p,
 			    const char *new_label_p)
 {
 #if defined (EnableThreadMonitoring)
-  struct timeval start_time, end_time, elapsed_time;
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL elapsed_time;
 #endif
 #if !defined(CS_MODE)
   int vol_fd;
@@ -2823,7 +2826,7 @@ fileio_unformat_and_rename (THREAD_ENTRY * thread_p, const char *vol_label_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&start_time, NULL);
+      tsc_getticks (&start_tick);
     }
 #endif
 
@@ -2844,8 +2847,8 @@ fileio_unformat_and_rename (THREAD_ENTRY * thread_p, const char *vol_label_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&end_time, NULL);
-      DIFF_TIMEVAL (start_time, end_time, elapsed_time);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
     }
 
   if (MONITOR_WAITING_THREAD (elapsed_time))
@@ -2937,7 +2940,8 @@ fileio_copy_volume (THREAD_ENTRY * thread_p, int from_vol_desc,
 	    }
 	  else
 	    {
-	      LSA_SET_NULL (&malloc_io_page_p->prv.lsa);
+	      (void) fileio_initialize_res (thread_p,
+					    &(malloc_io_page_p->prv));
 	      if (fileio_write (thread_p, to_vol_desc, malloc_io_page_p,
 				page_id, IO_PAGESIZE) == NULL)
 		{
@@ -3692,7 +3696,8 @@ fileio_read (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 	     PAGEID page_id, size_t page_size)
 {
 #if defined (EnableThreadMonitoring)
-  struct timeval start_time, end_time, elapsed_time;
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL elapsed_time;
 #endif
   off_t offset = FILEIO_GET_FILE_SIZE (page_size, page_id);
   ssize_t nbytes;
@@ -3711,7 +3716,7 @@ fileio_read (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&start_time, NULL);
+      tsc_getticks (&start_tick);
     }
 #endif
 
@@ -3813,8 +3818,8 @@ fileio_read (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&end_time, NULL);
-      DIFF_TIMEVAL (start_time, end_time, elapsed_time);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
     }
 
   if (MONITOR_WAITING_THREAD (elapsed_time))
@@ -3858,7 +3863,8 @@ fileio_write (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 	      PAGEID page_id, size_t page_size)
 {
 #if defined (EnableThreadMonitoring)
-  struct timeval start_time, end_time, elapsed_time;
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL elapsed_time;
 #endif
   off_t offset = FILEIO_GET_FILE_SIZE (page_size, page_id);
   bool is_retry = true;
@@ -3875,7 +3881,7 @@ fileio_write (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&start_time, NULL);
+      tsc_getticks (&start_tick);
     }
 #endif
 
@@ -3967,8 +3973,8 @@ fileio_write (THREAD_ENTRY * thread_p, int vol_fd, void *io_page_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&end_time, NULL);
-      DIFF_TIMEVAL (start_time, end_time, elapsed_time);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
     }
 
   if (MONITOR_WAITING_THREAD (elapsed_time))
@@ -4004,7 +4010,8 @@ fileio_read_pages (THREAD_ENTRY * thread_p, int vol_fd, char *io_pages_p,
 		   PAGEID page_id, int num_pages, size_t page_size)
 {
 #if defined (EnableThreadMonitoring)
-  struct timeval start_time, end_time, elapsed_time;
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL elapsed_time;
 #endif
   off_t offset;
   ssize_t nbytes;
@@ -4029,7 +4036,7 @@ fileio_read_pages (THREAD_ENTRY * thread_p, int vol_fd, char *io_pages_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&start_time, NULL);
+      tsc_getticks (&start_tick);
     }
 #endif
 
@@ -4135,8 +4142,8 @@ fileio_read_pages (THREAD_ENTRY * thread_p, int vol_fd, char *io_pages_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&end_time, NULL);
-      DIFF_TIMEVAL (start_time, end_time, elapsed_time);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
     }
 
   if (MONITOR_WAITING_THREAD (elapsed_time))
@@ -4161,7 +4168,8 @@ fileio_write_pages (THREAD_ENTRY * thread_p, int vol_fd, char *io_pages_p,
 		    PAGEID page_id, int num_pages, size_t page_size)
 {
 #if defined (EnableThreadMonitoring)
-  struct timeval start_time, end_time, elapsed_time;
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL elapsed_time;
 #endif
   off_t offset;
   ssize_t nbytes;
@@ -4185,7 +4193,7 @@ fileio_write_pages (THREAD_ENTRY * thread_p, int vol_fd, char *io_pages_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&start_time, NULL);
+      tsc_getticks (&start_tick);
     }
 #endif
 
@@ -4290,8 +4298,8 @@ fileio_write_pages (THREAD_ENTRY * thread_p, int vol_fd, char *io_pages_p,
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&end_time, NULL);
-      DIFF_TIMEVAL (start_time, end_time, elapsed_time);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
     }
 
   if (MONITOR_WAITING_THREAD (elapsed_time))
@@ -4358,7 +4366,8 @@ fileio_synchronize (THREAD_ENTRY * thread_p, int vol_fd, const char *vlabel)
 {
   int ret;
 #if defined (EnableThreadMonitoring)
-  struct timeval start_time, end_time, elapsed_time;
+  TSC_TICKS start_tick, end_tick;
+  TSCTIMEVAL elapsed_time;
 #endif
 #if defined (SERVER_MODE)
   static pthread_mutex_t inc_cnt_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -4394,7 +4403,7 @@ fileio_synchronize (THREAD_ENTRY * thread_p, int vol_fd, const char *vlabel)
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&start_time, NULL);
+      tsc_getticks (&start_tick);
     }
 #endif
 
@@ -4409,8 +4418,8 @@ fileio_synchronize (THREAD_ENTRY * thread_p, int vol_fd, const char *vlabel)
 #if defined (EnableThreadMonitoring)
   if (0 < prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD))
     {
-      gettimeofday (&end_time, NULL);
-      DIFF_TIMEVAL (start_time, end_time, elapsed_time);
+      tsc_getticks (&end_tick);
+      tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
     }
 #endif
 
@@ -4778,7 +4787,7 @@ fileio_write_user_area (THREAD_ENTRY * thread_p, int vol_fd, PAGEID page_id,
 	  return NULL;
 	}
 
-      LSA_SET_NULL (&io_page_p->prv.lsa);
+      (void) fileio_initialize_res (thread_p, &(io_page_p->prv));
       memcpy (io_page_p->page, area_p, nbytes);
 
       write_p = (void *) io_page_p;
@@ -10211,8 +10220,8 @@ fileio_fill_hole_during_restore (THREAD_ENTRY * thread_p, int *next_page_id_p,
 		  1, IO_PAGESIZE);
 	  return ER_FAILED;
 	}
-      LSA_SET_NULL (&malloc_io_pgptr->prv.lsa);
-      MEM_REGION_INIT (&malloc_io_pgptr->page[0], DB_PAGESIZE);
+      memset ((char *) malloc_io_pgptr, 0, IO_PAGESIZE);
+      (void) fileio_initialize_res (thread_p, &(malloc_io_pgptr->prv));
     }
 
   while (*next_page_id_p < stop_page_id)
@@ -11977,3 +11986,20 @@ fileio_os_sysconf (void)
   return (nprocs > 1) ? (int) nprocs : 1;
 }
 #endif /* SERVER_MODE */
+
+/*
+ * fileio_initialize_res () -
+ *   return:
+ */
+void
+fileio_initialize_res (THREAD_ENTRY * thread_p, FILEIO_PAGE_RESERVED * prv_p)
+{
+  LSA_SET_NULL (&(prv_p->lsa));
+  prv_p->pageid = -1;
+  prv_p->volid = -1;
+
+  prv_p->ptype = '\0';
+  prv_p->pflag_reserve_1 = '\0';
+  prv_p->p_reserve_2 = 0;
+  prv_p->p_reserve_3 = 0;
+}

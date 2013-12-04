@@ -552,13 +552,16 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
   shm_as_p->access_mode = br_info_p->access_mode;
   shm_as_p->cci_pconnect = br_info_p->cci_pconnect;
   shm_as_p->access_log = br_info_p->access_log;
-
+  shm_as_p->access_log_max_size = br_info_p->access_log_max_size;
   shm_as_p->jdbc_cache = br_info_p->jdbc_cache;
   shm_as_p->jdbc_cache_only_hint = br_info_p->jdbc_cache_only_hint;
   shm_as_p->jdbc_cache_life_time = br_info_p->jdbc_cache_life_time;
 
   shm_as_p->connect_order = br_info_p->connect_order;
   shm_as_p->replica_only_flag = br_info_p->replica_only_flag;
+
+  shm_as_p->max_num_delayed_hosts_lookup =
+    br_info_p->max_num_delayed_hosts_lookup;
 
   shm_as_p->cas_rctime = br_info_p->cas_rctime;
 
@@ -601,7 +604,7 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
 	  shard_info_p = &proxy_info_p->shard_info[shard_id];
 	  shard_conn_info_p = &shm_as_p->shard_conn_info[shard_id];
 
-	  proxy_info_p->fixed_conn_info =
+	  proxy_info_p->fixed_shard_user =
 	    (shard_conn_info_p->db_user[0] != '\0') ? true : false;
 
 	  for (shard_cas_id = 0; shard_cas_id < shard_info_p->max_appl_server;
@@ -614,8 +617,8 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
 	      as_info_p->proxy_id = proxy_id;
 	      as_info_p->shard_id = shard_id;
 	      as_info_p->shard_cas_id = shard_cas_id;
-	      as_info_p->fixed_conn_info = proxy_info_p->fixed_conn_info;
-	      if (proxy_info_p->fixed_conn_info == true)
+	      as_info_p->fixed_shard_user = proxy_info_p->fixed_shard_user;
+	      if (proxy_info_p->fixed_shard_user == true)
 		{
 		  strcpy (as_info_p->database_user,
 			  shard_conn_info_p->db_user);
@@ -664,6 +667,7 @@ broker_shm_set_as_info (T_SHM_APPL_SERVER * shm_appl,
   as_info_p->num_error_queries = 0;
   as_info_p->num_interrupts = 0;
   as_info_p->num_connect_requests = 0;
+  as_info_p->num_connect_rejected = 0;
   as_info_p->num_restarts = 0;
   as_info_p->auto_commit_mode = FALSE;
   as_info_p->database_name[0] = '\0';
@@ -672,6 +676,7 @@ broker_shm_set_as_info (T_SHM_APPL_SERVER * shm_appl,
   as_info_p->database_passwd[0] = '\0';
   as_info_p->last_connect_time = 0;
   as_info_p->num_holdable_results = 0;
+  as_info_p->cas_change_mode = CAS_CHANGE_MODE_DEFAULT;
   as_info_p->cur_sql_log_mode = br_info_p->sql_log_mode;
   as_info_p->cur_slow_log_mode = br_info_p->slow_log_mode;
 

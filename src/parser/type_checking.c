@@ -7013,7 +7013,7 @@ pt_fold_union (PARSER_CONTEXT * parser, PT_NODE * node, bool arg1_is_false)
   char oids_incl;
   SCAN_OPERATION_TYPE scan_op_type;
   PT_NODE *order_by, *orderby_for;
-  PT_NODE *into_list, *for_update;
+  PT_NODE *into_list;
   PT_NODE_TYPE type;
   int line, column;
   const char *alias_print;
@@ -7027,7 +7027,6 @@ pt_fold_union (PARSER_CONTEXT * parser, PT_NODE * node, bool arg1_is_false)
   order_by = node->info.query.order_by;
   orderby_for = node->info.query.orderby_for;
   into_list = node->info.query.into_list;
-  for_update = node->info.query.for_update;
   type = node->node_type;
   line = node->line_number;
   column = node->column_number;
@@ -7045,7 +7044,6 @@ pt_fold_union (PARSER_CONTEXT * parser, PT_NODE * node, bool arg1_is_false)
   node->info.query.order_by = NULL;
   node->info.query.orderby_for = NULL;
   node->info.query.into_list = NULL;
-  node->info.query.for_update = NULL;
   parser_free_tree (parser, node);
 
   if (arg1_is_false)
@@ -7111,11 +7109,6 @@ pt_fold_union (PARSER_CONTEXT * parser, PT_NODE * node, bool arg1_is_false)
       if (into_list)
 	{
 	  node->info.query.into_list = into_list;
-	}
-
-      if (for_update)
-	{
-	  node->info.query.for_update = for_update;
 	}
     }
 
@@ -19206,6 +19199,33 @@ pt_fold_const_expr (PARSER_CONTEXT * parser, PT_NODE * expr, void *arg)
 
 	  result = parser_copy_tree_list (parser, result);
 	}
+
+      if (opd1 && opd1->node_type == PT_EXPR
+	  && opd2 && opd2->node_type == PT_VALUE
+	  && (opd1->info.expr.op == PT_INST_NUM
+	      || opd1->info.expr.op == PT_ORDERBY_NUM)
+	  && (opd2->type_enum == PT_TYPE_INTEGER
+	      || opd2->type_enum == PT_TYPE_BIGINT))
+	{
+	  DB_BIGINT rvalue;
+
+	  if (opd2->type_enum == PT_TYPE_INTEGER)
+	    {
+	      rvalue = opd2->info.value.data_value.i;
+	    }
+	  else if (opd2->type_enum == PT_TYPE_BIGINT)
+	    {
+	      rvalue = opd2->info.value.data_value.bigint;
+	    }
+
+	  if ((op == PT_GT && rvalue <= 0) || (op == PT_GE && rvalue <= 1))
+	    {
+	      /* always true */
+	      DB_MAKE_INTEGER (&dbval_res, 1);
+	      result = pt_dbval_to_value (parser, &dbval_res);
+	    }
+	}
+
       if (result == NULL)
 	{
 	  PT_ERRORc (parser, expr, er_msg ());
@@ -19237,7 +19257,7 @@ end:
 	    {
 	      alias_print = expr->alias_print;
 	    }
-	  if (result->alias_print == NULL)
+	  if (result->alias_print == NULL && expr->is_alias_enabled_expr)
 	    {
 	      result->alias_print =
 		pt_append_string (parser, NULL, alias_print);
@@ -19406,10 +19426,11 @@ pt_fold_const_function (PARSER_CONTEXT * parser, PT_NODE * func)
 	    {
 	      result->info.value.text = func->alias_print;
 	    }
-	  if (alias_print == NULL)
+	  if (alias_print == NULL && func->is_alias_enabled_expr)
 	    {
 	      alias_print = func->alias_print;
 	    }
+
 	  parser_free_tree (parser, func);
 	}
 

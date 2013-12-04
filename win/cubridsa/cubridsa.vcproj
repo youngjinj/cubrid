@@ -663,6 +663,10 @@
 					>
 				</File>
 				<File
+					RelativePath="..\..\src\base\perf.c"
+					>
+				</File>
+				<File
 					RelativePath="..\..\src\base\perf_monitor.c"
 					>
 				</File>
@@ -692,6 +696,10 @@
 				</File>
 				<File
 					RelativePath="..\..\src\base\system_parameter.c"
+					>
+				</File>
+				<File
+					RelativePath="..\..\src\base\tsc_timer.c"
 					>
 				</File>
 				<File

@@ -1079,11 +1079,22 @@ fn_proxy_client_prepare (T_PROXY_CONTEXT * ctx_p, T_PROXY_EVENT * event_p,
 
   driver_info = proxy_get_driver_info_by_ctx (ctx_p);
   client_version = CAS_MAKE_PROTO_VER (driver_info);
+
+  if (ctx_p->is_prepare_for_execute == false)
+    {
+      proxy_info_p->num_request_stmt++;
+    }
+
   stmt_p =
     shard_stmt_find_by_sql (organized_sql_stmt,
 			    ctx_p->database_user, client_version);
   if (stmt_p)
     {
+      if (ctx_p->is_prepare_for_execute == false)
+	{
+	  proxy_info_p->num_request_stmt_in_pool++;
+	}
+
       PROXY_DEBUG_LOG ("success to find statement. (stmt:%s).",
 		       shard_str_stmt (stmt_p));
 
@@ -1506,10 +1517,10 @@ proxy_client_execute_internal (T_PROXY_CONTEXT * ctx_p,
   /* bind variables, even:bind type, odd:bind value */
 
   stmt_p = shard_stmt_find_by_stmt_h_id (srv_h_id);
-  if (stmt_p == NULL)
+  if (stmt_p == NULL || stmt_p->status == SHARD_STMT_STATUS_INVALID)
     {
       PROXY_LOG (PROXY_LOG_MODE_ERROR,
-		 "Unable to find statement handle ideitifier. "
+		 "Unable to find statement handle identifier. "
 		 "(srv_h_id:%d). context(%s).", srv_h_id,
 		 proxy_str_context (ctx_p));
 

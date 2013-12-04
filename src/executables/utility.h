@@ -28,6 +28,7 @@
 
 #include <config.h>
 #include <stdio.h>
+#include "util_func.h"
 
 /*
  * UTILITY MESSAGE SETS
@@ -109,7 +110,11 @@ typedef enum
   MSGCAT_UTIL_GENERIC_NOT_HA_MODE = 36,
   MSGCAT_UTIL_GENERIC_HA_MODE = 37,
   MSGCAT_UTIL_GENERIC_HA_MODE_NOT_LISTED_HA_DB = 38,
-  MSGCAT_UTIL_GENERIC_HA_MODE_NOT_LISTED_HA_NODE = 39
+  MSGCAT_UTIL_GENERIC_HA_MODE_NOT_LISTED_HA_NODE = 39,
+  MSGCAT_UTIL_GENERIC_INVALID_CMD = 40,
+  MSGCAT_UTIL_GENERIC_MANAGER_NOT_INSTALLED = 41,
+  MSGCAT_UTIL_GENERIC_INVALID_ARGUMENT = 42,
+  MSGCAT_UTIL_GENERIC_FILEOPEN_ERROR = 43
 } MSGCAT_UTIL_GENERIC_MSG;
 
 /* Message id in the set MSGCAT_UTIL_SET_DELETEDB */
@@ -413,7 +418,8 @@ typedef enum
   UNLOADDB_MSG_OBJECTS_DUMPED = 43,
   UNLOADDB_MSG_OBJECTS_FAILED = 46,
   UNLOADDB_MSG_INVALID_DIR_NAME = 47,
-  UNLOADDB_MSG_LOG_LSA = 48
+  UNLOADDB_MSG_LOG_LSA = 48,
+  UNLOADDB_MSG_PASSWORD_PROMPT = 49
 } MSGCAT_UNLOADDB_MSG;
 
 /* Message id in the set MSGCAT_UTIL_SET_LOADDB */
@@ -467,6 +473,9 @@ typedef enum
   LOADDB_MSG_INSTANCE_COUNT_EX = 112,
 #endif
   LOADDB_MSG_LAST_COMMITTED_LINE = 113,
+  LOADDB_MSG_INSERT_AND_FAIL_COUNT = 116,
+  LOADDB_MSG_LOAD_FAIL = 117,
+  LOADDB_MSG_EXCEED_MAX_LEN = 118,
   LOADDB_MSG_USAGE = 120
 } MSGCAT_LOADDB_MSG;
 
@@ -740,10 +749,8 @@ typedef struct _ha_config
 #define PROPERTY_ON             "on"
 #define PROPERTY_OFF            "off"
 
-#if defined(WINDOWS)
-#define PRINT_SERVICE_NAME	"cubrid service"
-#endif
 
+#define PRINT_SERVICE_NAME	"cubrid service"
 #define PRINT_MASTER_NAME       "cubrid master"
 #define PRINT_SERVER_NAME       "cubrid server"
 #define PRINT_BROKER_NAME       "cubrid broker"
@@ -1133,6 +1140,10 @@ typedef struct _ha_config
 #define UNLOAD_CS_MODE_L                        "CS-mode"
 #define UNLOAD_DATAFILE_PER_CLASS_S             11915
 #define UNLOAD_DATAFILE_PER_CLASS_L             "datafile-per-class"
+#define UNLOAD_USER_S                           'u'
+#define UNLOAD_USER_L                           "user"
+#define UNLOAD_PASSWORD_S                       'p'
+#define UNLOAD_PASSWORD_L                       "password"
 
 /* compactdb option list */
 #define COMPACT_VERBOSE_S                       'v'

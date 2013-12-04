@@ -91,6 +91,7 @@ static int xts_Xasl_errcode = NO_ERROR;
 static int xts_save_aggregate_type (const AGGREGATE_TYPE * aggregate);
 static int xts_save_function_type (const FUNCTION_TYPE * function);
 static int xts_save_analytic_type (const ANALYTIC_TYPE * analytic);
+static int xts_save_analytic_eval_type (const ANALYTIC_EVAL_TYPE * analytic);
 static int xts_save_srlist_id (const QFILE_SORTED_LIST_ID * sort_list_id);
 static int xts_save_list_id (const QFILE_LIST_ID * list_id);
 static int xts_save_arith_type (const ARITH_TYPE * arithmetic);
@@ -222,6 +223,9 @@ static char *xts_process_aggregate_type (char *ptr,
 					 const AGGREGATE_TYPE * aggregate);
 static char *xts_process_analytic_type (char *ptr,
 					const ANALYTIC_TYPE * analytic);
+static char *xts_process_analytic_eval_type (char *ptr,
+					     const ANALYTIC_EVAL_TYPE *
+					     analytic);
 static char *xts_process_function_type (char *ptr,
 					const FUNCTION_TYPE * function);
 static char *xts_process_srlist_id (char *ptr,
@@ -285,6 +289,7 @@ static int xts_sizeof_arith_type (const ARITH_TYPE * ptr);
 static int xts_sizeof_aggregate_type (const AGGREGATE_TYPE * ptr);
 static int xts_sizeof_function_type (const FUNCTION_TYPE * ptr);
 static int xts_sizeof_analytic_type (const ANALYTIC_TYPE * ptr);
+static int xts_sizeof_analytic_eval_type (const ANALYTIC_EVAL_TYPE * ptr);
 static int xts_sizeof_srlist_id (const QFILE_SORTED_LIST_ID * ptr);
 static int xts_sizeof_sort_list (const SORT_LIST * ptr);
 static int xts_sizeof_method_sig_list (const METHOD_SIG_LIST * ptr);
@@ -743,6 +748,73 @@ xts_save_analytic_type (const ANALYTIC_TYPE * analytic)
     }
 
   if (xts_process_analytic_type (buf_p, analytic) == NULL)
+    {
+      offset = ER_FAILED;
+      goto end;
+    }
+
+  memcpy (&xts_Stream_buffer[offset], buf_p, size);
+
+end:
+  if (is_buf_alloced)
+    {
+      free_and_init (buf_p);
+    }
+
+  return offset;
+}
+
+static int
+xts_save_analytic_eval_type (const ANALYTIC_EVAL_TYPE * analytic_eval)
+{
+  int offset;
+  int size;
+  OR_ALIGNED_BUF (sizeof (*analytic_eval) * 2) a_buf;
+  char *buf = OR_ALIGNED_BUF_START (a_buf);
+  char *buf_p = NULL;
+  bool is_buf_alloced = false;
+
+  if (analytic_eval == NULL)
+    {
+      return NO_ERROR;
+    }
+
+  offset = xts_get_offset_visited_ptr (analytic_eval);
+  if (offset != ER_FAILED)
+    {
+      return offset;
+    }
+
+  size = xts_sizeof_analytic_eval_type (analytic_eval);
+  if (size == ER_FAILED)
+    {
+      return ER_FAILED;
+    }
+
+  offset = xts_reserve_location_in_stream (size);
+  if (offset == ER_FAILED
+      || xts_mark_ptr_visited (analytic_eval, offset) == ER_FAILED)
+    {
+      return ER_FAILED;
+    }
+
+  if (size <= (int) OR_ALIGNED_BUF_SIZE (a_buf))
+    {
+      buf_p = buf;
+    }
+  else
+    {
+      buf_p = (char *) malloc (size);
+      if (buf_p == NULL)
+	{
+	  xts_Xasl_errcode = ER_OUT_OF_VIRTUAL_MEMORY;
+	  return ER_FAILED;
+	}
+
+      is_buf_alloced = true;
+    }
+
+  if (xts_process_analytic_eval_type (buf_p, analytic_eval) == NULL)
     {
       offset = ER_FAILED;
       goto end;
@@ -3343,6 +3415,33 @@ xts_process_buildlist_proc (char *ptr,
     }
   ptr = or_pack_int (ptr, offset);
 
+  ptr = or_pack_int (ptr, build_list_proc->g_hash_eligible);
+
+  ptr = or_pack_int (ptr, build_list_proc->g_output_first_tuple);
+  ptr = or_pack_int (ptr, build_list_proc->g_hkey_size);
+
+  offset = xts_save_regu_variable_list (build_list_proc->g_hk_scan_regu_list);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  offset = xts_save_regu_variable_list (build_list_proc->g_hk_sort_regu_list);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  offset = xts_save_regu_variable_list (build_list_proc->g_scan_regu_list);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  ptr = or_pack_int (ptr, build_list_proc->g_func_count);
   ptr = or_pack_int (ptr, build_list_proc->g_grbynum_flag);
   ptr = or_pack_int (ptr, build_list_proc->g_with_rollup);
 
@@ -3360,7 +3459,7 @@ xts_process_buildlist_proc (char *ptr,
     }
   ptr = or_pack_int (ptr, offset);
 
-  offset = xts_save_analytic_type (build_list_proc->a_func_list);
+  offset = xts_save_analytic_eval_type (build_list_proc->a_eval_list);
   if (offset == ER_FAILED)
     {
       return NULL;
@@ -4484,6 +4583,8 @@ xts_process_access_spec_type (char *ptr, const ACCESS_SPEC_TYPE * access_spec)
     }
   ptr = or_pack_int (ptr, offset);
 
+  ptr = or_pack_int (ptr, access_spec->flags);
+
   return ptr;
 }
 
@@ -4513,6 +4614,8 @@ xts_process_indx_info (char *ptr, const INDX_INFO * indx_info)
   ptr = or_pack_int (ptr, indx_info->groupby_skip);
 
   ptr = or_pack_int (ptr, indx_info->use_iss);
+
+  ptr = or_pack_int (ptr, indx_info->ils_prefix_len);
 
   ptr = or_pack_int (ptr, indx_info->func_idx_col_id);
 
@@ -5124,21 +5227,21 @@ xts_process_aggregate_type (char *ptr, const AGGREGATE_TYPE * aggregate)
 
   ptr = OR_PACK_DOMAIN_OBJECT_TO_OID (ptr, aggregate->domain, 0, 0);
 
-  offset = xts_save_db_value (aggregate->value);
+  offset = xts_save_db_value (aggregate->accumulator.value);
   if (offset == ER_FAILED)
     {
       return NULL;
     }
   ptr = or_pack_int (ptr, offset);
 
-  offset = xts_save_db_value (aggregate->value2);
+  offset = xts_save_db_value (aggregate->accumulator.value2);
   if (offset == ER_FAILED)
     {
       return NULL;
     }
   ptr = or_pack_int (ptr, offset);
 
-  ptr = or_pack_int (ptr, aggregate->curr_cnt);
+  ptr = or_pack_int (ptr, aggregate->accumulator.curr_cnt);
 
   offset = xts_save_aggregate_type (aggregate->next);
   if (offset == ER_FAILED)
@@ -5236,7 +5339,12 @@ xts_process_analytic_type (char *ptr, const ANALYTIC_TYPE * analytic)
     }
   ptr = or_pack_int (ptr, offset);
 
-  ptr = or_pack_int (ptr, analytic->outptr_idx);
+  offset = xts_save_db_value (analytic->out_value);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
 
   ptr = or_pack_int (ptr, analytic->offset_idx);
 
@@ -5275,24 +5383,47 @@ xts_process_analytic_type (char *ptr, const ANALYTIC_TYPE * analytic)
       ptr = or_pack_int (ptr, offset);
     }
 
-  offset = xts_save_sort_list (analytic->sort_list);
-  if (offset == ER_FAILED)
-    {
-      return NULL;
-    }
-  ptr = or_pack_int (ptr, offset);
+  ptr = or_pack_int (ptr, analytic->sort_prefix_size);
 
-  ptr = or_pack_int (ptr, analytic->partition_cnt);
+  ptr = or_pack_int (ptr, analytic->sort_list_size);
 
   ptr = or_pack_int (ptr, analytic->flag);
-
-  ptr = or_pack_int (ptr, analytic->eval_group);
 
   ptr = or_pack_int (ptr, analytic->from_last);
 
   ptr = or_pack_int (ptr, analytic->ignore_nulls);
 
   ptr = or_pack_int (ptr, analytic->is_const_operand);
+
+  return ptr;
+}
+
+static char *
+xts_process_analytic_eval_type (char *ptr,
+				const ANALYTIC_EVAL_TYPE * analytic_eval)
+{
+  int offset;
+
+  offset = xts_save_analytic_type (analytic_eval->head);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  offset = xts_save_sort_list (analytic_eval->sort_list);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  offset = xts_save_analytic_eval_type (analytic_eval->next);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
 
   return ptr;
 }
@@ -5843,8 +5974,15 @@ xts_sizeof_buildlist_proc (const BUILDLIST_PROC_NODE * build_list)
     PTR_SIZE +			/* g_having_pred */
     PTR_SIZE +			/* g_grbynum_pred */
     PTR_SIZE +			/* g_grbynum_val */
+    PTR_SIZE +			/* g_hk_scan_regu_list */
+    PTR_SIZE +			/* g_hk_sort_regu_list */
+    PTR_SIZE +			/* g_scan_regu_list */
     OR_INT_SIZE +		/* g_grbynum_flag */
     OR_INT_SIZE +		/* g_with_rollup */
+    OR_INT_SIZE +		/* g_hash_eligible */
+    OR_INT_SIZE +		/* g_output_first_tuple */
+    OR_INT_SIZE +		/* g_hkey_size */
+    OR_INT_SIZE +		/* g_func_count */
     PTR_SIZE +			/* g_agg_list */
     PTR_SIZE +			/* g_outarith_list */
     PTR_SIZE +			/* a_func_list */
@@ -6343,6 +6481,7 @@ xts_sizeof_access_spec_type (const ACCESS_SPEC_TYPE * access_spec)
   size += OR_INT_SIZE +		/* type */
     OR_INT_SIZE +		/* access */
     OR_INT_SIZE +		/* lock_hint */
+    OR_INT_SIZE +		/* flags */
     PTR_SIZE +			/* index_ptr */
     PTR_SIZE +			/* where_key */
     PTR_SIZE +			/* where_pred */
@@ -6451,6 +6590,8 @@ xts_sizeof_indx_info (const INDX_INFO * indx_info)
   size += OR_INT_SIZE;		/* groupby_skip */
 
   size += OR_INT_SIZE;		/* use_iss boolean (int) */
+
+  size += OR_INT_SIZE;		/* ils_prefix_len (int) */
 
   size += OR_INT_SIZE;		/* func_idx_col_id (int) */
 
@@ -6869,17 +7010,16 @@ xts_sizeof_analytic_type (const ANALYTIC_TYPE * analytic)
   size += or_packed_domain_size (analytic->domain, 0) + PTR_SIZE +	/* next */
     PTR_SIZE +			/* value */
     PTR_SIZE +			/* value2 */
+    PTR_SIZE +			/* valptr_value */
     PTR_SIZE +			/* list_id */
-    PTR_SIZE +			/* sort_list */
     OR_INT_SIZE +		/* function */
-    OR_INT_SIZE +		/* outptr_idx */
     OR_INT_SIZE +		/* offset_idx */
     OR_INT_SIZE +		/* default_idx */
     OR_INT_SIZE +		/* option */
     OR_INT_SIZE +		/* opr_dbtype */
-    OR_INT_SIZE +		/* partition_cnt */
+    OR_INT_SIZE +		/* sort_prefix_size */
+    OR_INT_SIZE +		/* sort_list_size */
     OR_INT_SIZE +		/* flag */
-    OR_INT_SIZE +		/* eval_grp */
     OR_INT_SIZE +		/* from_last */
     OR_INT_SIZE +		/* ignore_nulls */
     OR_INT_SIZE;		/* is_const_opr */
@@ -6890,6 +7030,24 @@ xts_sizeof_analytic_type (const ANALYTIC_TYPE * analytic)
       return ER_FAILED;
     }
   size += tmp_size;
+
+  return size;
+}
+
+/*
+ * xts_sizeof_analytic_eval_type () -
+ *   return:
+ *   ptr(in)    :
+ */
+static int
+xts_sizeof_analytic_eval_type (const ANALYTIC_EVAL_TYPE * analytic_eval)
+{
+  int size = 0;
+  int tmp_size = 0;
+
+  size = PTR_SIZE +		/* next */
+    PTR_SIZE +			/* head */
+    PTR_SIZE;			/* sort_list */
 
   return size;
 }

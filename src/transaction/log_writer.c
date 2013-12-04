@@ -1918,9 +1918,28 @@ xlogwr_get_log_pages (THREAD_ENTRY * thread_p, LOG_PAGEID first_pageid,
 					 entry, copy_from_file);
       if (error_code != NO_ERROR)
 	{
+	  error_code = ER_HA_LW_FAILED_GET_LOG_PAGE;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  error_code, 1, first_pageid);
+
 	  status = LOGWR_STATUS_ERROR;
 	  goto error;
 	}
+
+      /* wait until LFT finishes flushing */
+      rv = pthread_mutex_lock (&writer_info->flush_wait_mutex);
+
+      if (entry->status == LOGWR_STATUS_FETCH
+	  && writer_info->flush_completed == false)
+	{
+	  rv =
+	    pthread_cond_wait (&writer_info->flush_wait_cond,
+			       &writer_info->flush_wait_mutex);
+	}
+      assert_release (writer_info->flush_completed == true);
+
+      rv = pthread_mutex_unlock (&writer_info->flush_wait_mutex);
+
 
       /* In case of async mode, unregister the writer and wakeup LFT to finish */
       /*
@@ -2026,10 +2045,6 @@ logwr_get_min_copied_fpageid (void)
   pthread_mutex_unlock (&writer_info->wr_list_mutex);
 
   if (min_fpageid == LOGPAGEID_MAX || min_fpageid == LOGPB_HEADER_PAGE_ID)
-    {
-      min_fpageid = NULL_PAGEID;
-    }
-  if (min_fpageid < css_get_ha_num_of_hosts ())
     {
       min_fpageid = NULL_PAGEID;
     }

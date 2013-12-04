@@ -1889,6 +1889,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 #endif
 
   assert_release (IS_SYNC_EXEC_MODE (*flag_p));
+  assert (thread_get_recursion_depth (thread_p) == 0);
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 
@@ -2477,6 +2478,8 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   list_id_p = NULL;
 
   dbvals_p = NULL;
+  assert (thread_get_recursion_depth (thread_p) == 0);
+
 #if defined (SERVER_MODE)
   use_global_heap = false;
   data = (char *) dbval_p;
@@ -3417,6 +3420,8 @@ qmgr_get_old_page (THREAD_ENTRY * thread_p, VPID * vpid_p,
       /* return temp file page */
       page_p = pgbuf_fix (thread_p, vpid_p, OLD_PAGE,
 			  PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
+
+      (void) pgbuf_check_page_ptype (thread_p, page_p, PAGE_QRESULT);
     }
 
   return page_p;
@@ -3634,6 +3639,9 @@ qmgr_get_external_file_page (THREAD_ENTRY * thread_p, VPID * vpid_p,
 
       tmp_vfid_p->curr_free_page_index++;
       *vpid_p = tmp_vfid_p->vpid_array[tmp_vfid_p->vpid_index++];
+
+      (void) pgbuf_set_page_ptype (thread_p, page_p, PAGE_QRESULT);
+
       qmgr_put_page_header (page_p, &page_header);
 
       addr.vfid = &tmp_vfid_p->temp_vfid;
@@ -3727,6 +3735,9 @@ qmgr_get_external_file_page (THREAD_ENTRY * thread_p, VPID * vpid_p,
     }
 
   *vpid_p = tmp_vfid_p->vpid_array[tmp_vfid_p->vpid_index++];
+
+  (void) pgbuf_set_page_ptype (thread_p, page_p, PAGE_QRESULT);
+
   qmgr_put_page_header (page_p, &page_header);
 
   if (tmp_vfid_p->vpid_index >= tmp_vfid_p->vpid_count)

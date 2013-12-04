@@ -199,7 +199,7 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
     stop\n\
     restart\n\
     info\n\
-    status      [-b] [-f] [-q] [-t] [-s <sec>] [-m] [-c] [<expr>]\n\
+    status      [-b] [-f] [-q] [-t] [-s <sec>] [-S] [-P] [-m] [-c] [<expr>]\n\
     on          <ブローカー名>\n\
     off         <ブローカー名>\n\
     reset       <ブローカー名>\n\
@@ -231,6 +231,10 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
 36 サーバーがHAモードに設定されませんでした。\n
 38 HA環境で設定されているサーバーがha_db_listのリストにありません。
 39 HA環境で設定されているサーバーがha_node_listのリストにありません。
+40 Invalid command.\n
+41 cubrid manager server is not installed.\n
+42 Invalid argument.\n
+43 File(%s) open error.\n
 
 $set 2 MSGCAT_UTIL_SET_BACKUPDB
 30 警告: -tオプションは独立実行モードでは無視されます。\n
@@ -422,6 +426,9 @@ $set 12 MSGCAT_UTIL_SET_LOADDB
 113 最後にコミットされたライン : %d
 114 エラーコントロールファイル
 115 ロードする時にエラー制御のための入力ファイル
+116 Total %8d object(s) inserted, %d object(s) failed.\n
+117 Load failed.\n
+118 Maximum length of class name is %d bytes.\n
 120 \
 loaddb: データベースにオブジェクトやスキーマロード\n\
 使い方: %s loaddb [オプション] <データベース名>\n\
@@ -470,11 +477,14 @@ $set 13 MSGCAT_UTIL_SET_UNLOADDB
 46 %dこのオブジェクトが(全体%d個)問題なくダンプされました。\n
 47 出力ディレクトリー名が長過ぎます。\n
 48 LSA : %d %d \n
+49 パスワード: 
 60 \
 unloaddb: データベースからスキーマとオブジェクトをアンロード\n\
 使い方: %s unloaddb [オプション] <データベース名>\n\
 \n\
 オプション:\n\
+  -u, --user=ID               データベースアクセスに関するユーザー名; デフォルト: 「dba」\n\
+  -p, --password=PASS         ユーザーパスワード; デフォルト: なし\n\
   -i, --input-class-file=FILE テーブル名が入っているファイル; デフォルト: すべてのクラス\n\
       --include-reference     レファレンスされるテーブルも含める; デフォルト: 許可しない(「-i」が指定される必要がある)\n\
       --input-class-only      特定クラスだけを処理; デフォルト: 許可しない(「-i」が指定される必要がある)\n\

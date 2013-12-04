@@ -922,11 +922,26 @@ pt_find_aggregate_functions_pre (PARSER_CONTEXT * parser, PT_NODE * tree,
 {
   PT_AGG_FIND_INFO *info = (PT_AGG_FIND_INFO *) arg;
   PT_NODE *select_stack = info->select_stack;
+  PT_NODE *stack_top = select_stack;
 
   if (tree == NULL)
     {
       /* nothing to do */
       return tree;
+    }
+
+  while (stack_top != NULL && stack_top->next != NULL)
+    {
+      stack_top = stack_top->next;
+    }
+  if (stack_top && stack_top->info.pointer.node
+      && stack_top->info.pointer.node->node_type == PT_SELECT
+      && stack_top->info.pointer.node->info.query.q.select.where == tree)
+    {
+      /* subqueries of WHERE clause will not be walked for this parent query;
+         they must be treated separately as they own any aggregates referring
+         upper-level names */
+      info->stop_on_subquery = true;
     }
 
   if (pt_is_aggregate_function (parser, tree))
@@ -945,6 +960,12 @@ pt_find_aggregate_functions_pre (PARSER_CONTEXT * parser, PT_NODE * tree,
 	      /* first level on spec stack, this function belongs to the
 	         callee statement */
 	      info->base_count++;
+
+	      if (tree->info.function.function_type == PT_COUNT_STAR)
+		{
+		  /* can't use count star in loose scan */
+		  info->disable_loose_scan = true;
+		}
 	    }
 	}
       else
@@ -962,6 +983,14 @@ pt_find_aggregate_functions_pre (PARSER_CONTEXT * parser, PT_NODE * tree,
 	    {
 	      /* only names from base SELECT were found */
 	      info->base_count++;
+
+	      if (tree->info.function.all_or_distinct == PT_ALL
+		  && tree->info.function.function_type != PT_MIN
+		  && tree->info.function.function_type != PT_MAX)
+		{
+		  /* only DISTINCT allowed for functions other than MIN/MAX */
+		  info->disable_loose_scan = true;
+		}
 	    }
 	  else if (name_info.max_level < 0 && name_info.name_count > 0)
 	    {
@@ -995,9 +1024,29 @@ pt_find_aggregate_functions_pre (PARSER_CONTEXT * parser, PT_NODE * tree,
 	  *continue_walk = PT_LEAF_WALK;
 	}
 
-      /* don't walk selects unless necessary */
+      /* if we encountered a subquery while walking where clause, stop this
+         walk and make subquery owner of all aggregate functions that
+         reference upper-level names */
       if (info->stop_on_subquery)
 	{
+	  PT_AGG_FIND_INFO sub_info;
+	  sub_info.base_count = 0;
+	  sub_info.out_of_context_count = 0;
+	  sub_info.select_stack = NULL;
+	  sub_info.stop_on_subquery = false;
+
+	  (void) parser_walk_tree (parser, tree,
+				   pt_find_aggregate_functions_pre, &sub_info,
+				   pt_find_aggregate_functions_post,
+				   &sub_info);
+
+	  if (sub_info.out_of_context_count > 0)
+	    {
+	      /* mark as agg select; base_count > 0 case will be handled
+	         later on */
+	      PT_SELECT_INFO_SET_FLAG (tree, PT_SELECT_INFO_HAS_AGG);
+	    }
+
 	  *continue_walk = PT_STOP_WALK;
 	}
 
@@ -1038,6 +1087,21 @@ pt_find_aggregate_functions_post (PARSER_CONTEXT * parser, PT_NODE * tree,
     {
       info->select_stack =
 	pt_pointer_stack_pop (parser, info->select_stack, NULL);
+    }
+  else
+    {
+      PT_NODE *stack_top = info->select_stack;
+
+      while (stack_top != NULL && stack_top->next != NULL)
+	{
+	  stack_top = stack_top->next;
+	}
+      if (stack_top && stack_top->info.pointer.node
+	  && stack_top->info.pointer.node->node_type == PT_SELECT
+	  && stack_top->info.pointer.node->info.query.q.select.where == tree)
+	{
+	  info->stop_on_subquery = false;
+	}
     }
 
   /* nothing can stop us! */
@@ -1093,6 +1157,63 @@ pt_is_analytic_node (PARSER_CONTEXT * parser, PT_NODE * tree,
     }
 
   if (*has_analytic)
+    {
+      *continue_walk = PT_STOP_WALK;
+    }
+  else if (PT_IS_QUERY_NODE_TYPE (tree->node_type))
+    {
+      *continue_walk = PT_LIST_WALK;
+    }
+
+  return tree;
+}
+
+/*
+ * pt_is_inst_or_orderby_num_node_post () -
+ *   return:
+ *   parser(in):
+ *   tree(in):
+ *   arg(in/out):
+ *   continue_walk(in/out):
+ */
+PT_NODE *
+pt_is_inst_or_orderby_num_node_post (PARSER_CONTEXT * parser, PT_NODE * tree,
+				     void *arg, int *continue_walk)
+{
+  bool *has_inst_orderby_num = (bool *) arg;
+
+  if (*has_inst_orderby_num)
+    {
+      *continue_walk = PT_STOP_WALK;
+    }
+  else
+    {
+      *continue_walk = PT_CONTINUE_WALK;
+    }
+
+  return tree;
+}
+
+/*
+ * pt_is_inst_or_orderby_num_node () -
+ *   return:
+ *   parser(in):
+ *   tree(in):
+ *   arg(in/out): true if node is an INST_NUM or ORDERBY_NUM expression node
+ *   continue_walk(in/out):
+ */
+PT_NODE *
+pt_is_inst_or_orderby_num_node (PARSER_CONTEXT * parser, PT_NODE * tree,
+				void *arg, int *continue_walk)
+{
+  bool *has_inst_orderby_num = (bool *) arg;
+
+  if (PT_IS_INSTNUM (tree) || PT_IS_ORDERBYNUM (tree))
+    {
+      *has_inst_orderby_num = true;
+    }
+
+  if (*has_inst_orderby_num)
     {
       *continue_walk = PT_STOP_WALK;
     }
@@ -2748,6 +2869,7 @@ pt_has_aggregate (PARSER_CONTEXT * parser, PT_NODE * node)
   info.base_count = 0;
   info.out_of_context_count = 0;
   info.stop_on_subquery = false;
+  info.disable_loose_scan = false;
 
   if (!node)
     {
@@ -2756,9 +2878,12 @@ pt_has_aggregate (PARSER_CONTEXT * parser, PT_NODE * node)
 
   if (node->node_type == PT_SELECT)
     {
+      bool found = false;
+
       /* STEP 1: check agg flag */
       if (PT_SELECT_INFO_IS_FLAGED (node, PT_SELECT_INFO_HAS_AGG))
 	{
+	  /* we've been here before */
 	  return true;
 	}
 
@@ -2766,12 +2891,18 @@ pt_has_aggregate (PARSER_CONTEXT * parser, PT_NODE * node)
       if (node->info.query.q.select.group_by
 	  || node->info.query.q.select.having)
 	{
-	  /* mark as agg select */
-	  PT_SELECT_INFO_SET_FLAG (node, PT_SELECT_INFO_HAS_AGG);
-	  return true;
+	  found = true;
+	  /* fall trough, we need to check for loose scan */
 	}
 
-      /* STEP 3: check select_list */
+      /* STEP 3: check tree */
+      if (PT_SELECT_INFO_IS_FLAGED (node, PT_SELECT_INFO_IS_UPD_DEL_QUERY)
+	  || PT_SELECT_INFO_IS_FLAGED (node, PT_SELECT_INFO_IS_MERGE_QUERY))
+	{
+	  /* UPDATE, DELETE and MERGE queries cannot own aggregates from
+	     subqueries, so this SELECT can't either */
+	  info.stop_on_subquery = true;
+	}
       save_next = node->next;
       node->next = NULL;
       (void) parser_walk_tree (parser, node, pt_find_aggregate_functions_pre,
@@ -2781,7 +2912,16 @@ pt_has_aggregate (PARSER_CONTEXT * parser, PT_NODE * node)
 
       if (info.base_count > 0)
 	{
-	  /* mark as agg select */
+	  found = true;
+	  if (info.disable_loose_scan)
+	    {
+	      PT_SELECT_INFO_SET_FLAG (node,
+				       PT_SELECT_INFO_DISABLE_LOOSE_SCAN);
+	    }
+	}
+
+      if (found)
+	{
 	  PT_SELECT_INFO_SET_FLAG (node, PT_SELECT_INFO_HAS_AGG);
 	  return true;
 	}
@@ -2809,6 +2949,7 @@ pt_has_aggregate (PARSER_CONTEXT * parser, PT_NODE * node)
     }
   else
     {
+      info.stop_on_subquery = true;
       save_next = node->next;
       node->next = NULL;
       (void) parser_walk_tree (parser, node, pt_find_aggregate_functions_pre,
@@ -2867,6 +3008,25 @@ pt_has_analytic (PARSER_CONTEXT * parser, PT_NODE * node)
     }
 
   return has_analytic;
+}
+
+/*
+ * pt_has_inst_or_orderby_num () - check if tree has an INST_NUM or ORDERBY_NUM
+ *				   node somewhere
+ *   return: true if tree has INST_NUM/ORDERBY_NUM
+ *   parser(in):
+ *   node(in):
+ */
+bool
+pt_has_inst_or_orderby_num (PARSER_CONTEXT * parser, PT_NODE * node)
+{
+  bool has_inst_orderby_num;
+
+  (void) parser_walk_tree (parser, node,
+			   pt_is_analytic_node, &has_inst_orderby_num,
+			   pt_is_analytic_node_post, &has_inst_orderby_num);
+
+  return has_inst_orderby_num;
 }
 
 /*
@@ -4230,14 +4390,14 @@ regu_agg_alloc (void)
       return NULL;
     }
 
-  aggptr->value = regu_dbval_alloc ();
-  if (aggptr->value == NULL)
+  aggptr->accumulator.value = regu_dbval_alloc ();
+  if (aggptr->accumulator.value == NULL)
     {
       return NULL;
     }
 
-  aggptr->value2 = regu_dbval_alloc ();
-  if (aggptr->value2 == NULL)
+  aggptr->accumulator.value2 = regu_dbval_alloc ();
+  if (aggptr->accumulator.value2 == NULL)
     {
       return NULL;
     }
@@ -4266,8 +4426,8 @@ regu_agg_grbynum_alloc (void)
       return NULL;
     }
 
-  aggptr->value = NULL;
-  aggptr->value2 = NULL;
+  aggptr->accumulator.value = NULL;
+  aggptr->accumulator.value2 = NULL;
   aggptr->list_id = NULL;
 
   return aggptr;
@@ -4308,9 +4468,9 @@ static void
 regu_agg_init (AGGREGATE_TYPE * ptr)
 {
   ptr->next = NULL;
-  ptr->value = NULL;
-  ptr->value2 = NULL;
-  ptr->curr_cnt = 0;
+  ptr->accumulator.value = NULL;
+  ptr->accumulator.value2 = NULL;
+  ptr->accumulator.curr_cnt = 0;
   ptr->function = (FUNC_TYPE) 0;
   ptr->option = (QUERY_OPTIONS) 0;
   regu_var_init (&ptr->operand);
@@ -4353,6 +4513,31 @@ regu_analytic_alloc (void)
 }
 
 /*
+ * regu_analytic_eval_alloc () -
+ *   return: ANALYTIC_EVAL_TYPE *
+ *
+ * Note: Memory allocation function for ANALYTIC_EVAL_TYPE.
+ */
+ANALYTIC_EVAL_TYPE *
+regu_analytic_eval_alloc (void)
+{
+  ANALYTIC_EVAL_TYPE *ptr;
+
+  ptr =
+    (ANALYTIC_EVAL_TYPE *) pt_alloc_packing_buf (sizeof (ANALYTIC_EVAL_TYPE));
+  if (ptr == NULL)
+    {
+      regu_set_error_with_zero_args (ER_REGU_NO_SPACE);
+    }
+  else
+    {
+      regu_analytic_eval_init (ptr);
+    }
+
+  return ptr;
+}
+
+/*
  * regu_analytic_init () -
  *   return:
  *   ptr(in)    : pointer to an analytic structure
@@ -4365,20 +4550,34 @@ regu_analytic_init (ANALYTIC_TYPE * ptr)
   ptr->next = NULL;
   ptr->value = NULL;
   ptr->value2 = NULL;
-  ptr->outptr_idx = 0;
+  ptr->out_value = NULL;
   ptr->offset_idx = 0;
   ptr->default_idx = 0;
   ptr->curr_cnt = 0;
-  ptr->partition_cnt = 0;
+  ptr->sort_prefix_size = 0;
+  ptr->sort_list_size = 0;
   ptr->function = (FUNC_TYPE) 0;
   regu_var_init (&ptr->operand);
-  ptr->sort_list = NULL;
   ptr->opr_dbtype = DB_TYPE_NULL;
   ptr->flag = 0;
-  ptr->eval_group = -1;
   ptr->from_last = false;
   ptr->ignore_nulls = false;
   ptr->is_const_operand = false;
+}
+
+/*
+ * regu_analytic_eval_init () -
+ *   return:
+ *   ptr(in)    : pointer to an analytic structure
+ *
+ * Note: Initialization function for ANALYTIC_EVAL_TYPE.
+ */
+void
+regu_analytic_eval_init (ANALYTIC_EVAL_TYPE * ptr)
+{
+  ptr->next = NULL;
+  ptr->head = NULL;
+  ptr->sort_list = NULL;
 }
 
 /*
@@ -4614,6 +4813,7 @@ regu_spec_init (ACCESS_SPEC_TYPE * ptr, TARGET_TYPE type)
   ptr->single_fetch = (QPROC_SINGLE_FETCH) false;
   ptr->s_dbval = NULL;
   ptr->next = NULL;
+  ptr->flags = 0;
 }
 
 /*
@@ -9070,8 +9270,8 @@ pt_make_query_show_exec_stats (PARSER_CONTEXT * parser)
     "UNION ALL (SELECT 'data_page_ioreads' as [variable] , exec_stats('Num_data_page_ioreads') as [value])"
     "UNION ALL (SELECT 'data_page_iowrites' as [variable] , exec_stats('Num_data_page_iowrites') as [value]);";
 
-  /* parser ';' will empty and reset the stack of parser, 
-   * this make the status machine be right for the next statement, 
+  /* parser ';' will empty and reset the stack of parser,
+   * this make the status machine be right for the next statement,
    * and avoid nested parser statement. */
   parser_parse_string (parser, ";");
 
@@ -9161,8 +9361,8 @@ pt_make_query_show_exec_stats_all (PARSER_CONTEXT * parser)
     "UNION ALL (SELECT 'heap_stats_bestspace_entries' as [variable] , exec_stats('Num_heap_stats_bestspace_entries') as [value])"
     "UNION ALL (SELECT 'heap_stats_bestspace_maxed' as [variable] , exec_stats('Num_heap_stats_bestspace_maxed') as [value])";
 
-  /* parser ';' will empty and reset the stack of parser, 
-   * this make the status machine be right for the next statement, 
+  /* parser ';' will empty and reset the stack of parser,
+   * this make the status machine be right for the next statement,
    * and avoid nested parser statement. */
   parser_parse_string (parser, ";");
 
@@ -10020,8 +10220,8 @@ pt_make_query_show_index (PARSER_CONTEXT * parser, PT_NODE * original_cls_id)
   query->info.query.order_by =
     parser_append_node (order_by_item, query->info.query.order_by);
 
-  /* By Column_name */
-  order_by_item = pt_make_sort_spec_with_number (parser, 5, PT_ASC);
+  /* By Seq_in_index */
+  order_by_item = pt_make_sort_spec_with_number (parser, 4, PT_ASC);
   if (order_by_item == NULL)
     {
       goto error;
@@ -10898,7 +11098,7 @@ pt_make_tuple_value_reference (PARSER_CONTEXT * parser, PT_NODE * name,
 /*
  * pt_make_query_show_collation() - builds the query for SHOW COLLATION
  *
- * SELECT * FROM 
+ * SELECT * FROM
  *    (SELECT coll_name AS [Collation],
  *	      IF (charset_id = 3, 'iso88591',
  *		  IF (charset_id = 5, 'utf8',
@@ -11562,7 +11762,7 @@ unusable_expr:
  * pt_find_node_type_pre () - Use parser_walk_tree to find a node with a
  *			      specific node type.
  *
- * return	      : node. 
+ * return	      : node.
  * parser (in)	      : parser context.
  * node (in)	      : node in parse tree.
  * arg (in)	      : int array containing node type and found.

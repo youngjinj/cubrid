@@ -371,6 +371,7 @@ static LDR_ELEM elem_converter[NUM_LDR_TYPES];
  */
 static int Total_objects = 0;
 static int Last_committed_line = 0;
+static int Total_fails = 0;
 
 /*
  * ldr_post_commit_handler
@@ -697,6 +698,16 @@ ldr_clear_err_total (LDR_CONTEXT * context)
     {
       context->err_total = 0;
     }
+}
+
+/*
+ * ldr_increment_fails - increment Total_fails count
+ *    return: void
+ */
+void
+ldr_increment_fails ()
+{
+  Total_fails++;
 }
 
 /*
@@ -3126,6 +3137,19 @@ ldr_date_time_conversion_error (const char *token, DB_TYPE type)
 }
 
 /*
+ * ldr_load_failed_error - display load failed error
+ *    return: void
+ */
+void
+ldr_load_failed_error ()
+{
+  display_error_line (0);
+  fprintf (stderr, msgcat_message (MSGCAT_CATALOG_UTILS,
+				   MSGCAT_UTIL_SET_LOADDB,
+				   LOADDB_MSG_LOAD_FAIL));
+}
+
+/*
  * ldr_check_date_time_conversion - check time/date/timestamp string w.r.t. type
  *    return: NO_ERROR if successful, error code otherwise
  *    str(in): string to convert
@@ -4495,6 +4519,19 @@ ldr_act_init_context (LDR_CONTEXT * context, const char *class_name, int len)
     }
   if (class_name)
     {
+      if (intl_identifier_lower_string_size (class_name) >=
+	  SM_MAX_IDENTIFIER_LENGTH)
+	{
+	  display_error_line (0);
+	  fprintf (stderr, msgcat_message (MSGCAT_CATALOG_UTILS,
+					   MSGCAT_UTIL_SET_LOADDB,
+					   LOADDB_MSG_EXCEED_MAX_LEN),
+		   SM_MAX_IDENTIFIER_LENGTH - 1);
+	  CHECK_CONTEXT_VALIDITY (context, true);
+	  ldr_abort ();
+	  goto error_exit;
+	}
+
       class_mop = ldr_find_class (class_name);
       if (class_mop == NULL)
 	{
@@ -5786,6 +5823,7 @@ ldr_init_loader (LDR_CONTEXT * context)
   ldr_Hint_subclasses[0] = 0;
 
   Total_objects = 0;
+  Total_fails = 0;
   ldr_clear_context (context);
   ldr_act_init_context (context, NULL, 0);
   ldr_Current_context = context;
@@ -5897,7 +5935,7 @@ ldr_start (int periodic_commit)
 
   /* make sure we reset this to get accurate statistics */
   Total_objects = 0;
-
+  Total_fails = 0;
   return NO_ERROR;
 }
 
@@ -5976,9 +6014,11 @@ ldr_interrupt_has_occurred (int type)
  *    objects(out): return object count
  *    defaults(out): return default object count
  *    lastcommit(out):
+ *    fails(out): return fail count
  */
 void
-ldr_stats (int *errors, int *objects, int *defaults, int *lastcommit)
+ldr_stats (int *errors, int *objects, int *defaults, int *lastcommit,
+	   int *fails)
 {
   if (errors != NULL)
     {
@@ -5998,6 +6038,10 @@ ldr_stats (int *errors, int *objects, int *defaults, int *lastcommit)
   if (lastcommit != NULL)
     {
       *lastcommit = Last_committed_line;
+    }
+  if (fails != NULL)
+    {
+      *fails = Total_fails;
     }
 }
 
@@ -6027,9 +6071,7 @@ ldr_update_statistics (void)
 		       sm_class_name (table->class_));
 	      fflush (stdout);
 	    }
-	  err =
-	    sm_update_statistics (table->class_, NULL, true,
-				  STATS_WITH_SAMPLING);
+	  err = sm_update_statistics (table->class_, STATS_WITH_SAMPLING);
 	}
     }
   return err;
