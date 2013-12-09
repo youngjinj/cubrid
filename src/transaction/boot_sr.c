@@ -6483,7 +6483,6 @@ xboot_compact_db (THREAD_ENTRY * thread_p, OID * class_oids, int n_classes,
 		  int *modified_objects, int *big_objects,
 		  int *initial_last_repr_id)
 {
-
   return boot_compact_db (thread_p, class_oids, n_classes,
 			  space_to_process, instance_lock_timeout,
 			  class_lock_timeout, delete_old_repr,

@@ -1696,7 +1696,6 @@ struct log_global
   /* background log archiving info */
   BACKGROUND_ARCHIVING_INFO bg_archive_info;
 
-
   MVCCTABLE mvcc_table;		/* MVCC table */
 };
 
