@@ -12095,7 +12095,7 @@ btree_insert_init_locks (THREAD_ENTRY * thread_p, bool is_active,
 
       if (!BTREE_IS_UNIQUE (btid_int))
 	{
-	  if (IS_WRITE_EXCLUSIVE_LOCK (class_lock))
+	  if (IS_WRITE_EXCLUSIVE_LOCK (*class_lock))
 	    {
 	      *next_key_lock_request = false;
 	    }
@@ -19113,7 +19113,7 @@ btree_get_next_key_info (THREAD_ENTRY * thread_p,
 
       error_code = btree_prepare_next_search (thread_p, bts);
       /* go to next key */
-      btree_find_next_index_record (thread_p, bts, bts->use_desc_index);
+      btree_find_next_index_record (thread_p, bts);
       if (error_code != NO_ERROR)
 	{
 	  goto error;
@@ -24199,8 +24199,7 @@ btree_get_oid_count_and_pointer (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 		      bts->prev_oid_pos = 0;
 		      VPID_SET_NULL (&(bts->prev_ovfl_vpid));
 #endif /* SERVER_MODE */
-		      if (btree_find_next_index_record (thread_p, bts,
-							bts->use_desc_index)
+		      if (btree_find_next_index_record (thread_p, bts)
 			  != NO_ERROR)
 			{
 			  return ER_FAILED;
