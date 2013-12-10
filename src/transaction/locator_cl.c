@@ -5609,10 +5609,9 @@ locator_add_root (OID * root_oid, MOBJ class_root)
 
   ws_cache (class_root, root_mop, root_mop);
   ws_dirty (root_mop);
-  ws_set_lock (root_mop, X_LOCK);
+  ws_set_lock (root_mop, SCH_M_LOCK);
 
   sm_Root_class_mop = root_mop;
-  sm_mark_system_class (sm_Root_class_mop, 1);
   oid_Root_class_oid = ws_oid (root_mop);
 
   /* Reserve the class name */
@@ -5621,6 +5620,8 @@ locator_add_root (OID * root_oid, MOBJ class_root)
     {
       root_mop = NULL;
     }
+
+  sm_mark_system_class (sm_Root_class_mop, 1);
 
   return root_mop;
 }
