@@ -802,10 +802,6 @@
 					RelativePath="..\..\src\storage\system_catalog.c"
 					>
 				</File>
-				<File
-					RelativePath="..\..\src\storage\visibility_map.c"
-					>
-				</File>
 			</Filter>
 			<Filter
 				Name="transaction"
