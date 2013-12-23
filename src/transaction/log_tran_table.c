@@ -72,7 +72,6 @@
 #include "mvcc.h"
 #include "vacuum.h"
 
-
 #if defined(SERVER_MODE) || defined(SA_MODE)
 #include "replication.h"
 #endif

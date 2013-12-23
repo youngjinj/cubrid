@@ -1134,6 +1134,7 @@ or_get_varchar_length (OR_BUF * buf, int *rc)
 
   if (*rc != NO_ERROR)
     {
+      assert (charlen == 0);
       return charlen;
     }
 
@@ -1142,6 +1143,7 @@ or_get_varchar_length (OR_BUF * buf, int *rc)
       *rc = or_get_data (buf, (char *) &net_charlen, OR_INT_SIZE);
       charlen = OR_GET_INT (&net_charlen);
     }
+
   return charlen;
 }
 

@@ -1415,6 +1415,7 @@ typedef enum
   PT_AES_DECRYPT,
   PT_SHA_ONE,
   PT_SHA_TWO,
+  PT_INDEX_PREFIX,
 
   /* This is the last entry. Please add a new one before it. */
   PT_LAST_OPCODE
@@ -3449,6 +3450,8 @@ struct parser_context
   QUERY_EXEC_MODE exec_mode;	/* flag used to specify query exec mode */
 
   DB_VALUE sys_datetime;
+  DB_VALUE sys_epochtime;
+
   DB_VALUE local_transaction_id;
 
   int num_lcks_classes;

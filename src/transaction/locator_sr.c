@@ -65,7 +65,9 @@
 #include "boot_sr.h"
 #include "partition.h"
 #include "vacuum.h"
-
+#if defined(ENABLE_SYSTEMTAP)
+#include "probes.h"
+#endif /* ENABLE_SYSTEMTAP */
 #include "db.h"
 
 #if defined(DMALLOC)
@@ -7695,6 +7697,9 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
   DB_LOGICAL ev_res;
   BTREE_LOCKED_KEYS locked_keys;
   bool use_mvcc = false;
+#if defined(ENABLE_SYSTEMTAP)
+  char *classname = NULL;
+#endif /* ENABLE_SYSTEMTAP */
 
   assert_release (class_oid != NULL);
   assert_release (!OID_ISNULL (class_oid));
@@ -7749,6 +7754,10 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 	  goto error;
 	}
     }
+
+#if defined(ENABLE_SYSTEMTAP)
+  classname = or_class_name (recdes);
+#endif /* ENABLE_SYSTEMTAP */
 
   for (i = 0; i < num_btids; i++)
     {
@@ -7806,6 +7815,10 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 
 	  if (is_insert)
 	    {
+#if defined(ENABLE_SYSTEMTAP)
+	      CUBRID_IDX_INSERT_START (classname, index->btname);
+#endif /* ENABLE_SYSTEMTAP */
+
 	      if (mvcc_Enabled && index->type == BTREE_FOREIGN_KEY)
 		{
 		  if (lock_object (thread_p, inst_oid, class_oid, X_LOCK,
@@ -7819,15 +7832,42 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 		btree_perform_insert (thread_p, &btid, key_dbvalue, class_oid,
 				      inst_oid, op_type, unique_stat_info,
 				      &unique, use_mvcc);
+
+#if defined(ENABLE_SYSTEMTAP)
+	      if (key_ins_del == NULL)
+		{
+		  CUBRID_IDX_INSERT_END (classname, index->btname, 1);
+		}
+	      else
+		{
+		  CUBRID_IDX_INSERT_END (classname, index->btname, 0);
+		}
+#endif /* ENABLE_SYSTEMTAP */
 	    }
 	  else
 	    {
 	      locked_keys =
 		btree_get_locked_keys (&btid, search_btid,
 				       search_btid_duplicate_key_locked);
+
+#if defined(ENABLE_SYSTEMTAP)
+	      CUBRID_IDX_DELETE_START (classname, index->btname);
+#endif /* ENABLE_SYSTEMTAP */
+
 	      key_ins_del = btree_delete (thread_p, &btid, key_dbvalue,
 					  class_oid, inst_oid, locked_keys,
 					  &unique, op_type, unique_stat_info);
+#if defined(ENABLE_SYSTEMTAP)
+	      if (key_ins_del == NULL)
+		{
+		  CUBRID_IDX_DELETE_END (classname, index->btname, 1);
+		}
+	      else
+		{
+		  CUBRID_IDX_DELETE_END (classname, index->btname, 0);
+		}
+#endif /* ENABLE_SYSTEMTAP */
+
 	    }
 	}
 
@@ -8309,6 +8349,9 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   bool same_key = true;
   int c = DB_UNK;
   BTREE_LOCKED_KEYS locked_keys;
+#if defined(ENABLE_SYSTEMTAP)
+  char *classname = NULL;
+#endif /* ENABLE_SYSTEMTAP */
 
   assert_release (class_oid != NULL);
   assert_release (!OID_ISNULL (class_oid));
@@ -8391,6 +8434,10 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
       error_code = ER_FAILED;
       goto error;
     }
+
+#if defined(ENABLED_SYSTEMTAP)
+  classname = or_class_name (old_recdes);
+#endif /* ENABLE_SYSTEMTAP */
 
   for (i = 0; i < num_btids; i++)
     {
@@ -8588,6 +8635,9 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		}
 	    }
 	}
+#if defined(ENABLE_SYSTEMTAP)
+      CUBRID_IDX_UPDATE_START (classname, index->btname);
+#endif /* ENABLE_SYSTEMTAP */
 
       if (!same_key || do_delete_only || do_insert_only)
 	{
@@ -8606,6 +8656,10 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		      error_code = er_errid ();
 		      if (!(unique && error_code == ER_BTREE_UNKNOWN_KEY))
 			{
+#if defined(ENABLE_SYSTEMTAP)
+			  CUBRID_IDX_UPDATE_END (classname, index->btname, 1);
+#endif /* ENABLE_SYSTEMTAP */
+
 			  goto error;
 			}
 		    }
@@ -8630,6 +8684,10 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 						unique_stat_info, &unique,
 						false) == NULL)
 			{
+#if defined(ENABLE_SYSTEMTAP)
+			  CUBRID_IDX_UPDATE_END (classname, index->btname, 1);
+#endif /* ENABLE_SYSTEMTAP */
+
 			  error_code = er_errid ();
 			  goto error;
 			}
@@ -8646,14 +8704,19 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 
 		      if (error_code != NO_ERROR)
 			{
+#if defined(ENABLE_SYSTEMTAP)
+			  CUBRID_IDX_UPDATE_END (classname, index->btname, 1);
+#endif /* ENABLE_SYSTEMTAP */
+
 			  goto error;
 			}
 		    }
-
 		}
-
-
 	    }
+
+#if defined(ENABLE_SYSTEMTAP)
+	  CUBRID_IDX_UPDATE_END (classname, index->btname, 0);
+#endif /* ENABLE_SYSTEMTAP */
 
 	  if (!locator_Dont_check_foreign_key
 	      && index->type == BTREE_PRIMARY_KEY && index->fk)

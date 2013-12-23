@@ -2133,8 +2133,8 @@ pt_record_error (PARSER_CONTEXT * parser, int stmt_no, int line_no,
 	msgcat_message (MSGCAT_CATALOG_CUBRID, MSGCAT_SET_PARSER_SYNTAX,
 			MSGCAT_SYNTAX_BEFORE_END_OF_STMT);
       /* size of constant string "before ' '\n" to be printed along with the
-         actual context - do not count format parameter "%s", of size 2 */
-      int before_context_len = strlen (before_context_str) - 2;
+         actual context - do not count format parameter "%1$s", of size 4 */
+      int before_context_len = strlen (before_context_str) - 4;
       int context_len = strlen (context);
       int msg_len = strlen (msg);
       int end_of_statement = 0;
@@ -2164,15 +2164,22 @@ pt_record_error (PARSER_CONTEXT * parser, int stmt_no, int line_no,
 	{
 	  str_len = context_len + before_context_len;
 	}
+
+      /* parser_allocate_string_buffer() returns the start pointer of 
+       * the string buffer. It is guaranteed that the length of 
+       * the buffer 's' is equal to 'str_len + 1'. 
+       */
       s = parser_allocate_string_buffer (parser, str_len, sizeof (char));
       if (s == NULL)
 	{
 	  PT_INTERNAL_ERROR (parser, "insufficient memory");
 	  return;
 	}
+
       if (end_of_statement == 0)
 	{
-	  sprintf (s, before_context_str, context_copy);
+	  /* snprintf will assign the NULL-terminator('\0') to s[str_len]. */
+	  snprintf (s, str_len + 1, before_context_str, context_copy);
 	  if (s[str_len - 3] == '\n')
 	    {
 	      s[str_len - 3] = ' ';
@@ -2180,7 +2187,7 @@ pt_record_error (PARSER_CONTEXT * parser, int stmt_no, int line_no,
 	}
       else
 	{
-	  sprintf (s, before_end_of_stmt_str);
+	  strcpy (s, before_end_of_stmt_str);
 	}
       node->info.error_msg.error_message = s;
     }
@@ -3799,6 +3806,8 @@ pt_show_binopcode (PT_OP_TYPE n)
       return "width_bucket";
     case PT_TRACE_STATS:
       return "trace_stats";
+    case PT_INDEX_PREFIX:
+      return "index_prefix ";
     default:
       return "unknown opcode";
     }
@@ -11967,6 +11976,21 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
 			       pt_show_binopcode (p->info.expr.op));
       q = pt_append_varchar (parser, q, r2);
       break;
+    case PT_INDEX_PREFIX:
+      q = pt_append_nulstring (parser, q, " index_prefix(");
+      r1 = pt_print_bytes (parser, p->info.expr.arg1);
+      q = pt_append_varchar (parser, q, r1);
+
+      q = pt_append_nulstring (parser, q, ", ");
+      r1 = pt_print_bytes (parser, p->info.expr.arg2);
+      q = pt_append_varchar (parser, q, r1);
+
+      q = pt_append_nulstring (parser, q, ", ");
+      r1 = pt_print_bytes (parser, p->info.expr.arg3);
+      q = pt_append_varchar (parser, q, r1);
+
+      q = pt_append_nulstring (parser, q, ")");
+      break;
     }
 
   for (t = p->or_next; t; t = t->or_next)
@@ -16035,6 +16059,18 @@ pt_print_drop_session_variables (PARSER_CONTEXT * parser, PT_NODE * p)
  *       during view definition translation, see mq_translate ()).
  *       If a type ambiguity does occur, the XASL cache will return query
  *       results with unexpected types to the client.
+ *	 
+ *	 Printing charset introducer and COLLATE modifier of values.
+ *	 Four flags control the printing of charset and collate for strings:
+ *	  - PT_SUPPRESS_CHARSET_PRINT: when printing columns header in results
+ *	  - PT_SUPPRESS_COLLATE_PRINT: some string literals should not
+ *	    have COLLATE modifier: in ENUM definition, partition list or
+ *	    LIKE ESCAPE sequence
+ *	  - PT_CHARSET_COLLATE_FULL : printing of already compiled statement
+ *	    (view definition, index function or filter expression)
+ *	  - PT_CHARSET_COLLATE_USER_ONLY: printing of an uncompiled statement
+ *	    (in HA replication); it prints the statement exactly as the user
+ *	    input. This is mutually exclusive with PT_CHARSET_COLLATE_FULL.
  */
 /* TODO Investigate the scenarios when this function prints ambiguous strings
  *      and fix the issue by either printing different strings or setting the
@@ -16085,7 +16121,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 	? (p->data_type->info.data_type.collation_id) : LANG_SYS_COLLATION;
 
       if ((p->info.value.print_collation == false
-	   && !(parser->custom_print & PT_CHARSET_COLLATE_FULL))
+	   && !(parser->custom_print
+		& (PT_CHARSET_COLLATE_FULL | PT_CHARSET_COLLATE_USER_ONLY)))
 	  || (parser->custom_print & PT_SUPPRESS_COLLATE_PRINT)
 	  || (prt_coll_id == LANG_SYS_COLLATION
 	      && (parser->custom_print & PT_SUPPRESS_CHARSET_PRINT))
@@ -16101,7 +16138,8 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 
       /* do not print charset introducer for NCHAR and VARNCHAR */
       if ((p->info.value.print_charset == false
-	   && !(parser->custom_print & PT_CHARSET_COLLATE_FULL))
+	   && !(parser->custom_print
+		& (PT_CHARSET_COLLATE_FULL | PT_CHARSET_COLLATE_USER_ONLY)))
 	  || (p->type_enum != PT_TYPE_CHAR && p->type_enum != PT_TYPE_VARCHAR)
 	  || (prt_cs == LANG_SYS_CODESET
 	      && (parser->custom_print & PT_SUPPRESS_CHARSET_PRINT))
@@ -17442,6 +17480,7 @@ pt_is_const_expr_node (PT_NODE * node)
 	case PT_RPAD:
 	case PT_REPLACE:
 	case PT_TRANSLATE:
+	case PT_INDEX_PREFIX:
 	  return (pt_is_const_expr_node (node->info.expr.arg1)
 		  && pt_is_const_expr_node (node->info.expr.arg2)
 		  && (node->info.expr.arg3 ?

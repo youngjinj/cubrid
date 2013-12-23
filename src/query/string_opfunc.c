@@ -715,6 +715,7 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
 
       intl_pad_char (codeset, pad, &pad_size);
 
+    trim_again:
       /* We need to implicitly trim both strings since we don't want padding
          for the result (its of varying type) and since padding can mask the
          logical end of both of the strings.  Trimming depends on codeset. */
@@ -745,6 +746,13 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
 	       && *(t + 1) == pad[1]; t--, t--, size2--, size2--)
 	    {
 	      ;
+	    }
+
+	  if (codeset == INTL_CODESET_KSC5601_EUC)
+	    {
+	      /* trim also ASCII space */
+	      intl_pad_char (INTL_CODESET_ISO88591, pad, &pad_size);
+	      goto trim_again;
 	    }
 	}
 
@@ -11996,6 +12004,53 @@ db_sys_datetime (DB_VALUE * result_datetime)
 		      c_time_struct->tm_hour, c_time_struct->tm_min,
 		      c_time_struct->tm_sec, tloc.millitm);
   DB_MAKE_DATETIME (result_datetime, &datetime);
+
+  return error_status;
+}
+
+/*
+ * db_sys_date_and_epoch_time () - This function returns current 
+ *				   datetime and timestamp.
+ *
+ * return: status of the error
+ *
+ *   dt_dbval(out): datetime
+ *   ts_dbval(out): timestamp
+ */
+
+int
+db_sys_date_and_epoch_time (DB_VALUE * dt_dbval, DB_VALUE * ts_dbval)
+{
+  int error_status = NO_ERROR;
+  DB_DATETIME datetime;
+  struct timeb tloc;
+  struct tm *c_time_struct, tm_val;
+
+  assert (dt_dbval != NULL);
+  assert (ts_dbval != NULL);
+
+  if (ftime (&tloc) != 0)
+    {
+      error_status = ER_SYSTEM_DATE;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+      return error_status;
+    }
+
+  c_time_struct = localtime_r (&tloc.time, &tm_val);
+  if (c_time_struct == NULL)
+    {
+      error_status = ER_SYSTEM_DATE;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+      return error_status;
+    }
+
+  db_datetime_encode (&datetime, c_time_struct->tm_mon + 1,
+		      c_time_struct->tm_mday, c_time_struct->tm_year + 1900,
+		      c_time_struct->tm_hour, c_time_struct->tm_min,
+		      c_time_struct->tm_sec, tloc.millitm);
+
+  DB_MAKE_DATETIME (dt_dbval, &datetime);
+  DB_MAKE_TIMESTAMP (ts_dbval, (DB_TIMESTAMP *) (&tloc.time));
 
   return error_status;
 }
@@ -25785,4 +25840,87 @@ db_get_cs_coll_info (DB_VALUE * result, const DB_VALUE * val, const int mode)
     }
 
   return status;
+}
+
+/*
+ * db_string_index_prefix () -
+ */
+int
+db_string_index_prefix (const DB_VALUE * string1,
+			const DB_VALUE * string2,
+			const DB_VALUE * index_type, DB_VALUE * prefix_index)
+{
+  int error_status = NO_ERROR;
+  TP_DOMAIN key_domain;
+  DB_VALUE db_cmp_res;
+  int cmp_res;
+
+  assert (string1 != (DB_VALUE *) NULL);
+  assert (string2 != (DB_VALUE *) NULL);
+  assert (index_type != (DB_VALUE *) NULL);
+
+  if (DB_IS_NULL (string1) || DB_IS_NULL (string2) || DB_IS_NULL (index_type))
+    {
+      if (QSTR_IS_NATIONAL_CHAR (DB_VALUE_DOMAIN_TYPE (string1)))
+	{
+	  error_status =
+	    db_value_domain_init (prefix_index, DB_TYPE_VARNCHAR,
+				  DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
+	}
+      else if (QSTR_IS_BIT (DB_VALUE_DOMAIN_TYPE (string1)))
+	{
+	  error_status =
+	    db_value_domain_init (prefix_index, DB_TYPE_VARBIT,
+				  DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
+	}
+      else
+	{
+	  error_status =
+	    db_value_domain_init (prefix_index, DB_TYPE_VARCHAR,
+				  DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
+	}
+      return error_status;
+    }
+
+  if (!QSTR_IS_ANY_CHAR_OR_BIT (DB_VALUE_DOMAIN_TYPE (string1))
+      || !QSTR_IS_ANY_CHAR_OR_BIT (DB_VALUE_DOMAIN_TYPE (string2))
+      || !is_char_string (index_type))
+    {
+      error_status = ER_QSTR_INVALID_DATA_TYPE;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+      return error_status;
+    }
+
+  if ((qstr_get_category (string1) != qstr_get_category (string2))
+      || (DB_GET_STRING_CODESET (string1) != DB_GET_STRING_CODESET (string2)))
+    {
+      error_status = ER_QSTR_INCOMPATIBLE_CODE_SETS;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+      return error_status;
+    }
+
+  key_domain.is_desc = false;
+  if (strncasecmp (DB_PULL_STRING (index_type), "d", 1) == 0)
+    {
+      key_domain.is_desc = true;
+    }
+
+  error_status = db_string_compare (string1, string2, &db_cmp_res);
+  if (error_status != NO_ERROR)
+    {
+      return error_status;
+    }
+  cmp_res = DB_GET_INT (&db_cmp_res);
+  if ((key_domain.is_desc && cmp_res <= 0)
+      || (!key_domain.is_desc && cmp_res >= 0))
+    {
+      error_status = ER_OBJ_INVALID_ARGUMENTS;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+      return error_status;
+    }
+
+  error_status = db_string_unique_prefix (string1, string2, prefix_index,
+					  &key_domain);
+
+  return error_status;
 }

@@ -1056,7 +1056,6 @@ static int mr_cmpval_numeric (DB_VALUE * value1, DB_VALUE * value2,
 			      int do_coercion, int total_order,
 			      int *start_colp, int collation);
 static void pr_init_ordered_mem_sizes (void);
-static int pr_midxkey_element_disk_size (char *mem, DB_DOMAIN * domain);
 static void mr_initmem_resultset (void *mem, TP_DOMAIN * domain);
 static int mr_setmem_resultset (void *mem, TP_DOMAIN * domain,
 				DB_VALUE * value);
@@ -2052,9 +2051,9 @@ pr_clear_value (DB_VALUE * value)
   if (DB_IS_NULL (value))
     {
       need_clear = false;
-      if (prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
+      if (value->need_clear)
 	{
-	  if (value->need_clear)
+	  if (prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
 	    {			/* need to check */
 	      if ((QSTR_IS_ANY_CHAR_OR_BIT (db_type)
 		   && value->data.ch.medium.buf != NULL)
@@ -8730,7 +8729,7 @@ pr_value_mem_size (DB_VALUE * value)
  *    mem(in): memory buffer
  *    domain(in): type domain
  */
-static int
+int
 pr_midxkey_element_disk_size (char *mem, DB_DOMAIN * domain)
 {
   int disk_size = 0;
@@ -8966,7 +8965,8 @@ pr_midxkey_unique_prefix (const DB_VALUE * db_midxkey1,
   midxkey1 = (DB_MIDXKEY *) (&(db_midxkey1->data.midxkey));
   midxkey2 = (DB_MIDXKEY *) (&(db_midxkey2->data.midxkey));
 
-  assert (midxkey1->size != -1 && midxkey2->size != -1);
+  assert (midxkey1->size != -1);
+  assert (midxkey2->size != -1);
   assert (midxkey1->ncolumns == midxkey2->ncolumns);
   assert (midxkey1->domain == midxkey2->domain);
   assert (midxkey1->domain->setdomain == midxkey2->domain->setdomain);
@@ -8994,7 +8994,8 @@ pr_midxkey_unique_prefix (const DB_VALUE * db_midxkey1,
     }
   else
     {
-      assert (size1 < midxkey1->size && size2 < midxkey2->size);
+      assert (size1 < midxkey1->size);
+      assert (size2 < midxkey2->size);
 
       if (!next_dom_is_desc)
 	{
@@ -9868,6 +9869,16 @@ mr_index_lengthmem_string (void *memptr, TP_DOMAIN * domain)
   int charlen;
   int rc = NO_ERROR;
 
+  /* generally, index key-value is short enough
+   */
+  charlen = OR_GET_BYTE (memptr);
+  if (charlen < 0xFF)
+    {
+      return or_varchar_length (charlen);
+    }
+
+  assert (charlen == 0xFF);
+
   or_init (&buf, memptr, -1);
 
   charlen = or_get_varchar_length (&buf, &rc);
@@ -10351,22 +10362,41 @@ mr_data_cmpdisk_string (void *mem1, void *mem2, TP_DOMAIN * domain,
 			int do_coercion, int total_order, int *start_colp)
 {
   int c = DB_UNK;
+  char *str1, *str2;
   int str_length1, str_length2;
   OR_BUF buf1, buf2;
   int rc = NO_ERROR;
 
   assert (domain != NULL);
 
-  or_init (&buf1, (char *) mem1, 0);
+  str1 = (char *) mem1;
+  str2 = (char *) mem2;
+
+  /* generally, data is short enough
+   */
+  str_length1 = OR_GET_BYTE (str1);
+  str_length2 = OR_GET_BYTE (str2);
+  if (str_length1 < 0xFF && str_length2 < 0xFF)
+    {
+      str1 += OR_BYTE_SIZE;
+      str2 += OR_BYTE_SIZE;
+      c = QSTR_COMPARE (domain->collation_id,
+			(unsigned char *) str1, str_length1,
+			(unsigned char *) str2, str_length2);
+      c = MR_CMP_RETURN_CODE (c);
+      return c;
+    }
+
+  assert (str_length1 == 0xFF || str_length2 == 0xFF);
+
+  or_init (&buf1, str1, 0);
   str_length1 = or_get_varchar_length (&buf1, &rc);
   if (rc == NO_ERROR)
     {
-
-      or_init (&buf2, (char *) mem2, 0);
+      or_init (&buf2, str2, 0);
       str_length2 = or_get_varchar_length (&buf2, &rc);
       if (rc == NO_ERROR)
 	{
-
 	  c = QSTR_COMPARE (domain->collation_id,
 			    (unsigned char *) buf1.ptr, str_length1,
 			    (unsigned char *) buf2.ptr, str_length2);
@@ -12974,18 +13004,39 @@ mr_data_cmpdisk_varnchar (void *mem1, void *mem2, TP_DOMAIN * domain,
 			  int do_coercion, int total_order, int *start_colp)
 {
   int c = DB_UNK;
+  char *str1, *str2;
   int str_length1, str_length2;
   OR_BUF buf1, buf2;
   int rc = NO_ERROR;
 
   assert (domain != NULL);
 
-  or_init (&buf1, (char *) mem1, 0);
+  str1 = (char *) mem1;
+  str2 = (char *) mem2;
+
+  /* generally, data is short enough
+   */
+  str_length1 = OR_GET_BYTE (str1);
+  str_length2 = OR_GET_BYTE (str2);
+  if (str_length1 < 0xFF && str_length2 < 0xFF)
+    {
+      str1 += OR_BYTE_SIZE;
+      str2 += OR_BYTE_SIZE;
+      c = QSTR_NCHAR_COMPARE (domain->collation_id,
+			      (unsigned char *) str1, str_length1,
+			      (unsigned char *) str2, str_length2,
+			      (INTL_CODESET) TP_DOMAIN_CODESET (domain));
+      c = MR_CMP_RETURN_CODE (c);
+      return c;
+    }
+
+  assert (str_length1 == 0xFF || str_length2 == 0xFF);
+
+  or_init (&buf1, str1, 0);
   str_length1 = or_get_varchar_length (&buf1, &rc);
   if (rc == NO_ERROR)
     {
-
-      or_init (&buf2, (char *) mem2, 0);
+      or_init (&buf2, str2, 0);
       str_length2 = or_get_varchar_length (&buf2, &rc);
       if (rc == NO_ERROR)
 	{

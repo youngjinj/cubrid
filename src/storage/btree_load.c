@@ -322,8 +322,7 @@ static int btree_dump_sort_output (const RECDES * recdes,
 				   LOAD_ARGS * load_args);
 #endif /* defined(CUBRID_DEBUG) */
 static int btree_index_sort (THREAD_ENTRY * thread_p, SORT_ARGS * sort_args,
-			     int est_inp_pg_cnt, SORT_PUT_FUNC * out_func,
-			     void *out_args);
+			     SORT_PUT_FUNC * out_func, void *out_args);
 static SORT_STATUS btree_sort_get_next (THREAD_ENTRY * thread_p,
 					RECDES * temp_recdes, void *arg);
 static int compare_driver (const void *first, const void *second, void *arg);
@@ -1396,7 +1395,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   /* Build the leaf pages of the btree as the output of the sort.
    * We do not estimate the number of pages required.
    */
-  if (btree_index_sort (thread_p, sort_args, 0,
+  if (btree_index_sort (thread_p, sort_args,
 			btree_construct_leafs, load_args) != NO_ERROR)
     {
       goto error;
@@ -1484,6 +1483,14 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
       xbtree_add_index (thread_p, btid, key_type, &class_oids[0], attr_ids[0],
 			unique_flag, sort_args->n_oids, sort_args->n_nulls,
 			load_args->n_keys);
+    }
+
+  if (!VFID_ISNULL (&load_args->btid->ovfid))
+    {
+      /* notification */
+      BTREE_SET_CREATED_OVERFLOW_KEY_NOTIFICATION (thread_p, NULL, NULL,
+						   &class_oids[0], btid,
+						   bt_name);
     }
 
   if (sort_args->filter)
@@ -2043,6 +2050,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 				  &load_args->leaf.vpid, load_args,
 				  node_level) == NULL)
 	    {
+	      pr_clear_value (&prefix_key);
 	      goto exit_on_error;
 	    }
 
@@ -2728,10 +2736,12 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 
       /* First decompose the input record into the key and oid components */
       or_init (&buf, recdes->data, recdes->length);
-      assert (PTR_ALIGN (recdes->data, MAX_ALIGNMENT) == recdes->data);
+      assert (buf.ptr == PTR_ALIGN (buf.ptr, MAX_ALIGNMENT));
 
-      /* Skip forward link */
-      or_advance (&buf, next_size);
+      /* Skip forward link, value_has_null */
+      or_advance (&buf, next_size + OR_INT_SIZE);
+
+      assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
 
       /* Instance level uniqueness checking */
       if (BTREE_IS_UNIQUE (load_args->btid))
@@ -2747,7 +2757,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	{
 	  goto error;
 	}
-      buf.ptr = PTR_ALIGN (buf.ptr, MAX_ALIGNMENT);
+
+      assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
 
       /* Do not copy the string--just use the pointer.  The pr_ routines
        * for strings and sets have different semantics for length.
@@ -2818,8 +2829,13 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 
 	  c = btree_compare_key (&this_key, &load_args->current_key,
 				 load_args->btid->key_type, 0, 1, NULL);
-	  if (c == DB_UNK)
+	  if (c == DB_EQ || c == DB_GT)
 	    {
+	      ;			/* ok */
+	    }
+	  else
+	    {
+	      assert_release (false);
 	      goto error;
 	    }
 
@@ -3197,7 +3213,6 @@ exit_on_error:
  *   return: int
  *   sort_args(in): sort arguments; specifies the sort-attribute as well as
  *	            the structure of the input objects
- *   est_inp_pg_cnt(in): Estimated number of input pages to the sorting
  *   out_func(in): output function to utilize the sorted items as they are
  *                 produced
  *   out_args(in): arguments to the out_func.
@@ -3209,11 +3224,11 @@ exit_on_error:
  */
 static int
 btree_index_sort (THREAD_ENTRY * thread_p, SORT_ARGS * sort_args,
-		  int est_inp_pg_cnt, SORT_PUT_FUNC * out_func,
-		  void *out_args)
+		  SORT_PUT_FUNC * out_func, void *out_args)
 {
   return sort_listfile (thread_p, sort_args->hfids[0].vfid.volid,
-			est_inp_pg_cnt, &btree_sort_get_next, sort_args,
+			0 /* TODO - support parallelism */ ,
+			&btree_sort_get_next, sort_args,
 			out_func, out_args, compare_driver, sort_args,
 			SORT_DUP, NO_SORT_LIMIT);
 }
@@ -3361,7 +3376,9 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
   OID prev_oid;
   SORT_ARGS *sort_args;
   OR_BUF buf;
+  int value_has_null;
   int next_size;
+  int record_size;
   int oid_size;
   char midxkey_buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_midxkey_buf;
   int *prefix_lengthp;
@@ -3575,9 +3592,14 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	    }
 	}
 
-      if (sort_args->not_null_flag
-	  && (db_value_is_null (dbvalue_ptr)
-	      || btree_multicol_key_has_null (dbvalue_ptr)))
+      value_has_null = 0;	/* init */
+      if (db_value_is_null (dbvalue_ptr)
+	  || btree_multicol_key_has_null (dbvalue_ptr))
+	{
+	  value_has_null = 1;	/* found null columns */
+	}
+
+      if (sort_args->not_null_flag && value_has_null)
 	{
 	  if (dbvalue_ptr == &dbvalue)
 	    {
@@ -3606,17 +3628,17 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
       if (key_len > 0)
 	{
 	  next_size = sizeof (char *);
+	  record_size = next_size + OR_INT_SIZE + oid_size + key_len +
+	    (int) MAX_ALIGNMENT;
 
-	  if ((next_size + oid_size + key_len + (int) MAX_ALIGNMENT)
-	      > temp_recdes->area_size)
+	  if (temp_recdes->area_size < record_size)
 	    {
 	      /*
 	       * Record is too big to fit into temp_recdes area; so
 	       * backtrack this iteration
 	       */
 	      sort_args->cur_oid = prev_oid;
-	      temp_recdes->length = (next_size + oid_size
-				     + key_len + MAX_ALIGNMENT);
+	      temp_recdes->length = record_size;
 	      goto nofit;
 	    }
 
@@ -3625,6 +3647,17 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	  or_init (&buf, temp_recdes->data, 0);
 
 	  or_pad (&buf, next_size);	/* init as NULL */
+
+	  assert (buf.ptr == PTR_ALIGN (buf.ptr, MAX_ALIGNMENT));
+
+	  /* save has_null */
+	  if (or_put_byte (&buf, value_has_null) != NO_ERROR)
+	    {
+	      goto nofit;
+	    }
+
+	  or_advance (&buf, (OR_INT_SIZE - OR_BYTE_SIZE));
+	  assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
 
 	  if (sort_args->unique_flag)
 	    {
@@ -3640,7 +3673,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	      goto nofit;
 	    }
 
-	  buf.ptr = PTR_ALIGN (buf.ptr, MAX_ALIGNMENT);
+	  assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
 
 	  if ((*(sort_args->key_type->type->data_writeval)) (&buf,
 							     dbvalue_ptr)
@@ -3689,11 +3722,10 @@ compare_driver (const void *first, const void *second, void *arg)
 {
   char *mem1 = *(char **) first;
   char *mem2 = *(char **) second;
+  int has_null;
   SORT_ARGS *sort_args;
   TP_DOMAIN *key_type;
-  DB_VALUE val1, val2;
-  OR_BUF buf_val1, buf_val2;
-  int c;
+  int c = DB_UNK;
 
   sort_args = (SORT_ARGS *) arg;
   key_type = sort_args->key_type;
@@ -3704,6 +3736,20 @@ compare_driver (const void *first, const void *second, void *arg)
   /* Skip next link */
   mem1 += sizeof (char *);
   mem2 += sizeof (char *);
+
+  assert (PTR_ALIGN (mem1, MAX_ALIGNMENT) == mem1);
+  assert (PTR_ALIGN (mem2, MAX_ALIGNMENT) == mem2);
+
+  /* Read value_has_null */
+  assert (OR_GET_BYTE (mem1) == 0 || OR_GET_BYTE (mem1) == 1);
+  assert (OR_GET_BYTE (mem2) == 0 || OR_GET_BYTE (mem2) == 1);
+  has_null = (OR_GET_BYTE (mem1) || OR_GET_BYTE (mem2)) ? 1 : 0;
+
+  mem1 += OR_INT_SIZE;
+  mem2 += OR_INT_SIZE;
+
+  assert (PTR_ALIGN (mem1, INT_ALIGNMENT) == mem1);
+  assert (PTR_ALIGN (mem2, INT_ALIGNMENT) == mem2);
 
   /* Skip the oids */
   if (sort_args->unique_flag)
@@ -3717,28 +3763,98 @@ compare_driver (const void *first, const void *second, void *arg)
       mem2 += OR_OID_SIZE;
     }
 
-  mem1 = PTR_ALIGN (mem1, MAX_ALIGNMENT);
-  mem2 = PTR_ALIGN (mem2, MAX_ALIGNMENT);
+  assert (PTR_ALIGN (mem1, INT_ALIGNMENT) == mem1);
+  assert (PTR_ALIGN (mem2, INT_ALIGNMENT) == mem2);
 
-  OR_BUF_INIT (buf_val1, mem1, -1);
-  OR_BUF_INIT (buf_val2, mem2, -1);
-
-  if ((*(key_type->type->data_readval))
-      (&buf_val1, &val1, key_type, -1, false, NULL, 0) != NO_ERROR)
+  if (TP_DOMAIN_TYPE (key_type) == DB_TYPE_MIDXKEY)
     {
-      assert (false);
-      return DB_UNK;
+      int i;
+      char *bitptr1, *bitptr2;
+      int bitmap_size;
+      TP_DOMAIN *dom;
+
+      /* fast implementation of pr_midxkey_compare ().
+       * do not use DB_VALUE container for speed-up
+       */
+
+      bitptr1 = mem1;
+      bitptr2 = mem2;
+
+      bitmap_size = OR_MULTI_BOUND_BIT_BYTES (key_type->precision);
+
+      mem1 += bitmap_size;
+      mem2 += bitmap_size;
+
+      assert (key_type->setdomain != NULL);
+
+      for (i = 0, dom = key_type->setdomain;
+	   i < sort_args->n_attrs && dom; i++, dom = dom->next)
+	{
+	  /* val1 or val2 is NULL */
+	  if (has_null)
+	    {
+	      if (OR_MULTI_ATT_IS_UNBOUND (bitptr1, i))
+		{		/* element val is null? */
+		  if (OR_MULTI_ATT_IS_UNBOUND (bitptr2, i))
+		    {
+		      continue;
+		    }
+
+		  c = DB_LT;
+		  break;	/* exit for-loop */
+		}
+	      else if (OR_MULTI_ATT_IS_UNBOUND (bitptr2, i))
+		{
+		  c = DB_GT;
+		  break;	/* exit for-loop */
+		}
+	    }
+
+	  /* check for val1 and val2 same domain */
+	  c = (*(dom->type->index_cmpdisk)) (mem1, mem2, dom, 0, 1, NULL);
+	  assert (c == DB_LT || c == DB_EQ || c == DB_GT);
+
+	  if (c != DB_EQ)
+	    {
+	      break;		/* exit for-loop */
+	    }
+
+	  mem1 += pr_midxkey_element_disk_size (mem1, dom);
+	  mem2 += pr_midxkey_element_disk_size (mem2, dom);
+	}			/* for (i = 0; ... ) */
+      assert (c == DB_LT || c == DB_EQ || c == DB_GT);
+
+      if (dom && dom->is_desc)
+	{
+	  c = ((c == DB_GT) ? DB_LT : (c == DB_LT) ? DB_GT : c);
+	}
+    }
+  else
+    {
+      OR_BUF buf_val1, buf_val2;
+      DB_VALUE val1, val2;
+
+      OR_BUF_INIT (buf_val1, mem1, -1);
+      OR_BUF_INIT (buf_val2, mem2, -1);
+
+      if ((*(key_type->type->data_readval))
+	  (&buf_val1, &val1, key_type, -1, false, NULL, 0) != NO_ERROR)
+	{
+	  assert (false);
+	  return DB_UNK;
+	}
+
+      if ((*(key_type->type->data_readval))
+	  (&buf_val2, &val2, key_type, -1, false, NULL, 0) != NO_ERROR)
+	{
+	  assert (false);
+	  return DB_UNK;
+	}
+
+      c = btree_compare_key (&val1, &val2, key_type, 0, 1, NULL);
     }
 
-  if ((*(key_type->type->data_readval))
-      (&buf_val2, &val2, key_type, -1, false, NULL, 0) != NO_ERROR)
-    {
-      assert (false);
-      return DB_UNK;
-    }
-
-  c = btree_compare_key (&val1, &val2, key_type, 0, 1, NULL);
-  assert (c != DB_UNK);
+  assert (c == DB_LT || c == DB_EQ || c == DB_GT);
 
   return c;
 }

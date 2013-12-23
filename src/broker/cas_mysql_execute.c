@@ -2698,6 +2698,7 @@ cas_mysql_connect_db (char *alias, char *user, char *passwd)
   char dbname[MAX_DBNAME_LENGTH] = "";
   char host[MAX_HOSTNAME_LENGTH] = "";
   int port;
+  unsigned int read_timeout;
 
   _db_conn = mysql_init (NULL);
   if (_db_conn == NULL)
@@ -2714,6 +2715,13 @@ cas_mysql_connect_db (char *alias, char *user, char *passwd)
   mysql_options (_db_conn, MYSQL_SET_CHARSET_NAME, "utf8");
   mysql_options (_db_conn, MYSQL_INIT_COMMAND,
 		 "SET SESSION sql_mode=STRICT_TRANS_TABLES");
+
+  if (shm_appl->mysql_read_timeout > 0)
+    {
+      read_timeout = (unsigned int) shm_appl->mysql_read_timeout;
+      mysql_options (_db_conn, MYSQL_OPT_READ_TIMEOUT, &read_timeout);
+    }
+
   if (!mysql_real_connect
       (_db_conn, host, user, passwd, dbname, port, NULL,
        CLIENT_MULTI_STATEMENTS | CLIENT_FOUND_ROWS))
@@ -3276,8 +3284,10 @@ cas_mysql_set_mysql_wait_timeout (void)
     }
 
   wait_timeout = (int) strtol (row[1], &p, 10);
-  if (p != NULL)
+  if (p != NULL && *p != '\0')
     {
+      wait_timeout = MYSQL_DEFAULT_WAIT_TIMEOUT;
+
       goto release_and_return;
     }
 
@@ -3287,7 +3297,11 @@ cas_mysql_set_mysql_wait_timeout (void)
    * CAS will be stopped if there is no request 60 seconds.
    * so we cannot set mysql wait timeout under 60 seconds.
    */
-  if (wait_timeout < 60)
+  if (wait_timeout < 0)
+    {
+      wait_timeout = MYSQL_DEFAULT_WAIT_TIMEOUT;
+    }
+  else if (wait_timeout < 60)
     {
       wait_timeout = 60;
     }
@@ -3298,7 +3312,7 @@ release_and_return:
       mysql_free_result (res);
     }
 
-  mysql_wait_timeout = wait_timeout;
+  mysql_wait_timeout = MIN (wait_timeout, MYSQL_DEFAULT_WAIT_TIMEOUT);
 }
 
 int
@@ -3311,14 +3325,29 @@ int
 cas_mysql_execute_dummy (void)
 {
   int ret_val = 0;
+  MYSQL_RES *res = NULL;
+  MYSQL_ROW row;
 
-  ret_val = mysql_query (_db_conn, "select 1 from dual");
+  ret_val = mysql_query (_db_conn, "select 1 limit 0");
   if (ret_val != 0)
     {
       return -1;
     }
-  else
+
+  res = mysql_use_result (_db_conn);
+  if (res == NULL)
     {
-      return 0;
+      return -1;
     }
+
+  row = mysql_fetch_row (res);
+
+  assert (row == NULL);		/* we don't need to fetch row, just to avoid out of sync error */
+
+  if (res != NULL)
+    {
+      mysql_free_result (res);
+    }
+
+  return 0;
 }

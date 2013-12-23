@@ -126,6 +126,7 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
     case T_DATE_ADD:
     case T_DATE_SUB:
     case T_NEXT_VALUE:
+    case T_INDEX_PREFIX:
 
       /* fetch lhs, rhs, and third value */
       if (fetch_peek_dbval (thread_p, arithptr->leftptr,
@@ -2045,20 +2046,7 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
     case T_UTC_TIME:
       {
 	DB_TIME db_time;
-	DB_VALUE timezone;
-	int timezone_val;
-
-	db_time = vd->sys_datetime.time / 1000;
-
-	/* extract the timezone part */
-	if (db_sys_timezone (&timezone) != NO_ERROR)
-	  {
-	    goto error;
-	  }
-	timezone_val = DB_GET_INT (&timezone);
-	db_time = db_time + timezone_val * 60 + SECONDS_OF_ONE_DAY;
-	db_time = db_time % SECONDS_OF_ONE_DAY;
-
+	db_time = (DB_TIME) (vd->sys_epochtime % SECONDS_OF_ONE_DAY);
 	DB_MAKE_ENCODED_TIME (arithptr->value, &db_time);
 	break;
       }
@@ -3585,6 +3573,15 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 	  goto error;
 	}
       break;
+
+    case T_INDEX_PREFIX:
+      if (db_string_index_prefix (peek_left, peek_right, peek_third,
+				  arithptr->value) != NO_ERROR)
+	{
+	  goto error;
+	}
+      break;
+
 
     default:
       break;

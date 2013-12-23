@@ -320,6 +320,8 @@ extern int db_sys_date (DB_VALUE * result_date);
 extern int db_sys_time (DB_VALUE * result_time);
 extern int db_sys_timestamp (DB_VALUE * result_timestamp);
 extern int db_sys_datetime (DB_VALUE * result_datetime);
+extern int db_sys_date_and_epoch_time (DB_VALUE * dt_dbval,
+				       DB_VALUE * ts_dbval);
 extern int db_sys_timezone (DB_VALUE * result_timezone);
 extern int db_to_char (const DB_VALUE * src_value,
 		       const DB_VALUE * format_or_length,
@@ -470,4 +472,8 @@ extern int db_get_date_format (const DB_VALUE * format_str,
 			       TIMESTAMP_FORMAT * format);
 extern int db_get_cs_coll_info (DB_VALUE * result, const DB_VALUE * val,
 				const int mode);
+extern int db_string_index_prefix (const DB_VALUE * string1,
+				   const DB_VALUE * string2,
+				   const DB_VALUE * index_type,
+				   DB_VALUE * prefix_index);
 #endif /* _STRING_OPFUNC_H_ */

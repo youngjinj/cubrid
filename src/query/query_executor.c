@@ -75,6 +75,10 @@
 #include "partition.h"
 #include "tsc_timer.h"
 
+#if defined(ENABLE_SYSTEMTAP)
+#include "probes.h"
+#endif /* ENABLE_SYSTEMTAP */
+
 #define GOTO_EXIT_ON_ERROR \
   do \
     { \
@@ -859,10 +863,11 @@ static int qexec_analytic_sort_key_header_load (ANALYTIC_FUNCTION_STATE *
 						func_state, bool load_value);
 static int qexec_analytic_value_advance (THREAD_ENTRY * thread_p,
 					 ANALYTIC_FUNCTION_STATE * func_state,
-					 int amount, int max_group_changes);
+					 int amount, int max_group_changes,
+					 bool ignore_nulls);
 static int qexec_analytic_value_lookup (THREAD_ENTRY * thread_p,
 					ANALYTIC_FUNCTION_STATE * func_state,
-					int position);
+					int position, bool ignore_nulls);
 static int qexec_analytic_group_header_next (THREAD_ENTRY * thread_p,
 					     ANALYTIC_FUNCTION_STATE *
 					     func_state);
@@ -4338,10 +4343,12 @@ qexec_hash_gby_agg_tuple (THREAD_ENTRY * thread_p, XASL_STATE * xasl_state,
 	    }
 
 	  /* save output tuple */
-	  if (qfile_save_tuple
-	      (tpldesc, T_NORMAL, new_value->first_tuple.tpl,
-	       &tuple_size) != NO_ERROR)
+	  if (qfile_save_tuple (tpldesc, T_NORMAL, new_value->first_tuple.tpl,
+				&tuple_size) != NO_ERROR)
 	    {
+	      qdata_free_agg_hkey (thread_p, new_key);
+	      qdata_free_agg_hvalue (thread_p, new_value);
+
 	      return ER_FAILED;
 	    }
 
@@ -4980,7 +4987,7 @@ qexec_groupby (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   GROUPBY_STATE gbstate;
   QFILE_LIST_SCAN_ID input_scan_id;
   int ls_flag = 0;
-  int tuple_cnt = 0;
+  int estimated_pages;
 
   TSC_TICKS start_tick, end_tick;
   TSCTIMEVAL tv_diff;
@@ -5195,6 +5202,12 @@ qexec_groupby (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	  GOTO_EXIT_ON_ERROR;
 	}
 
+      estimated_pages =
+	qfile_get_estimated_pages_for_sorting (gbstate.agg_hash_context->
+					       part_list_id,
+					       &gbstate.agg_hash_context->
+					       sort_key);
+
       /* choose appripriate sort function */
       if (gbstate.agg_hash_context->sort_key.use_original)
 	{
@@ -5206,13 +5219,7 @@ qexec_groupby (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	}
 
       /* sort and aggregate partial results */
-      if (sort_listfile (thread_p, NULL_VOLID,
-			 qfile_get_estimated_pages_for_sorting (gbstate.
-								agg_hash_context->
-								part_list_id,
-								&gbstate.
-								agg_hash_context->
-								sort_key),
+      if (sort_listfile (thread_p, NULL_VOLID, estimated_pages,
 			 &qexec_hash_gby_get_next, &gbstate,
 			 &qexec_hash_gby_put_next, &gbstate,
 			 cmp_fn, &gbstate.agg_hash_context->sort_key,
@@ -5312,10 +5319,10 @@ qexec_groupby (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       gbstate.upd_del_class_cnt = 0;
     }
 
-  if (sort_listfile (thread_p, NULL_VOLID,
-		     qfile_get_estimated_pages_for_sorting (list_id,
-							    &gbstate.
-							    key_info),
+  estimated_pages = qfile_get_estimated_pages_for_sorting (list_id,
+							   &gbstate.key_info);
+
+  if (sort_listfile (thread_p, NULL_VOLID, estimated_pages,
 		     &qexec_gby_get_next, &gbstate, &qexec_gby_put_next,
 		     &gbstate, gbstate.cmp_fn, &gbstate.key_info, SORT_DUP,
 		     NO_SORT_LIMIT) != NO_ERROR)
@@ -15211,6 +15218,14 @@ qexec_execute_query (THREAD_ENTRY * thread_p, XASL_NODE * xasl, int dbval_cnt,
   int amount_qlist_exit;
   int amount_qlist_new;
 #endif /* NDEBUG */
+#if defined(ENABLE_SYSTEMTAP)
+  LOG_TDES *tdes = NULL;
+  QMGR_TRAN_ENTRY *tran_entry_p = NULL;
+  QMGR_QUERY_ENTRY *query_p = NULL;
+  char *query_str = NULL;
+  int client_id = -1;
+  char *db_user = NULL;
+#endif /* ENABLE_SYSTEMTAP */
 
 #if defined(CUBRID_DEBUG)
   {
@@ -15286,11 +15301,43 @@ qexec_execute_query (THREAD_ENTRY * thread_p, XASL_NODE * xasl, int dbval_cnt,
    */
   er_clear ();
 
+#if defined(ENABLE_SYSTEMTAP)
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+  tdes = LOG_FIND_TDES (tran_index);
+  tran_entry_p = qmgr_get_tran_entry (tran_index);
+
+  if (tdes != NULL)
+    {
+      client_id = tdes->client_id;
+      db_user = tdes->client.db_user;
+    }
+
+  query_p = tran_entry_p->query_entry_list_p;
+  while (query_p && query_p->query_id != query_id)
+    {
+      query_p = query_p->next;
+    }
+
+  if (query_p != NULL)
+    {
+      XASL_CACHE_ENTRY *xasl_ent = NULL;
+
+      xasl_ent = query_p->xasl_ent;
+      if (xasl_ent != NULL)
+	{
+	  query_str = xasl_ent->sql_info.sql_user_text;
+	}
+    }
+  CUBRID_QUERY_EXEC_START (query_str, query_id, client_id, db_user);
+#endif /* ENABLE_SYSTEMTAP */
+
   /* form the value descriptor to represent positional values */
   xasl_state.vd.dbval_cnt = dbval_cnt;
   xasl_state.vd.dbval_ptr = (DB_VALUE *) dbval_ptr;
   ftime (&tloc);
   c_time_struct = localtime_r (&tloc.time, &tm_val);
+
+  xasl_state.vd.sys_epochtime = tloc.time;
 
   if (c_time_struct != NULL)
     {
@@ -15460,6 +15507,11 @@ qexec_execute_query (THREAD_ENTRY * thread_p, XASL_NODE * xasl, int dbval_cnt,
 		}
 #endif /* NDEBUG */
 
+#if defined(ENABLE_SYSTEMTAP)
+	      CUBRID_QUERY_EXEC_END (query_str, query_id, client_id, db_user,
+				     1);
+#endif /* ENABLE_SYSTEMTAP */
+
 	      /* caller will detect the error condition and free the listid */
 	      return list_id;
 	    }			/* if-else */
@@ -15532,6 +15584,16 @@ qexec_execute_query (THREAD_ENTRY * thread_p, XASL_NODE * xasl, int dbval_cnt,
   }
 #endif /* CUBRID_DEBUG */
 
+#if defined(ENABLE_SYSTEMTAP)
+  /*if (qmgr_get_query_error_with_id (thread_p, query_id) < 0)
+     {
+     CUBRID_QUERY_EXEC_END (query_str, query_id, client_id, db_user, 1);
+     }
+     else
+     { */
+  CUBRID_QUERY_EXEC_END (query_str, query_id, client_id, db_user, 0);
+  // }
+#endif /* ENABLE_SYSTEMTAP */
   return list_id;
 }
 
@@ -20989,15 +21051,34 @@ bf2df_str_cmpdisk (void *mem1, void *mem2, TP_DOMAIN * domain,
 		   int do_coercion, int total_order, int *start_colp)
 {
   int c = DB_UNK;
+  char *str1, *str2;
   int str_length1, str_length2;
   OR_BUF buf1, buf2;
   int rc = NO_ERROR;
 
-  or_init (&buf1, (char *) mem1, 0);
+  str1 = (char *) mem1;
+  str2 = (char *) mem2;
+
+  /* generally, data is short enough
+   */
+  str_length1 = OR_GET_BYTE (str1);
+  str_length2 = OR_GET_BYTE (str2);
+  if (str_length1 < 0xFF && str_length2 < 0xFF)
+    {
+      str1 += OR_BYTE_SIZE;
+      str2 += OR_BYTE_SIZE;
+      c = bf2df_str_compare ((unsigned char *) str1, str_length1,
+			     (unsigned char *) str2, str_length2);
+      return c;
+    }
+
+  assert (str_length1 == 0xFF || str_length2 == 0xFF);
+
+  or_init (&buf1, str1, 0);
   str_length1 = or_get_varchar_length (&buf1, &rc);
   if (rc == NO_ERROR)
     {
-      or_init (&buf2, (char *) mem2, 0);
+      or_init (&buf2, str2, 0);
       str_length2 = or_get_varchar_length (&buf2, &rc);
       if (rc == NO_ERROR)
 	{
@@ -22106,6 +22187,7 @@ qexec_execute_analytic (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   QFILE_LIST_SCAN_ID input_scan_id, interm_scan_id;
   OUTPTR_LIST *a_outptr_list;
   int ls_flag = 0;
+  int estimated_pages;
 
   /* fetch regulist and outlist */
   a_outptr_list =
@@ -22240,15 +22322,15 @@ qexec_execute_analytic (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
    * Now load up the sort module and set it off...
    */
 
+  estimated_pages =
+    qfile_get_estimated_pages_for_sorting (list_id, &analytic_state.key_info);
+
   /* number of sort keys is always less than list file column count, as
    * sort columns are included */
   analytic_state.key_info.use_original = 1;
   analytic_state.cmp_fn = &qfile_compare_partial_sort_record;
 
-  if (sort_listfile (thread_p, NULL_VOLID,
-		     qfile_get_estimated_pages_for_sorting (list_id,
-							    &analytic_state.
-							    key_info),
+  if (sort_listfile (thread_p, NULL_VOLID, estimated_pages,
 		     &qexec_analytic_get_next, &analytic_state,
 		     &qexec_analytic_put_next, &analytic_state,
 		     analytic_state.cmp_fn, &analytic_state.key_info,
@@ -22826,7 +22908,7 @@ qexec_analytic_put_next (THREAD_ENTRY * thread_p, const RECDES * recdes,
 					      analytic_state->xasl_state,
 					      func_state, recdes, true);
 		}
-	      else if (QPROC_ANALYTIC_HAS_SUBPARTITIONS (func_state->func_p))
+	      else if (func_state->func_p->function != PT_NTILE)
 		{
 		  if (qexec_analytic_finalize_group
 		      (thread_p, analytic_state->xasl_state, func_state,
@@ -22895,7 +22977,9 @@ qexec_analytic_eval_instnum_pred (THREAD_ENTRY * thread_p,
       ANALYTIC_TYPE *func_p = analytic_state->func_state_list[i].func_p;
 
       if (QPROC_ANALYTIC_IS_OFFSET_FUNCTION (func_p)
-	  || func_p->function == PT_NTILE)
+	  || func_p->function == PT_NTILE
+	  || func_p->function == PT_FIRST_VALUE
+	  || func_p->function == PT_LAST_VALUE)
 	{
 	  /* inst_num() predicate is evaluated at group processing for these
 	     functions, as the result is computed at this stage using all
@@ -23365,6 +23449,7 @@ qexec_analytic_evaluate_offset_function (THREAD_ENTRY * thread_p,
   TP_DOMAIN_STATUS dom_status;
   double nth_idx = 0.0;
   char buf[64];
+  bool put_default = false;
 
   if (func_state == NULL)
     {
@@ -23384,7 +23469,7 @@ qexec_analytic_evaluate_offset_function (THREAD_ENTRY * thread_p,
     }
 
   /* determine which tuple count to use */
-  if (QPROC_ANALYTIC_IGNORE_NULLS (func_p))
+  if (func_p->ignore_nulls)
     {
       group_tuple_count = func_state->curr_group_tuple_count_nn;
     }
@@ -23526,13 +23611,31 @@ qexec_analytic_evaluate_offset_function (THREAD_ENTRY * thread_p,
   /* put value */
   if (target_idx >= 0 && target_idx < group_tuple_count)
     {
-      if (qexec_analytic_value_lookup (thread_p, func_state, target_idx) !=
-	  NO_ERROR)
+      if (qexec_analytic_value_lookup
+	  (thread_p, func_state, target_idx,
+	   func_p->ignore_nulls) != NO_ERROR)
 	{
 	  return ER_FAILED;
 	}
+
+      if (func_p->function == PT_NTH_VALUE)
+	{
+	  /* when using ORDER BY on NTH_VALUE, value will be NULL until that
+	     value is reached */
+	  if ((func_p->sort_prefix_size != func_p->sort_list_size)
+	      && (func_state->group_consumed_tuples
+		  < func_state->group_tuple_position))
+	    {
+	      put_default = true;
+	    }
+	}
     }
   else
+    {
+      put_default = true;
+    }
+
+  if (put_default)
     {
       /* coerce value to default domain */
       dom_status = tp_value_coerce (default_val_p, &default_val,
@@ -23652,14 +23755,7 @@ qexec_analytic_evaluate_median_function (THREAD_ENTRY * thread_p,
     }
 
   /* get target row */
-  if (QPROC_ANALYTIC_IGNORE_NULLS (func_p))
-    {
-      row_num_d = ((double) (func_state->curr_group_tuple_count_nn - 1)) / 2;
-    }
-  else
-    {
-      row_num_d = ((double) (func_state->curr_group_tuple_count - 1)) / 2;
-    }
+  row_num_d = ((double) (func_state->curr_group_tuple_count_nn - 1)) / 2;
   f_row_num_d = floor (row_num_d);
   c_row_num_d = ceil (row_num_d);
 
@@ -23669,7 +23765,7 @@ qexec_analytic_evaluate_median_function (THREAD_ENTRY * thread_p,
       /* we have an odd number of rows, median is middle row's value;
          fetch it */
       if (qexec_analytic_value_lookup
-	  (thread_p, func_state, (int) f_row_num_d) != NO_ERROR)
+	  (thread_p, func_state, (int) f_row_num_d, true) != NO_ERROR)
 	{
 	  return ER_FAILED;
 	}
@@ -23690,7 +23786,7 @@ qexec_analytic_evaluate_median_function (THREAD_ENTRY * thread_p,
       DB_MAKE_NULL (&f_value);
 
       if (qexec_analytic_value_lookup
-	  (thread_p, func_state, (int) f_row_num_d) != NO_ERROR)
+	  (thread_p, func_state, (int) f_row_num_d, true) != NO_ERROR)
 	{
 	  return ER_FAILED;
 	}
@@ -23700,7 +23796,7 @@ qexec_analytic_evaluate_median_function (THREAD_ENTRY * thread_p,
 	}
 
       if (qexec_analytic_value_lookup
-	  (thread_p, func_state, (int) c_row_num_d) != NO_ERROR)
+	  (thread_p, func_state, (int) c_row_num_d, true) != NO_ERROR)
 	{
 	  return ER_FAILED;
 	}
@@ -23793,7 +23889,8 @@ qexec_analytic_sort_key_header_load (ANALYTIC_FUNCTION_STATE * func_state,
   func_state->curr_sort_key_tuple_count = OR_GET_INT (tuple_p);
   tuple_p += DB_ALIGN (tp_Integer.disksize, MAX_ALIGNMENT);
 
-  if (!load_value && !QPROC_ANALYTIC_IGNORE_NULLS (func_state->func_p))
+  if (!load_value && !func_state->func_p->ignore_nulls
+      && func_state->func_p->function != PT_MEDIAN)
     {
       /* we're not counting NULLs and we're not using the value */
       return NO_ERROR;
@@ -23838,11 +23935,13 @@ qexec_analytic_sort_key_header_load (ANALYTIC_FUNCTION_STATE * func_state,
  *   func_state(in): function state
  *   amount(in): amount to advance (can also be negative)
  *   max_group_changes(in): maximum number of group changes
+ *   ignore_nulls(in): if true, execution will skip NULL values
  */
 static int
 qexec_analytic_value_advance (THREAD_ENTRY * thread_p,
 			      ANALYTIC_FUNCTION_STATE * func_state,
-			      int amount, int max_group_changes)
+			      int amount, int max_group_changes,
+			      bool ignore_nulls)
 {
   SCAN_CODE sc = S_SUCCESS;
 
@@ -23975,7 +24074,7 @@ qexec_analytic_value_advance (THREAD_ENTRY * thread_p,
 	    }
 	  else
 	    {
-	      if (!QPROC_ANALYTIC_IGNORE_NULLS (func_state->func_p))
+	      if (!ignore_nulls)
 		{
 		  amount--;
 		}
@@ -23990,7 +24089,7 @@ qexec_analytic_value_advance (THREAD_ENTRY * thread_p,
 	    }
 	  else
 	    {
-	      if (!QPROC_ANALYTIC_IGNORE_NULLS (func_state->func_p))
+	      if (!ignore_nulls)
 		{
 		  amount++;
 		}
@@ -24001,8 +24100,7 @@ qexec_analytic_value_advance (THREAD_ENTRY * thread_p,
   if (amount != 0)
     {
       /* target was not hit */
-      if (func_state->curr_group_tuple_count_nn == 0
-	  && QPROC_ANALYTIC_IGNORE_NULLS (func_state->func_p))
+      if (func_state->curr_group_tuple_count_nn == 0 && ignore_nulls)
 	{
 	  /* current group has only NULL values, so result will be NULL */
 	  return NO_ERROR;
@@ -24027,15 +24125,16 @@ qexec_analytic_value_advance (THREAD_ENTRY * thread_p,
  *   thread_p(in): thread
  *   func_state(in): function state
  *   position(in): position to seek
+ *   ignore_nulls(in): if true, execution will skip NULL values
  */
 static int
 qexec_analytic_value_lookup (THREAD_ENTRY * thread_p,
 			     ANALYTIC_FUNCTION_STATE * func_state,
-			     int position)
+			     int position, bool ignore_nulls)
 {
   int offset = position;
 
-  if (QPROC_ANALYTIC_IGNORE_NULLS (func_state->func_p))
+  if (ignore_nulls)
     {
       offset -= func_state->group_tuple_position_nn;
     }
@@ -24046,7 +24145,8 @@ qexec_analytic_value_lookup (THREAD_ENTRY * thread_p,
 
   if (offset != 0)
     {
-      return qexec_analytic_value_advance (thread_p, func_state, offset, 0);
+      return qexec_analytic_value_advance (thread_p, func_state, offset, 0,
+					   ignore_nulls);
     }
   else
     {
@@ -24069,18 +24169,11 @@ qexec_analytic_group_header_next (THREAD_ENTRY * thread_p,
 
   assert (func_state != NULL);
 
-  if (QPROC_ANALYTIC_IGNORE_NULLS (func_state->func_p))
-    {
-      pos = func_state->group_tuple_position_nn;
-      count = func_state->curr_group_tuple_count_nn;
-    }
-  else
-    {
-      pos = func_state->group_tuple_position;
-      count = func_state->curr_group_tuple_count;
-    }
+  pos = func_state->group_tuple_position;
+  count = func_state->curr_group_tuple_count;
 
-  return qexec_analytic_value_advance (thread_p, func_state, count - pos, 1);
+  return qexec_analytic_value_advance (thread_p, func_state, count - pos, 1,
+				       false);
 }
 
 /*
@@ -24232,7 +24325,8 @@ qexec_analytic_update_group_result (THREAD_ENTRY * thread_p,
 		{
 		  /* first scan, load first value */
 		  rc =
-		    qexec_analytic_value_advance (thread_p, func_state, 1, 1);
+		    qexec_analytic_value_advance (thread_p, func_state, 1, 1,
+						  func_p->ignore_nulls);
 		  if (rc != NO_ERROR)
 		    {
 		      goto cleanup;
@@ -24251,21 +24345,9 @@ qexec_analytic_update_group_result (THREAD_ENTRY * thread_p,
 		  func_state->group_consumed_tuples = 0;
 		}
 	    }
-	  else if (func_state->func_p->function != PT_FIRST_VALUE
-		   && func_state->func_p->function != PT_LAST_VALUE
-		   && func_state->func_p->function != PT_MEDIAN)
+	  else if (func_state->func_p->function == PT_MEDIAN)
 	    {
-	      /* if the function does not seek results in the list file, we
-	         are in charge of advancing */
-	      rc = qexec_analytic_value_advance (thread_p, func_state, 1, 1);
-	      if (rc != NO_ERROR)
-		{
-		  goto cleanup;
-		}
-	    }
-	  else
-	    {
-	      /* FIRST_VALUE, LAST_VALUE or MEDIAN; check for group end */
+	      /* MEDIAN, check for group end */
 	      if (func_state->group_consumed_tuples >=
 		  func_state->curr_group_tuple_count)
 		{
@@ -24277,6 +24359,28 @@ qexec_analytic_update_group_result (THREAD_ENTRY * thread_p,
 		      goto cleanup;
 		    }
 		  func_state->group_consumed_tuples = 0;
+		}
+	    }
+	  else
+	    {
+	      bool ignore_nulls = func_p->ignore_nulls;
+
+	      if (func_p->function == PT_FIRST_VALUE
+		  || func_p->function == PT_LAST_VALUE)
+		{
+		  /* for FIRST_VALUE and LAST_VALUE, the IGNORE NULLS logic
+		     resides at evaluation time */
+		  ignore_nulls = false;
+		}
+
+	      /* if the function does not seek results in the list file, we
+	         are in charge of advancing */
+	      rc =
+		qexec_analytic_value_advance (thread_p, func_state, 1, 1,
+					      ignore_nulls);
+	      if (rc != NO_ERROR)
+		{
+		  goto cleanup;
 		}
 	    }
 

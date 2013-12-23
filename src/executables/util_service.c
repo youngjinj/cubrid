@@ -1068,14 +1068,18 @@ check_all_services_status (unsigned int sleep_time,
       return false;
     }
 
-  if (strcmp (get_property (SERVICE_START_SERVER), PROPERTY_ON) == 0)
+  if (strcmp (get_property (SERVICE_START_SERVER), PROPERTY_ON) == 0
+      && us_Property_map[SERVER_START_LIST].property_value != NULL)
     {
-      char buf[4096] = { '\0' };
+      char buf[4096];
       char *list, *token, *save;
       const char *delim = " ,:";
 
+      memset (buf, '\0', sizeof (buf));
+
       strncpy (buf, us_Property_map[SERVER_START_LIST].property_value,
 	       sizeof (buf) - 1);
+
       for (list = buf;; list = NULL)
 	{
 	  token = strtok_r (list, delim, &save);
@@ -1178,8 +1182,9 @@ process_service (int command_type, bool process_window_service)
 
 	      if (strcmp (get_property (SERVICE_START_SERVER),
 			  PROPERTY_ON) == 0
-		  && strlen (us_Property_map[SERVER_START_LIST].
-			     property_value) != 0)
+		  && us_Property_map[SERVER_START_LIST].property_value != NULL
+		  && us_Property_map[SERVER_START_LIST].property_value[0] !=
+		  '\0')
 		{
 		  (void) process_server (command_type, 0, NULL, false, true,
 					 false);
@@ -1217,7 +1222,7 @@ process_service (int command_type, bool process_window_service)
       if (process_window_service)
 	{
 #if defined(WINDOWS)
-	  if (is_windows_service_running (0, process_window_service))
+	  if (is_windows_service_running (0))
 	    {
 	      const char *args[] =
 		{ UTIL_WIN_SERVICE_CONTROLLER_NAME, PRINT_CMD_SERVICE,
@@ -1247,8 +1252,9 @@ process_service (int command_type, bool process_window_service)
 	    {
 	      if (strcmp (get_property (SERVICE_START_SERVER),
 			  PROPERTY_ON) == 0
-		  && strlen (us_Property_map[SERVER_START_LIST].
-			     property_value) != 0)
+		  && us_Property_map[SERVER_START_LIST].property_value != NULL
+		  && us_Property_map[SERVER_START_LIST].property_value[0] !=
+		  '\0')
 		{
 		  (void) process_server (command_type, 0, NULL, false, true,
 					 false);
@@ -1448,11 +1454,16 @@ process_server (int command_type, int argc, char **argv,
   int status = NO_ERROR;
   int master_port = prm_get_master_port_id ();
 
+  memset (buf, '\0', sizeof (buf));
+
   /* A string is copyed because strtok_r() modify an original string. */
   if (argc == 0)
     {
-      strncpy (buf, us_Property_map[SERVER_START_LIST].property_value,
-	       sizeof (buf) - 1);
+      if (us_Property_map[SERVER_START_LIST].property_value != NULL)
+	{
+	  strncpy (buf, us_Property_map[SERVER_START_LIST].property_value,
+		   sizeof (buf) - 1);
+	}
     }
   else
     {
@@ -2528,7 +2539,6 @@ us_hb_copylogdb_start (dynamic_array * pids, HA_CONF * ha_conf,
 		      status = ER_GENERIC_ERROR;
 		      goto ret;
 		    }
-
 		}
 	      else
 		{
@@ -3043,7 +3053,7 @@ us_hb_process_start (HA_CONF * ha_conf, const char *db_name,
       goto ret;
     }
 
-  sleep (3);
+  sleep (HB_START_WAITING_TIME_IN_SECS);
   if (check_result == true)
     {
       for (i = 0; i < da_size (pids); i++)
@@ -3104,11 +3114,34 @@ us_hb_process_copylogdb (int command_type, HA_CONF * ha_conf,
 			 const char *db_name, const char *node_name)
 {
   int status = NO_ERROR;
+  int i, pid;
+  dynamic_array *pids = NULL;
 
   switch (command_type)
     {
     case START:
-      status = us_hb_copylogdb_start (NULL, ha_conf, db_name, node_name);
+      pids = da_create (100, sizeof (int));
+      if (pids == NULL)
+	{
+	  status = ER_GENERIC_ERROR;
+	  goto ret;
+	}
+
+      status = us_hb_copylogdb_start (pids, ha_conf, db_name, node_name);
+
+      sleep (HB_START_WAITING_TIME_IN_SECS);
+      for (i = 0; i < da_size (pids); i++)
+	{
+	  da_get (pids, i, &pid);
+	  if (is_terminated_process (pid))
+	    {
+	      (void) us_hb_copylogdb_stop (ha_conf, db_name, node_name);
+
+	      status = ER_GENERIC_ERROR;
+	      break;
+	    }
+	}
+
       break;
 
     case STOP:
@@ -3120,6 +3153,12 @@ us_hb_process_copylogdb (int command_type, HA_CONF * ha_conf,
       break;
     }
 
+ret:
+  if (pids)
+    {
+      da_destroy (pids);
+    }
+
   return status;
 }
 
@@ -3128,11 +3167,34 @@ us_hb_process_applylogdb (int command_type, HA_CONF * ha_conf,
 			  const char *db_name, const char *node_name)
 {
   int status = NO_ERROR;
+  int i, pid;
+  dynamic_array *pids = NULL;
 
   switch (command_type)
     {
     case START:
-      status = us_hb_applylogdb_start (NULL, ha_conf, db_name, node_name);
+      pids = da_create (100, sizeof (int));
+      if (pids == NULL)
+	{
+	  status = ER_GENERIC_ERROR;
+	  goto ret;
+	}
+
+      status = us_hb_applylogdb_start (pids, ha_conf, db_name, node_name);
+
+      sleep (HB_START_WAITING_TIME_IN_SECS);
+      for (i = 0; i < da_size (pids); i++)
+	{
+	  da_get (pids, i, &pid);
+	  if (is_terminated_process (pid))
+	    {
+	      (void) us_hb_applylogdb_stop (ha_conf, db_name, node_name);
+
+	      status = ER_GENERIC_ERROR;
+	      break;
+	    }
+	}
+
       break;
 
     case STOP:
@@ -3142,6 +3204,12 @@ us_hb_process_applylogdb (int command_type, HA_CONF * ha_conf,
     default:
       status = ER_GENERIC_ERROR;
       break;
+    }
+
+ret:
+  if (pids)
+    {
+      da_destroy (pids);
     }
 
   return status;
@@ -3674,13 +3742,12 @@ load_properties (void)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
 		  1, strlen (value) + 1);
-	  us_Property_map[SERVER_START_LIST].property_value = "";
 	  return ER_OUT_OF_VIRTUAL_MEMORY;
 	}
     }
   else
     {
-      us_Property_map[SERVER_START_LIST].property_value = "";
+      us_Property_map[SERVER_START_LIST].property_value = NULL;
     }
 
   return NO_ERROR;
@@ -3701,7 +3768,7 @@ finalize_properties (void)
     {
       if (us_Property_map[i].property_value != NULL)
 	{
-	  free ((void *) us_Property_map[i].property_value);
+	  free_and_init (us_Property_map[i].property_value);
 	}
     }
 }
