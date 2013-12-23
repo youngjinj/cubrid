@@ -737,7 +737,7 @@ locator_lock (MOP mop, LOCK lock)
   cache_lock.isolation = TM_TRAN_ISOLATION ();
 
   /* Find the cache coherency numbers for fetching purposes */
-  if (object == NULL && WS_ISMARK_DELETED (mop))
+  if (object == NULL && WS_IS_DELETED (mop))
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
 	      oid->volid, oid->pageid, oid->slotid);
@@ -1069,7 +1069,7 @@ locator_lock_set (int num_mops, MOP * vector_mop, LOCK reqobj_inst_lock,
 
 	  /* Find the cache coherency numbers for fetching purposes */
 
-	  if (object == NULL && WS_ISMARK_DELETED (mop))
+	  if (object == NULL && WS_IS_DELETED (mop))
 	    {
 	      if (quit_on_errors == false)
 		{
@@ -1345,7 +1345,7 @@ locator_set_chn_classes_objects (LC_LOCKSET * lockset)
 	      || (xmop = ws_mop (&lockset->objects[i].oid, NULL)) == NULL
 	      || ws_find (xmop, &object) == WS_FIND_MOP_DELETED
 	      || (xmop = ws_mop (class_oid, sm_Root_class_mop)) == NULL
-	      || WS_ISMARK_DELETED (xmop))
+	      || WS_IS_DELETED (xmop))
 	    {
 	      OID_SET_NULL (&lockset->objects[i].oid);
 	    }
@@ -2021,7 +2021,7 @@ locator_lock_and_doesexist (MOP mop, LOCK lock)
   cache_lock.isolation = TM_TRAN_ISOLATION ();
 
   /* Find the cache coherency numbers for fetching purposes */
-  if (object == NULL && WS_ISMARK_DELETED (mop))
+  if (object == NULL && WS_IS_DELETED (mop))
     {
       return LC_DOESNOT_EXIST;
     }
@@ -3078,7 +3078,7 @@ locator_find_class_by_oid (MOP * class_mop, const char *classname,
     {
     case LC_CLASSNAME_EXIST:
       *class_mop = ws_mop (class_oid, sm_Root_class_mop);
-      if (*class_mop == NULL || WS_ISMARK_DELETED (*class_mop))
+      if (*class_mop == NULL || WS_IS_DELETED (*class_mop))
 	{
 	  *class_mop = NULL;
 	  if (er_errid () == ER_OUT_OF_VIRTUAL_MEMORY)
@@ -3193,7 +3193,7 @@ locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
       goto end;
     }
 
-  if (WS_ISMARK_DELETED (*class_mop))
+  if (WS_IS_DELETED (*class_mop))
     {
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
 	      ER_LC_UNKNOWN_CLASSNAME, 1, classname);
@@ -4738,7 +4738,7 @@ locator_mflush (MOP mop, void *mf)
        */
       decache = mflush->decache;
       mflush->decache = false;
-      if (WS_ISMARK_DELETED (class_mop))
+      if (WS_IS_DELETED (class_mop))
 	{
 	  status = locator_mflush (class_mop, mf);
 	  mflush->decache = decache;
@@ -5180,6 +5180,7 @@ locator_internal_flush_instance (MOP inst_mop, bool decache)
       return ER_OBJ_INVALID_ARGUMENTS;
     }
 
+  inst_mop = ws_mvcc_latest_version(inst_mop);
 retry:
   if (WS_ISDIRTY (inst_mop)
       && (ws_find (inst_mop, &inst) == WS_FIND_MOP_DELETED || inst != NULL))
@@ -5658,7 +5659,7 @@ locator_add_class (MOBJ class_obj, const char *classname)
   class_mop = ws_find_class (classname);
   if (class_mop != NULL && ws_get_lock (class_mop) != NULL_LOCK)
     {
-      if (!WS_ISMARK_DELETED (class_mop))
+      if (!WS_IS_DELETED (class_mop))
 	{
 	  /* The class already exist.. since it is cached */
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_CLASSNAME_EXIST, 1,
@@ -6065,7 +6066,7 @@ locator_prepare_rename_class (MOP class_mop, const char *old_classname,
       && tmp_class_mop != NULL
       && tmp_class_mop != class_mop
       && ws_get_lock (tmp_class_mop) != NULL_LOCK
-      && !WS_ISMARK_DELETED (tmp_class_mop))
+      && !WS_IS_DELETED (tmp_class_mop))
     {
       /* The class already exist.. since it is cached */
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_CLASSNAME_EXIST, 1,

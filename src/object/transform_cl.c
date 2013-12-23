@@ -250,7 +250,7 @@ tf_find_temporary_oids (LC_OIDSET * oidset, MOBJ classobj, MOBJ obj)
 	      oid = &mem->oid;
 
 	      if (OID_ISTEMP (oid) && mem->pointer != NULL
-		  && !mem->pointer->deleted)
+		  && !WS_IS_DELETED (mem->pointer))
 		{
 
 		  /* Make sure the ws_memoid mop is temporary. */

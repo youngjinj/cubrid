@@ -3520,7 +3520,7 @@ db_get_all_chosen_classes (int (*p) (MOBJ o))
 	  for (i = 0; i < lmops->num; i++)
 	    {
 	      /* is it necessary to have this check ? */
-	      if (!WS_MARKED_DELETED (lmops->mops[i]) &&
+	      if (!WS_IS_DELETED (lmops->mops[i]) &&
 		  lmops->mops[i] != sm_Root_class_mop)
 		{
 		  /* should have a ext_ append function */

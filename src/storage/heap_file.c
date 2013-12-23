@@ -12954,6 +12954,9 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	      if (OID_ISNULL (&current_oid))
 		{
 		  /* No next version, stop here */
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			  ER_HEAP_UNKNOWN_OBJECT, 3, current_oid.volid,
+			  current_oid.pageid, current_oid.slotid);
 		  scan = S_DOESNT_EXIST;
 		  break_loop = true;
 		}
@@ -27793,6 +27796,7 @@ heap_mvcc_reev_cond_assigns (THREAD_ENTRY * thread_p, OID * class_oid,
 
   if (mvcc_reev_data->new_recdes == NULL)
     {
+      /* Seems that the caller wants to reevaluate only the condition */
       goto end;
     }
 

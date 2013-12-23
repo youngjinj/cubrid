@@ -779,9 +779,7 @@ mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header)
       /* Record was already deleted */
       if (MVCC_IS_REC_DELETED_BY_ME (thread_p, rec_header))
 	{
-	  /* Record was already deleted by me... This case should be filtered
-	   * by scan phase and it should never get here. Be conservative.
-	   */
+	  /* Record was already deleted by me... */
 	  return DELETE_RECORD_DELETED;
 	}
       else if (MVCC_IS_REC_DELETER_ACTIVE (thread_p, rec_header))

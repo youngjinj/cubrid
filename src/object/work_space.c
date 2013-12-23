@@ -3240,7 +3240,7 @@ ws_decache (MOP mop)
 	    {
 	      obj_free_memory ((SM_CLASS *) mop->class_mop->object,
 			       (MOBJ) mop->object);
-	      if (mop->deleted)
+	      if (WS_IS_DELETED (mop))
 		{
 		  remove_class_object (mop->class_mop, mop);
 		}
@@ -3339,7 +3339,7 @@ ws_identifier_with_check (MOP mop, const bool check_non_referable)
   OID *oid = NULL;
   MOP class_mop;
 
-  if (mop == NULL || WS_MARKED_DELETED (mop))
+  if (mop == NULL || WS_IS_DELETED (mop))
     {
       goto end;
     }
@@ -3624,7 +3624,7 @@ ws_find (MOP mop, MOBJ * obj)
   mop = ws_mvcc_latest_version (mop);
 
   *obj = NULL;
-  if (mop && !mop->deleted)
+  if (mop && !WS_IS_DELETED (mop))
     {
       *obj = (MOBJ) mop->object;
     }
@@ -4119,7 +4119,7 @@ ws_describe_mop (MOP mop, void *args)
     {
       fprintf (stdout, " dirty");
     }
-  if (mop->deleted)
+  if (WS_IS_DELETED (mop))
     {
       fprintf (stdout, " deleted");
     }
@@ -4328,7 +4328,7 @@ ws_dump (FILE * fpp)
   for (m = ws_Resident_classes; m != NULL; m = m->next)
     {
       mop = m->op;
-      if (mop->deleted)
+      if (WS_IS_DELETED (mop))
 	{
 	  deleted++;
 	}
@@ -4540,10 +4540,10 @@ ws_flush_properties (MOP op)
 int
 ws_has_dirty_objects (MOP op, int *isvirt)
 {
-  *isvirt = (op && !op->deleted && op->object
+  *isvirt = (op && !WS_IS_DELETED (op) && op->object
 	     && (((SM_CLASS *) (op->object))->class_type == SM_VCLASS_CT));
 
-  return (op && !op->deleted && op->object && op->dirty_link
+  return (op && !WS_IS_DELETED (op) && op->object && op->dirty_link
 	  && op->dirty_link != Null_object);
 }
 
@@ -5937,6 +5937,35 @@ ws_is_dirty (MOP mop)
 {
   mop = ws_mvcc_latest_version (mop);
   return mop->dirty;
+}
+
+/*
+ * ws_is_deleted () - Is object deleted.
+ *
+ * return   : True if deleted, false otherwise
+ * mop (in) : Checked object (latest mvcc version is checked).
+ */
+int
+ws_is_deleted (MOP mop)
+{
+  mop = ws_mvcc_latest_version (mop);
+  return mop->deleted;
+}
+
+/*
+ * ws_set_deleted () - Marks an object as deleted
+ *
+ * return   :
+ * mop (in) : Object to be set as deleted
+ *
+ * Note: Latest mvcc version is marked
+ */
+void
+ws_set_deleted (MOP mop)
+{
+  mop = ws_mvcc_latest_version (mop);
+  mop->deleted = 1;
+  WS_PUT_COMMIT_MOP (mop);
 }
 
 /*

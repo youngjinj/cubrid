@@ -4925,7 +4925,7 @@ check_set_object (DB_VALUE * var, int *removed_ptr)
     }
   mop = ws_mvcc_latest_version (mop);
 
-  if (!mop->deleted)
+  if (!WS_IS_DELETED (mop))
     {
       if (mop->is_vid)
 	{

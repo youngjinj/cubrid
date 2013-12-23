@@ -6297,7 +6297,7 @@ setof_mop_to_setof_vobj (PARSER_CONTEXT * parser, DB_SET * seq,
 		  goto failure;
 		}
 
-	      if (WS_MARKED_DELETED (obj))
+	      if (WS_IS_DELETED (obj))
 		{
 		  db_value_domain_init (new_elem, DB_TYPE_OBJECT,
 					DB_DEFAULT_PRECISION,
@@ -20245,7 +20245,7 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
   int error = NO_ERROR;
   PT_NODE *hint_arg, *node;
   float hint_wait_secs;
-  bool has_partitioned = false;
+  bool has_partitioned = false, abort_reevaluation = false;
 
   assert (parser != NULL && statement != NULL);
 
@@ -20337,6 +20337,47 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 	      NULL))
 	{
 	  goto error_return;
+	}
+
+      if (aptr_statement->info.query.q.select.group_by != NULL)
+	{
+	  /* remove reevaluation flags if we have GROUP BY because the locking will be
+	   * made at SELECT stage */
+	  abort_reevaluation = true;
+	}
+      else
+	{
+	  /* if at least one table involved in reevaluation is a derived table then
+	   * abort reevaluation and force locking on select */
+	  for (cl_name_node = aptr_statement->info.query.q.select.from;
+	       cl_name_node != NULL; cl_name_node = cl_name_node->next)
+	    {
+	      if (cl_name_node->info.spec.derived_table != NULL
+		  && (cl_name_node->info.spec.
+		      flag | PT_SPEC_FLAG_MVCC_COND_REEV))
+		{
+		  PT_SELECT_INFO_SET_FLAG (aptr_statement,
+					   PT_SELECT_INFO_MVCC_LOCK_NEEDED);
+		  abort_reevaluation = true;
+		  break;
+		}
+	    }
+	}
+
+      if (abort_reevaluation)
+	{
+	  /* In order to abort reevaluation is enough to clear reevaluation flags
+	   * from all specs (from both, delete and select statements)*/
+	  for (cl_name_node = aptr_statement->info.query.q.select.from;
+	       cl_name_node != NULL; cl_name_node = cl_name_node->next)
+	    {
+	      cl_name_node->info.spec.flag &= ~PT_SPEC_FLAG_MVCC_COND_REEV;
+	    }
+	  for (cl_name_node = from; cl_name_node != NULL;
+	       cl_name_node = cl_name_node->next)
+	    {
+	      cl_name_node->info.spec.flag &= ~PT_SPEC_FLAG_MVCC_COND_REEV;
+	    }
 	}
 
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
@@ -20738,7 +20779,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   float hint_wait_secs;
   int *mvcc_assign_extra_classes = NULL;
   bool mvcc_enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
-  bool has_partitioned = false;
+  bool has_partitioned = false, abort_reevaluation = false;
 
 
   assert (parser != NULL && statement != NULL);
@@ -20786,7 +20827,9 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
    * in UPDATE will be handled in future */
   if (mvcc_enabled && !has_partitioned)
     {
-      /* Flag specs that are referenced in conditions and assignments */
+      /* Flag specs that are referenced in conditions and assignments. This must
+       * be done before the generation of select statement, otherwise it will
+       * be difficult to flag specs from select statement */
 
       error = pt_mvcc_flag_specs_cond_reev (parser, from, where);
       if (error != NO_ERROR)
@@ -20833,23 +20876,6 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       goto cleanup;
     }
 
-  /* remove reevaluation flags if we have GROUP BY because the locking will be
-   * made at SELECT stage */
-  if (aptr_statement->info.query.q.select.group_by != NULL)
-    {
-      for (p = aptr_statement->info.query.q.select.from; p != NULL;
-	   p = p->next)
-	{
-	  p->info.spec.flag &=
-	    ~(PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV);
-	}
-      for (p = from; p != NULL; p = p->next)
-	{
-	  p->info.spec.flag &=
-	    ~(PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV);
-	}
-    }
-
   error = pt_copy_upddel_hints_to_select (parser, statement, aptr_statement);
   if (error != NO_ERROR)
     {
@@ -20866,6 +20892,49 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
 	}
       goto cleanup;
+    }
+
+  if (aptr_statement->info.query.q.select.group_by != NULL)
+    {
+      /* remove reevaluation flags if we have GROUP BY because the locking will be
+       * made at SELECT stage */
+      abort_reevaluation = true;
+    }
+  else
+    {
+      /* if at least one table involved in reevaluation is a derived table then
+       * abort reevaluation and force locking on select */
+      for (p = aptr_statement->info.query.q.select.from; p != NULL;
+	   p = p->next)
+	{
+	  if (p->info.spec.derived_table != NULL
+	      && (p->info.spec.
+		  flag | PT_SPEC_FLAG_MVCC_COND_REEV |
+		  PT_SPEC_FLAG_MVCC_ASSIGN_REEV))
+	    {
+	      PT_SELECT_INFO_SET_FLAG (aptr_statement,
+				       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
+	      abort_reevaluation = true;
+	      break;
+	    }
+	}
+    }
+
+  if (abort_reevaluation)
+    {
+      /* In order to abort reevaluation is enough to clear reevaluation flags
+       * from all specs (from both, update and select statements)*/
+      for (p = aptr_statement->info.query.q.select.from; p != NULL;
+	   p = p->next)
+	{
+	  p->info.spec.flag &=
+	    ~(PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV);
+	}
+      for (p = from; p != NULL; p = p->next)
+	{
+	  p->info.spec.flag &=
+	    ~(PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV);
+	}
     }
 
   if (mvcc_enabled)

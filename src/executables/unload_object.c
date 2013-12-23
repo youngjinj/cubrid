@@ -620,7 +620,7 @@ extractobjects (const char *exec_name)
 #endif /* CUBRID_DEBUG */
   for (i = 0; i < class_table->num; i++)
     {
-      if (WS_MARKED_DELETED (class_table->mops[i]) ||
+      if (WS_IS_DELETED (class_table->mops[i]) ||
 	  class_table->mops[i] == sm_Root_class_mop)
 	{
 	  continue;
@@ -932,7 +932,7 @@ extractobjects (const char *exec_name)
     {
       for (i = 0; i < class_table->num; i++)
 	{
-	  if (!WS_MARKED_DELETED (class_table->mops[i]) &&
+	  if (!WS_IS_DELETED (class_table->mops[i]) &&
 	      class_table->mops[i] != sm_Root_class_mop)
 	    {
 	      int ret_val;

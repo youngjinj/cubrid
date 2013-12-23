@@ -1131,8 +1131,7 @@ get_object_value (MOP op, SM_ATTRIBUTE * att, char *mem,
   /* check for existence of the object
    * this is expensive so only do this if enabled by a parameter.
    */
-  if (current != NULL && current->object == NULL
-      && !WS_ISMARK_DELETED (current))
+  if (current != NULL && current->object == NULL && !WS_IS_DELETED (current))
     {
       if (WS_ISVID (current))
 	{
@@ -1164,7 +1163,7 @@ get_object_value (MOP op, SM_ATTRIBUTE * att, char *mem,
 	}
     }
 
-  if (current != NULL && WS_ISMARK_DELETED (current))
+  if (current != NULL && WS_IS_DELETED (current))
     {
       /* convert deleted MOPs to NULL values */
       DB_MAKE_NULL (dest);
@@ -4492,7 +4491,7 @@ obj_isclass (MOP obj)
       if (locator_is_class (obj, DB_FETCH_READ))
 	{
 	  /* make sure it isn't deleted */
-	  if (!WS_ISMARK_DELETED (obj))
+	  if (!WS_IS_DELETED (obj))
 	    {
 	      status = locator_does_exist_object (obj, DB_FETCH_READ);
 	      if (status == LC_DOESNOT_EXIST)
@@ -4539,7 +4538,7 @@ obj_isinstance (MOP obj)
 	   * before declaring this an instance, we have to make sure it
 	   * isn't deleted
 	   */
-	  else if (!WS_ISMARK_DELETED (obj))
+	  else if (!WS_IS_DELETED (obj))
 	    {
 	      if (WS_ISVID (obj))
 		{

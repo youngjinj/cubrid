@@ -3584,7 +3584,7 @@ get_grants (MOP auth, DB_SET ** grant_ptr, int filter)
       if (DB_VALUE_TYPE (&value) == DB_TYPE_OBJECT && !DB_IS_NULL (&value))
 	{
 	  grantor = db_pull_object (&value);
-	  if (WS_ISMARK_DELETED (grantor))
+	  if (WS_IS_DELETED (grantor))
 	    {
 	      grantor = NULL;
 	    }
@@ -3603,7 +3603,7 @@ get_grants (MOP auth, DB_SET ** grant_ptr, int filter)
 	      && !DB_IS_NULL (&value))
 	    {
 	      class_ = db_pull_object (&value);
-	      if (WS_ISMARK_DELETED (class_))
+	      if (WS_IS_DELETED (class_))
 		{
 		  class_ = NULL;
 		}
@@ -5733,7 +5733,7 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
 
   if (class_ == NULL)
     {
-      /* does it make sense to check WS_ISMARK_DELETED here ? */
+      /* does it make sense to check WS_IS_DELETED here ? */
       error = er_errid ();
       /* !!! do we need to mask the error here ? */
 
@@ -5804,7 +5804,7 @@ au_fetch_class (MOP op, SM_CLASS ** class_ptr, AU_FETCHMODE fetchmode,
   op = ws_mvcc_latest_version (op);
 
   if (fetchmode != AU_FETCH_READ	/* not just reading */
-      || op->deleted		/* marked deleted */
+      || WS_IS_DELETED (op)	/* marked deleted */
       || op->object == NULL	/* never been fetched */
       || op->class_mop != sm_Root_class_mop	/* not a class */
       || op->lock < SCH_S_LOCK)	/* don't have the lowest level lock */
@@ -5969,7 +5969,7 @@ fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE fetchmode)
 
   if (obj == NULL)
     {
-      /* does it make sense to check WS_ISMARK_DELETED here ? */
+      /* does it make sense to check WS_IS_DELETED here ? */
       error = er_errid ();
 
       /*

@@ -1036,11 +1036,11 @@ vid_compare_non_updatable_objects (MOP mop1, MOP mop2)
 	  attobj2 = DB_GET_OBJECT (&val2);
 	  db_value_put_null (&val1);
 	  db_value_put_null (&val2);
-	  if (attobj1 != NULL && WS_ISMARK_DELETED (attobj1))
+	  if (attobj1 != NULL && WS_IS_DELETED (attobj1))
 	    {
 	      attobj1 = NULL;
 	    }
-	  if (attobj2 != NULL && WS_ISMARK_DELETED (attobj2))
+	  if (attobj2 != NULL && WS_IS_DELETED (attobj2))
 	    {
 	      attobj2 = NULL;
 	    }

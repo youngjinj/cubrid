@@ -3266,7 +3266,7 @@ help_fprint_all_classes (FILE * fp)
 	{
 	  for (i = 0; i < lmops->num; i++)
 	    {
-	      if (!WS_MARKED_DELETED (lmops->mops[i]))
+	      if (!WS_IS_DELETED (lmops->mops[i]))
 		{
 		  help_fprint_obj (fp, lmops->mops[i]);
 		}
@@ -3299,7 +3299,7 @@ help_fprint_resident_instances (FILE * fp, MOP op)
 
   if (locator_is_class (op, DB_FETCH_QUERY_READ))
     {
-      if (!WS_MARKED_DELETED (op))
+      if (!WS_IS_DELETED (op))
 	classmop = op;
     }
   else
@@ -3318,7 +3318,7 @@ help_fprint_resident_instances (FILE * fp, MOP op)
 	{
 	  for (i = 0; i < lmops->num; i++)
 	    {
-	      if (!WS_MARKED_DELETED (lmops->mops[i]))
+	      if (!WS_IS_DELETED (lmops->mops[i]))
 		{
 		  help_fprint_obj (fp, lmops->mops[i]);
 		}

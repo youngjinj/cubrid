@@ -4744,7 +4744,7 @@ mr_data_lengthval_object (DB_VALUE * value, int disk)
   if (DB_VALUE_TYPE (value) == DB_TYPE_OBJECT && disk)
     {
       mop = db_get_object (value);
-      if ((mop == NULL) || (mop->deleted))
+      if ((mop == NULL) || (WS_IS_DELETED (mop)))
 	{
 	  /* The size of a NULL is OR_OID_SIZE, which is already set
 	   * (from Jeff L.) */
@@ -4788,7 +4788,7 @@ mr_data_writemem_object (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
       /* Temporary oid, must get a permanent one.
          This should only happen if the MOID has a valid MOP.
          Check for deletion */
-      if ((mem->pointer == NULL) || (mem->pointer->deleted))
+      if ((mem->pointer == NULL) || (WS_IS_DELETED (mem->pointer)))
 	{
 	  oidp = (OID *) & oid_Null_oid;
 	  er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
@@ -4812,7 +4812,7 @@ mr_data_writemem_object (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
   else
     {
       /* normal OID check for deletion */
-      if ((mem->pointer != NULL) && (mem->pointer->deleted))
+      if ((mem->pointer != NULL) && (WS_IS_DELETED (mem->pointer)))
 	oidp = (OID *) & oid_Null_oid;
     }
 
@@ -4885,7 +4885,7 @@ mr_data_writeval_object (OR_BUF * buf, DB_VALUE * value)
   if (DB_VALUE_TYPE (value) == DB_TYPE_OBJECT)
     {
       mop = db_get_object (value);
-      if ((mop == NULL) || (mop->deleted))
+      if ((mop == NULL) || (WS_IS_DELETED (mop)))
 	{
 	  rc = or_put_oid (buf, (OID *) & oid_Null_oid);
 	}

@@ -360,15 +360,9 @@ typedef struct mop_iterator
     }                                \
   } while (0)
 
-#define WS_ISMARK_DELETED(mop) ((mop)->deleted)
-#define WS_MARKED_DELETED(mop) ((mop)->deleted)
+#define WS_IS_DELETED(mop) (ws_is_deleted(mop))
 
-#define WS_SET_DELETED(mop)          \
-  do {                               \
-    assert ((mop)->mvcc_link == NULL); \
-    (mop)->deleted = 1;              \
-    WS_PUT_COMMIT_MOP(mop);          \
-  } while (0)
+#define WS_SET_DELETED(mop) (ws_set_deleted(mop))
 
 #define WS_ISVID(mop) ((mop)->is_vid)
 /*
@@ -406,7 +400,7 @@ typedef struct mop_iterator
  */
 
 #define WS_MOP_IS_NULL(mop)                                          \
-  (((mop == NULL) || WS_ISMARK_DELETED(mop) ||                       \
+  (((mop == NULL) || WS_IS_DELETED(mop) ||			     \
     (OID_ISNULL(&(mop)->oid_info.oid) && !(mop)->is_vid)) ? 1 : 0)
 
 /*
@@ -549,6 +543,8 @@ extern void ws_gc_disable (void);
 /* Dirty list maintenance */
 extern void ws_dirty (MOP op);
 extern int ws_is_dirty (MOP mop);
+extern int ws_is_deleted (MOP mop);
+extern void ws_set_deleted (MOP mop);
 extern void ws_clean (MOP op);
 extern int ws_map_dirty (MAPFUNC function, void *args,
 			 bool reverse_dirty_link);

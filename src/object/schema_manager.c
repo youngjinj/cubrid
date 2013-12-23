@@ -2370,7 +2370,7 @@ sm_fetch_all_classes (int external_list, DB_FETCH_MODE purpose)
 	  for (i = 0; i < lmops->num; i++)
 	    {
 	      /* is it necessary to have this check ? */
-	      if (!WS_MARKED_DELETED (lmops->mops[i])
+	      if (!WS_IS_DELETED (lmops->mops[i])
 		  && lmops->mops[i] != sm_Root_class_mop)
 		{
 		  if (!external_list)
@@ -2455,7 +2455,7 @@ sm_fetch_all_base_classes (int external_list, DB_FETCH_MODE purpose)
 	  for (i = 0; i < lmops->num; i++)
 	    {
 	      /* is it necessary to have this check ? */
-	      if (!WS_MARKED_DELETED (lmops->mops[i])
+	      if (!WS_IS_DELETED (lmops->mops[i])
 		  && lmops->mops[i] != sm_Root_class_mop)
 		{
 		  error = au_fetch_class_force (lmops->mops[i], &class_,
@@ -2623,7 +2623,7 @@ sm_fetch_all_objects (DB_OBJECT * op, DB_FETCH_MODE purpose)
 		  for (i = 0; i < lmops->num; i++)
 		    {
 		      /* is it necessary to have this check ? */
-		      if (!WS_MARKED_DELETED (lmops->mops[i]))
+		      if (!WS_IS_DELETED (lmops->mops[i]))
 			{
 			  new_ = ml_ext_alloc_link ();
 			  if (new_ == NULL)
@@ -2832,7 +2832,7 @@ sm_mark_system_classes (void)
 	{
 	  for (i = 0; i < lmops->num; i++)
 	    {
-	      if (!WS_MARKED_DELETED (lmops->mops[i]) && lmops->mops[i]
+	      if (!WS_IS_DELETED (lmops->mops[i]) && lmops->mops[i]
 		  != sm_Root_class_mop)
 		{
 		  if (au_fetch_class_force (lmops->mops[i], &class_,
@@ -3936,7 +3936,7 @@ sm_update_all_statistics (bool with_fullscan)
       /* Need to reset the statistics cache for all resident classes */
       for (cl = ws_Resident_classes; cl != NULL; cl = cl->next)
 	{
-	  if (!WS_ISMARK_DELETED (cl->op))
+	  if (!WS_IS_DELETED (cl->op))
 	    {
 	      /* uncache statistics only if object is cached - MOP trickery */
 	      if (cl->op->object != NULL)
@@ -4368,7 +4368,7 @@ alter_trigger_hierarchy (DB_OBJECT * classop,
   error = au_fetch_class_force (classop, &class_, mode);
   if (error != NO_ERROR)
     {
-      if (WS_ISMARK_DELETED (classop))
+      if (WS_IS_DELETED (classop))
 	{
 	  error = NO_ERROR;	/* in this case, just ignore the error */
 	}
@@ -12237,7 +12237,7 @@ lock_subclasses_internal (SM_TEMPLATE * def, MOP op,
       error = au_fetch_class_force (op, &class_, AU_FETCH_WRITE);
       if (error != NO_ERROR)
 	{
-	  if (WS_ISMARK_DELETED (op))
+	  if (WS_IS_DELETED (op))
 	    /* in this case, just ignore the error */
 	    error = NO_ERROR;
 	}

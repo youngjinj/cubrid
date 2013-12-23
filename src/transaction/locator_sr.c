@@ -4530,6 +4530,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 		      MVCC_REEV_DATA mvcc_reev_data, *p_mvcc_reev_data = NULL;
 		      if (!mvcc_Enabled)
 			{
+			  /* In MVCC lobs should be deleted by vacuum */
 			  if (lob_exist)
 			    {
 			      error_code = locator_delete_lob_force (thread_p,
@@ -4545,6 +4546,12 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 			}
 		      else
 			{
+			  /* The relationship between primary key and foreign
+			   * key must be reevaluated so we provide to
+			   * reevaluation the primary key. That's because
+			   * between fetch of foreign keys and the deletion the
+			   * foreign keys can be modified by other
+			   * transactions */
 			  p_mvcc_reev_data = &mvcc_reev_data;
 			  SET_MVCC_UPDATE_REEV_DATA (p_mvcc_reev_data, NULL,
 						     V_TRUE, key);
@@ -4561,6 +4568,8 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 							 p_mvcc_reev_data);
 		      if (error_code == ER_MVCC_ROW_ALREADY_DELETED)
 			{
+			  /* skip foreign keys that were already deleted. For
+			   * example the "cross type" reference */
 			  error_code = NO_ERROR;
 			}
 		      else if (error_code != NO_ERROR)
@@ -5883,6 +5892,12 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	      if (er_errid () == ER_HEAP_NODATA_NEWADDRESS)
 		{
 		  is_update_inplace = true;
+		  /* The object is a new instance, that is only the address (no
+		   * content) is known by the heap manager. This is a normal
+		   * behaviour and, if we have an index, we need to add the
+		   * object to the index later. Because the following processing
+		   * can remove this error, we save it here in
+		   * no_data_new_address */
 		  no_data_new_address = true;
 		  er_clear ();
 		}
@@ -5908,6 +5923,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	      or_mvcc_get_header (oldrecdes, &old_rec_header);
 	      if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, &old_rec_header))
 		{
+		  /* When the row was inserted by me then just overwrite */
 		  is_update_inplace = true;
 		}
 	    }
@@ -6009,6 +6025,12 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	      else if (er_errid () == ER_HEAP_NODATA_NEWADDRESS)
 		{
 		  er_clear ();
+		  /* The object is a new instance, that is only the address (no
+		   * content) is known by the heap manager. This is a normal
+		   * behaviour and, if we have an index, we need to add the
+		   * object to the index later. Because the following processing
+		   * can remove this error, we save it here in
+		   * no_data_new_address */
 		  no_data_new_address = true;
 		}
 	      else
@@ -6139,7 +6161,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    }
 	}
 
-      /* in non-mvcc update indexes and then heap */
+      /* in non-mvcc or when we update in place then update indexes and then
+       * heap */
       if (is_update_inplace)
 	{
 	  if (heap_perform_update
@@ -6515,6 +6538,7 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
        */
       if (isold_object == true && has_index)
 	{
+	  /* if MVCC then delete before updating index */
 	  if (mvcc_Enabled
 	      && !heap_is_mvcc_disabled_for_class (thread_p, &class_oid))
 	    {
@@ -8450,7 +8474,10 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 	  pk_btid_index = i;
 	}
 
-      /* check for specified update attributes */
+      /* check for specified update attributes. In MVCC, we can have a new OID
+       * after UPDATE that must be reflected in B-tree because vacuum can delete
+       * old key. So, in this case we must update index even if no attribute
+       * that is part of index was updated */
       if (att_id && (!mvcc_Enabled
 		     || heap_is_mvcc_disabled_for_class (thread_p, class_oid)
 		     || OID_EQ (old_oid, new_oid)))

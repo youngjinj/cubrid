@@ -5660,7 +5660,7 @@ its_deleted (DB_OBJECT * object)
   if (object != NULL)
     {
       /* fast way */
-      deleted = WS_ISMARK_DELETED (object);
+      deleted = WS_IS_DELETED (object);
 
       /* Slow but safe way */
 #if 0

@@ -2559,7 +2559,7 @@ obt_apply_assignments (OBJ_TEMPLATE * template_ptr, int check_uniques,
 		    au_fetch_instance_force (object, &mobj, AU_FETCH_UPDATE);
 		  if (error != NO_ERROR)
 		    {
-		      if (WS_ISMARK_DELETED (object))
+		      if (WS_IS_DELETED (object))
 			{
 			  if (trstate != NULL)
 			    {
