@@ -1457,6 +1457,9 @@
 
 #define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1144
 
+#define ER_AU_CANT_ALTER_OWNER_OF_SYSTEM_CLASS      -1145
+#define ER_DIAG_VOLID_NOT_EXIST                     -1146
+
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001
 

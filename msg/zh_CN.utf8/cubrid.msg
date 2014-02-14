@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Last Error
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 请检测符号 '%1$s' 的正确性.
 4 'read uncommitted schema' 是不可接受的, 使用 \n'read committed schema' 来代替.
 5 最大字符串长度是 16383.
-6 %s 超过了限制 %lld.
+6 %s 超过了限制 %s.
 7 最大比特字符串长度是 %1$d 比特.
 8 无法在join的条件语句中使用子查询.
 9 无法指定属性 "(%1$s)" 在更新grant/revoke的私有分句.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 非法使用排序规则\n  COLLATION ( expression )\n
 119 非法使用clob_to_char\n  CLOB_TO_CHAR ( expression [using charset] )\n
 120 非法使用index_prefix\n  INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 内存耗尽.
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 用户 %1$s 没有在数据库中.
 44 Update语句中不能使用聚合函数.
 45 在每一个类中属性名必须唯一. 属性名 '%s' 在类 '%s' 被多于一次的指定.
-46  %1$s 有多个指派.
+46  %1$s.%2$s 有多个指派.
 47 sort spec 中的数字不是整数.
 48 在sort spec中 %1$d 超出了范围.
 49 Order by item 不是一个整数.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 虚拟内存耗尽: 无法申请 %1$d 字节.

@@ -30,12 +30,12 @@
 
 #define bool char
 
-#ifdef WINDOWS
+#if defined(WINDOWS) && !defined(__GNUC__)
 #define int32_t __int32
 #define int64_t __int64
 #define u_int32_t unsigned __int32
 #define u_int64_t unsigned __int64
-#endif
+#endif /* WINDOWS && !__GNUC__ */
 
 
 #ifdef NO_ERROR
@@ -1457,9 +1457,13 @@
 
 #define ERR_CSS_TCP_CONNECT_TIMEDOUT                -1144
 
-#define ER_MVCC_ROW_ALREADY_DELETED		    -2000
+#define ER_AU_CANT_ALTER_OWNER_OF_SYSTEM_CLASS      -1145
+#define ER_DIAG_VOLID_NOT_EXIST                     -1146
 
-#define ER_LAST_ERROR                               -2001
+#define ER_MVCC_ROW_ALREADY_DELETED		    -2000
+#define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001
+
+#define ER_LAST_ERROR                               -2002
 
 #define DB_TRUE 1
 #define DB_FALSE 0
@@ -1621,6 +1625,13 @@ typedef enum
   DB_COL_FUNC,
   DB_COL_OTHER
 } DB_COL_TYPE;
+
+typedef enum db_class_modification_status
+{
+  DB_CLASS_NOT_MODIFIED,
+  DB_CLASS_MODIFIED,
+  DB_CLASS_ERROR
+} DB_CLASS_MODIFICATION_STATUS;
 
 typedef enum
 {
@@ -2851,6 +2862,7 @@ extern int db_make_method_error (DB_VALUE * value,
 extern int db_make_short (DB_VALUE * value, const DB_C_SHORT num);
 extern int db_make_bigint (DB_VALUE * value, const DB_BIGINT num);
 extern int db_make_string (DB_VALUE * value, const char *str);
+extern int db_make_string_copy (DB_VALUE * value, const char *str);
 extern int db_make_numeric (DB_VALUE * value,
 			    const DB_C_NUMERIC num,
 			    const int precision, const int scale);
@@ -3897,6 +3909,9 @@ extern int db_execute_statement (DB_SESSION * session,
 extern int db_execute_and_keep_statement (DB_SESSION * session,
 					  int stmt,
 					  DB_QUERY_RESULT ** result);
+extern DB_CLASS_MODIFICATION_STATUS db_has_modified_class (DB_SESSION *
+							   session,
+							   int stmt_id);
 
 extern int db_query_get_info (DB_QUERY_RESULT * result,
 			      int *done, int *count,

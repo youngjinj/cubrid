@@ -84,7 +84,6 @@ extern const char TEXT_CONSTRAINT_PREFIX[];
 extern MOP sm_Root_class_mop;
 extern HFID *sm_Root_class_hfid;
 extern const char *sm_Root_class_name;
-extern bool sm_Disable_updating_statistics;
 
 extern int sm_finish_class (SM_TEMPLATE * template_, MOP * classmop);
 extern int sm_update_class (SM_TEMPLATE * template_, MOP * classmop);
@@ -334,6 +333,8 @@ extern bool classobj_is_exist_foreign_key_ref (MOP refop,
 
 extern int classobj_put_foreign_key_ref (DB_SEQ ** properties,
 					 SM_FOREIGN_KEY_INFO * fk_info);
+extern int classobj_rename_foreign_key_ref (DB_SEQ ** properties,
+					    char *old_name, char *new_name);
 extern int classobj_drop_foreign_key_ref (DB_SEQ ** properties, BTID * btid);
 
 /* currently this is a private function to be called only by AU_SET_USER */
@@ -345,5 +346,8 @@ extern void sm_free_function_index_info (SM_FUNCTION_INFO * func_index_info);
 extern void sm_free_filter_index_info (SM_PREDICATE_INFO * filter_index_info);
 
 extern bool sm_is_global_only_constraint (SM_CLASS_CONSTRAINT * constraint);
+
+extern int sm_rename_foreign_key_ref (MOP ref_clsop, char *old_name,
+				      char *new_name);
 
 #endif /* _SCHEMA_MANAGER_H_ */

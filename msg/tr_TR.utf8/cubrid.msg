@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Son Hata
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 Lütfen '%1$s' belirteç doğruluğunu kontrol edin.
 4 'kaydedilmemiş şema okuma' kabul edilemez, kullanarak \n'kaydedilmemiş şema okuma' yerine.
 5 Maksimum karakter dize uzunluğu 16383.
-6 %s, %lld sınırını aşarsa .
+6 %s, %s sınırını aşarsa .
 7 En fazla bit dize uzunluğu %1$d bits.
 8 Join koşulu yan tümcesinde bir alt sorgu kullanamazsınız.
 9 Güncelleştirme ayrıcalığı maddesinin öznitelik "(%1$s)" belirlemek durumu grant/revoke edemezsiniz.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 derlemenin geçersiz kullanımı \n COLLATION ( expression )\n
 119 clob_to_char geçersiz kullanımı\n CLOB_TO_CHAR ( expression [using charset] )\n
 120 index_prefix geçersiz kullanımı\n INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 Bellek yetersiz.
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 Kullanıcı %1$s veritabanında değil.
 44 Güncelleme kümeleme içeremez.
 45 Her sınıfta özniteliği adlarının benzersiz olması gerekir. Öznitelik adı '%s' sınıf '%s' bir kereden fazla belirtildi.
-46 %1$s birden fazla atama var..
+46 %1$s.%2$s birden fazla atama var..
 47 Sıralama özellikleri sayısı bir tamsayı değildir.
 48 Sıralama özellikleri %1$d aralık dışında.
 49 Öğe tarafindan bir tamsayı değildir.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Sanal bellek yetersiz: %1$d bayt bölüm ayıramadı.

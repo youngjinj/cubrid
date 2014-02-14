@@ -57,6 +57,7 @@
 #include "xasl_generation.h"
 #include "schema_manager.h"
 #include "object_print.h"
+#include "show_meta.h"
 
 #define DEFAULT_VAR "."
 
@@ -235,6 +236,18 @@ static PT_NODE *pt_process_spec_for_delete (PARSER_CONTEXT * parser,
 					    PT_NODE * spec);
 static PT_NODE *pt_process_spec_for_update (PARSER_CONTEXT * parser,
 					    PT_NODE * spec, PT_NODE * name);
+static bool check_arg_valid (PARSER_CONTEXT * parser,
+			     SHOWSTMT_NAMED_ARG * arg_meta, int arg_num,
+			     PT_NODE * val);
+static PT_NODE *pt_resolve_showstmt_args_unnamed (PARSER_CONTEXT * parser,
+						  SHOWSTMT_NAMED_ARG *
+						  arg_infos,
+						  int arg_info_count,
+						  PT_NODE * args);
+static PT_NODE *pt_resolve_showstmt_args_named (PARSER_CONTEXT * parser,
+						SHOWSTMT_NAMED_ARG *
+						arg_infos, int arg_info_count,
+						PT_NODE * args);
 #define NULL_ATTRID -1
 
 /*
@@ -544,6 +557,26 @@ pt_tuple_value (PARSER_CONTEXT * parser, PT_NODE * name, CURSOR_ID * cursor_p,
 }
 
 /*
+ * pt_insert_value () - Creates an insert value setting node argument as
+ *			original node.
+ *
+ * return      : PT_INSERT_VALUE node.
+ * parser (in) : Parser context.
+ * node (in)   : Original node.
+ */
+PT_NODE *
+pt_insert_value (PARSER_CONTEXT * parser, PT_NODE * node)
+{
+  PT_NODE *insert_val = parser_new_node (parser, PT_INSERT_VALUE);
+  if (insert_val != NULL)
+    {
+      parser_init_node (insert_val);
+      insert_val->info.insert_value.original_node = node;
+    }
+  return insert_val;
+}
+
+/*
  * pt_datatypes_match () -
  *   return:  1 if the two data types are not virtual objects or the same
  * 	      class of virtual object.  0 otherwise.
@@ -850,6 +883,7 @@ pt_find_aggregate_names (PARSER_CONTEXT * parser, PT_NODE * tree,
   PT_AGG_NAME_INFO *info = (PT_AGG_NAME_INFO *) arg;
   PT_NODE *node = NULL, *select_stack;
   int level = 0;
+  bool max_level_has_gby = false;
 
   switch (tree->node_type)
     {
@@ -895,11 +929,23 @@ pt_find_aggregate_names (PARSER_CONTEXT * parser, PT_NODE * tree,
 	{
 	  /* found! */
 	  info->max_level = level;
+	  max_level_has_gby = (select->info.query.q.select.group_by != NULL);
 	}
 
       /* next stack level */
       select_stack = select_stack->next;
       level++;
+    }
+
+  /* Note: we need to deal with corelated queries when an aggregate
+   *       function in the subquery contains arguments in outer-level 
+   *       queries. For example:
+   *            'select (select sum(t1.i) from t2) from t1;'
+   *       It should be evaluted over the rows of the nearest outer level.
+   */
+  if (!max_level_has_gby)
+    {
+      info->max_level = level - 1;
     }
 
   return tree;
@@ -4170,6 +4216,32 @@ regu_outlist_init (OUTPTR_LIST * ptr)
 }
 
 /*
+ * regu_outlistptr_array_alloc () - Allocate an array of OUTPTR_LIST pointers.
+ *
+ * return	 : Allocated memory pointer.
+ * int size (in) : Array size.
+ */
+OUTPTR_LIST **
+regu_outlistptr_array_alloc (int size)
+{
+  OUTPTR_LIST **ptr;
+
+  if (size == 0)
+    return NULL;
+
+  ptr = (OUTPTR_LIST **) pt_alloc_packing_buf (sizeof (OUTPTR_LIST *) * size);
+  if (ptr == NULL)
+    {
+      regu_set_error_with_zero_args (ER_REGU_NO_SPACE);
+      return NULL;
+    }
+  else
+    {
+      return ptr;
+    }
+}
+
+/*
  *       	   MEMORY FUNCTIONS FOR EXPRESSION STRUCTURES
  */
 
@@ -4795,6 +4867,11 @@ regu_spec_init (ACCESS_SPEC_TYPE * ptr, TARGET_TYPE type)
       ptr->s.list_node.list_regu_list_pred = NULL;
       ptr->s.list_node.list_regu_list_rest = NULL;
       ACCESS_SPEC_XASL_NODE (ptr) = NULL;
+    }
+  else if (type == TARGET_SHOWSTMT)
+    {
+      ptr->s.showstmt_node.show_type = SHOWSTMT_NULL;
+      ptr->s.showstmt_node.arg_list = NULL;
     }
   else if (type == TARGET_SET)
     {
@@ -6367,7 +6444,7 @@ pt_rewrite_to_auto_param (PARSER_CONTEXT * parser, PT_NODE * value)
   int count_to_realloc = 0;
   DB_VALUE *larger_host_variables = NULL;
 
-  assert (pt_is_const_not_hostvar (value) && !PT_IS_NULL_NODE (value));
+  assert (pt_is_const_not_hostvar (value));
 
   /* The index number of auto-parameterized host variables starts after the last
      one of the user-specified host variables. */
@@ -6444,7 +6521,6 @@ pt_copy_statement_flags (PT_NODE * source, PT_NODE * destination)
 {
   destination->recompile = source->recompile;
   destination->cannot_prepare = source->cannot_prepare;
-  destination->do_not_keep = source->do_not_keep;
   destination->si_datetime = source->si_datetime;
   destination->si_tran_id = source->si_tran_id;
 }
@@ -8667,6 +8743,386 @@ pt_make_query_show_table (PARSER_CONTEXT * parser,
 }
 
 /*
+ * check_arg_valid() - check argument type and set error code if not valid
+ *
+ *   return: true - valid, false - not valid, semantic check error will set when return false.
+ *   parser(in):
+ *   arg_meta(in): argument validation rule
+ *   arg_num(in): argument sequence
+ *   val(in): argument value node
+ */
+static bool
+check_arg_valid (PARSER_CONTEXT * parser, SHOWSTMT_NAMED_ARG * arg_meta,
+		 int arg_num, PT_NODE * val)
+{
+  bool valid = false;
+
+  switch (arg_meta->type)
+    {
+    case AVT_INTEGER:
+      if (PT_IS_VALUE_NODE (val) && val->type_enum == PT_TYPE_INTEGER)
+	{
+	  valid = true;
+	}
+      else if (arg_meta->optional && PT_IS_NULL_NODE (val))
+	{
+	  valid = true;
+	}
+
+      if (!valid)
+	{
+	  /* expect unsigned integer value in here */
+	  PT_ERRORmf2 (parser, val, MSGCAT_SET_PARSER_SEMANTIC,
+		       MSGCAT_SEMANTIC_UNEXPECTED_NTH_ARGUMENT,
+		       "positive integer value", arg_num);
+	}
+      break;
+
+    case AVT_STRING:
+      if (PT_IS_VALUE_NODE (val) && val->type_enum == PT_TYPE_CHAR)
+	{
+	  valid = true;
+	}
+      else if (arg_meta->optional && PT_IS_NULL_NODE (val))
+	{
+	  valid = true;
+	}
+
+      if (!valid)
+	{
+	  /* expect string value in here */
+	  PT_ERRORmf2 (parser, val, MSGCAT_SET_PARSER_SEMANTIC,
+		       MSGCAT_SEMANTIC_UNEXPECTED_NTH_ARGUMENT,
+		       "string value", arg_num);
+	}
+      break;
+
+    case AVT_IDENTIFIER:
+      if (PT_IS_NAME_NODE (val))
+	{
+	  valid = true;
+	}
+      else if (arg_meta->optional && PT_IS_NULL_NODE (val))
+	{
+	  valid = true;
+	}
+
+      if (!valid)
+	{
+	  /* expect identifier in here */
+	  PT_ERRORmf2 (parser, val, MSGCAT_SET_PARSER_SEMANTIC,
+		       MSGCAT_SEMANTIC_UNEXPECTED_NTH_ARGUMENT,
+		       "identifier", arg_num);
+	}
+      break;
+
+    default:
+      assert (0);
+    }
+
+  return valid;
+}
+
+/*
+ * pt_resolve_showstmt_args_unnamed() - 
+ *   do semantic check for unnamed arguments by specified meta data
+ *   from SHOWSTMT_NAMED_ARG.
+ * 
+ *   return: newly build node (PT_NODE) for arguments
+ *   parser(in): Parser context
+ *   arg_infos(in): array for meta data of argument
+ *   arg_info_count(in): array count of arg_infos
+ *   arg_infos(in): argument node to be processed
+ */
+static PT_NODE *
+pt_resolve_showstmt_args_unnamed (PARSER_CONTEXT * parser,
+				  SHOWSTMT_NAMED_ARG * arg_infos,
+				  int arg_info_count, PT_NODE * args)
+{
+  int i;
+  PT_NODE *arg, *id_string;
+  PT_NODE *prev = NULL, *head = NULL;
+
+  if (arg_info_count == 0)
+    {
+      return args;
+    }
+
+  /* process each argument by meta information */
+  i = 0;
+  arg = args;
+
+  for (; i < arg_info_count && arg != NULL; i++, arg = arg->next)
+    {
+      if (!check_arg_valid (parser, &arg_infos[i], i + 1, arg))
+	{
+	  goto error;
+	}
+
+      if (arg_infos[i].type == AVT_IDENTIFIER)
+	{
+	  /* replace identifier node with string value node */
+	  id_string = pt_make_string_value (parser, arg->info.name.original);
+	  if (id_string == NULL)
+	    {
+	      goto error;
+	    }
+
+	  id_string->next = arg->next;
+	  arg = id_string;
+	}
+
+      if (prev == NULL)
+	{
+	  head = arg;
+	}
+      else
+	{
+	  prev->next = arg;
+	}
+
+      prev = arg;
+    }
+
+  if (arg != NULL)
+    {
+      /* too many arguments, n-th argument is not needed */
+      PT_ERRORm (parser, arg, MSGCAT_SET_PARSER_SEMANTIC,
+		 MSGCAT_SEMANTIC_TOO_MANY_ARGUMENT);
+      goto error;
+    }
+
+  if (i < arg_info_count)
+    {
+      /* too few arguments */
+      PT_ERRORmf (parser, head, MSGCAT_SET_PARSER_SEMANTIC,
+		  MSGCAT_SEMANTIC_TOO_FEW_ARGUMENT, arg_info_count);
+      goto error;
+    }
+
+  return head;
+
+error:
+  return NULL;
+}
+
+/*
+ * pt_resolve_showstmt_args_named() - 
+ *   do semantic check for named arguments by specified meta data
+ *   from SHOWSTMT_NAMED_ARG.
+ * 
+ *   return: newly build node (PT_NODE) for arguments
+ *   parser(in): Parser context
+ *   arg_infos(in): array for meta data of argument
+ *   arg_info_count(in): array count of arg_infos
+ *   arg_infos(in): argument node to be processed
+ */
+static PT_NODE *
+pt_resolve_showstmt_args_named (PARSER_CONTEXT * parser,
+				SHOWSTMT_NAMED_ARG * arg_infos,
+				int arg_info_count, PT_NODE * args)
+{
+  int i;
+  bool found = false;
+  PT_NODE *name_node, *value_node;
+  PT_NODE *prev = NULL, *res = NULL;
+  PT_NODE *arg;
+
+  if (arg_info_count == 0)
+    {
+      return args;
+    }
+
+  for (i = 0; i < arg_info_count; i++)
+    {
+      found = false;
+      prev = NULL;
+
+      for (arg = args; arg != NULL; arg = arg->next)
+	{
+	  assert (arg->node_type == PT_NAMED_ARG);
+
+	  name_node = arg->info.named_arg.name;
+	  value_node = arg->info.named_arg.value;
+
+	  if (strcasecmp (name_node->info.name.original, arg_infos[i].name) ==
+	      0)
+	    {
+	      if (!check_arg_valid (parser, &arg_infos[i], i + 1, value_node))
+		{
+		  goto error;
+		}
+
+	      if (arg_infos[i].type == AVT_IDENTIFIER)
+		{
+		  /* replace identifier node with string value node */
+		  value_node =
+		    pt_make_string_value (parser,
+					  value_node->info.name.original);
+		}
+
+	      res = parser_append_node (value_node, res);
+	      arg->info.named_arg.value = NULL;
+
+	      /* remove processed arg */
+	      if (prev)
+		{
+		  prev->next = arg->next;
+		}
+	      else
+		{
+		  args = arg->next;
+		}
+	      found = true;
+	      break;
+	    }
+
+	  prev = arg;
+	}
+
+      if (!found)
+	{
+	  /* missing argument */
+	  PT_ERRORmf (parser, args, MSGCAT_SET_PARSER_SEMANTIC,
+		      MSGCAT_SEMANTIC_MISSING_ARGUMENT, arg_infos[i].name);
+	  goto error;
+	}
+    }
+
+  /* all argument should be processed and nothing left */
+  if (args != NULL)
+    {
+      /* unknown argument */
+      PT_ERRORmf (parser, args, MSGCAT_SET_PARSER_SEMANTIC,
+		  MSGCAT_SEMANTIC_UNKNOWN_ARGUMENT,
+		  arg->info.named_arg.name->info.name.original);
+      goto error;
+    }
+
+  return res;
+
+error:
+  return NULL;
+}
+
+/*
+ * pt_make_query_showstmt () - builds the query for SHOW statement
+ *
+ *   return: newly built node (PT_NODE), NULL if construction fails
+ *   parser(in): Parser context
+ *   type (int): show statement type
+ *   arg (in): show statement arguments
+ *
+ * Notes: make query as:
+ *
+ *    SELECT *
+ *     FROM (pt_showstmt_info(type, args))
+ *     [WHERE expr]
+ *     [ORDER BY sort_col asc_or_desc]
+ *
+ */
+PT_NODE *
+pt_make_query_showstmt (PARSER_CONTEXT * parser, unsigned int type,
+			PT_NODE * args, PT_NODE * where_cond)
+{
+  const SHOWSTMT_METADATA *meta = NULL;
+  const SHOWSTMT_COLUMN_ORDERBY *orderby = NULL;
+  int num_orderby;
+  PT_NODE *query = NULL;
+  PT_NODE *value, *from_item, *showstmt_info;
+  PT_NODE *order_by_item;
+  int i, err;
+
+  /* get show column info */
+  meta = showstmt_get_metadata (type);
+  orderby = meta->orderby;
+  num_orderby = meta->num_orderby;
+
+  query = parser_new_node (parser, PT_SELECT);
+  if (query == NULL)
+    {
+      return NULL;
+    }
+
+  value = parser_new_node (parser, PT_VALUE);
+  if (value == NULL)
+    {
+      goto error;
+    }
+  value->type_enum = PT_TYPE_STAR;
+  query->info.query.q.select.list =
+    parser_append_node (value, query->info.query.q.select.list);
+
+  showstmt_info = parser_new_node (parser, PT_SHOWSTMT);
+  if (showstmt_info == NULL)
+    {
+      goto error;
+    }
+  showstmt_info->info.showstmt.show_type = type;
+
+  if (meta->args != NULL)
+    {
+      if (meta->args[0].name == NULL)
+	{
+	  showstmt_info->info.showstmt.show_args =
+	    pt_resolve_showstmt_args_unnamed (parser, meta->args,
+					      meta->arg_size, args);
+	}
+      else
+	{
+	  showstmt_info->info.showstmt.show_args =
+	    pt_resolve_showstmt_args_named (parser, meta->args,
+					    meta->arg_size, args);
+	}
+      if (showstmt_info->info.showstmt.show_args == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  /* add to FROM an empty entity, the entity will be populated later */
+  from_item = pt_add_table_name_to_from_list (parser,
+					      query, NULL, NULL,
+					      DB_AUTH_NONE);
+  if (from_item == NULL)
+    {
+      goto error;
+    }
+  from_item->info.spec.derived_table = showstmt_info;
+  from_item->info.spec.derived_table_type = PT_IS_SHOWSTMT;
+  from_item->info.spec.meta_class = 0;
+  from_item->info.spec.join_type = PT_JOIN_NONE;
+
+  if (where_cond != NULL)
+    {
+      query->info.query.q.select.where =
+	parser_append_node (where_cond, query->info.query.q.select.where);
+    }
+
+  for (i = 0; i < num_orderby; i++)
+    {
+      order_by_item =
+	pt_make_sort_spec_with_number (parser, orderby[i].pos,
+				       orderby[i].asc ? PT_ASC : PT_DESC);
+      if (order_by_item == NULL)
+	{
+	  goto error;
+	}
+      query->info.query.order_by =
+	parser_append_node (order_by_item, query->info.query.order_by);
+    }
+  return query;
+
+error:
+  if (query != NULL)
+    {
+      parser_free_tree (parser, query);
+    }
+
+  return NULL;
+}
+
+/*
  * pt_make_query_show_columns() - builds the query for SHOW COLUMNS
  *
  *   return: newly built node (PT_NODE), NULL if construnction fails
@@ -8772,8 +9228,9 @@ pt_make_query_show_columns (PARSER_CONTEXT * parser,
   db_make_int (db_valuep + 1, 0);
   for (i = 2; i < subquery_list_size; i++)
     {
-      db_make_varchar (db_valuep + i, DB_DEFAULT_PRECISION, "", 0,
-		       LANG_SYS_CODESET, LANG_SYS_COLLATION);
+      db_value_domain_default (db_valuep + i, DB_TYPE_VARCHAR,
+			       DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			       LANG_SYS_COLLATION, NULL);
     }
 
   psubquery_aliases = is_show_full ? subquery_full_aliases : subquery_aliases;
@@ -10171,25 +10628,32 @@ pt_make_query_show_index (PARSER_CONTEXT * parser, PT_NODE * original_cls_id)
   intl_identifier_lower (original_cls_id->info.name.original,
 			 lower_table_name);
 
-  db_make_varchar (db_valuep + 0, DB_DEFAULT_PRECISION, "", 0,
-		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  db_value_domain_default (db_valuep + 0, DB_TYPE_VARCHAR,
+			   DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION, NULL);
   db_make_int (db_valuep + 1, 0);
-  db_make_varchar (db_valuep + 2, DB_DEFAULT_PRECISION, "", 0,
-		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  db_value_domain_default (db_valuep + 2, DB_TYPE_VARCHAR,
+			   DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION, NULL);
   db_make_int (db_valuep + 3, 0);
-  db_make_varchar (db_valuep + 4, DB_DEFAULT_PRECISION, "", 0,
-		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
-  db_make_varchar (db_valuep + 5, DB_DEFAULT_PRECISION, "", 0,
-		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  db_value_domain_default (db_valuep + 4, DB_TYPE_VARCHAR,
+			   DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION, NULL);
+  db_value_domain_default (db_valuep + 5, DB_TYPE_VARCHAR,
+			   DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION, NULL);
   db_make_int (db_valuep + 6, 0);
   db_make_int (db_valuep + 7, 0);
   db_make_null (db_valuep + 8);
-  db_make_varchar (db_valuep + 9, DB_DEFAULT_PRECISION, "", 0,
-		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
-  db_make_varchar (db_valuep + 10, DB_DEFAULT_PRECISION, "", 0,
-		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
-  db_make_varchar (db_valuep + 11, DB_DEFAULT_PRECISION, "", 0,
-		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  db_value_domain_default (db_valuep + 9, DB_TYPE_VARCHAR,
+			   DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION, NULL);
+  db_value_domain_default (db_valuep + 10, DB_TYPE_VARCHAR,
+			   DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION, NULL);
+  db_value_domain_default (db_valuep + 11, DB_TYPE_VARCHAR,
+			   DB_DEFAULT_PRECISION, 0, LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION, NULL);
 
   for (i = 0; i < sizeof (db_valuep) / sizeof (db_valuep[0]); i++)
     {
@@ -11784,6 +12248,37 @@ pt_find_node_type_pre (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
       return node;
     }
   if (node->node_type == node_type)
+    {
+      *found_p = 1;
+      *continue_walk = PT_STOP_WALK;
+    }
+  return node;
+}
+
+/*
+ * pt_find_op_type_pre () - Use parser_walk_tree to find an operator of a
+ *			    specific type.
+ *
+ * return	      : node.
+ * parser (in)	      : parser context.
+ * node (in)	      : node in parse tree.
+ * arg (in)	      : int array containing expr type and found.
+ * continue_walk (in) : continue walk.
+ *
+ * NOTE: Make sure to set found to 0 before calling parser_walk_tree.
+ */
+PT_NODE *
+pt_find_op_type_pre (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+		     int *continue_walk)
+{
+  int op_type = *((int *) arg);
+  int *found_p = ((int *) arg) + 1;
+
+  if (*found_p || *continue_walk == PT_STOP_WALK || node == NULL)
+    {
+      return node;
+    }
+  if (node->node_type == PT_EXPR && node->info.expr.op == op_type)
     {
       *found_p = 1;
       *continue_walk = PT_STOP_WALK;

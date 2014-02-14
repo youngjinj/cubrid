@@ -70,6 +70,7 @@ extern "C"
 	  qe_query_result_free((REQ_HANDLE)->num_query_res, (REQ_HANDLE)->qr); \
 	  (REQ_HANDLE)->cur_fetch_tuple_index = 0; \
 	  (REQ_HANDLE)->num_query_res = 0;	\
+	  (REQ_HANDLE)->current_query_res = 0;  \
 	  (REQ_HANDLE)->num_tuple = 0;		\
 	  (REQ_HANDLE)->qr = NULL;		\
 	} while (0)
@@ -82,6 +83,9 @@ extern "C"
   ((c)->datasource && (c)->datasource->pool_prepared_statement)
 #define HAS_REACHED_LIMIT_OPEN_STATEMENT(c) \
   ((c)->open_prepared_statement_count >= (c)->datasource->max_open_prepared_statement)
+
+#define REACHABLE       true
+#define UNREACHABLE     false
 /************************************************************************
  * PUBLIC TYPE DEFINITIONS						*
  ************************************************************************/
@@ -167,6 +171,7 @@ extern "C"
     T_VALUE_BUF conv_value_buffer;
     T_CCI_QUERY_RESULT *qr;
     int num_query_res;
+    int current_query_res;
     int valid;
     int query_timeout;
     int is_closed;

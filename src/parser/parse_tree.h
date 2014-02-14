@@ -340,6 +340,9 @@
 #define PT_IS_VALUE_NODE(n) \
         ( (n) ? ((n)->node_type == PT_VALUE) : false )
 
+#define PT_IS_INSERT_VALUE_NODE(n) \
+	( (n) ? ((n)->node_type == PT_INSERT_VALUE) : false )
+
 #define PT_IS_SET_TYPE(n) \
         ( (n) ? ((n)->type_enum == PT_TYPE_SET || \
                  (n)->type_enum == PT_TYPE_MULTISET || \
@@ -757,9 +760,8 @@ enum pt_custom_print
 				 * instead pt_print_tree
 				 */
   PT_SUPPRESS_BIGINT_CAST = 0x4000000,
-  PT_SUPPRESS_COLLATE_PRINT = 0x8000000,
-  PT_CHARSET_COLLATE_FULL = 0x10000000,
-  PT_CHARSET_COLLATE_USER_ONLY = 0x20000000
+  PT_CHARSET_COLLATE_FULL = 0x8000000,
+  PT_CHARSET_COLLATE_USER_ONLY = 0x10000000
 };
 
 /* all statement node types should be assigned their API statement enumeration */
@@ -869,6 +871,9 @@ enum pt_node_type
   PT_ATTR_ORDERING,
   PT_TUPLE_VALUE,
   PT_QUERY_TRACE,
+  PT_INSERT_VALUE,
+  PT_NAMED_ARG,
+  PT_SHOWSTMT,
   PT_VACUUM,
   PT_NODE_NUMBER,		/* This is the number of node types */
   PT_LAST_NODE_NUMBER = PT_NODE_NUMBER
@@ -1108,7 +1113,9 @@ typedef enum
   PT_TRACE_ON,
   PT_TRACE_OFF,
   PT_TRACE_FORMAT_TEXT,
-  PT_TRACE_FORMAT_JSON
+  PT_TRACE_FORMAT_JSON,
+
+  PT_IS_SHOWSTMT		/* query is SHOWSTMT */
 } PT_MISC_TYPE;
 
 /* Enumerated join type */
@@ -1142,7 +1149,9 @@ typedef enum
   PT_HINT_QUERY_CACHE = 0x1000,	/* 0001 0000 0000 0000 *//* query_cache */
   PT_HINT_REEXECUTE = 0x2000,	/* 0010 0000 0000 0000 *//* reexecute */
   PT_HINT_JDBC_CACHE = 0x4000,	/* 0100 0000 0000 0000 *//* jdbc_cache */
+#if 0				/* not used */
   PT_HINT_NO_STATS = 0x8000,	/* 1000 0000 0000 0000 *//* no_stats */
+#endif
   PT_HINT_USE_IDX_DESC = 0x10000,	/* 0001 0000 0000 0000 0000 *//* descending index scan */
   PT_HINT_NO_COVERING_IDX = 0x20000,	/* 0010 0000 0000 0000 0000 *//* do not use covering index scan */
   PT_HINT_INSERT_MODE = 0x40000,	/* 0100 0000 0000 0000 0000 *//* set insert_executeion_mode */
@@ -1411,11 +1420,11 @@ typedef enum
   PT_WIDTH_BUCKET,
 
   PT_TRACE_STATS,
+  PT_INDEX_PREFIX,
   PT_AES_ENCRYPT,
   PT_AES_DECRYPT,
   PT_SHA_ONE,
   PT_SHA_TWO,
-  PT_INDEX_PREFIX,
 
   /* This is the last entry. Please add a new one before it. */
   PT_LAST_OPCODE
@@ -1490,6 +1499,17 @@ typedef enum
   CONNECT_BY_CYCLES_IGNORE,
   CONNECT_BY_CYCLES_NONE_IGNORE
 } PT_CONNECT_BY_CHECK_CYCLES;
+
+/* Enum used for insert statements. After checking if insert is allowed on
+ * server, the result is saved to avoid the same check again.
+ */
+typedef enum
+{
+  SERVER_INSERT_NOT_CHECKED = 0,
+  SERVER_INSERT_IS_ALLOWED = 1,
+  SERVER_INSERT_IS_NOT_ALLOWED = -1
+} SERVER_INSERT_ALLOWED;
+
 /*
  * Type definitions
  */
@@ -1545,6 +1565,7 @@ typedef struct pt_merge_info PT_MERGE_INFO;
 typedef struct pt_method_call_info PT_METHOD_CALL_INFO;
 typedef struct pt_method_def_info PT_METHOD_DEF_INFO;
 typedef struct pt_name_info PT_NAME_INFO;
+typedef struct pt_named_arg_info PT_NAMED_ARG_INFO;
 typedef struct pt_remove_trigger_info PT_REMOVE_TRIGGER_INFO;
 typedef struct pt_rename_info PT_RENAME_INFO;
 typedef struct pt_rename_trigger_info PT_RENAME_TRIGGER_INFO;
@@ -1560,6 +1581,7 @@ typedef struct pt_set_opt_lvl_info PT_SET_OPT_LVL_INFO;
 typedef struct pt_set_sys_params_info PT_SET_SYS_PARAMS_INFO;
 typedef struct pt_set_xaction_info PT_SET_XACTION_INFO;
 typedef struct pt_set_trigger_info PT_SET_TRIGGER_INFO;
+typedef struct pt_showstmt_info PT_SHOWSTMT_INFO;
 typedef struct pt_sort_spec_info PT_SORT_SPEC_INFO;
 typedef struct pt_timeout_info PT_TIMEOUT_INFO;
 typedef struct pt_trigger_action_info PT_TRIGGER_ACTION_INFO;
@@ -1606,6 +1628,8 @@ typedef struct pt_set_names_info PT_SET_NAMES_INFO;
 typedef struct pt_trace_info PT_TRACE_INFO;
 
 typedef struct pt_tuple_value_info PT_TUPLE_VALUE_INFO;
+
+typedef struct pt_insert_value_info PT_INSERT_VALUE_INFO;
 
 typedef struct pt_vacuum_info PT_VACUUM_INFO;
 
@@ -1760,7 +1784,6 @@ struct pt_alter_info
   PT_NODE *constraint_list;	/* constraints from ADD and CHANGE clauses */
   PT_NODE *create_index;	/* PT_CREATE_INDEX from ALTER ADD INDEX */
   PT_NODE *internal_stmts;	/* internally created statements to handle TEXT */
-  PT_HINT_ENUM hint;		/* hint flag */
 };
 
 /* ALTER USER INFO */
@@ -1851,7 +1874,6 @@ struct pt_create_entity_info
 						 */
   unsigned or_replace:1;	/* OR REPLACE clause for create view */
   unsigned if_not_exists:1;	/* IF NOT EXISTS clause for create table | class */
-  PT_HINT_ENUM hint;		/* hint flag */
 };
 
 /* CREATE/DROP INDEX INFO */
@@ -1873,7 +1895,6 @@ struct pt_index_info
 				 * expression */
   bool reverse;			/* REVERSE */
   bool unique;			/* UNIQUE specified? */
-  PT_HINT_ENUM hint;		/* hint flag */
 };
 
 /* CREATE USER INFO */
@@ -1913,6 +1934,7 @@ struct pt_serial_info
   int no_min;
   int no_cyclic;
   int no_cache;
+  unsigned if_exists:1;		/* IF EXISTS clause for drop serial */
 };
 
 /* Info for DATA_DEFAULT */
@@ -2060,7 +2082,8 @@ struct pt_spec_info
   UINTPTR id;			/* entity spec unique id # */
   PT_MISC_TYPE only_all;	/* PT_ONLY or PT_ALL */
   PT_MISC_TYPE meta_class;	/* enum 0 or PT_META  */
-  PT_MISC_TYPE derived_table_type;	/* PT_IS_SUBQUERY, PT_IS_SET_EXPR, or PT_IS_CSELECT */
+  PT_MISC_TYPE derived_table_type;	/* PT_IS_SUBQUERY, PT_IS_SET_EXPR, or PT_IS_CSELECT,
+					   PT_IS_SHOWSTMT */
   PT_MISC_TYPE flavor;		/* enum 0 or PT_METHOD_ENTITY */
   PT_NODE *on_cond;
   PT_NODE *using_cond;		/* -- does not support named columns join */
@@ -2262,6 +2285,12 @@ struct pt_insert_info
   PT_NODE *odku_assignments;	/* ON DUPLICATE KEY UPDATE assignments */
   bool do_replace;		/* REPLACE statement was given */
   PT_NODE *insert_mode;		/* insert execution mode */
+  PT_NODE *non_null_attrs;	/* attributes with not null constraint */
+  PT_NODE *odku_non_null_attrs;	/* attributes with not null constraint in
+				 * odku assignments
+				 */
+  int has_uniques;		/* class has unique constraints */
+  SERVER_INSERT_ALLOWED server_allowed;	/* is insert allowed on server */
 };
 
 /* Info for Transaction Isolation Level */
@@ -2521,6 +2550,15 @@ struct pt_name_info
   PT_RESERVED_NAME_ID reserved_id;	/* used to identify reserved name */
 };
 
+/*
+ * information for arguments that has name and value
+ */
+struct pt_named_arg_info
+{
+  PT_NODE *name;		/* an identifier node for argument name */
+  PT_NODE *value;		/* argument value, may be string, int or identifier */
+};
+
 enum
 {
   PT_IDX_HINT_FORCE = 1,
@@ -2741,6 +2779,12 @@ struct pt_set_trigger_info
   PT_MISC_TYPE option;		/* PT_TRIGGER_DEPTH, PT_TRIGGER_TRACE */
 };
 
+/* Info for PT_SHOWSTMT node */
+struct pt_showstmt_info
+{
+  SHOWSTMT_TYPE show_type;	/* show statement type */
+  PT_NODE *show_args;		/* show statement args */
+};
 
 /* Info for OrderBy/GroupBy */
 struct pt_sort_spec_info
@@ -2985,6 +3029,9 @@ struct pt_value_info
   bool print_collation;
   bool has_cs_introducer;	/* 1 if charset introducer is used for string
 				 * node e.g. _utf8'a'; 0 otherwise. */
+  bool is_collate_allowed;	/* 1 if this is a PT_VALUE allowed to have 
+				 * the COLLATE modifier (the grammar context
+				 * in which is created allows it) */
   int coll_modifier;		/* collation modifier = collation + 1 */
 };
 
@@ -3132,6 +3179,24 @@ struct pt_trace_info
   PT_MISC_TYPE format;
 };
 
+/* pt_insert_value_info -
+ * Parse tree node info used to replace nodes in insert value list after being
+ * evaluated.
+ */
+struct pt_insert_value_info
+{
+  PT_NODE *original_node;	/* original node before first evaluation.
+				 * if this is NULL, it is considered that
+				 * evaluated value cannot change on different
+				 * execution, and reevaluation is not needed
+				 */
+  DB_VALUE value;		/* evaluated value */
+  int is_evaluated;		/* true if value was already evaluated */
+  int replace_names;		/* true if names in evaluated node need to be
+				 * replaced
+				 */
+};
+
 /* info structure used for VACUUM statement nodes */
 struct pt_vacuum_info
 {
@@ -3188,11 +3253,13 @@ union pt_statement_info
   PT_HOST_VAR_INFO host_var;
   PT_INDEX_INFO index;
   PT_INSERT_INFO insert;
+  PT_INSERT_VALUE_INFO insert_value;
   PT_ISOLATION_LVL_INFO isolation_lvl;
   PT_MERGE_INFO merge;
   PT_METHOD_CALL_INFO method_call;
   PT_METHOD_DEF_INFO method_def;
   PT_NAME_INFO name;
+  PT_NAMED_ARG_INFO named_arg;
   PT_NODE_LIST_INFO node_list;
   PT_PARTITION_INFO partition;
   PT_PARTS_INFO parts;
@@ -3214,6 +3281,7 @@ union pt_statement_info
   PT_SET_TRIGGER_INFO set_trigger;
   PT_SET_SESSION_VARIABLE_INFO set_variables;
   PT_SET_XACTION_INFO set_xaction;
+  PT_SHOWSTMT_INFO showstmt;
   PT_SORT_SPEC_INFO sort_spec;
   PT_STORED_PROC_INFO sp;
   PT_STORED_PROC_PARAM_INFO sp_param;
@@ -3326,7 +3394,6 @@ struct parser_node
   CACHE_TIME cache_time;	/* client or server cache time */
   unsigned recompile:1;		/* the statement should be recompiled - used for plan cache */
   unsigned cannot_prepare:1;	/* the statement cannot be prepared - used for plan cache */
-  unsigned do_not_keep:1;	/* the statement will not be kept after execution - used for plan cache */
   unsigned partition_pruned:1;	/* partition pruning takes place */
   unsigned si_datetime:1;	/* get server info; SYS_DATETIME */
   unsigned si_tran_id:1;	/* get server info; LOCAL_TRANSACTION_ID */

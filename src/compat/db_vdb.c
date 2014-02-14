@@ -1361,7 +1361,6 @@ db_is_output_marker (DB_MARKER * marker)
   return result;
 }
 
-
 /*
  * db_get_query_type_list() - This function returns a type list that describes
  *    the columns of a SELECT statement. This includes the column title, data
@@ -1722,7 +1721,7 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
   int server_info_bits;
 
   SEMANTIC_CHK_INFO sc_info = { NULL, NULL, 0, 0, 0, false, false };
-  CLASS_STATUS cls_status = CLS_NOT_MODIFIED;
+  DB_CLASS_MODIFICATION_STATUS cls_status = DB_CLASS_NOT_MODIFIED;
 
   if (result != NULL)
     {
@@ -1898,16 +1897,16 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
   pt_null_etc (statement);
   if (statement->xasl_id == NULL
       && ((cls_status = pt_has_modified_class (parser, statement))
-	  != CLS_NOT_MODIFIED))
+	  != DB_CLASS_NOT_MODIFIED))
     {
-      if (cls_status == CLS_MODIFIED)
+      if (cls_status == DB_CLASS_MODIFIED)
 	{
 	  err = ER_QPROC_INVALID_XASLNODE;
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, err, 0);
 	}
       else
 	{
-	  assert (cls_status == CLS_ERROR);
+	  assert (cls_status == DB_CLASS_ERROR);
 	  err = er_errid ();
 	}
     }
@@ -1916,28 +1915,37 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
     {
       /* now, execute the statement by calling do_execute_statement() */
       err = do_execute_statement (parser, statement);
-      if (err == ER_QPROC_INVALID_XASLNODE &&
-	  session->stage[stmt_ndx] == StatementPreparedStage)
+      if (err == ER_QPROC_INVALID_XASLNODE
+	  && session->stage[stmt_ndx] == StatementPreparedStage)
 	{
-	  /* Hmm, there is a kind of problem in the XASL cache.
-	     It is possible when the cache entry was deleted before 'execute'
-	     and after 'prepare' by the other, e.g. qmgr_drop_all_query_plans().
-	     In this case, retry to prepare once more (generate and stored
-	     the XASL again). */
+	  /* The cache entry was deleted before 'execute' */
 	  if (statement->xasl_id)
 	    {
-	      (void) qmgr_drop_query_plan (NULL, NULL, statement->xasl_id,
-					   false);
 	      pt_free_statement_xasl_id (statement);
 	    }
-	  /* forget all errors */
-	  er_clear ();
-	  pt_reset_error (parser);
 
-	  /* retry the statement by calling do_prepare/execute_statement() */
-	  if (do_prepare_statement (parser, statement) == NO_ERROR)
+	  cls_status = pt_has_modified_class (parser, statement);
+	  if (cls_status == DB_CLASS_NOT_MODIFIED)
 	    {
-	      err = do_execute_statement (parser, statement);
+	      /* forget all errors */
+	      er_clear ();
+	      pt_reset_error (parser);
+
+	      /* retry the statement by calling do_prepare/execute_statement() */
+	      if (do_prepare_statement (parser, statement) == NO_ERROR)
+		{
+		  err = do_execute_statement (parser, statement);
+		}
+	    }
+	  else if (cls_status == DB_CLASS_MODIFIED)
+	    {
+	      err = ER_QPROC_INVALID_XASLNODE;
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, err, 0);
+	    }
+	  else
+	    {
+	      assert (cls_status == DB_CLASS_ERROR);
+	      err = er_errid ();
 	    }
 	}
     }
@@ -2312,25 +2320,32 @@ set_prepare_info_into_list (DB_PREPARE_INFO * prepare_info,
   length = 0;
   while (name)
     {
-      if (name->info.name.original == NULL)
+      if (PT_IS_NAME_NODE (name))
 	{
-	  prepare_info->into_list[length] = NULL;
+	  if (name->info.name.original == NULL)
+	    {
+	      prepare_info->into_list[length] = NULL;
+	    }
+	  else
+	    {
+	      char *into_name =
+		(char *) malloc (strlen (name->info.name.original) + 1);
+	      if (into_name == NULL)
+		{
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			  ER_OUT_OF_VIRTUAL_MEMORY, 1,
+			  strlen (name->info.name.original) + 1);
+		  goto error;
+		}
+	      memcpy (into_name, name->info.name.original,
+		      strlen (name->info.name.original));
+	      into_name[strlen (name->info.name.original)] = 0;
+	      prepare_info->into_list[length] = into_name;
+	    }
 	}
       else
 	{
-	  char *into_name =
-	    (char *) malloc (strlen (name->info.name.original) + 1);
-	  if (into_name == NULL)
-	    {
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_OUT_OF_VIRTUAL_MEMORY, 1,
-		      strlen (name->info.name.original) + 1);
-	      goto error;
-	    }
-	  memcpy (into_name, name->info.name.original,
-		  strlen (name->info.name.original));
-	  into_name[strlen (name->info.name.original)] = 0;
-	  prepare_info->into_list[length] = into_name;
+	  prepare_info->into_list[length] = NULL;
 	}
       length++;
       name = name->next;
@@ -2360,12 +2375,14 @@ char_array_to_name_list (PARSER_CONTEXT * parser, char **names, int length)
 {
   PT_NODE *name = NULL;
   PT_NODE *list = NULL;
-  int i = 0;
+  int i;
+
   for (i = 0; i < length; i++)
     {
       name = pt_name (parser, names[i]);
       list = parser_append_node (name, list);
     }
+
   return list;
 }
 
@@ -2985,31 +3002,34 @@ is_allowed_as_prepared_statement_with_hv (PT_NODE * node)
     }
 }
 
+
 /*
- * db_invalidate_mvcc_snapshot () - When MVCC is enabled, server uses a
- *				    snapshot to filter data. Snapshot is
- *				    obtained with the first fetch or execution
- *				    on server and should be invalidated before
- *				    executing a new statement.
+ * db_has_modified_class()
  *
- * return : Void.
- *
- * NOTE: When Repeatable Reads and Serializable Isolation are implemented for
- *	 MVCC, snapshot must be invalidated only on commit/rollback.
+ *   return:
+ *   session(in):
+ *   stmt_id(in):
  */
-void
-db_invalidate_mvcc_snapshot ()
+DB_CLASS_MODIFICATION_STATUS
+db_has_modified_class (DB_SESSION * session, int stmt_id)
 {
-  if (!prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+  DB_CLASS_MODIFICATION_STATUS cls_status;
+  PT_NODE *statement;
+
+  assert (session != NULL);
+  assert (stmt_id < session->dimension);
+
+  cls_status = DB_CLASS_NOT_MODIFIED;
+  if (stmt_id < session->dimension)
     {
-      /* Snapshot is used only if MVCC is enabled */
-      return;
+      statement = session->statements[stmt_id];
+      if (statement != NULL)
+	{
+	  cls_status = pt_has_modified_class (session->parser, statement);
+	}
     }
-  /* TODO: Check isolation level */
-  /* Invalidate snapshot on server */
-  log_invalidate_mvcc_snapshot ();
-  /* Increment snapshot version in work space */
-  ws_increment_mvcc_snapshot_version ();
+
+  return cls_status;
 }
 
 /*
@@ -3066,12 +3086,6 @@ db_execute_statement_local (DB_SESSION * session, int stmt_ndx,
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_OBJ_INVALID_ARGUMENTS,
 	      0);
       return ER_OBJ_INVALID_ARGUMENTS;
-    }
-
-  if (session->statements && stmt_ndx > 0 && stmt_ndx <= session->dimension
-      && session->statements[stmt_ndx - 1])
-    {
-      session->statements[stmt_ndx - 1]->do_not_keep = 1;
     }
 
   err = db_execute_and_keep_statement_local (session, stmt_ndx, result);
@@ -3328,16 +3342,6 @@ db_drop_statement (DB_SESSION * session, int stmt)
   statement = session->statements[stmt - 1];
   if (statement != NULL)
     {
-      /* free XASL_ID allocated by query_prepare()
-         before freeing the statement */
-      if (statement->xasl_id)
-	{
-	  if (statement->do_not_keep == 0)
-	    {
-	      (void) qmgr_drop_query_plan (NULL, NULL, statement->xasl_id,
-					   false);
-	    }
-	}
       pt_free_statement_xasl_id (statement);
       parser_free_tree (session->parser, statement);
       session->statements[stmt - 1] = NULL;
@@ -3363,16 +3367,6 @@ db_drop_all_statements (DB_SESSION * session)
       statement = session->statements[stmt];
       if (statement != NULL)
 	{
-	  /* free XASL_ID allocated by query_prepare()
-	     before freeing the statement */
-	  if (statement->xasl_id)
-	    {
-	      if (statement->do_not_keep == 0)
-		{
-		  (void) qmgr_drop_query_plan (NULL, NULL, statement->xasl_id,
-					       false);
-		}
-	    }
 	  pt_free_statement_xasl_id (statement);
 	  parser_free_tree (session->parser, statement);
 	  session->statements[stmt] = NULL;
@@ -3421,16 +3415,6 @@ db_close_session_local (DB_SESSION * session)
 	  statement = session->statements[i];
 	  if (statement != NULL)
 	    {
-	      /* free XASL_ID allocated by query_prepare()
-	         before freeing the statement */
-	      if (statement->xasl_id)
-		{
-		  if (statement->do_not_keep == 0)
-		    {
-		      (void) qmgr_drop_query_plan (NULL, NULL,
-						   statement->xasl_id, false);
-		    }
-		}
 	      pt_free_statement_xasl_id (statement);
 	      parser_free_tree (parser, statement);
 	      session->statements[i] = NULL;
@@ -4075,4 +4059,31 @@ db_is_query_async_executable (DB_SESSION * session, int stmt_ndx)
 
   return !sync;
 #endif
+}
+
+/*
+ * db_invalidate_mvcc_snapshot () - When MVCC is enabled, server uses a
+ *				    snapshot to filter data. Snapshot is
+ *				    obtained with the first fetch or execution
+ *				    on server and should be invalidated before
+ *				    executing a new statement.
+ *
+ * return : Void.
+ *
+ * NOTE: When Repeatable Reads and Serializable Isolation are implemented for
+ *	 MVCC, snapshot must be invalidated only on commit/rollback.
+ */
+void
+db_invalidate_mvcc_snapshot ()
+{
+  if (!prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      /* Snapshot is used only if MVCC is enabled */
+      return;
+    }
+  /* TODO: Check isolation level */
+  /* Invalidate snapshot on server */
+  log_invalidate_mvcc_snapshot ();
+  /* Increment snapshot version in work space */
+  ws_increment_mvcc_snapshot_version ();
 }

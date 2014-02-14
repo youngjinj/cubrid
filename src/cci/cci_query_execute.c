@@ -1315,6 +1315,11 @@ qe_close_query_result (T_REQ_HANDLE * req_handle, T_CON_HANDLE * con_handle)
       return err_code;
     }
 
+  if (is_connected_to_cubrid (con_handle) == false)
+    {
+      return err_code;
+    }
+
   net_buf_init (&net_buf);
 
   broker_ver = hm_get_broker_version (con_handle);
@@ -1751,6 +1756,15 @@ qe_fetch (T_REQ_HANDLE * req_handle, T_CON_HANDLE * con_handle, char flag,
 	    {
 	      return CCI_ER_DELETED_TUPLE;
 	    }
+	}
+    }
+  else
+    {
+      if (is_connected_to_oracle (con_handle)
+	  && req_handle->cursor_pos > req_handle->fetched_tuple_end
+	  && req_handle->is_fetch_completed)
+	{
+	  return CCI_ER_NO_MORE_DATA;
 	}
     }
 
@@ -2286,7 +2300,10 @@ qe_get_class_num_objs (T_CON_HANDLE * con_handle, char *class_name, char flag,
       else
 	{
 	  NET_STR_TO_INT (tmp_i_value, result_msg + 4);
-	  *num_objs = tmp_i_value;
+	  if (num_objs)
+	    {
+	      *num_objs = tmp_i_value;
+	    }
 	  result_msg_size -= 4;
 	}
 
@@ -2295,7 +2312,10 @@ qe_get_class_num_objs (T_CON_HANDLE * con_handle, char *class_name, char flag,
       else
 	{
 	  NET_STR_TO_INT (tmp_i_value, result_msg + 8);
-	  *num_pages = tmp_i_value;
+	  if (num_pages)
+	    {
+	      *num_pages = tmp_i_value;
+	    }
 	}
     }
 
@@ -2462,7 +2482,11 @@ qe_get_row_count (T_REQ_HANDLE * req_handle, T_CON_HANDLE * con_handle,
     }
 
   NET_STR_TO_INT (tmp, result_msg + 4);
-  *row_count = tmp;
+
+  if (row_count)
+    {
+      *row_count = tmp;
+    }
 
   return 0;
 }
@@ -2624,7 +2648,10 @@ qe_col_size (T_CON_HANDLE * con_handle, char *oid_str, const char *col_attr,
       return CCI_ER_COMMUNICATION;
     }
 
-  NET_STR_TO_INT (*set_size, result_msg + 4);
+  if (set_size)
+    {
+      NET_STR_TO_INT (*set_size, result_msg + 4);
+    }
   FREE_MEM (result_msg);
 
   return 0;
@@ -4742,8 +4769,26 @@ fetch_info_decode (char *buf, int size, int num_cols,
       num_tuple = 1;
     }
 
-  if (num_tuple <= 0)
+  if (num_tuple < 0)
     {
+      return 0;
+    }
+  else if (num_tuple == 0)
+    {
+      if (fetch_type == FETCH_FETCH
+	  && hm_get_broker_version (con_handle) >=
+	  CAS_PROTO_MAKE_VER (PROTOCOL_V5))
+	{
+	  if (remain_size < NET_SIZE_BYTE)
+	    {
+	      return CCI_ER_COMMUNICATION;
+	    }
+
+	  NET_STR_TO_BYTE (req_handle->is_fetch_completed, cur_p);
+	  remain_size -= NET_SIZE_BYTE;
+	  cur_p += NET_SIZE_BYTE;
+	}
+
       return 0;
     }
 
@@ -5329,7 +5374,10 @@ col_get_info_decode (char *buf_p, int remain_size, int *col_size,
 
   if (remain_size < 1)
     return CCI_ER_COMMUNICATION;
-  *col_type = *cur_p;
+  if (col_type)
+    {
+      *col_type = *cur_p;
+    }
   remain_size -= 1;
   cur_p += 1;
 
@@ -5354,7 +5402,10 @@ col_get_info_decode (char *buf_p, int remain_size, int *col_size,
   if (num_tuple < 0)
     return num_tuple;
 
-  *col_size = num_tuple;
+  if (col_size)
+    {
+      *col_size = num_tuple;
+    }
   req_handle->num_tuple = num_tuple;
   if (num_tuple == 0)
     {
@@ -6509,17 +6560,26 @@ shard_info_decode_error:
 }
 
 bool
+is_connected_to_cubrid (T_CON_HANDLE * con_handle)
+{
+  return ((con_handle->broker_info[BROKER_INFO_DBMS_TYPE] == CAS_DBMS_CUBRID)
+	  || (con_handle->broker_info[BROKER_INFO_DBMS_TYPE] ==
+	      CAS_PROXY_DBMS_CUBRID));
+}
+
+bool
 is_connected_to_oracle (T_CON_HANDLE * con_handle)
 {
-  return con_handle->broker_info[BROKER_INFO_DBMS_TYPE] == CAS_DBMS_ORACLE
-    || con_handle->broker_info[BROKER_INFO_DBMS_TYPE] ==
-    CAS_PROXY_DBMS_ORACLE;
+  return ((con_handle->broker_info[BROKER_INFO_DBMS_TYPE] == CAS_DBMS_ORACLE)
+	  || (con_handle->broker_info[BROKER_INFO_DBMS_TYPE] ==
+	      CAS_PROXY_DBMS_ORACLE));
 }
 
 static bool
 is_set_default_value_if_null (T_CON_HANDLE * con_handle,
 			      T_CCI_CUBRID_STMT stmt_type, char bind_mode)
 {
-  return is_connected_to_oracle (con_handle)
-    && stmt_type == CUBRID_STMT_CALL_SP && bind_mode == CCI_PARAM_MODE_OUT;
+  return (is_connected_to_oracle (con_handle)
+	  && (stmt_type == CUBRID_STMT_CALL_SP
+	      && bind_mode == CCI_PARAM_MODE_OUT));
 }

@@ -7351,6 +7351,16 @@ pt_eval_type_pre (PARSER_CONTEXT * parser, PT_NODE * node,
 						  node->info.query.limit, 0,
 						  true);
 	    }
+	  else if (node->info.query.all_distinct == PT_DISTINCT)
+	    {
+	      /* When a distinct query has neither orderby nor groupby clause,
+	       * limit must be orderby_num predicate.
+	       */
+	      expr_pred = &node->info.query.orderby_for;
+	      limit = pt_limit_to_numbering_expr (parser,
+						  node->info.query.limit,
+						  PT_ORDERBY_NUM, false);
+	    }
 	  else
 	    {
 	      expr_pred = &node->info.query.q.select.where;
@@ -9906,6 +9916,14 @@ pt_eval_expr_type (PARSER_CONTEXT * parser, PT_NODE * node)
     case PT_ASSIGN:
       node->data_type = parser_copy_tree_list (parser, arg1->data_type);
       node->type_enum = arg1_type;
+
+      if (PT_IS_HOSTVAR (arg2) && arg2->expected_domain == NULL)
+	{
+	  d = pt_node_to_db_domain (parser, arg1, NULL);
+	  d = tp_domain_cache (d);
+	  SET_EXPECTED_DOMAIN (arg2, d);
+	  pt_preset_hostvar (parser, arg2);
+	}
       break;
 
     case PT_LIKE_ESCAPE:
@@ -15260,6 +15278,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 		  {
 		    /* operation with zero date returns null */
 		    DB_MAKE_NULL (result);
+		    if (!prm_get_bool_value
+			(PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+		      {
+			er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				ER_DATE_CONVERSION, 0);
+			goto error_date_conversion;
+		      }
 		    break;
 		  }
 
@@ -15334,6 +15359,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 		  {
 		    /* operation with zero date returns null */
 		    DB_MAKE_NULL (result);
+		    if (!prm_get_bool_value
+			(PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+		      {
+			er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				ER_DATE_CONVERSION, 0);
+			goto error_date_conversion;
+		      }
 		    break;
 		  }
 
@@ -15409,6 +15441,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 		  {
 		    /* operation with zero date returns null */
 		    DB_MAKE_NULL (result);
+		    if (!prm_get_bool_value
+			(PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+		      {
+			er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				ER_DATE_CONVERSION, 0);
+			goto error_date_conversion;
+		      }
 		    break;
 		  }
 
@@ -15562,6 +15601,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 		  {
 		    /* operation with zero date returns null */
 		    DB_MAKE_NULL (result);
+		    if (!prm_get_bool_value
+			(PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+		      {
+			er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				ER_DATE_CONVERSION, 0);
+			goto error_date_conversion;
+		      }
 		    break;
 		  }
 
@@ -15703,6 +15749,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 		  {
 		    /* operation with zero date returns null */
 		    DB_MAKE_NULL (result);
+		    if (!prm_get_bool_value
+			(PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+		      {
+			er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				ER_DATE_CONVERSION, 0);
+			goto error_date_conversion;
+		      }
 		    break;
 		  }
 
@@ -15757,6 +15810,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 		  {
 		    /* operation with zero date returns null */
 		    DB_MAKE_NULL (result);
+		    if (!prm_get_bool_value
+			(PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+		      {
+			er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				ER_DATE_CONVERSION, 0);
+			goto error_date_conversion;
+		      }
 		    break;
 		  }
 
@@ -15799,6 +15859,13 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 		  {
 		    /* operation with zero date returns null */
 		    DB_MAKE_NULL (result);
+		    if (!prm_get_bool_value
+			(PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+		      {
+			er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				ER_DATE_CONVERSION, 0);
+			goto error_date_conversion;
+		      }
 		    break;
 		  }
 
@@ -15838,6 +15905,7 @@ pt_evaluate_db_value_expr (PARSER_CONTEXT * parser,
 	    {
 	    case DB_TYPE_SET:
 	    case DB_TYPE_MULTISET:
+	    case DB_TYPE_SEQUENCE:
 	      if (!pt_product_sets (parser, domain, arg1, arg2, result, o2))
 		{
 		  return 0;	/* set union failed */
@@ -18380,6 +18448,10 @@ overflow:
   PT_ERRORmf (parser, o1, MSGCAT_SET_PARSER_SEMANTIC,
 	      MSGCAT_SEMANTIC_DATA_OVERFLOW_ON, pt_show_type_enum (rTyp));
   return 0;
+
+error_date_conversion:
+  PT_ERRORc (parser, o1, er_msg ());
+  return 0;
 }
 
 /*
@@ -19323,6 +19395,10 @@ end:
 	      result->info.value.text =
 		pt_append_string (parser, NULL, expr->alias_print);
 	    }
+	  if (PT_IS_VALUE_NODE (result))
+	    {
+	      result->info.value.is_collate_allowed = true;
+	    }
 	  parser_free_tree (parser, expr);
 	}
 
@@ -19485,6 +19561,11 @@ pt_fold_const_function (PARSER_CONTEXT * parser, PT_NODE * func)
 	  if (alias_print == NULL && func->is_alias_enabled_expr)
 	    {
 	      alias_print = func->alias_print;
+	    }
+
+	  if (PT_IS_VALUE_NODE (result))
+	    {
+	      result->info.value.is_collate_allowed = true;
 	    }
 
 	  parser_free_tree (parser, func);
@@ -19971,6 +20052,8 @@ pt_coerce_value (PARSER_CONTEXT * parser, PT_NODE * src, PT_NODE * dest,
 		  dest->info.value.print_charset;
 		temp->info.value.print_collation =
 		  dest->info.value.print_collation;
+		temp->info.value.is_collate_allowed =
+		  dest->info.value.is_collate_allowed;
 		*dest = *temp;
 		if (data_type != NULL)
 		  {
@@ -23113,7 +23196,8 @@ pt_fix_enumeration_comparison (PARSER_CONTEXT * parser, PT_NODE * expr)
 	{
 	  /* Skip nodes that already have been wrapped with
 	   * PT_TO_ENUMERATION_VALUE expression or have the correct type */
-	  if (list->node_type == PT_TO_ENUMERATION_VALUE
+	  if ((list->node_type == PT_EXPR
+	       && list->info.expr.op == PT_TO_ENUMERATION_VALUE)
 	      || (list->type_enum == PT_TYPE_ENUMERATION
 		  && pt_is_same_enum_data_type (arg1->data_type,
 						list->data_type)))

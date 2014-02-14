@@ -38,6 +38,7 @@
 #include "dbgw3/client/Query.h"
 #include "dbgw3/client/QueryMapper.h"
 #include "dbgw3/client/XmlParser.h"
+#include "dbgw3/GlobalOnce.h"
 
 namespace dbgw
 {
@@ -58,6 +59,7 @@ namespace dbgw
       m_pAsyncJobManager(new _AsyncWorkerJobManager(&m_workerPool)),
       m_pTimeoutJobManager(new _TimeoutWorkerJobManager(&m_workerPool))
     {
+      initializeGlobalOnce();
     }
 
     Impl(Configuration *pSelf, const char *szConfFileName) :
@@ -69,6 +71,7 @@ namespace dbgw
       m_pAsyncJobManager(new _AsyncWorkerJobManager(&m_workerPool)),
       m_pTimeoutJobManager(new _TimeoutWorkerJobManager(&m_workerPool))
     {
+      initializeGlobalOnce();
     }
 
     ~Impl()

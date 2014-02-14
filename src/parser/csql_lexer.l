@@ -335,6 +335,9 @@ extern int str_identifier = '\0';
 										csql_yylval.cptr = pt_makename(yytext);
 										return HASH; }
 [hH][aA][vV][iI][nN][gG]						{ begin_token(yytext);   return HAVING; }
+[hH][eE][aA][dD][eE][rR]						{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return HEADER; }
 [hH][oO][uU][rR]							{ begin_token(yytext);   return HOUR_; }
 [hH][oO][uU][rR]_[mM][iI][lL][lL][iI][sS][eE][cC][oO][nN][dD]		{ begin_token(yytext);   return HOUR_MILLISECOND; }
 [hH][oO][uU][rR]_[sS][eE][cC][oO][nN][dD]				{ begin_token(yytext);   return HOUR_SECOND; }
@@ -779,6 +782,9 @@ extern int str_identifier = '\0';
 [vV][aA][rR][yY][iI][nN][gG]						{ begin_token(yytext);   return VARYING; }
 [vV][cC][lL][aA][sS][sS]						{ begin_token(yytext);   return VCLASS; }
 [vV][iI][eE][wW]							{ begin_token(yytext);   return VIEW; }
+[vV][oO][lL][uU][mM][eE]						{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return VOLUME; }
 [wW][eE][eE][kK]							{ begin_token(yytext);   
 										csql_yylval.cptr = pt_makename(yytext);
 										return WEEK; }
@@ -892,7 +898,6 @@ _[uU][tT][fF]8[']		{
 "."[ \t\r\n]*([a-zA-Z_#]|([\xc0-\xfe]))([a-zA-Z_#0-9]|([\x80-\xfe]))* {
 								int i = 0;
 								int len = 0;
-								begin_token(yytext);
 								if (dot_flag == 0)
 								  {
 								    yybuffer_pos -= csql_yyleng;
@@ -902,6 +907,7 @@ _[uU][tT][fF]8[']		{
 								  }
 								else
 								  {
+								    begin_token(yytext);
 								    dot_flag = 0;
 								    len = strlen(yytext);
 								    if (len >= 254)
@@ -919,7 +925,6 @@ _[uU][tT][fF]8[']		{
 "->"[ \t\r\n]*([a-zA-Z_#]|([\xc0-\xfe]))([a-zA-Z_#0-9]|([\x80-\xfe]))* {
 								int i = 0;
 								int len = 0;
-								begin_token(yytext);
 								if (dot_flag == 0)
 								  {
 								    yybuffer_pos -= csql_yyleng;
@@ -929,6 +934,7 @@ _[uU][tT][fF]8[']		{
 								  }
 								else
 								  {
+								    begin_token(yytext);
 								    dot_flag = 0;
 								    len = strlen(yytext);
 								    if (len >= 254)
@@ -1411,8 +1417,11 @@ csql_yyerror (const char *s)
 	{
 	  if (strstr (s, "$end"))
 	    {
-              int msg_size = strlen (before_token) + strlen (next_ptr) + 2;
+	      int msg_size;
+
 	      next_ptr = end_of_stmt_str;
+	      msg_size = strlen (before_token) + strlen (next_ptr) + 2;
+
 	      msg = (char *) csql_yyalloc (msg_size);
 	      if (msg == NULL)
 		{

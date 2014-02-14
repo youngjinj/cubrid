@@ -40,6 +40,7 @@
 #include "dbi.h"
 #include "xasl_generation.h"
 #include "view_transform.h"
+#include "show_meta.h"
 
 /* this must be the last header file included!!! */
 #include "dbval.h"
@@ -375,6 +376,8 @@ static PT_NODE *pt_check_filter_index_expr_post (PARSER_CONTEXT * parser,
 static void pt_check_filter_index_expr (PARSER_CONTEXT * parser,
 					PT_NODE * atts, PT_NODE * node,
 					MOP db_obj);
+static PT_NODE *pt_check_sub_insert (PARSER_CONTEXT * parser, PT_NODE * node,
+				     void *void_arg, int *continue_walk);
 static PT_NODE *pt_get_assignments (PT_NODE * node);
 static int pt_check_cume_dist_percent_rank_order_by (PARSER_CONTEXT * parser,
 						     PT_NODE * func);
@@ -6667,7 +6670,7 @@ static void
 pt_check_alter_partition (PARSER_CONTEXT * parser, PT_NODE * stmt, MOP dbobj)
 {
   PT_NODE *name_list, *part_list;
-  PT_NODE *names, *parts, *val;
+  PT_NODE *names, *parts, *val, *next_parts;
   PT_ALTER_CODE cmd;
   SM_CLASS *smclass, *subcls;
   SM_ATTRIBUTE *keyattr = NULL;
@@ -7217,6 +7220,22 @@ pt_check_alter_partition (PARSER_CONTEXT * parser, PT_NODE * stmt, MOP dbobj)
 
 		  /* in-list delete - lost check */
 		  db_value_list_finddel (&inlist_head, parts_val);
+		}
+	    }
+
+	  /* check if has duplicated name in parts_list of itself */
+	  for (next_parts = parts->next; next_parts;
+	       next_parts = next_parts->next)
+	    {
+	      if (!intl_identifier_casecmp
+		  (next_parts->info.parts.name->info.name.original,
+		   part_name))
+		{
+		  PT_ERRORmf (parser, stmt,
+			      MSGCAT_SET_PARSER_SEMANTIC,
+			      MSGCAT_SEMANTIC_DUPLICATE_PARTITION_DEF,
+			      part_name);
+		  goto check_end;
 		}
 	    }
 
@@ -9925,7 +9944,7 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
   PT_NODE *next, *top_node = info->top_node;
   PT_NODE *orig = node;
   PT_NODE *t_node;
-  PT_NODE *entity;
+  PT_NODE *entity, *derived_table;
   PT_ASSIGNMENTS_HELPER ea;
   PT_NODE *sort_spec = NULL;
 
@@ -10036,6 +10055,22 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
       if (node)
 	{
 	  pt_coerce_insert_values (parser, node);
+	}
+      if (pt_has_error (parser))
+	{
+	  break;
+	}
+
+      if (node->info.insert.value_clauses->info.node_list.list_type !=
+	  PT_IS_SUBQUERY)
+	{
+	  /* Search and check sub-inserts in value list */
+	  (void) parser_walk_tree (parser, node->info.insert.value_clauses,
+				   pt_check_sub_insert, NULL, NULL, NULL);
+	}
+      if (pt_has_error (parser))
+	{
+	  break;
 	}
 
       if (top_node
@@ -10402,6 +10437,39 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
 		}
 	    }
 	}
+
+      entity = node->info.query.q.select.from;
+      if (entity != NULL
+	  && entity->info.spec.derived_table_type == PT_IS_SHOWSTMT
+	  && (derived_table = entity->info.spec.derived_table) != NULL
+	  && derived_table->node_type == PT_SHOWSTMT)
+	{
+	  SHOWSTMT_TYPE show_type;
+	  SHOW_SEMANTIC_CHECK_FUNC check_func = NULL;
+
+	  show_type = derived_table->info.showstmt.show_type;
+	  check_func = showstmt_get_metadata (show_type)->semantic_check_func;
+	  if (check_func != NULL)
+	    {
+	      node = (*check_func) (parser, node);
+	    }
+	}
+
+      /* check for session variable assignments */
+      {
+	int arg[2];
+
+	arg[0] = PT_DEFINE_VARIABLE;	/* type */
+	arg[1] = 0;		/* found */
+
+	(void) parser_walk_tree (parser, node->info.query.q.select.list,
+				 pt_find_op_type_pre, arg, NULL, NULL);
+
+	if (arg[1])		/* an assignment was found */
+	  {
+	    PT_SELECT_INFO_SET_FLAG (node, PT_SELECT_INFO_DISABLE_LOOSE_SCAN);
+	  }
+      }
 
       node = pt_semantic_type (parser, node, info);
       break;
@@ -12425,6 +12493,50 @@ pt_no_attr_and_meta_attr_updates (PARSER_CONTEXT * parser,
 }
 
 /*
+ * pt_node_double_insert_assignments () - Check if an attribute is assigned
+ *					  more than once.
+ *
+ * return      : Void.
+ * parser (in) : Parser context.
+ * stmt (in)   : Insert statement.
+ */
+void
+pt_no_double_insert_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
+{
+  PT_NODE *attr = NULL, *spec = NULL;
+
+  if (stmt == NULL || stmt->node_type != PT_INSERT)
+    {
+      return;
+    }
+
+  spec = stmt->info.insert.spec;
+  if (spec->info.spec.entity_name->info.name.original == NULL)
+    {
+      assert (false);
+      PT_ERROR (parser, spec->info.spec.entity_name, er_msg ());
+      return;
+    }
+
+  /* check for duplicate assignments */
+  for (attr = stmt->info.insert.attr_list; attr != NULL; attr = attr->next)
+    {
+      PT_NODE *attr2;
+      for (attr2 = attr->next; attr2 != NULL; attr2 = attr2->next)
+	{
+	  if (pt_name_equal (parser, attr, attr2))
+	    {
+	      PT_ERRORmf2 (parser, attr2, MSGCAT_SET_PARSER_SEMANTIC,
+			   MSGCAT_SEMANTIC_GT_1_ASSIGNMENT_TO,
+			   spec->info.spec.entity_name->info.name.original,
+			   attr2->info.name.original);
+	      return;
+	    }
+	}
+    }
+}
+
+/*
  * pt_no_double_updates () - assert that there are no multiple assignments to
  *      the same attribute in the given update or merge statement
  *   return:  none
@@ -12482,10 +12594,11 @@ pt_no_double_updates (PARSER_CONTEXT * parser, PT_NODE * stmt)
 				   CASE_INSENSITIVE)
 		  && att_a->info.name.spec_id == att_b->info.name.spec_id)
 		{
-		  PT_ERRORmf (parser, att_a,
-			      MSGCAT_SET_PARSER_SEMANTIC,
-			      MSGCAT_SEMANTIC_GT_1_ASSIGNMENT_TO,
-			      att_a->info.name.original);
+		  PT_ERRORmf2 (parser, att_a,
+			       MSGCAT_SET_PARSER_SEMANTIC,
+			       MSGCAT_SEMANTIC_GT_1_ASSIGNMENT_TO,
+			       att_a->info.name.resolved,
+			       att_a->info.name.original);
 		  return;
 		}
 	    }
@@ -12525,10 +12638,11 @@ pt_no_double_updates (PARSER_CONTEXT * parser, PT_NODE * stmt)
 				       CASE_INSENSITIVE)
 		      && att_a->info.name.spec_id == att_b->info.name.spec_id)
 		    {
-		      PT_ERRORmf (parser, att_a,
-				  MSGCAT_SET_PARSER_SEMANTIC,
-				  MSGCAT_SEMANTIC_GT_1_ASSIGNMENT_TO,
-				  att_a->info.name.original);
+		      PT_ERRORmf2 (parser, att_a,
+				   MSGCAT_SET_PARSER_SEMANTIC,
+				   MSGCAT_SEMANTIC_GT_1_ASSIGNMENT_TO,
+				   att_a->info.name.resolved,
+				   att_a->info.name.original);
 		      return;
 		    }
 		}
@@ -13913,6 +14027,87 @@ pt_coerce_insert_values (PARSER_CONTEXT * parser, PT_NODE * stmt)
 }
 
 /*
+ * pt_check_sub_insert () - Checks if sub-inserts are semantically correct
+ *
+ * return	      : Unchanged node argument.
+ * parser (in)	      : Parser context.
+ * node (in)	      : Parse tree node.
+ * void_arg (in)      : Unused argument.
+ * continue_walk (in) : Continue walk.
+ */
+static PT_NODE *
+pt_check_sub_insert (PARSER_CONTEXT * parser, PT_NODE * node, void *void_arg,
+		     int *continue_walk)
+{
+  PT_NODE *entity_name = NULL, *value_clauses = NULL;
+
+  if (*continue_walk == PT_STOP_WALK)
+    {
+      return node;
+    }
+
+  switch (node->node_type)
+    {
+    case PT_INSERT:
+      /* continue to checks */
+      *continue_walk = PT_LIST_WALK;
+      break;
+    case PT_SELECT:
+    case PT_INTERSECTION:
+    case PT_DIFFERENCE:
+    case PT_UNION:
+      /* stop advancing into this node */
+      *continue_walk = PT_LIST_WALK;
+      return node;
+    default:
+      /* do nothing */
+      *continue_walk = PT_CONTINUE_WALK;
+      return node;
+    }
+  /* Check current insert node */
+  value_clauses = node->info.insert.value_clauses;
+  if (value_clauses->next)
+    {
+      /* Only one row is allowed for sub-inserts */
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_DO_INSERT_TOO_MANY, 0);
+      if (!pt_has_error (parser))
+	{
+	  PT_ERRORc (parser, node, db_error_string (3));
+	}
+      *continue_walk = PT_STOP_WALK;
+      return node;
+    }
+  entity_name = node->info.insert.spec->info.spec.entity_name;
+  if (entity_name == NULL || entity_name->info.name.db_object == NULL)
+    {
+      PT_INTERNAL_ERROR (parser, "Unresolved insert spec");
+      *continue_walk = PT_STOP_WALK;
+      return node;
+    }
+  if (sm_is_reuse_oid_class (entity_name->info.name.db_object))
+    {
+      /* Inserting Reusable OID is not allowed */
+      PT_ERRORmf (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+		  MSGCAT_SEMANTIC_NON_REFERABLE_VIOLATION,
+		  entity_name->info.name.original);
+      *continue_walk = PT_STOP_WALK;
+      return node;
+    }
+
+  /* check sub-inserts for this sub-insert */
+  if (value_clauses->info.node_list.list_type != PT_IS_SUBQUERY)
+    {
+      (void) parser_walk_tree (parser, value_clauses, pt_check_sub_insert,
+			       NULL, NULL, NULL);
+      if (pt_has_error (parser))
+	{
+	  *continue_walk = PT_STOP_WALK;
+	}
+    }
+  return node;
+}
+
+/*
  * pt_count_input_markers () - If the node is a input host variable marker,
  *      compare its index+1 against *num_ptr and record the bigger of
  *      the two into *num_ptr
@@ -14467,7 +14662,9 @@ pt_check_defaultf (PARSER_CONTEXT * parser, PT_NODE * node)
 
   arg = node->info.expr.arg1;
 
-  if (arg == NULL || arg->node_type != PT_NAME)
+  /* OIDs don't have default value */
+  if (arg == NULL || arg->node_type != PT_NAME
+      || arg->info.name.meta_class == PT_OID_ATTR)
     {
       PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
 		 MSGCAT_SEMANTIC_DEFAULT_JUST_COLUMN_NAME);

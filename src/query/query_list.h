@@ -107,7 +107,7 @@ struct cache_time
         } while (0)
 
 /* XASL HEADER */
-/* 
+/*
  * XASL_NODE_HEADER has useful information that needs to be passed to client
  * along with XASL_ID
  *
@@ -712,7 +712,7 @@ enum
 {
   ASYNC_EXECUTABLE = 0x00,
   ASYNC_UNEXECUTABLE = 0x02,
-  KEEP_PLAN_CACHE = 0x04,
+  /* This flag is removed = 0x04, */
   NOT_FROM_RESULT_CACHE = 0x08,
   RESULT_CACHE_REQUIRED = 0x10,
   RESULT_CACHE_INHIBITED = 0x20,
@@ -723,7 +723,8 @@ enum
   SORT_LIMIT_CANDIDATE = 0x0400,
   SORT_LIMIT_USED = 0x0800,
   XASL_TRACE_TEXT = 0x1000,
-  XASL_TRACE_JSON = 0x2000
+  XASL_TRACE_JSON = 0x2000,
+  TRIGGER_IS_INVOLVED = 0x4000
 };
 
 #define IS_SYNC_EXEC_MODE(flag) (!((flag) & ASYNC_EXEC))
@@ -732,13 +733,12 @@ enum
 #define IS_ASYNC_UNEXECUTABLE(flag) ((flag) & ASYNC_UNEXECUTABLE)
 #define IS_ASYNC_EXECUTABLE(flag) (!((flag) & ASYNC_UNEXECUTABLE))
 
-#define DO_KEEP_PLAN_CACHE(flag)        ((flag) & KEEP_PLAN_CACHE)
-#define DO_NOT_KEEP_PLAN_CACHE(flag)    !((flag) & KEEP_PLAN_CACHE)
-
 #define DO_NOT_COLLECT_EXEC_STATS(flag)    ((flag) & DONT_COLLECT_EXEC_STATS)
 
 #define IS_XASL_TRACE_TEXT(flag)    ((flag) & XASL_TRACE_TEXT)
 #define IS_XASL_TRACE_JSON(flag)    ((flag) & XASL_TRACE_JSON)
+
+#define IS_TRIGGER_INVOLVED(flag)   ((flag) & TRIGGER_IS_INVOLVED)
 
 typedef int QUERY_FLAG;
 

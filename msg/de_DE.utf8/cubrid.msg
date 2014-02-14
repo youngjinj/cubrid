@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Letzter Fehler
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 Überprüfen Sie bitte die Richtigkeit des Tokens '%1$s'.
 4 'read uncommitted schema' ist nicht akzeptabel, \n'read committed schema' wird anstatt benutzt.
 5 Maximale Länge der Zeichenstrings ist 16383.
-6 %s überschreitet den Grenzwert %lld.
+6 %s überschreitet den Grenzwert %s.
 7 Maximale Länge der Bitstrings ist %1$d Bits.
 8 Eie Subanfrage darf in einem Join-Bedingung-Klausel nicht angewendet werden.
 9 Attribut "(%1$s)" kann in Update-Privileg-Klausel der grant/revoke Anweisung nicht spezifiziert werden.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 Ungültige Nutzung der Kollation\n COLLATION ( expression )\n
 119 Ungültige Nutzung des clob_to_char\n CLOB_TO_CHAR ( expression [using charset] )\n
 120 Ungültige Nutzung des index_prefix\n  INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 Außer Speicher.
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 Benutzer %1$s ist nicht in der Datenbank.
 44 Das Update darf keine Aggregation haben.
 45 Attributnamen in jeder Klasse müssen eindeutig sein. Attributname '%s' in Klasse '%s' ist mehr als einmal angegeben.
-46 Es gibt mehrere Zuordnungen zu %1$s.
+46 Es gibt mehrere Zuordnungen zu %1$s.%2$s.
 47 Zahl in sort spec ist kein Integer.
 48 %1$d in sort spec ist außer zulässigem Bereich.
 49 „Order by“ ist kein Integer.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Außer virtuellem Speicher: %1$d Bytes können nicht zugewiesen werden.

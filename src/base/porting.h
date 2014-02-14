@@ -69,6 +69,16 @@ extern "C"
 
 #define CTIME_MAX 64
 
+#ifndef LLONG_MAX
+#define LLONG_MAX	9223372036854775807LL
+#endif
+#ifndef LLONG_MIN
+#define LLONG_MIN	(-LLONG_MAX - 1LL)
+#endif
+#ifndef ULLONG_MAX
+#define ULLONG_MAX	18446744073709551615ULL
+#endif
+
 #if defined(WINDOWS)
 #include <fcntl.h>
 #include <direct.h>
@@ -114,6 +124,7 @@ extern "C"
 #define fileno		_fileno
 #define vsnprintf	cub_vsnprintf
 #define tempnam         _tempnam
+#define printf          _printf_p
 #define fprintf         _fprintf_p
 #define vfprintf        _vfprintf_p
 #define vprintf         _vprintf_p
@@ -267,7 +278,7 @@ extern "C"
 #if defined(ENABLE_UNUSED_FUNCTION)
   extern int lock_region (int fd, int cmd, long offset, long size);
 #endif
-  extern int free_space (const char *);
+  extern int free_space (const char *, int);
 
 #define _longjmp                longjmp
 /*
@@ -758,7 +769,21 @@ extern void port_close_memstream (FILE * fp, char **ptr, size_t * sizeloc);
 
 extern char *trim (char *str);
 
-extern int port_str_to_int (int *ret_p, const char *str_p, int base);
+extern int parse_int (int *ret_p, const char *str_p, int base);
+extern int parse_bigint (INT64 * ret_p, const char *str_p, int base);
+
+extern int str_to_int32 (int *ret_p, char **end_p, const char *str_p,
+			 int base);
+extern int str_to_uint32 (unsigned int *ret_p, char **end_p,
+			  const char *str_p, int base);
+extern int str_to_int64 (INT64 * ret_p, char **end_p, const char *str_p,
+			 int base);
+extern int str_to_uint64 (UINT64 * ret_p, char **end_p, const char *str_p,
+			  int base);
+
+#ifndef HAVE_STRLCPY
+extern size_t strlcpy (char *, const char *, size_t);
+#endif
 
 #if (defined(WINDOWS) && defined(_WIN32))
 extern time_t mktime_for_win32 (struct tm *tm);

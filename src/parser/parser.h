@@ -462,15 +462,6 @@ extern "C"
 					      PT_NODE * spec,
 					      PT_NODE * statement,
 					      PT_NODE * from);
-  extern void pt_evaluate_tree_internal (PARSER_CONTEXT * parser,
-					 PT_NODE * tree,
-					 DB_VALUE * db_values,
-					 int values_count, bool set_insert);
-  extern void pt_evaluate_tree_having_serial_internal (PARSER_CONTEXT *
-						       parser, PT_NODE * tree,
-						       DB_VALUE * db_values,
-						       int values_count,
-						       bool set_insert);
   extern PT_NODE *pt_do_cnf (PARSER_CONTEXT * parser, PT_NODE * node,
 			     void *arg, int *continue_walk);
   extern PT_NODE *pt_find_entity (PARSER_CONTEXT * parser,
@@ -499,6 +490,8 @@ extern "C"
   extern int mq_is_real_class_of_vclass (PARSER_CONTEXT * parser,
 					 const PT_NODE * s_class,
 					 const PT_NODE * d_class);
+  extern void pt_no_double_insert_assignments (PARSER_CONTEXT * parser,
+					       PT_NODE * stmt);
   extern void pt_no_double_updates (PARSER_CONTEXT * parser, PT_NODE * stmt);
   extern void pt_no_attr_and_meta_attr_updates (PARSER_CONTEXT * parser,
 						PT_NODE * stmt);
@@ -599,6 +592,7 @@ extern "C"
 			     const PT_NODE * flat_list);
   extern PT_NODE *pt_tuple_value (PARSER_CONTEXT * parser, PT_NODE * name,
 				  CURSOR_ID * cursor_p, int index);
+  extern PT_NODE *pt_insert_value (PARSER_CONTEXT * parser, PT_NODE * node);
   extern bool pt_name_equal (PARSER_CONTEXT * parser,
 			     const PT_NODE * name1, const PT_NODE * name2);
   extern PT_NODE *pt_find_name (PARSER_CONTEXT * parser, const PT_NODE * name,
@@ -813,6 +807,9 @@ extern "C"
 					    bool is_full_syntax,
 					    int like_where_syntax,
 					    PT_NODE * like_or_where_expr);
+  extern PT_NODE *pt_make_query_showstmt (PARSER_CONTEXT * parser,
+					  unsigned int type, PT_NODE * args,
+					  PT_NODE * where_cond);
   extern PT_NODE *pt_make_query_show_columns (PARSER_CONTEXT * parser,
 					      PT_NODE * original_cls_id,
 					      int like_where_syntax,
@@ -905,6 +902,9 @@ extern "C"
   extern PT_NODE *pt_find_node_type_pre (PARSER_CONTEXT * parser,
 					 PT_NODE * node, void *arg,
 					 int *continue_walk);
+  extern PT_NODE *pt_find_op_type_pre (PARSER_CONTEXT * parser,
+				       PT_NODE * node, void *arg,
+				       int *continue_walk);
   extern int pt_get_query_limit_value (PARSER_CONTEXT * parser,
 				       PT_NODE * query, DB_VALUE * limit_val);
   extern bool pt_check_ordby_num_for_multi_range_opt (PARSER_CONTEXT * parser,
@@ -925,6 +925,10 @@ extern "C"
 						    int xasl_flag);
 
   extern PT_NODE *pt_make_query_show_trace (PARSER_CONTEXT * parser);
+
+  extern void insert_rewrite_names_in_value_clauses (PARSER_CONTEXT * parser,
+						     PT_NODE *
+						     insert_statement);
 #ifdef __cplusplus
 }
 #endif

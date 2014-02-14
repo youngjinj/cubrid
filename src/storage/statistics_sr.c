@@ -85,13 +85,6 @@ static int stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
 						OID * class_oid,
 						OID * partitions, int count,
 						bool with_fullscan);
-static const BTREE_STATS *stats_find_inherited_index_stats (OR_CLASSREP *
-							    cls_rep,
-							    OR_CLASSREP *
-							    subcls_rep,
-							    DISK_ATTR *
-							    subcls_attr,
-							    BTID * cls_btid);
 
 /*
  * xstats_update_statistics () -  Updates the statistics for the objects
@@ -559,7 +552,7 @@ xstats_get_statistics_from_server (THREAD_ENTRY * thread_p, OID * class_id_p,
       for (j = 0, btree_stats_p = disk_attr_p->bt_stats;
 	   j < disk_attr_p->n_btstats; j++, btree_stats_p++)
 	{
-          /* collect maximum unique keys info */
+	  /* collect maximum unique keys info */
 	  if (btree_is_unique (thread_p, &btree_stats_p->btid))
 	    {
 	      max_unique_keys = MAX (max_unique_keys, btree_stats_p->keys);
@@ -1404,21 +1397,16 @@ stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
 		disk_repr_p->variable + (j - disk_repr_p->n_fixed);
 	    }
 
-	  assert_release (subcls_attr_p->id == disk_attr_p->id);
-	  assert_release (subcls_attr_p->n_btstats <= disk_attr_p->n_btstats);
-
-	  if (!(subcls_attr_p->id == disk_attr_p->id
-		&& subcls_attr_p->n_btstats <= disk_attr_p->n_btstats))
+	  /* check for partitions schema changes are not yet finished */
+	  if (subcls_attr_p->id != disk_attr_p->id
+	      || subcls_attr_p->n_btstats != disk_attr_p->n_btstats)
 	    {
-	      error = ER_FAILED;
+	      error = NO_ERROR;
 	      goto cleanup;
 	    }
 
-	  /* check for partitions schema changes are not yet finished */
-	  if (subcls_attr_p->n_btstats < disk_attr_p->n_btstats)
-	    {
-	      continue;
-	    }
+	  assert_release (subcls_attr_p->id == disk_attr_p->id);
+	  assert_release (subcls_attr_p->n_btstats == disk_attr_p->n_btstats);
 
 	  for (k = 0, btree_stats_p = disk_attr_p->bt_stats;
 	       k < disk_attr_p->n_btstats; k++, btree_stats_p++)
@@ -1527,10 +1515,16 @@ stats_update_partitioned_statistics (THREAD_ENTRY * thread_p,
 	    }
 
 	  /* check for partitions schema changes are not yet finished */
-	  if (subcls_attr_p->n_btstats < disk_attr_p->n_btstats)
+	  if (subcls_attr_p->id != disk_attr_p->id
+	      || subcls_attr_p->n_btstats != disk_attr_p->n_btstats)
 	    {
-	      continue;
+	      assert (false);	/* is impossible */
+	      error = NO_ERROR;
+	      goto cleanup;
 	    }
+
+	  assert_release (subcls_attr_p->id == disk_attr_p->id);
+	  assert_release (subcls_attr_p->n_btstats == disk_attr_p->n_btstats);
 
 	  for (k = 0, btree_stats_p = disk_attr_p->bt_stats;
 	       k < disk_attr_p->n_btstats; k++, btree_stats_p++)
@@ -1728,7 +1722,7 @@ cleanup:
  *		     statistics
  * cls_btid (in)   : BTID of the index in the superclass
  */
-static const BTREE_STATS *
+const BTREE_STATS *
 stats_find_inherited_index_stats (OR_CLASSREP * cls_rep,
 				  OR_CLASSREP * subcls_rep,
 				  DISK_ATTR * subcls_attr, BTID * cls_btid)
@@ -1737,6 +1731,7 @@ stats_find_inherited_index_stats (OR_CLASSREP * cls_rep,
   const char *cls_btname = NULL;
   const BTID *subcls_btid = NULL;
   BTREE_STATS *btstats = NULL;
+
   /* find the index representation in the superclass */
   for (i = 0; i < cls_rep->n_indexes; i++)
     {

@@ -128,21 +128,21 @@ cci_url_get_bool (char *str, bool * value)
 static int
 cci_url_get_int (char *str, int *value)
 {
-  int v;
-  char *end;
+  int result = 0;
+  int val;
 
   if (value == NULL)
     {
       return CCI_ER_INVALID_URL;
     }
 
-  v = strtol (str, &end, 10);
-  if (end != NULL && end[0] != '\0')
+  result = parse_int (&val, str, 10);
+  if (result != 0)
     {
       return CCI_ER_INVALID_URL;
     }
 
-  *value = v;
+  *value = val;
   return CCI_ER_NO_ERROR;
 }
 
@@ -246,7 +246,7 @@ static int
 cci_url_set_althosts (T_CON_HANDLE * handle, char *data)
 {
   T_ALTER_HOST *hosts = handle->alter_hosts;
-  char *token, *save_data = NULL, *end;
+  char *token, *save_data = NULL;
   int i, error = CCI_ER_NO_ERROR;
 
   memcpy (handle->alter_hosts[0].ip_addr, handle->ip_addr, 4);
@@ -256,6 +256,7 @@ cci_url_set_althosts (T_CON_HANDLE * handle, char *data)
     {
       char *host, *port, *save_alter = NULL;
       int v;
+      int result = 0;
 
       if (i >= ALTER_HOST_MAX_SIZE)
 	{
@@ -284,8 +285,8 @@ cci_url_set_althosts (T_CON_HANDLE * handle, char *data)
 	{
 	  return CCI_ER_INVALID_URL;
 	}
-      v = strtol (port, &end, 10);
-      if (v <= 0 || (end != NULL && end[0] != '\0'))
+      result = parse_int (&v, port, 10);
+      if (result != 0 || v <= 0)
 	{
 	  return CCI_ER_INVALID_URL;
 	}
@@ -309,11 +310,23 @@ cci_shuffle_althosts (T_CON_HANDLE * handle)
   struct drand48_data buf;
   T_ALTER_HOST temp_host;
 
+  gettimeofday (&t, NULL);
+
+  /* tv_usec returned by gettimeofday on WINDOWS
+   * is millisec * 1000 and seeding it would result in
+   * generating an even random number at first.
+   * To avoid such a pattern in generating a random number,
+   * tv_usec/1000 is used on WINDOWS.
+   */
+#if defined (WINDOWS)
+  srand48_r (t.tv_usec / 1000, &buf);
+#else /* WINDOWS */
+  srand48_r (t.tv_usec, &buf);
+#endif /* !WINDOWS */
+
   /* Fisher-Yates shuffle */
   for (i = handle->alter_host_count - 1; i > 0; i--)
     {
-      gettimeofday (&t, NULL);
-      srand48_r (t.tv_usec, &buf);
       lrand48_r (&buf, &r);
       j = (int) (r % (i + 1));
 
@@ -356,6 +369,13 @@ cci_conn_set_properties (T_CON_HANDLE * handle, char *properties)
   error = cci_url_parse_properties (props, DIM (props), properties);
   if (error != CCI_ER_NO_ERROR)
     {
+      goto set_properties_end;
+    }
+
+  if (handle->rc_time < 0 || handle->slow_query_threshold_millis < 0
+      || handle->login_timeout < 0 || handle->query_timeout < 0)
+    {
+      error = CCI_ER_INVALID_URL;
       goto set_properties_end;
     }
 

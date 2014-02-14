@@ -52,12 +52,6 @@ else
   DBGW_MYSQL61_LIB =
 endif
 
-if BUILD_DBGW_NBASE_T
-  DBGW_NBASE_T_LIB = libdbgw3_nbase_t.la
-else
-  DBGW_NBASE_T_LIB =
-endif
-
 if BUILD_DBGW_ALL
   DBGW_ALL_LIB = libdbgw3_all.la
 else
@@ -111,6 +105,7 @@ dbgw3_base_SOURCES = \
         $(BASE_DIR)/porting.c \
         $(CCI_DIR)/cci_log.cpp \
         $(DBGW_DIR)/Exception.cpp \
+        $(DBGW_DIR)/GlobalOnce.cpp \
         $(DBGW_DIR)/Logger.cpp \
         $(DBGW_DIR)/SynchronizedResource.cpp \
         $(DBGW_DIR)/Value.cpp \
@@ -185,14 +180,6 @@ dbgw3_mysql_SOURCES = \
         $(DBGW_SQL_DIR)/mysql/MySQLStatementBase.cpp \
         $(DBGW_SQL_DIR)/mysql/MySQLValue.cpp \
         $(DBGW_SQL_DIR)/mysql/MySQLMock.cpp
-dbgw3_nbase_t_SOURCES = \
-        $(dbgw3_base_SOURCES) \
-        $(DBGW_SQL_DIR)/nbase_t/NBaseTException.cpp \
-        $(DBGW_SQL_DIR)/nbase_t/NBaseTConnection.cpp \
-        $(DBGW_SQL_DIR)/nbase_t/NBaseTPreparedStatement.cpp \
-        $(DBGW_SQL_DIR)/nbase_t/NBaseTExecutor.cpp \
-        $(DBGW_SQL_DIR)/nbase_t/NBaseTResultSetMetaData.cpp \
-        $(DBGW_SQL_DIR)/nbase_t/NBaseTResultSet.cpp
 dbgw3_all_SOURCES = \
         $(dbgw3_base_SOURCES) \
         $(DBGW_SQL_DIR)/oracle/OracleCallableStatement.cpp \
@@ -261,14 +248,6 @@ libdbgw3_mysql61_la_CPPFLAGS = \
 libdbgw3_mysql61_la_LDFLAGS = -version-number @LT_VERSION@ @MYSQL_LIB_PATH@
 libdbgw3_mysql61_la_LIBADD = @EXPAT_LIBS@ -lmysqlclient -lrt
 libdbgw3_mysql61_la_LINK = $(CXXLINK)
-
-libdbgw3_nbase_t_la_SOURCES = \
-        $(dbgw3_nbase_t_SOURCES)
-libdbgw3_nbase_t_la_CPPFLAGS = \
-        $(AM_CPPFLAGS) @SRC_INC@ -I$(CCI_DIR) -I$(BROKER_DIR) -fPIC @NBASE_T_INC_PATH@ -DDBGW_NBASE_T
-libdbgw3_nbase_t_la_LDFLAGS = -version-number @LT_VERSION@ @NBASE_T_LIB_PATH@ -lz
-libdbgw3_nbase_t_la_LIBADD = @EXPAT_LIBS@ @JANSSON_LIBS@ -lnbaseclient
-libdbgw3_nbase_t_la_LINK = $(CXXLINK)
 
 libdbgw3_all_la_SOURCES = \
         $(dbgw3_all_SOURCES)

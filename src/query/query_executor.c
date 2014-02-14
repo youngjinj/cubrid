@@ -781,7 +781,8 @@ static int qexec_gby_finalize_group_dim (THREAD_ENTRY * thread_p,
 					 GROUPBY_STATE * gbstate,
 					 const RECDES * recdes);
 static void qexec_gby_finalize_group (THREAD_ENTRY * thread_p,
-				      GROUPBY_STATE * gbstate, int N);
+				      GROUPBY_STATE * gbstate, int N,
+				      bool keep_list_file);
 static SORT_STATUS qexec_hash_gby_get_next (THREAD_ENTRY * thread_p,
 					    RECDES * recdes, void *arg);
 static int qexec_hash_gby_put_next (THREAD_ENTRY * thread_p,
@@ -1137,6 +1138,8 @@ static int qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 						PRUNING_CONTEXT * pcontext,
 						int *removed_count);
 static int qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
+					      HEAP_SCANCACHE **
+					      pruned_partition_scan_cache,
 					      HEAP_SCANCACHE * scan_cache,
 					      HEAP_CACHE_ATTRINFO * attr_info,
 					      HEAP_CACHE_ATTRINFO *
@@ -1144,7 +1147,7 @@ static int qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
 					      const HEAP_IDX_ELEMENTS_INFO *
 					      idx_info, int needs_pruning,
 					      PRUNING_CONTEXT * pcontext,
-					      OID * unique_oid);
+					      OID * unique_oid, int op_type);
 static int qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p,
 					       ODKU_INFO * odku, HFID * hfid,
 					       VAL_DESCR * vd, int op_type,
@@ -2137,7 +2140,13 @@ qexec_clear_regu_var (XASL_NODE * xasl_p, REGU_VARIABLE * regu_var, int final)
 #if 0				/* TODO - */
     case TYPE_ORDERBY_NUM:
 #endif
-      pr_clear_value (regu_var->value.dbvalptr);
+      pg_cnt += pr_clear_value (regu_var->value.dbvalptr);
+      /* Fall through */
+    case TYPE_LIST_ID:
+      if (regu_var->xasl != NULL && regu_var->xasl->status != XASL_CLEARED)
+	{
+	  pg_cnt += qexec_clear_xasl (NULL, regu_var->xasl, final);
+	}
       break;
     case TYPE_INARITH:
     case TYPE_OUTARITH:
@@ -2498,6 +2507,8 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 	    qexec_clear_regu_list (xasl_p, p->s_id.s.ssid.scan_pred.regu_list,
 				   final);
 	  break;
+	case S_SHOWSTMT_SCAN:
+	  break;
 	case S_METHOD_SCAN:
 	  break;
 	case S_VALUES_SCAN:
@@ -2552,6 +2563,11 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 				   final);
 	  pg_cnt +=
 	    qexec_clear_regu_list (xasl_p, p->s.list_node.list_regu_list_rest,
+				   final);
+	  break;
+	case TARGET_SHOWSTMT:
+	  pg_cnt +=
+	    qexec_clear_regu_list (xasl_p, p->s.showstmt_node.arg_list,
 				   final);
 	  break;
 	case TARGET_SET:
@@ -3033,13 +3049,30 @@ qexec_clear_xasl (THREAD_ENTRY * thread_p, XASL_NODE * xasl, bool final)
 		qexec_clear_update_assignment (xasl, assignment, final);
 	    }
 	}
+      if (xasl->proc.insert.valptr_lists != NULL
+	  && xasl->proc.insert.no_val_lists > 0)
+	{
+	  int i, j;
+	  VALPTR_LIST *valptr_list = NULL;
+	  REGU_VARIABLE_LIST regu_list = NULL;
+	  for (i = 0; i < xasl->proc.insert.no_val_lists; i++)
+	    {
+	      valptr_list = xasl->proc.insert.valptr_lists[i];
+	      for (regu_list = valptr_list->valptrp; regu_list != NULL;
+		   regu_list = regu_list->next)
+		{
+		  pg_cnt +=
+		    qexec_clear_regu_var (xasl, &regu_list->value, final);
+		}
+	    }
+	}
       break;
 
     default:
       break;
     }				/* switch */
 
-  /* Note: Here reset the current pointer to access spacification nodes.
+  /* Note: Here reset the current pointer to access specification nodes.
    *       This is needed beause this XASL tree may be used again if
    *       this thread is suspended and restarted.
    */
@@ -4434,6 +4467,13 @@ qexec_hash_gby_agg_tuple (THREAD_ENTRY * thread_p, XASL_STATE * xasl_state,
 	    }
 	}
 
+#if !defined(NDEBUG)
+      er_log_debug (ARG_FILE_LINE,
+		    "hash aggregation overflow: dumped %.2fKB entry",
+		    (qdata_get_agg_hkey_size (key) +
+		     qdata_get_agg_hvalue_size (value, false)) / 1024.0f);
+#endif
+
       /* remove entry */
       context->hash_size -= qdata_get_agg_hkey_size (key);
       context->hash_size -= qdata_get_agg_hvalue_size (value, false);
@@ -4453,6 +4493,11 @@ qexec_hash_gby_agg_tuple (THREAD_ENTRY * thread_p, XASL_STATE * xasl_state,
 	  qdata_save_agg_htable_to_list (thread_p, context->hash_table,
 					 groupby_list, context->part_list_id,
 					 context->temp_dbval_array);
+
+#if !defined(NDEBUG)
+	  er_log_debug (ARG_FILE_LINE,
+			"hash aggregation abandoned: very high selectivity");
+#endif
 	}
     }
 
@@ -4540,6 +4585,8 @@ qexec_hash_gby_put_next (THREAD_ENTRY * thread_p, const RECDES * recdes,
 		}
 	      if (status != NO_ERROR)
 		{
+		  qmgr_free_old_page_and_init (thread_p, page,
+					       list_idp->tfile_vfid);
 		  return ER_FAILED;
 		}
 
@@ -4549,6 +4596,7 @@ qexec_hash_gby_put_next (THREAD_ENTRY * thread_p, const RECDES * recdes,
 	    {
 	      peek = PEEK;	/* avoid unnecessary COPY */
 	    }
+	  qmgr_free_old_page_and_init (thread_p, page, list_idp->tfile_vfid);
 	}
       else
 	{
@@ -7475,6 +7523,23 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 	}
       break;
 
+    case TARGET_SHOWSTMT:
+      /* open a showstmt scan */
+      if (scan_open_showstmt_scan (thread_p, s_id,
+				   grouped,
+				   curr_spec->single_fetch,
+				   curr_spec->s_dbval,
+				   val_list,
+				   vd,
+				   curr_spec->where_pred,
+				   curr_spec->s.showstmt_node.show_type,
+				   curr_spec->s.showstmt_node.arg_list) !=
+	  NO_ERROR)
+	{
+	  goto exit_on_error;
+	}
+      break;
+
     case TARGET_REGUVAL_LIST:
       /* open a regu value list scan */
       if (scan_open_values_scan (thread_p, s_id,
@@ -7582,6 +7647,9 @@ qexec_close_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec)
 	  break;
 	case TARGET_LIST:
 	  mnt_qm_lscans (thread_p);
+	  break;
+	case TARGET_SHOWSTMT:
+	  /* do nothing */
 	  break;
 	case TARGET_REGUVAL_LIST:
 	  /* currently do nothing */
@@ -11338,6 +11406,17 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 		{
 		  goto error_exit;
 		}
+	      if (pruning_type == DB_PARTITION_CLASS)
+		{
+		  /* make sure data belongs to the right partition */
+		  if (!OID_EQ
+		      (&pruned_oid, &pcontext->selected_partition->class_oid))
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_INVALID_DATA_FOR_PARTITION, 0);
+		      goto error_exit;
+		    }
+		}
 	      /* get actual class hfid */
 	      error_code = heap_get_hfid_from_class_oid (thread_p,
 							 &pruned_oid,
@@ -11446,27 +11525,31 @@ error_exit:
  *        statements)
  *   return: NO_ERROR or ER_code
  *   thread_p(in):
+ *   pruned_partition_scan_cache(out): the real scan_cache for this oid
  *   scan_cache(in):
  *   attr_info(in/out): The attribute information that will be inserted
  *   index_attr_info(in/out):
  *   idx_info(in):
- *   needs_pruning(in):
+ *   pruning_type(in):
  *   pcontext(in):
  *   unique_oid_p(out): the OID of one object to be updated or a NULL OID if
  *                      there are no potential unique index violations
+ *   op_type(int):
  * Note: A single OID is returned even if there are several objects that would
  *       generate unique index violations (this can only happen if there are
  *       several unique indexes).
  */
 static int
 qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
+				   HEAP_SCANCACHE **
+				   pruned_partition_scan_cache,
 				   HEAP_SCANCACHE * scan_cache,
 				   HEAP_CACHE_ATTRINFO * attr_info,
 				   HEAP_CACHE_ATTRINFO * index_attr_info,
 				   const HEAP_IDX_ELEMENTS_INFO * idx_info,
-				   int needs_pruning,
+				   int pruning_type,
 				   PRUNING_CONTEXT * pcontext,
-				   OID * unique_oid_p)
+				   OID * unique_oid_p, int op_type)
 {
   LC_COPYAREA *copyarea = NULL;
   RECDES recdes;
@@ -11483,9 +11566,17 @@ qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
   OID class_oid;
   HFID class_hfid;
   bool is_global_index = false;
+  int local_op_type = SINGLE_ROW_UPDATE;
+
+  assert (pruned_partition_scan_cache != NULL);
 
   DB_MAKE_NULL (&dbvalue);
   OID_SET_NULL (unique_oid_p);
+
+  if (BTREE_IS_MULTI_ROW_OP (op_type))
+    {
+      local_op_type = MULTI_ROW_UPDATE;
+    }
 
   if (heap_attrinfo_clear_dbvalues (index_attr_info) != NO_ERROR)
     {
@@ -11531,7 +11622,7 @@ qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
 	  goto error_exit;
 	}
 
-      if (needs_pruning)
+      if (pruning_type != DB_NOT_PARTITIONED_CLASS)
 	{
 	  if (pcontext == NULL)
 	    {
@@ -11551,9 +11642,75 @@ qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
 			      key_dbvalue, &class_oid, &unique_oid,
 			      is_global_index) == BTREE_KEY_FOUND)
 	{
+	  if (pruning_type != DB_NOT_PARTITIONED_CLASS && is_global_index)
+	    {
+	      /* get actual class oid */
+	      if (heap_get_class_oid (thread_p, &class_oid, &unique_oid)
+		  == NULL)
+		{
+		  goto error_exit;
+		}
+	      /* get actual class hfid */
+	      error_code = heap_get_hfid_from_class_oid (thread_p,
+							 &class_oid,
+							 &class_hfid);
+	      if (error_code != NO_ERROR)
+		{
+		  goto error_exit;
+		}
+	    }
+
+	  if (pruning_type != DB_NOT_PARTITIONED_CLASS
+	      && BTREE_IS_MULTI_ROW_OP (op_type))
+	    {
+	      /* need to provide appropriate scan_cache to
+	       * locator_delete_force in order to correctly compute
+	       * statistics
+	       */
+	      PRUNING_SCAN_CACHE *pruning_cache =
+		locator_get_partition_scancache (pcontext, &class_oid,
+						 &class_hfid, local_op_type,
+						 false);
+	      if (pruning_cache == NULL)
+		{
+		  error_code = er_errid ();
+		  if (error_code == NO_ERROR)
+		    {
+		      error_code = ER_FAILED;
+		    }
+		  goto error_exit;
+		}
+
+	      *pruned_partition_scan_cache = &pruning_cache->scan_cache;
+	    }
 	  /* We now hold an U_LOCK on the instance. It will be upgraded to an
 	   * X_LOCK when the update is executed.
 	   */
+	  if (pruning_type == DB_PARTITION_CLASS)
+	    {
+	      OID pruned_class;
+	      if (is_global_index)
+		{
+		  /* find the class to which unique_oid belongs to */
+		  if (heap_get_class_oid
+		      (thread_p, &pruned_class, &unique_oid) == NULL)
+		    {
+		      goto error_exit;
+		    }
+		}
+	      else
+		{
+		  COPY_OID (&pruned_class, &class_oid);
+		}
+	      if (!OID_EQ
+		  (&pruned_class, &pcontext->selected_partition->class_oid))
+		{
+		  /* found a duplicate OID but not in the right partition */
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			  ER_INVALID_DATA_FOR_PARTITION, 0);
+		  goto error_exit;
+		}
+	    }
 	  found_duplicate = true;
 	  COPY_OID (unique_oid_p, &unique_oid);
 	}
@@ -11631,13 +11788,17 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
   bool need_clear = 0;
   OID unique_oid;
   int local_op_type = SINGLE_ROW_UPDATE;
+  HEAP_SCANCACHE *local_scan_cache = NULL;
 
   OID_SET_NULL (&unique_oid);
 
-  error = qexec_oid_of_duplicate_key_update (thread_p, scan_cache, attr_info,
+  local_scan_cache = scan_cache;
+
+  error = qexec_oid_of_duplicate_key_update (thread_p, &local_scan_cache,
+					     scan_cache, attr_info,
 					     index_attr_info, idx_info,
 					     pruning_type, pcontext,
-					     &unique_oid);
+					     &unique_oid, op_type);
   if (error != NO_ERROR)
     {
       goto exit_on_error;
@@ -11650,15 +11811,15 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
     }
 
   /* get attribute values */
-  scan_code = heap_get (thread_p, &unique_oid, &rec_descriptor, scan_cache,
-			PEEK, NULL_CHN);
+  scan_code = heap_get (thread_p, &unique_oid, &rec_descriptor,
+			local_scan_cache, PEEK, NULL_CHN);
   if (scan_code != S_SUCCESS)
     {
       goto exit_on_error;
     }
 
   /* setup operation type and handle partition representation id */
-  if (pruning_type != DB_NOT_PARTITIONED_CLASS)
+  if (pruning_type == DB_PARTITIONED_CLASS)
     {
       /* modify rec_descriptor representation id to that of attr_info */
       assert (OID_EQ (&attr_info->class_oid, &pcontext->root_oid));
@@ -11711,7 +11872,7 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
       else
 	{
 	  assert_release (assign->regu_var != NULL);
-	  error = fetch_peek_dbval (thread_p, assign->regu_var, NULL, NULL,
+	  error = fetch_peek_dbval (thread_p, assign->regu_var, vd, NULL,
 				    NULL, NULL, &val);
 	  if (error != NO_ERROR)
 	    {
@@ -11730,7 +11891,7 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
   error = locator_attribute_info_force (thread_p, hfid, &unique_oid, NULL,
 					false, attr_info, odku->attr_ids,
 					odku->no_assigns, LC_FLUSH_UPDATE,
-					local_op_type, scan_cache,
+					local_op_type, local_scan_cache,
 					force_count, false, repl_info,
 					pruning_type, pcontext, NULL, NULL);
   if (error != NO_ERROR)
@@ -11763,17 +11924,17 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   INSERT_PROC_NODE *insert = &xasl->proc.insert;
   SCAN_CODE xb_scan;
   SCAN_CODE ls_scan;
-  XASL_NODE *aptr;
-  DB_VALUE *valp;
+  XASL_NODE *aptr = NULL;
+  DB_VALUE *valp = NULL;
   QPROC_DB_VALUE_LIST vallist;
-  int k;
+  int i, k;
   int val_no;
   int rc;
   OID oid;
   OID class_oid;
   HFID class_hfid;
   ACCESS_SPEC_TYPE *specp = NULL;
-  SCAN_ID *s_id;
+  SCAN_ID *s_id = NULL;
   HEAP_CACHE_ATTRINFO attr_info;
   HEAP_CACHE_ATTRINFO index_attr_info;
   HEAP_IDX_ELEMENTS_INFO idx_info;
@@ -11844,10 +12005,7 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
     }
   savepoint_used = 1;
 
-  if (insert->is_first_value)
-    {
-      (void) session_begin_insert_values (thread_p);
-    }
+  (void) session_begin_insert_values (thread_p);
 
   COPY_OID (&class_oid, &insert->class_oid);
   HFID_COPY (&class_hfid, &insert->class_hfid);
@@ -11903,23 +12061,22 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       OR_ATTRIBUTE *attr;
       DB_VALUE *new_val;
       int error = NO_ERROR;
+      TP_DOMAIN_STATUS status = DOMAIN_COMPATIBLE;
 
       attr = heap_locate_last_attrepr (insert->att_id[k], &attr_info);
       if (attr == NULL)
 	{
 	  GOTO_EXIT_ON_ERROR;
 	}
-
-      if (attr->default_value.default_expr != DB_DEFAULT_NONE)
+      new_val = (DB_VALUE *) db_private_alloc (thread_p, sizeof (DB_VALUE));
+      if (new_val == NULL)
 	{
-	  new_val = (DB_VALUE *) db_private_alloc (thread_p,
-						   sizeof (DB_VALUE));
-	  insert->vals[k] = new_val;
+	  GOTO_EXIT_ON_ERROR;
 	}
-      switch (attr->default_value.default_expr)
+      DB_MAKE_NULL (new_val);
+      insert->vals[k] = new_val;
+      switch (attr->current_default_value.default_expr)
 	{
-	case DB_DEFAULT_NONE:
-	  break;
 	case DB_DEFAULT_SYSDATE:
 	  DB_MAKE_DATE (insert->vals[k], 1, 1, 1);
 	  insert->vals[k]->data.date = xasl_state->vd.sys_datetime.date;
@@ -11978,6 +12135,50 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	    DB_MAKE_STRING (insert->vals[k], temp);
 	  }
 	  break;
+	case DB_DEFAULT_NONE:
+	  if (attr->current_default_value.val_length <= 0)
+	    {
+	      /* leave default value as NULL */
+	      break;
+	    }
+	  else
+	    {
+	      OR_BUF buf;
+	      PR_TYPE *pr_type = PR_TYPE_FROM_ID (attr->type);
+	      bool copy = (pr_is_set_type (attr->type)) ? true : false;
+	      if (pr_type != NULL)
+		{
+		  or_init (&buf, attr->current_default_value.value,
+			   attr->current_default_value.val_length);
+		  buf.error_abort = 1;
+		  switch (_setjmp (buf.env))
+		    {
+		    case 0:
+		      error =
+			(*(pr_type->data_readval)) (&buf, insert->vals[k],
+						    attr->domain,
+						    attr->
+						    current_default_value.
+						    val_length, copy, NULL,
+						    0);
+		      if (error != NO_ERROR)
+			{
+			  GOTO_EXIT_ON_ERROR;
+			}
+		      break;
+		    default:
+		      error = ER_FAILED;
+		      GOTO_EXIT_ON_ERROR;
+		      break;
+		    }
+		}
+	    }
+	  break;
+	default:
+	  assert (0);
+	  error = ER_FAILED;
+	  GOTO_EXIT_ON_ERROR;
+	  break;
 	}
 
       if (error != NO_ERROR)
@@ -11985,25 +12186,26 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	  GOTO_EXIT_ON_ERROR;
 	}
 
-      if (TP_DOMAIN_TYPE (attr->domain) != DB_VALUE_TYPE (insert->vals[k]))
+      if (attr->current_default_value.default_expr == DB_DEFAULT_NONE)
 	{
-	  TP_DOMAIN_STATUS dom_status;
+	  /* skip the value cast */
+	  continue;
+	}
 
-	  dom_status = tp_value_cast (insert->vals[k], insert->vals[k],
-				      attr->domain, false);
-	  if (dom_status != DOMAIN_COMPATIBLE)
-	    {
-	      (void) tp_domain_status_er_set (dom_status, ARG_FILE_LINE,
-					      insert->vals[k], attr->domain);
-
-	      GOTO_EXIT_ON_ERROR;
-	    }
+      status =
+	tp_value_cast (insert->vals[k], insert->vals[k], attr->domain, false);
+      if (status != DOMAIN_COMPATIBLE)
+	{
+	  (void) tp_domain_status_er_set (status, ARG_FILE_LINE,
+					  insert->vals[k], attr->domain);
+	  GOTO_EXIT_ON_ERROR;
 	}
     }
 
   specp = xasl->spec_list;
-  if (specp || ((insert->do_replace || (xasl->dptr_list != NULL))
-		&& insert->has_uniques))
+  if (specp != NULL
+      || ((insert->do_replace || (xasl->dptr_list != NULL))
+	  && insert->has_uniques) || insert->no_val_lists > 1)
     {
       scan_cache_op_type = MULTI_ROW_INSERT;
     }
@@ -12047,7 +12249,7 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_ABORT, &lsa);
 	    }
 	  qexec_failure_line (__LINE__, xasl_state);
-	  return ER_FAILED;
+	  GOTO_EXIT_ON_ERROR;
 	}
 
       while ((xb_scan = qexec_next_scan_block_iterations (thread_p,
@@ -12229,18 +12431,27 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	}
       scan_cache_inited = true;
 
-      if (xasl->outptr_list)
+      if (XASL_IS_FLAGED (xasl, XASL_LINK_TO_REGU_VARIABLE)
+	  && scan_cache.file_type == FILE_HEAP_REUSE_SLOTS)
 	{
-	  regu_list = xasl->outptr_list->valptrp;
-	  vallist = xasl->val_list->valp;
-	  for (k = no_default_expr;
-	       k < val_no;
+	  /* do not allow references to reusable oids in sub-inserts.
+	   * this is a safety check and should have been detected at semantic
+	   * level
+	   */
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_REFERENCE_TO_NON_REFERABLE_NOT_ALLOWED, 0);
+	  GOTO_EXIT_ON_ERROR;
+	}
+
+      for (i = 0; i < insert->no_val_lists; i++)
+	{
+	  for (regu_list = insert->valptr_lists[i]->valptrp, vallist =
+	       xasl->val_list->valp, k = no_default_expr; k < val_no;
 	       k++, regu_list = regu_list->next, vallist = vallist->next)
 	    {
-
-	      if (fetch_peek_dbval (thread_p, &regu_list->value,
-				    &xasl_state->vd, &class_oid, NULL, NULL,
-				    &valp) != NO_ERROR)
+	      if (fetch_peek_dbval
+		  (thread_p, &regu_list->value, &xasl_state->vd, &class_oid,
+		   NULL, NULL, &valp) != NO_ERROR)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
@@ -12250,124 +12461,144 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		}
 	      insert->vals[k] = valp;
 	    }
-	}
 
-      /* evaluate constraint predicate */
-      satisfies_constraints = V_UNKNOWN;
-      if (insert->cons_pred != NULL)
-	{
-	  satisfies_constraints = eval_pred (thread_p, insert->cons_pred,
-					     &xasl_state->vd, NULL);
-	  if (satisfies_constraints == V_ERROR)
+	  /* evaluate constraint predicate */
+	  satisfies_constraints = V_UNKNOWN;
+	  if (insert->cons_pred != NULL)
+	    {
+	      satisfies_constraints = eval_pred (thread_p, insert->cons_pred,
+						 &xasl_state->vd, NULL);
+	      if (satisfies_constraints == V_ERROR)
+		{
+		  GOTO_EXIT_ON_ERROR;
+		}
+	    }
+
+	  if (insert->cons_pred != NULL && satisfies_constraints != V_TRUE)
+	    {
+	      /* currently there are only NOT NULL constraints */
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_NULL_CONSTRAINT_VIOLATION, 0);
+	      GOTO_EXIT_ON_ERROR;
+	    }
+
+	  if (heap_attrinfo_clear_dbvalues (&attr_info) != NO_ERROR)
 	    {
 	      GOTO_EXIT_ON_ERROR;
 	    }
-	}
 
-      if (insert->cons_pred != NULL && satisfies_constraints != V_TRUE)
-	{
-	  /* currently there are only NOT NULL constraints */
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		  ER_NULL_CONSTRAINT_VIOLATION, 0);
-	  GOTO_EXIT_ON_ERROR;
-	}
-
-      if (heap_attrinfo_clear_dbvalues (&attr_info) != NO_ERROR)
-	{
-	  GOTO_EXIT_ON_ERROR;
-	}
-      for (k = 0; k < val_no; ++k)
-	{
-	  if (DB_IS_NULL (insert->vals[k]))
+	  for (k = 0; k < val_no; ++k)
 	    {
-	      OR_ATTRIBUTE *attr =
-		heap_locate_last_attrepr (insert->att_id[k], &attr_info);
-	      if (attr == NULL)
+	      if (DB_IS_NULL (insert->vals[k]))
+		{
+		  OR_ATTRIBUTE *attr =
+		    heap_locate_last_attrepr (insert->att_id[k], &attr_info);
+		  if (attr == NULL)
+		    {
+		      GOTO_EXIT_ON_ERROR;
+		    }
+
+		  if (attr->is_autoincrement)
+		    {
+		      continue;
+		    }
+		}
+	      rc = heap_attrinfo_set (NULL, insert->att_id[k],
+				      insert->vals[k], &attr_info);
+	      if (rc != NO_ERROR)
+		{
+		  GOTO_EXIT_ON_ERROR;
+		}
+	    }
+
+	  if (heap_set_autoincrement_value (thread_p, &attr_info, &scan_cache)
+	      != NO_ERROR)
+	    {
+	      GOTO_EXIT_ON_ERROR;
+	    }
+
+	  if (insert->do_replace && insert->has_uniques)
+	    {
+	      int removed_count = 0;
+	      assert (index_attr_info_inited == true);
+	      error =
+		qexec_remove_duplicates_for_replace (thread_p, &scan_cache,
+						     &attr_info,
+						     &index_attr_info,
+						     &idx_info,
+						     scan_cache_op_type,
+						     insert->pruning_type,
+						     pcontext,
+						     &removed_count);
+	      if (error != NO_ERROR)
+		{
+		  GOTO_EXIT_ON_ERROR;
+		}
+	      xasl->list_id->tuple_cnt += removed_count;
+	    }
+
+	  force_count = 0;
+	  if (odku_assignments && insert->has_uniques)
+	    {
+	      error =
+		qexec_execute_duplicate_key_update (thread_p, insert->odku,
+						    &insert->class_hfid,
+						    &xasl_state->vd,
+						    scan_cache_op_type,
+						    &scan_cache, &attr_info,
+						    &index_attr_info,
+						    &idx_info,
+						    insert->pruning_type,
+						    pcontext, &force_count);
+	      if (error != NO_ERROR)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
 
-	      if (attr->is_autoincrement)
+	      if (force_count)
 		{
-		  continue;
+		  assert (force_count == 1);
+		  xasl->list_id->tuple_cnt += force_count * 2;
 		}
 	    }
-	  rc = heap_attrinfo_set (NULL, insert->att_id[k],
-				  insert->vals[k], &attr_info);
-	  if (rc != NO_ERROR)
+
+	  if (force_count == 0)
 	    {
-	      GOTO_EXIT_ON_ERROR;
-	    }
-	}
-
-      if (heap_set_autoincrement_value (thread_p, &attr_info, &scan_cache) !=
-	  NO_ERROR)
-	{
-	  GOTO_EXIT_ON_ERROR;
-	}
-
-      if (insert->do_replace && insert->has_uniques)
-	{
-	  int removed_count = 0;
-	  assert (index_attr_info_inited == true);
-	  error = qexec_remove_duplicates_for_replace (thread_p, &scan_cache,
-						       &attr_info,
-						       &index_attr_info,
-						       &idx_info,
-						       scan_cache_op_type,
-						       insert->pruning_type,
-						       pcontext,
-						       &removed_count);
-	  if (error != NO_ERROR)
-	    {
-	      GOTO_EXIT_ON_ERROR;
-	    }
-	  xasl->list_id->tuple_cnt += removed_count;
-	}
-
-      force_count = 0;
-      if (odku_assignments && insert->has_uniques)
-	{
-	  error =
-	    qexec_execute_duplicate_key_update (thread_p, insert->odku,
-						&insert->class_hfid,
-						&xasl_state->vd,
+	      if (locator_attribute_info_force (thread_p, &insert->class_hfid,
+						&oid, NULL, false, &attr_info,
+						NULL, 0, operation,
 						scan_cache_op_type,
-						&scan_cache, &attr_info,
-						&index_attr_info, &idx_info,
+						&scan_cache, &force_count,
+						false,
+						REPL_INFO_TYPE_STMT_NORMAL,
 						insert->pruning_type,
-						pcontext, &force_count);
-	  if (error != NO_ERROR)
-	    {
-	      GOTO_EXIT_ON_ERROR;
+						pcontext, NULL, NULL)
+		  != NO_ERROR)
+		{
+		  GOTO_EXIT_ON_ERROR;
+		}
+
+	      /* Instances are not put into the result list file, but are counted. */
+	      if (force_count)
+		{
+		  assert (force_count == 1);
+		  xasl->list_id->tuple_cnt += force_count;
+		}
 	    }
 
-	  if (force_count)
+	  if (XASL_IS_FLAGED (xasl, XASL_LINK_TO_REGU_VARIABLE))
 	    {
+	      /* this must be a sub-insert, and the inserted OID must be
+	       * saved to obj_oid in insert_proc
+	       */
 	      assert (force_count == 1);
-	      xasl->list_id->tuple_cnt += force_count * 2;
-	    }
-	}
-
-      if (force_count == 0)
-	{
-	  if (locator_attribute_info_force (thread_p, &insert->class_hfid,
-					    &oid, NULL, false, &attr_info,
-					    NULL, 0, operation,
-					    scan_cache_op_type, &scan_cache,
-					    &force_count, false,
-					    REPL_INFO_TYPE_STMT_NORMAL,
-					    insert->pruning_type, NULL,
-					    NULL, NULL) != NO_ERROR)
-	    {
-	      GOTO_EXIT_ON_ERROR;
-	    }
-
-	  /* Instances are not put into the result list file, but are counted. */
-	  if (force_count)
-	    {
-	      assert (force_count == 1);
-	      xasl->list_id->tuple_cnt += force_count;
+	      if (force_count != 1)
+		{
+		  GOTO_EXIT_ON_ERROR;
+		}
+	      db_make_oid (insert->obj_oid, &oid);
+	      /* Clear the list id */
+	      qfile_clear_list_id (xasl->list_id);
 	    }
 	}
     }
@@ -12452,7 +12683,7 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 				  &lsa) != TRAN_ACTIVE)
 	{
 	  qexec_failure_line (__LINE__, xasl_state);
-	  return ER_FAILED;
+	  GOTO_EXIT_ON_ERROR;
 	}
     }
 
@@ -12530,6 +12761,11 @@ exit_on_error:
     {
       partition_clear_pruning_context (pcontext);
       pcontext = NULL;
+    }
+  if (XASL_IS_FLAGED (xasl, XASL_LINK_TO_REGU_VARIABLE)
+      && xasl->list_id != NULL)
+    {
+      qfile_clear_list_id (xasl->list_id);
     }
 
   return ER_FAILED;
@@ -12635,7 +12871,7 @@ qexec_execute_obj_fetch (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	  continue;
 	}
 
-      if (xptr->status == XASL_CLEARED)
+      if (xptr->status == XASL_CLEARED || xptr->status == XASL_INITIALIZED)
 	{
 	  if (qexec_execute_mainblock (thread_p, xptr, xasl_state) !=
 	      NO_ERROR)
@@ -13795,7 +14031,8 @@ qexec_end_buildvalueblock_iterations (THREAD_ENTRY * thread_p,
   /* make final pass on aggregate list nodes */
   if (buildvalue->agg_list
       && qdata_finalize_aggregate_list (thread_p,
-					buildvalue->agg_list) != NO_ERROR)
+					buildvalue->agg_list,
+					false) != NO_ERROR)
     {
       GOTO_EXIT_ON_ERROR;
     }
@@ -14536,7 +14773,8 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		  continue;
 		}
 
-	      if (xptr2->status == XASL_CLEARED)
+	      if (xptr2->status == XASL_CLEARED
+		  || xptr2->status == XASL_INITIALIZED)
 		{
 		  if (qexec_execute_mainblock (thread_p, xptr2, xasl_state) !=
 		      NO_ERROR)
@@ -16557,6 +16795,15 @@ qexec_free_xasl_cache_ent (THREAD_ENTRY * thread_p, void *data, void *args)
  *   return:
  *   qstr(in)   :
  *   user_oid(in)       :
+ *
+ * NOTE : If a entry is found in hash table,
+ *        this function marks current transaction id
+ *        to the tran_index_array of the xasl cache entry.
+ *        This mark must be removed with qexec_end_use_of_xasl_cache_ent
+ *        before current request is finished.
+ *
+ *        A marked xasl cache entry cannot be deleted
+ *        from the xasl_id hash table when victimized.
  */
 XASL_CACHE_ENTRY *
 qexec_lookup_xasl_cache_ent (THREAD_ENTRY * thread_p, const char *qstr,
@@ -16617,7 +16864,8 @@ qexec_lookup_xasl_cache_ent (THREAD_ENTRY * thread_p, const char *qstr,
       if (ent)
 	{
 	  /* record my transaction id into the entry
-	     and adjust timestamp and reference counter */
+	   * and adjust timestamp and reference counter
+	   */
 #if defined(SERVER_MODE)
 	  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 	  if ((ssize_t) ent->last_ta_idx < MAX_NTRANS)
@@ -16817,20 +17065,6 @@ qexec_update_xasl_cache_ent (THREAD_ENTRY * thread_p,
          change the given XASL_ID to force to use the cached entry */
       XASL_ID_COPY (stream->xasl_id, &(ent->xasl_id));
 
-      /* record my transaction id into the entry
-         and adjust timestamp and reference counter */
-
-#if defined(SERVER_MODE)
-      tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-      if ((ssize_t) ent->last_ta_idx < MAX_NTRANS)
-	{
-	  num_elements = (int) ent->last_ta_idx;
-	  (void) tranid_lsearch (&tran_index, ent->tran_index_array,
-				 &num_elements);
-	  ent->last_ta_idx = num_elements;
-	}
-#endif
-
       (void) gettimeofday (&ent->time_last_used, NULL);
       ent->ref_count++;
 
@@ -16853,6 +17087,8 @@ qexec_update_xasl_cache_ent (THREAD_ENTRY * thread_p,
   /* check the number of XASL cache entries; compare with qstr hash entries */
   if ((int) mht_count (xasl_ent_cache.qstr_ht) >= xasl_ent_cache.max_entries)
     {
+      int num_mark_deleted_only, num_victimized, old_ent_num;
+
       /* Cache full!
          We need to remove some entries. Select candidates that are old aged
          and recently used. Number of candidates is 5% of total entries.
@@ -16862,6 +17098,15 @@ qexec_update_xasl_cache_ent (THREAD_ENTRY * thread_p,
          than 2% or none, select what are most recently used within the old
          aged candiates and what are old aged within the recently used
          candidates. */
+
+      old_ent_num = xasl_ent_cache.num;
+
+      er_log_debug (ARG_FILE_LINE,
+		    "Plan cache victimize started, qstr_ht = %d, xasl_id_ht = %d, "
+		    "class_oid_ht = %d.",
+		    xasl_ent_cache.qstr_ht->nentries,
+		    xasl_ent_cache.xid_ht->nentries,
+		    xasl_ent_cache.oid_ht->nentries);
 
       xasl_ent_cache.counter.full++;	/* counter */
       xasl_ent_cv = &xasl_ent_cache.cv_info;
@@ -16953,8 +17198,26 @@ qexec_update_xasl_cache_ent (THREAD_ENTRY * thread_p,
 	{
 	  (void) qexec_delete_xasl_cache_ent (thread_p, *r, NULL);
 	}
+
+      /* number of removed */
+      num_victimized = old_ent_num - xasl_ent_cache.num;
+
+      /* number of mark deleted */
+      num_mark_deleted_only = xasl_ent_cv->v_idx - num_victimized;
+
       xasl_ent_cv->v_idx = 0;	/* clear */
 
+      er_log_debug (ARG_FILE_LINE,
+		    "Plan cache victimize finished, qstr_ht = %d, xasl_id_ht = %d, "
+		    "class_oid_ht = %d (victimized entries = %d, "
+		    "mark deleted entries = %d)",
+		    xasl_ent_cache.qstr_ht->nentries,
+		    xasl_ent_cache.xid_ht->nentries,
+		    xasl_ent_cache.oid_ht->nentries,
+		    num_victimized, num_mark_deleted_only);
+
+      assert_release ((int) mht_count (xasl_ent_cache.qstr_ht)
+		      <= xasl_ent_cache.max_entries);
     }				/* if */
 
   /* make new XASL_CACHE_ENTRY */
@@ -17035,19 +17298,6 @@ qexec_update_xasl_cache_ent (THREAD_ENTRY * thread_p,
   ent->dbval_cnt = dbval_cnt;
   ent->list_ht_no = -1;
   ent->clo_list = NULL;
-  /* record my transaction id into the entry */
-#if defined(SERVER_MODE)
-  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
-  if ((ssize_t) ent->last_ta_idx < MAX_NTRANS)
-    {
-      num_elements = (int) ent->last_ta_idx;
-      (void) tranid_lsearch (&tran_index, ent->tran_index_array,
-			     &num_elements);
-      ent->last_ta_idx = num_elements;
-    }
-
-  assert (ent->last_ta_idx == 1);
-#endif
 
   /* insert (or update) the entry into the query string hash table */
   if (mht_put_new (xasl_ent_cache.qstr_ht, ent->sql_info.sql_hash_text, ent)
@@ -17138,8 +17388,8 @@ qexec_remove_my_transaction_id (THREAD_ENTRY * thread_p,
 	  *(r - 1) = 0;
 	}
 
+      assert (ent->last_ta_idx > 0);
       ent->last_ta_idx--;	/* shrink */
-      assert (ent->last_ta_idx >= 0);
     }
 
   return NO_ERROR;
@@ -17150,11 +17400,10 @@ qexec_remove_my_transaction_id (THREAD_ENTRY * thread_p,
  * qexec_end_use_of_xasl_cache_ent () - End use of XASL cache entry
  *   return: NO_ERROR, or ER_code
  *   xasl_id(in)        :
- *   marker(in) :
  */
 int
 qexec_end_use_of_xasl_cache_ent (THREAD_ENTRY * thread_p,
-				 const XASL_ID * xasl_id, bool marker)
+				 const XASL_ID * xasl_id)
 {
   XASL_CACHE_ENTRY *ent;
   int rc;
@@ -17182,12 +17431,6 @@ qexec_end_use_of_xasl_cache_ent (THREAD_ENTRY * thread_p,
 #else /* SA_MODE */
       rc = NO_ERROR;
 #endif /* SERVER_MODE */
-
-      if (marker)
-	{
-	  /* mark it to be deleted */
-	  ent->deletion_marker = true;
-	}
 
 #if defined(SERVER_MODE)
       if (ent->deletion_marker && ent->last_ta_idx == 0)
@@ -17330,12 +17573,8 @@ qexec_RT_xasl_cache_ent (THREAD_ENTRY * thread_p, XASL_CACHE_ENTRY * ent)
 	  return ER_FAILED;
 	}
 
-#if defined(SERVER_MODE)
-      /* remove my transaction id from the entry and do compaction */
-      (void) qexec_remove_my_transaction_id (thread_p, ent);
-#endif
-      (void) qexec_delete_xasl_cache_ent (thread_p, ent, NULL);
-
+      /* mark it to be deleted */
+      ent->deletion_marker = true;
       csect_exit (thread_p, CSECT_QPROC_XASL_CACHE);
 
       ret = ER_FAILED;
@@ -17350,12 +17589,23 @@ qexec_RT_xasl_cache_ent (THREAD_ENTRY * thread_p, XASL_CACHE_ENTRY * ent)
  *   xasl_id(in)        :
  *   dbval_cnt(in)      :
  *   clop(in)   :
+ *
+ * NOTE : If a entry is found in hash table,
+ *        this function marks current transaction id
+ *        to the tran_index_array of the xasl cache entry.
+ *        This mark must be removed with qexec_end_use_of_xasl_cache_ent
+ *        before current request is finished.
+ *
+ *        A marked xasl cache entry cannot be deleted
+ *        from the xasl_id hash table when victimized.
+ *
  */
 XASL_CACHE_ENTRY *
 qexec_check_xasl_cache_ent_by_xasl (THREAD_ENTRY * thread_p,
 				    const XASL_ID * xasl_id, int dbval_cnt,
 				    XASL_CACHE_CLONE ** clop)
 {
+  int num_elements;
   XASL_CACHE_ENTRY *ent;
 #if defined (ENABLE_UNUSED_FUNCTION)
   XASL_CACHE_CLONE *clo;
@@ -17406,6 +17656,20 @@ qexec_check_xasl_cache_ent_by_xasl (THREAD_ENTRY * thread_p,
 			"mismatch %d vs %d\n", ent->dbval_cnt, dbval_cnt);
 	  ent = NULL;
 	}
+
+#if defined(SERVER_MODE)
+      if (ent)
+	{
+	  int tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+	  if ((ssize_t) ent->last_ta_idx < MAX_NTRANS)
+	    {
+	      num_elements = (int) ent->last_ta_idx;
+	      (void) tranid_lsearch (&tran_index, ent->tran_index_array,
+				     &num_elements);
+	      ent->last_ta_idx = num_elements;
+	    }
+	}
+#endif
     }
 
 #if defined (ENABLE_UNUSED_FUNCTION)
@@ -18214,8 +18478,11 @@ qexec_execute_connect_by (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      /* evaluate CONNECT BY predicate */
 	      if (xasl->if_pred != NULL)
 		{
-		  /* set level_val to children's level */
-		  DB_MAKE_INT (xasl->level_val, level_value + 1);
+		  if (xasl->level_val)
+		    {
+		      /* set level_val to children's level */
+		      DB_MAKE_INT (xasl->level_val, level_value + 1);
+		    }
 		  ev_res = eval_pred (thread_p,
 				      xasl->if_pred, &xasl_state->vd, NULL);
 		  if (ev_res == V_ERROR)
@@ -20377,7 +20644,8 @@ qexec_gby_finalize_group_dim (THREAD_ENTRY * thread_p,
 {
   int i, j, nkeys, level = 0;
 
-  qexec_gby_finalize_group (thread_p, gbstate, 0);
+  qexec_gby_finalize_group (thread_p, gbstate, 0,
+			    (bool) gbstate->with_rollup);
   if (gbstate->state == SORT_PUT_STOP)
     {
       goto wrapup;
@@ -20412,7 +20680,7 @@ qexec_gby_finalize_group_dim (THREAD_ENTRY * thread_p,
 		      assert (gbstate->g_dim[j].
 			      d_flag & GROUPBY_DIM_FLAG_ROLLUP);
 
-		      qexec_gby_finalize_group (thread_p, gbstate, j);
+		      qexec_gby_finalize_group (thread_p, gbstate, j, true);
 #if 0				/* TODO - sus-11454 */
 		      if (gbstate->state == SORT_PUT_STOP)
 			{
@@ -20434,7 +20702,7 @@ qexec_gby_finalize_group_dim (THREAD_ENTRY * thread_p,
 	    {
 	      assert (gbstate->g_dim[j].d_flag & GROUPBY_DIM_FLAG_ROLLUP);
 
-	      qexec_gby_finalize_group (thread_p, gbstate, j);
+	      qexec_gby_finalize_group (thread_p, gbstate, j, true);
 #if 0				/* TODO - sus-11454 */
 	      if (gbstate->state == SORT_PUT_STOP)
 		{
@@ -20445,6 +20713,13 @@ qexec_gby_finalize_group_dim (THREAD_ENTRY * thread_p,
 	      qexec_gby_start_group (thread_p, gbstate, NULL, j);
 	    }
 	  level = gbstate->g_dim_levels;
+	}
+
+      if (gbstate->g_dim != NULL && gbstate->g_dim[0].d_agg_list != NULL)
+	{
+	  qfile_close_list (thread_p, gbstate->g_dim[0].d_agg_list->list_id);
+	  qfile_destroy_list (thread_p,
+			      gbstate->g_dim[0].d_agg_list->list_id);
 	}
     }
 
@@ -20463,10 +20738,11 @@ exit_on_error:
  *   return:
  *   gbstate(in):
  *   N(in):
+ *   keep_list_file(in) : whether keep the list file for reuse
  */
 static void
 qexec_gby_finalize_group (THREAD_ENTRY * thread_p,
-			  GROUPBY_STATE * gbstate, int N)
+			  GROUPBY_STATE * gbstate, int N, bool keep_list_file)
 {
   QPROC_TPLDESCR_STATUS tpldescr_status;
   XASL_NODE *xptr;
@@ -20487,8 +20763,8 @@ qexec_gby_finalize_group (THREAD_ENTRY * thread_p,
   assert (gbstate->g_dim[N].d_flag != GROUPBY_DIM_FLAG_NONE);
 
   if (qdata_finalize_aggregate_list (thread_p,
-				     gbstate->g_dim[N].d_agg_list)
-      != NO_ERROR)
+				     gbstate->g_dim[N].d_agg_list,
+				     keep_list_file) != NO_ERROR)
     {
       GOTO_EXIT_ON_ERROR;
     }
@@ -21474,6 +21750,15 @@ qexec_resolve_domains_for_aggregation (THREAD_ENTRY * thread_p,
 	  continue;
 	}
 
+      if (agg_p->function == PT_COUNT || agg_p->function == PT_COUNT_STAR)
+	{
+	  /* COUNT and COUNT(*) always have the same signature */
+	  agg_p->accumulator_domain.value_dom = &tp_Integer_domain;
+	  agg_p->accumulator_domain.value2_dom = &tp_Null_domain;
+
+	  continue;
+	}
+
       /* fetch function operand */
       if (fetch_peek_dbval
 	  (thread_p, &agg_p->operand, &xasl_state->vd, NULL, NULL, NULL,
@@ -21489,11 +21774,8 @@ qexec_resolve_domains_for_aggregation (THREAD_ENTRY * thread_p,
 	      || agg_p->accumulator_domain.value_dom == NULL
 	      || agg_p->accumulator_domain.value2_dom == NULL)
 	    {
-	      if (agg_p->function != PT_COUNT_STAR)
-		{
-		  /* domains will not be resolved for this function */
-		  *resolved = 0;
-		}
+	      /* domains will not be resolved at this time */
+	      *resolved = 0;
 	    }
 
 	  /* no need to continue */
@@ -21536,18 +21818,30 @@ qexec_resolve_domains_for_aggregation (THREAD_ENTRY * thread_p,
 	      agg_p->accumulator_domain.value2_dom = &tp_Null_domain;
 	      break;
 
-	    case PT_COUNT_STAR:
-	    case PT_COUNT:
-	      agg_p->accumulator_domain.value_dom = &tp_Integer_domain;
-	      agg_p->accumulator_domain.value2_dom = &tp_Null_domain;
-	      break;
-
 	    case PT_AVG:
 	    case PT_SUM:
 	      if (TP_IS_NUMERIC_TYPE (DB_VALUE_TYPE (dbval)))
 		{
-		  agg_p->accumulator_domain.value_dom =
-		    tp_domain_resolve_default (DB_VALUE_TYPE (dbval));
+		  if (TP_DOMAIN_TYPE (agg_p->domain) == DB_TYPE_NUMERIC)
+		    {
+		      agg_p->accumulator_domain.value_dom =
+			tp_domain_resolve (DB_TYPE_NUMERIC, NULL,
+					   DB_MAX_NUMERIC_PRECISION - 1,
+					   agg_p->domain->scale, NULL, NULL);
+		    }
+		  else if (DB_VALUE_TYPE (dbval) == DB_TYPE_NUMERIC)
+		    {
+		      agg_p->accumulator_domain.value_dom =
+			tp_domain_resolve (DB_TYPE_NUMERIC, NULL,
+					   DB_MAX_NUMERIC_PRECISION - 1,
+					   DB_VALUE_SCALE (dbval), NULL,
+					   NULL);
+		    }
+		  else
+		    {
+		      agg_p->accumulator_domain.value_dom =
+			tp_domain_resolve_default (DB_VALUE_TYPE (dbval));
+		    }
 		}
 	      else
 		{
@@ -21634,6 +21928,9 @@ qexec_resolve_domains_for_aggregation (THREAD_ENTRY * thread_p,
 		  agg_p->accumulator_domain.value_dom = tmp_domain_p;
 		  agg_p->accumulator_domain.value2_dom = &tp_Null_domain;
 		}
+	      break;
+	    default:
+	      break;
 	    }
 
 	  /* initialize accumulators */
@@ -21859,11 +22156,22 @@ qexec_groupby_index (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 
 	  if (gbstate.input_recs > 0)
 	    {
-	      /* compare old value with current */
-	      int c = db_value_compare (&list_dbvals[i], &val);
+	      /* compare old value with current
+	       * total_order is 1. Then NULLs are equal.
+	       */
+	      int c = tp_value_compare (&list_dbvals[i], &val, 1, 1);
 
 	      if (c != DB_EQ)
 		{
+		  /* must be DB_LT or DB_GT */
+		  if (c != DB_LT && c != DB_GT)
+		    {
+		      assert_release (false);
+		      gbstate.state = ER_FAILED;
+
+		      GOTO_EXIT_ON_ERROR;
+		    }
+
 		  /* new group should begin, check code below */
 		  all_cols_equal = false;
 		}
@@ -26192,7 +26500,7 @@ qexec_for_update_set_class_locks (THREAD_ENTRY * thread_p,
 	      if (specp->access == SEQUENTIAL
 		  && specp->pruning_type != DB_PARTITIONED_CLASS)
 		{
-		  /* X_LOCK classes which are accessed 
+		  /* X_LOCK classes which are accessed
 		   * sequentially. If this is a partitioned class,
 		   * IX_LOCK is enough. Later in the execution,
 		   * when pruning is performed, partitions will be
@@ -26276,7 +26584,7 @@ qexec_set_class_locks (THREAD_ENTRY * thread_p, XASL_NODE * aptr_list,
 			      && specp->pruning_type != DB_PARTITIONED_CLASS
 			      && (!mvcc_Enabled || specp->where_pred == NULL))
 			    {
-			      /* X_LOCK classes which are accessed 
+			      /* X_LOCK classes which are accessed
 			       * sequentially. If this is a partitioned class,
 			       * IX_LOCK is enough. Later in the execution,
 			       * when pruning is performed, partitions will be
@@ -29312,7 +29620,7 @@ qexec_alloc_agg_hash_context (THREAD_ENTRY * thread_p,
 	}
     }
 
-  /* 
+  /*
    * keep key domains
    */
   proc->agg_hash_context.key_domains =
@@ -29627,7 +29935,7 @@ qexec_free_agg_hash_context (THREAD_ENTRY * thread_p,
  *   thread_p(in): thread
  *   key(out): aggregate key
  *   regu_list(in): reguvar list for fetching values
- * 
+ *
  * NOTE: the DB_VALUEs in the key structure are transient. If key will be
  * stored for later use, a deep copy of DB_VALUEs must be performed using
  * qexec_copy_agg_key().

@@ -652,6 +652,7 @@ public class CUBRIDConnection implements Connection {
 		UStatement us = null;
 
 		synchronized (u_con) {
+			u_con.setBeginTime();
 			us = u_con.prepare(sql, prepareFlag);
 			error = u_con.getRecentError();
 		}
@@ -710,7 +711,7 @@ public class CUBRIDConnection implements Connection {
 	private void addStatement(Statement s) throws SQLException {
 		statements.add(s);
 		
-		if (u_con.getQueryTimeout() >= 0) {
+		if (u_con.getQueryTimeout() > 0) {
 			s.setQueryTimeout (u_con.getQueryTimeout());
 		}
 	}

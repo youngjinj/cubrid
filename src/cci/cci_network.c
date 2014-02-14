@@ -163,8 +163,7 @@ net_connect_srv (T_CON_HANDLE * con_handle, int host_id,
   client_info[SRV_CON_MSG_IDX_CLIENT_TYPE] = cci_client_type;
   client_info[SRV_CON_MSG_IDX_PROTO_VERSION] = CAS_PROTO_PACK_CURRENT_NET_VER;
   client_info[SRV_CON_MSG_IDX_FUNCTION_FLAG]
-    = BROKER_RENEWED_ERROR_CODE
-    | BROKER_SUPPORT_HOLDABLE_RESULT | BROKER_RECONNECT_WHEN_SERVER_DOWN;
+    = BROKER_RENEWED_ERROR_CODE | BROKER_SUPPORT_HOLDABLE_RESULT;
   client_info[SRV_CON_MSG_IDX_RESERVED2] = 0;
 
   info = db_info;
@@ -784,9 +783,8 @@ net_recv_msg_timeout (T_CON_HANDLE * con_handle, char **msg, int *msg_size,
 		(CAS_PROTOCOL_ERR_INDICATOR_SIZE +
 		 CAS_PROTOCOL_ERR_CODE_SIZE);
 
-	      if (hm_broker_reconnect_when_server_down (con_handle)
-		  && (con_handle->cas_info[CAS_INFO_ADDITIONAL_FLAG]
-		      & CAS_INFO_FLAG_MASK_NEW_SESSION_ID))
+	      if (con_handle->cas_info[CAS_INFO_ADDITIONAL_FLAG]
+		  & CAS_INFO_FLAG_MASK_NEW_SESSION_ID)
 		{
 		  char *p;
 
@@ -1257,13 +1255,12 @@ connect_srv (unsigned char *ip_addr, int port, char is_retry,
   struct sockaddr_in sock_addr;
   SOCKET sock_fd;
   int sock_addr_len;
-  int one = 1;
   int retry_count = 0;
   int con_retry_count;
   int ret;
-  int keepalive_val = 1;
-  int optlen = sizeof (keepalive_val);
+  int sock_opt;
 #if defined (WINDOWS)
+  u_long ioctl_opt;
   struct timeval timeout_val;
   fd_set rset, wset, eset;
 #else
@@ -1294,7 +1291,8 @@ connect_retry:
   sock_addr_len = sizeof (struct sockaddr_in);
 
 #if defined (WINDOWS)
-  if (ioctlsocket (sock_fd, FIONBIO, (u_long *) & one) < 0)
+  ioctl_opt = 1;
+  if (ioctlsocket (sock_fd, FIONBIO, (u_long *) (&ioctl_opt)) < 0)
     {
       CLOSE_SOCKET (sock_fd);
       return CCI_ER_CONNECT;
@@ -1414,8 +1412,8 @@ connect_retry:
     }
 
 #if defined (WINDOWS)
-  one = 0;
-  if (ioctlsocket (sock_fd, FIONBIO, (u_long *) & one) < 0)
+  ioctl_opt = 0;
+  if (ioctlsocket (sock_fd, FIONBIO, (u_long *) (&ioctl_opt)) < 0)
     {
       CLOSE_SOCKET (sock_fd);
       return CCI_ER_CONNECT;
@@ -1424,8 +1422,13 @@ connect_retry:
   fcntl (sock_fd, F_SETFL, flags);
 #endif
 
-  setsockopt (sock_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &one, sizeof (one));
-  setsockopt (sock_fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive_val, optlen);
+  sock_opt = 1;
+  setsockopt (sock_fd, IPPROTO_TCP, TCP_NODELAY, (char *) &sock_opt,
+	      sizeof (sock_opt));
+
+  sock_opt = 1;
+  setsockopt (sock_fd, SOL_SOCKET, SO_KEEPALIVE, (char *) &sock_opt,
+	      sizeof (sock_opt));
 
   *ret_sock = sock_fd;
   return CCI_ER_NO_ERROR;

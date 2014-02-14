@@ -148,7 +148,6 @@ BASE_SOURCES = \
 	$(BASE_DIR)/environment_variable.c \
 	$(BASE_DIR)/misc_string.c \
 	$(BASE_DIR)/variable_string.c \
-	$(BASE_DIR)/stringl.c \
 	$(BASE_DIR)/getopt_long.c \
 	$(BASE_DIR)/tsc_timer.c \
 	$(BASE_DIR)/perf.c
@@ -177,6 +176,7 @@ PARSER_SOURCES = \
 	$(PARSER_DIR)/csql_grammar.c \
 	$(PARSER_DIR)/csql_lexer.c \
 	$(PARSER_DIR)/parser_support.c \
+	$(PARSER_DIR)/show_meta.c \
 	$(PARSER_DIR)/double_byte_support.c \
 	$(PARSER_DIR)/method_transform.c \
 	$(PARSER_DIR)/cnf.c \

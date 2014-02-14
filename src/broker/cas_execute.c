@@ -116,6 +116,20 @@ typedef enum
   } while (0)
 #endif /* !WINDOWS */
 
+/* borrowed from optimizer.h: OPT_LEVEL, OPTIMIZATION_ENABLED, 
+ *                            PLAN_DUMP_ENABLED, SIMPLE_DUMP,
+ *                            DETAILED_DUMP
+ */
+#define CHK_OPT_LEVEL(level)                ((level) & 0xff)
+#define CHK_OPTIMIZATION_ENABLED(level)     (CHK_OPT_LEVEL(level) != 0)
+#define CHK_PLAN_DUMP_ENABLED(level)        ((level) >= 0x100)
+#define CHK_SIMPLE_DUMP(level)              ((level) & 0x100)
+#define CHK_DETAILED_DUMP(level)            ((level) & 0x200)
+#define CHK_OPTIMIZATION_LEVEL_VALID(level) \
+	  (CHK_OPTIMIZATION_ENABLED(level) \
+	   || CHK_PLAN_DUMP_ENABLED(level) \
+           || (level == 0))
+
 typedef int (*T_FETCH_FUNC) (T_SRV_HANDLE *, int, int, char, int,
 			     T_NET_BUF *, T_REQ_INFO *);
 
@@ -353,6 +367,9 @@ static void update_query_execution_count (T_APPL_SERVER_INFO * as_info_p,
 static bool need_reconnect_on_rctime (void);
 static void report_abnormal_host_status (int err_code);
 
+static int set_host_variables (DB_SESSION * session, int num_bind,
+			       DB_VALUE * in_values);
+
 
 static char cas_u_type[] = { 0,	/* 0 */
   CCI_U_TYPE_INT,		/* 1 */
@@ -409,10 +426,11 @@ static T_FETCH_FUNC fetch_func[] = {
   fetch_foreign_keys,		/* SCH_CROSS_REFERENCE */
 };
 
-static char database_name[MAX_HA_DBNAME_LENGTH] = "";
+static char database_name[MAX_HA_DBINFO_LENGTH] = "";
 static char database_user[SRV_CON_DBUSER_SIZE] = "";
 static char database_passwd[SRV_CON_DBPASSWD_SIZE] = "";
 static char cas_db_sys_param[128] = "";
+static int saved_Optimization_level = -1;
 
 /*****************************
   move from cas_log.c
@@ -445,13 +463,13 @@ ux_check_connection (void)
 	    }
 	  else
 	    {
-	      char dbname[MAX_HA_DBNAME_LENGTH];
+	      char dbname[MAX_HA_DBINFO_LENGTH];
 	      char dbuser[SRV_CON_DBUSER_SIZE];
 	      char dbpasswd[SRV_CON_DBPASSWD_SIZE];
 
-	      strcpy (dbname, database_name);
-	      strcpy (dbuser, database_user);
-	      strcpy (dbpasswd, database_passwd);
+	      strncpy (dbname, database_name, sizeof (dbname) - 1);
+	      strncpy (dbuser, database_user, sizeof (dbuser) - 1);
+	      strncpy (dbpasswd, database_passwd, sizeof (dbpasswd) - 1);
 
 	      cas_log_debug (ARG_FILE_LINE,
 			     "ux_check_connection: ux_database_shutdown()"
@@ -488,7 +506,7 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd,
 		     char **db_err_msg)
 {
   int err_code, client_type;
-  char *p;
+  char *p = NULL;
   const char *host_connected = NULL;
 
   as_info->force_reconnect = false;
@@ -577,8 +595,21 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd,
       cas_log_debug (ARG_FILE_LINE,
 		     "ux_database_connect: db_login(%s) db_restart(%s) at %s",
 		     db_user, db_name, host_connected);
-      strncpy (as_info->database_name, db_name, MAX_HA_DBNAME_LENGTH - 1);
-      strncpy (as_info->database_host, host_connected, MAXHOSTNAMELEN);
+      p = strchr (db_name, '@');
+      if (p)
+	{
+	  *p = '\0';
+	  strncpy (as_info->database_name, db_name,
+		   sizeof (as_info->database_name) - 1);
+	  *p = (char) '@';
+	}
+      else
+	{
+	  strncpy (as_info->database_name, db_name,
+		   sizeof (as_info->database_name) - 1);
+	}
+      strncpy (as_info->database_host, host_connected,
+	       sizeof (as_info->database_host) - 1);
       as_info->last_connect_time = time (NULL);
 
       strncpy (database_name, db_name, sizeof (database_name) - 1);
@@ -638,105 +669,6 @@ connect_error:
     }
 
   return ERROR_INFO_SET_WITH_MSG (err_code, DBMS_ERROR_INDICATOR, p);
-}
-
-int
-ux_database_reconnect (void)
-{
-  int err_code, client_type;
-  const char *host_connected = NULL;
-  int saved_lock_timeout;
-  int saved_isolation_level;
-
-  ux_get_tran_setting (&saved_lock_timeout, &saved_isolation_level);
-
-  err_code = db_shutdown ();
-  if (err_code < 0)
-    {
-      goto reconnect_error;
-    }
-  cas_log_debug (ARG_FILE_LINE, "ux_database_reconnect: db_shutdown()");
-
-  if (shm_appl->access_mode == READ_ONLY_ACCESS_MODE)
-    {
-      if (shm_appl->replica_only_flag)
-	{
-	  client_type = 12;	/* DB_CLIENT_TYPE_RO_BROKER_REPLICA_ONLY in db.h */
-	  cas_log_debug (ARG_FILE_LINE,
-			 "ux_database_connect: read_replica_only_broker");
-	}
-      else
-	{
-	  client_type = 5;	/* DB_CLIENT_TYPE_READ_ONLY_BROKER in db.h */
-	  cas_log_debug (ARG_FILE_LINE,
-			 "ux_database_connect: read_only_broker");
-	}
-    }
-  else if (shm_appl->access_mode == SLAVE_ONLY_ACCESS_MODE)
-    {
-      if (shm_appl->replica_only_flag)
-	{
-	  client_type = 13;	/* DB_CLIENT_TYPE_SO_BROKER_REPLICA_ONLY in db.h */
-	  cas_log_debug (ARG_FILE_LINE,
-			 "ux_database_connect: slave_replica_only_broker");
-	}
-      else
-	{
-	  client_type = 6;	/* DB_CLIENT_TYPE_SLAVE_ONLY_BROKER in db.h */
-	  cas_log_debug (ARG_FILE_LINE,
-			 "ux_database_connect: slave_only_broker");
-	}
-    }
-  else
-    {
-      if (shm_appl->replica_only_flag)
-	{
-	  client_type = 11;	/* DB_CLIENT_TYPE_RW_BROKER_REPLICA_ONLY */
-	  cas_log_debug (ARG_FILE_LINE,
-			 "ux_database_connect: read_write_replica_only_broker");
-	}
-      else
-	{
-	  client_type = 4;	/* DB_CLIENT_TYPE_BROKER in db.h */
-	}
-    }
-
-  db_set_preferred_hosts (shm_appl->preferred_hosts);
-  db_set_connect_order (shm_appl->connect_order);
-  db_set_max_num_delayed_hosts_lookup (shm_appl->
-				       max_num_delayed_hosts_lookup);
-
-  err_code = db_restart_ex (program_name, database_name, database_user,
-			    database_passwd, NULL, client_type);
-
-  if (err_code < 0)
-    {
-      goto reconnect_error;
-    }
-
-  host_connected = db_get_host_connected ();
-  cas_log_debug (ARG_FILE_LINE,
-		 "ux_database_reconnect: db_login (%s) db_restart(%s) at %s",
-		 database_user, database_name, host_connected);
-  strncpy (as_info->database_host, host_connected, MAXHOSTNAMELEN);
-  as_info->last_connect_time = time (NULL);
-
-  ux_get_default_setting ();
-
-  if (cas_default_isolation_level != saved_isolation_level)
-    {
-      ux_set_isolation_level (saved_isolation_level, NULL);
-    }
-
-  if (cas_default_lock_timeout != saved_lock_timeout)
-    {
-      ux_set_lock_timeout (saved_lock_timeout);
-    }
-
-  return 0;
-
-reconnect_error:
-  return err_code;
 }
 #endif /* !LIBCAS_FOR_JSP */
 
@@ -1302,7 +1234,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
 	  goto execute_error;
 	}
 
-      err_code = db_push_values (session, num_bind, value_list);
+      err_code = set_host_variables (session, num_bind, value_list);
       if (err_code != NO_ERROR)
 	{
 	  err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
@@ -1401,7 +1333,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
     {
       SQL_LOG2_EXEC_APPEND (as_info->cur_sql_log2, stmt_id, n,
 			    cas_log_query_plan_file (srv_handle->id));
-      set_optimization_level (1);
+      reset_optimization_level_as_saved ();
     }
   else
     {
@@ -1620,7 +1552,7 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
 	  goto execute_all_error;
 	}
 
-      err_code = db_push_values (session, num_bind, value_list);
+      err_code = set_host_variables (session, num_bind, value_list);
       if (err_code != NO_ERROR)
 	{
 	  err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
@@ -1948,11 +1880,17 @@ ux_execute_call (T_SRV_HANDLE * srv_handle, char flag, int max_col_size,
 
       if (call_info->is_first_out)
 	{
-	  db_push_values (session, num_bind - 1, &(value_list[1]));
+	  err_code = set_host_variables (session, num_bind - 1,
+					 &(value_list[1]));
 	}
       else
 	{
-	  db_push_values (session, num_bind, value_list);
+	  err_code = set_host_variables (session, num_bind, value_list);
+	}
+      if (err_code != NO_ERROR)
+	{
+	  err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
+	  goto execute_error;
 	}
     }
 
@@ -2428,7 +2366,13 @@ ux_execute_array (T_SRV_HANDLE * srv_handle, int argc, void **argv,
 	    }
 	}
 
-      db_push_values (session, num_markers, &(value_list[first_value]));
+      err_code = set_host_variables (session, num_markers,
+				     &(value_list[first_value]));
+      if (err_code != NO_ERROR)
+	{
+	  err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
+	  goto exec_db_error;
+	}
 
       if (is_prepared == FALSE)
 	{
@@ -3974,11 +3918,6 @@ get_column_default_as_string (DB_ATTRIBUTE * attr, bool * alloc)
       return default_value_string;
     }
 
-  if (db_value_is_null (def))
-    {
-      return "NULL";
-    }
-
   switch (attr->default_value.default_expr)
     {
     case DB_DEFAULT_SYSDATE:
@@ -3995,6 +3934,11 @@ get_column_default_as_string (DB_ATTRIBUTE * attr, bool * alloc)
       return "CURRENT_USER";
     case DB_DEFAULT_NONE:
       break;
+    }
+
+  if (db_value_is_null (def))
+    {
+      return "NULL";
     }
 
   switch (db_value_type (def))
@@ -7164,15 +7108,10 @@ prepare_column_list_info_set (DB_SESSION * session, char prepare_flag,
 	  /* precision = DB_MAX_STRING_LENGTH; */
 #endif /* !LIBCAS_FOR_JSP */
 
-	  set_column_info (net_buf,
-			   (char) cas_type,
-			   scale,
-			   precision,
-			   col_name,
-			   attr_name,
-			   class_name,
-			   (char)
-			   db_query_format_is_non_null (col), client_version);
+	  set_column_info (net_buf, (char) cas_type, scale, precision,
+			   col_name, attr_name, class_name,
+			   (char) db_query_format_is_non_null (col),
+			   client_version);
 
 	  num_cols++;
 	}
@@ -8547,6 +8486,7 @@ sch_imported_keys (T_NET_BUF * net_buf, char *fktable_name, void **result)
   DB_OBJECT *pktable_obj, *fktable_obj;
   DB_ATTRIBUTE **fk_attr = NULL, **pk_attr = NULL;
   DB_CONSTRAINT *fk_const = NULL, *pk = NULL, *pk_const = NULL;
+  DB_CONSTRAINT *pktable_cons = NULL;
   DB_CONSTRAINT_TYPE type;
   SM_FOREIGN_KEY_INFO *fk_info;
   T_FK_INFO_RESULT *fk_res = NULL;
@@ -8600,7 +8540,16 @@ sch_imported_keys (T_NET_BUF * net_buf, char *fktable_name, void **result)
 	  goto exit_on_error;
 	}
 
-      pk = db_constraint_find_primary_key (db_get_constraints (pktable_obj));
+      pktable_cons = db_get_constraints (pktable_obj);
+
+      error = db_error_code ();
+      if (error != NO_ERROR)
+	{
+	  error = ERROR_INFO_SET (error, DBMS_ERROR_INDICATOR);
+	  goto exit_on_error;
+	}
+
+      pk = db_constraint_find_primary_key (pktable_cons);
       if (pk == NULL)
 	{
 	  error = ERROR_INFO_SET_WITH_MSG (ER_FK_REF_CLASS_HAS_NOT_PK,
@@ -9329,13 +9278,8 @@ ux_make_out_rs (int srv_h_id, T_NET_BUF * net_buf, T_REQ_INFO * req_info)
       /* precision = DB_MAX_STRING_LENGTH; */
 #endif /* !LIBCAS_FOR_JSP */
 
-      set_column_info (net_buf,
-		       (char) cas_type,
-		       scale,
-		       precision,
-		       col_name,
-		       attr_name,
-		       class_name,
+      set_column_info (net_buf, (char) cas_type, scale, precision, col_name,
+		       attr_name, class_name,
 		       (char) db_query_format_is_non_null (col),
 		       client_version);
     }
@@ -9631,16 +9575,24 @@ get_tuple_count (T_SRV_HANDLE * srv_handle)
 void
 set_optimization_level (int level)
 {
-  DB_QUERY_RESULT *result = NULL;
-  DB_QUERY_ERROR error;
-  char sql_stmt[64];
+  saved_Optimization_level =
+    prm_get_integer_value (PRM_ID_OPTIMIZATION_LEVEL);
+  prm_set_integer_value (PRM_ID_OPTIMIZATION_LEVEL, level);
+}
 
-  sprintf (sql_stmt, "set optimization level = %d", level);
-  db_execute (sql_stmt, &result, &error);
-  if (result)
+void
+reset_optimization_level_as_saved (void)
+{
+  if (CHK_OPTIMIZATION_LEVEL_VALID (saved_Optimization_level))
     {
-      db_query_end (result);
+      prm_set_integer_value (PRM_ID_OPTIMIZATION_LEVEL,
+			     saved_Optimization_level);
     }
+  else
+    {
+      prm_set_integer_value (PRM_ID_OPTIMIZATION_LEVEL, 1);
+    }
+  saved_Optimization_level = -1;
 }
 
 int
@@ -9870,7 +9822,7 @@ serialize_collection_as_string (DB_VALUE * col, char **out)
 
 /*
  * get_backslash_escape_string() - This function returns proper backslash escape
- * string according to the value of 'no_backslash_escapes' confiuration.
+ * string according to the value of 'no_backslash_escapes' configuration.
  */
 static char *
 get_backslash_escape_string (void)
@@ -10037,4 +9989,52 @@ report_abnormal_host_status (int err_code)
 	}
     }
 #endif /* !LIBCAS_FOR_JSP */
+}
+
+/*
+ * set_host_variables ()
+ *
+ *   return: error code or NO_ERROR
+ *   db_session(in):
+ *   num_bind(in):
+ *   in_values(in):
+ */
+static int
+set_host_variables (DB_SESSION * session, int num_bind, DB_VALUE * in_values)
+{
+  int err_code;
+  DB_CLASS_MODIFICATION_STATUS cls_status;
+  int stmt_id, stmt_count;
+
+  err_code = db_push_values (session, num_bind, in_values);
+  if (err_code != NO_ERROR)
+    {
+      stmt_count = db_statement_count (session);
+      for (stmt_id = 0; stmt_id < stmt_count; stmt_id++)
+	{
+	  cls_status = db_has_modified_class (session, stmt_id);
+	  if (cls_status == DB_CLASS_MODIFIED)
+	    {
+	      err_code = ERROR_INFO_SET_FORCE (CAS_ER_STMT_POOLING,
+					       CAS_ERROR_INDICATOR);
+
+	      return err_code;
+	    }
+	  else if (cls_status == DB_CLASS_ERROR)
+	    {
+	      err_code = er_errid ();
+	      if (err_code == NO_ERROR)
+		{
+		  err_code = ER_FAILED;
+		}
+	      err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
+
+	      return err_code;
+	    }
+	}
+
+      err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
+    }
+
+  return err_code;
 }

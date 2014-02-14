@@ -1867,7 +1867,11 @@ db_query_format_is_non_null (DB_QUERY_TYPE * query_type)
 	}
     }
 
-  return ER_OBJ_INVALID_ATTRIBUTE;
+  /* 
+   * query_type is not an attribute. 
+   * It may be an expression and will be treated as nullable. 
+   */
+  return 0;
 }
 
 /*

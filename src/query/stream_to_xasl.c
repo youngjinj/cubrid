@@ -263,6 +263,8 @@ static char *stx_build_cls_spec_type (THREAD_ENTRY * thread_p, char *tmp,
 				      CLS_SPEC_TYPE * ptr);
 static char *stx_build_list_spec_type (THREAD_ENTRY * thread_p, char *tmp,
 				       LIST_SPEC_TYPE * ptr);
+static char *stx_build_showstmt_spec_type (THREAD_ENTRY * thread_p, char *ptr,
+					   SHOWSTMT_SPEC_TYPE * spec);
 static char *stx_build_rlist_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 					REGUVAL_LIST_SPEC_TYPE * spec,
 					OUTPTR_LIST * outptr_list);
@@ -1986,7 +1988,7 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
   ptr = or_unpack_int (ptr, (int *) &xasl->flag);
 
   /* initialize xasl status */
-  xasl->status = XASL_CLEARED;
+  xasl->status = XASL_INITIALIZED;
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
@@ -4260,7 +4262,6 @@ stx_build_insert_proc (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &insert_info->no_logging);
   ptr = or_unpack_int (ptr, &insert_info->release_lock);
   ptr = or_unpack_int (ptr, &insert_info->do_replace);
-  ptr = or_unpack_int (ptr, &insert_info->is_first_value);
   ptr = or_unpack_int (ptr, &insert_info->pruning_type);
 
   ptr = or_unpack_int (ptr, &offset);
@@ -4274,6 +4275,56 @@ stx_build_insert_proc (THREAD_ENTRY * thread_p, char *ptr,
 	stx_restore_odku_info (thread_p,
 			       &xasl_unpack_info->packed_xasl[offset]);
       if (insert_info->odku == NULL)
+	{
+	  return NULL;
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &insert_info->no_val_lists);
+  if (insert_info->no_val_lists > 0)
+    {
+      insert_info->valptr_lists =
+	(OUTPTR_LIST **) stx_alloc_struct (thread_p,
+					   sizeof (OUTPTR_LIST *) *
+					   insert_info->no_val_lists);
+      if (insert_info->valptr_lists == NULL)
+	{
+	  stx_set_xasl_errcode (thread_p, ER_OUT_OF_VIRTUAL_MEMORY);
+	  return NULL;
+	}
+      for (i = 0; i < insert_info->no_val_lists; i++)
+	{
+	  ptr = or_unpack_int (ptr, &offset);
+	  if (ptr == 0)
+	    {
+	      assert (0);
+	      return NULL;
+	    }
+	  else
+	    {
+	      insert_info->valptr_lists[i] =
+		stx_restore_outptr_list (thread_p,
+					 &xasl_unpack_info->
+					 packed_xasl[offset]);
+	      if (insert_info->valptr_lists[i] == NULL)
+		{
+		  return NULL;
+		}
+	    }
+	}
+    }
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      insert_info->obj_oid = NULL;
+    }
+  else
+    {
+      insert_info->obj_oid =
+	stx_restore_db_value (thread_p,
+			      &xasl_unpack_info->packed_xasl[offset]);
+      if (insert_info->obj_oid == NULL)
 	{
 	  return NULL;
 	}
@@ -4899,6 +4950,12 @@ stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 				      &ACCESS_SPEC_LIST_SPEC (access_spec));
       break;
 
+    case TARGET_SHOWSTMT:
+      ptr = stx_build_showstmt_spec_type (thread_p, ptr,
+					  &ACCESS_SPEC_SHOWSTMT_SPEC
+					  (access_spec));
+      break;
+
     case TARGET_REGUVAL_LIST:
       /* only for the customized type, arg is valid for the transition of customized outptr info */
       outptr_list = (OUTPTR_LIST *) arg;
@@ -5476,6 +5533,39 @@ stx_build_list_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 	stx_restore_regu_variable_list (thread_p, &xasl_unpack_info->
 					packed_xasl[offset]);
       if (list_spec_type->list_regu_list_rest == NULL)
+	{
+	  goto error;
+	}
+    }
+
+  return ptr;
+
+error:
+  stx_set_xasl_errcode (thread_p, ER_OUT_OF_VIRTUAL_MEMORY);
+  return NULL;
+}
+
+static char *
+stx_build_showstmt_spec_type (THREAD_ENTRY * thread_p, char *ptr,
+			      SHOWSTMT_SPEC_TYPE * showstmt_spec_type)
+{
+  int offset;
+  XASL_UNPACK_INFO *xasl_unpack_info =
+    stx_get_xasl_unpack_info_ptr (thread_p);
+
+  ptr = or_unpack_int (ptr, &showstmt_spec_type->show_type);
+
+  ptr = or_unpack_int (ptr, &offset);
+  if (offset == 0)
+    {
+      showstmt_spec_type->arg_list = NULL;
+    }
+  else
+    {
+      showstmt_spec_type->arg_list =
+	stx_restore_regu_variable_list (thread_p, &xasl_unpack_info->
+					packed_xasl[offset]);
+      if (showstmt_spec_type->arg_list == NULL)
 	{
 	  goto error;
 	}

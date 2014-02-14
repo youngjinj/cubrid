@@ -121,13 +121,6 @@ typedef struct
   COMPATIBLE_LEVEL compatible;	/* how compatible is the sub-tree */
 } COMPATIBLE_INFO;
 
-typedef enum
-{
-  CLS_NOT_MODIFIED,
-  CLS_MODIFIED,
-  CLS_ERROR
-} CLASS_STATUS;
-
 extern char *query_Plan_dump_filename;
 extern FILE *query_Plan_dump_fp;
 
@@ -155,12 +148,7 @@ extern PT_NODE *pt_to_upd_del_query (PARSER_CONTEXT * parser,
 				     PT_NODE * order_by,
 				     PT_NODE * orderby_for, int server_op,
 				     SCAN_OPERATION_TYPE scan_op_type);
-extern XASL_NODE *pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * node,
-				     PT_NODE * values_list, int has_uniques,
-				     PT_NODE * non_null_attrs,
-				     PT_NODE ** upd_not_null_attrs,
-				     PT_NODE * default_expr_attrs,
-				     bool is_first_value);
+extern XASL_NODE *pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * node);
 extern PRED_EXPR_WITH_CONTEXT *pt_to_pred_with_context (PARSER_CONTEXT *
 							parser,
 							PT_NODE * filter_pred,
@@ -205,8 +193,10 @@ extern void pt_set_dptr (PARSER_CONTEXT * parser, PT_NODE * node,
 			 XASL_NODE * xasl, UINTPTR id);
 extern PT_NODE *pt_flush_classes (PARSER_CONTEXT * parser, PT_NODE * tree,
 				  void *arg, int *continue_walk);
-extern CLASS_STATUS pt_has_modified_class (PARSER_CONTEXT * parser,
-					   PT_NODE * statement);
+extern DB_CLASS_MODIFICATION_STATUS pt_has_modified_class (PARSER_CONTEXT *
+							   parser,
+							   PT_NODE *
+							   statement);
 extern int pt_is_single_tuple (PARSER_CONTEXT * parser,
 			       PT_NODE * select_node);
 extern void pt_to_pos_descr (PARSER_CONTEXT * parser,

@@ -77,6 +77,9 @@ copy %SRC_DIR%\*.dll %DEST_DIR%\bin
 copy %SRC_DIR%\..\..\external\dll\*.dll %DEST_DIR%\bin
 copy %SRC_DIR%\..\..\external\dll\%PLATFORM%\*.dll %DEST_DIR%\bin
 
+copy %SRC_DIR%\DBGWConnector3*.dll %DEST_DIR%\bin
+copy %SRC_DIR%\DBGWConnector3*.pdb %DEST_DIR%\bin
+
 rem -------------------------------------------
 rem Conf
 copy %SRC_DIR%\..\..\..\conf\*conf* %DEST_DIR%\conf
@@ -122,7 +125,6 @@ copy %SRC_DIR%\..\..\..\src\dbgw\dbgw3\client\Resource.h  %DEST_DIR%\include\dbg
 copy %SRC_DIR%\..\..\..\src\dbgw\dbgw3\client\QueryMapper.h  %DEST_DIR%\include\dbgw3\client
 copy %SRC_DIR%\..\..\..\src\dbgw\dbgw3\client\Client.h  %DEST_DIR%\include\dbgw3\client
 copy %SRC_DIR%\..\..\..\src\dbgw\dbgw3\adapter\Adapter.h  %DEST_DIR%\include\dbgw3\adapter
-copy %SRC_DIR%\..\..\..\src\dbgw\dbgw3\adapter\AdapterForMySQL.h  %DEST_DIR%\include\dbgw3\adapter
 
 rem -------------------------------------------
 rem Messages

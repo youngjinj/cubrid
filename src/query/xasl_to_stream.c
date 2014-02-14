@@ -199,6 +199,9 @@ static char *xts_process_cls_spec_type (char *ptr,
 					const CLS_SPEC_TYPE * cls_spec);
 static char *xts_process_list_spec_type (char *ptr,
 					 const LIST_SPEC_TYPE * list_spec);
+static char *xts_process_showstmt_spec_type (char *ptr,
+					     const SHOWSTMT_SPEC_TYPE *
+					     list_spec);
 static char *xts_process_set_spec_type (char *ptr,
 					const SET_SPEC_TYPE * set_spec);
 static char *xts_process_method_spec_type (char *ptr,
@@ -276,6 +279,7 @@ static int xts_sizeof_indx_id (const INDX_ID * ptr);
 static int xts_sizeof_key_info (const KEY_INFO * ptr);
 static int xts_sizeof_cls_spec_type (const CLS_SPEC_TYPE * ptr);
 static int xts_sizeof_list_spec_type (const LIST_SPEC_TYPE * ptr);
+static int xts_sizeof_showstmt_spec_type (const SHOWSTMT_SPEC_TYPE * ptr);
 static int xts_sizeof_set_spec_type (const SET_SPEC_TYPE * ptr);
 static int xts_sizeof_method_spec_type (const METHOD_SPEC_TYPE * ptr);
 static int xts_sizeof_list_id (const QFILE_LIST_ID * ptr);
@@ -4127,7 +4131,7 @@ xts_process_delete_proc (char *ptr, const DELETE_PROC_NODE * delete_info)
 static char *
 xts_process_insert_proc (char *ptr, const INSERT_PROC_NODE * insert_info)
 {
-  int offset;
+  int offset, i;
 
   ptr = or_pack_oid (ptr, (OID *) & insert_info->class_oid);
 
@@ -4161,11 +4165,28 @@ xts_process_insert_proc (char *ptr, const INSERT_PROC_NODE * insert_info)
 
   ptr = or_pack_int (ptr, insert_info->do_replace);
 
-  ptr = or_pack_int (ptr, insert_info->is_first_value);
-
   ptr = or_pack_int (ptr, insert_info->pruning_type);
 
   offset = xts_save_odku_info (insert_info->odku);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  ptr = or_pack_int (ptr, insert_info->no_val_lists);
+
+  for (i = 0; i < insert_info->no_val_lists; i++)
+    {
+      offset = xts_save_outptr_list (insert_info->valptr_lists[i]);
+      if (offset == ER_FAILED)
+	{
+	  return NULL;
+	}
+      ptr = or_pack_int (ptr, offset);
+    }
+
+  offset = xts_save_db_value (insert_info->obj_oid);
   if (offset == ER_FAILED)
     {
       return NULL;
@@ -4537,6 +4558,12 @@ xts_process_access_spec_type (char *ptr, const ACCESS_SPEC_TYPE * access_spec)
 					&ACCESS_SPEC_LIST_SPEC (access_spec));
       break;
 
+    case TARGET_SHOWSTMT:
+      ptr = xts_process_showstmt_spec_type (ptr,
+					    &ACCESS_SPEC_SHOWSTMT_SPEC
+					    (access_spec));
+      break;
+
     case TARGET_REGUVAL_LIST:
       ptr =
 	xts_process_rlist_spec_type (ptr,
@@ -4875,6 +4902,24 @@ xts_process_list_spec_type (char *ptr, const LIST_SPEC_TYPE * list_spec)
   ptr = or_pack_int (ptr, offset);
 
   offset = xts_save_regu_variable_list (list_spec->list_regu_list_rest);
+  if (offset == ER_FAILED)
+    {
+      return NULL;
+    }
+  ptr = or_pack_int (ptr, offset);
+
+  return ptr;
+}
+
+static char *
+xts_process_showstmt_spec_type (char *ptr,
+				const SHOWSTMT_SPEC_TYPE * showstmt_spec)
+{
+  int offset;
+
+  ptr = or_pack_int (ptr, showstmt_spec->show_type);
+
+  offset = xts_save_regu_variable_list (showstmt_spec->arg_list);
   if (offset == ER_FAILED)
     {
       return NULL;
@@ -6201,7 +6246,11 @@ xts_sizeof_insert_proc (const INSERT_PROC_NODE * insert_info)
     OR_INT_SIZE +		/* no_logging */
     OR_INT_SIZE +		/* release_lock */
     OR_INT_SIZE +		/* do_replace */
-    OR_INT_SIZE;		/* needs pruning */
+    OR_INT_SIZE +		/* needs pruning */
+    OR_INT_SIZE +		/* no_val_lists */
+    PTR_SIZE;			/* obj_oid */
+
+  size += insert_info->no_val_lists * PTR_SIZE;	/* valptr_lists */
 
   return size;
 }
@@ -6510,6 +6559,17 @@ xts_sizeof_access_spec_type (const ACCESS_SPEC_TYPE * access_spec)
       size += tmp_size;
       break;
 
+    case TARGET_SHOWSTMT:
+      tmp_size =
+	xts_sizeof_showstmt_spec_type (&ACCESS_SPEC_SHOWSTMT_SPEC
+				       (access_spec));
+      if (tmp_size == ER_FAILED)
+	{
+	  return ER_FAILED;
+	}
+      size += tmp_size;
+      break;
+
     case TARGET_REGUVAL_LIST:
       /* currently do nothing */
       break;
@@ -6702,6 +6762,22 @@ xts_sizeof_list_spec_type (const LIST_SPEC_TYPE * list_spec)
   size += PTR_SIZE +		/* list_regu_list_pred */
     PTR_SIZE +			/* list_regu_list_rest */
     PTR_SIZE;			/* xasl_node */
+
+  return size;
+}
+
+/*
+ * xts_sizeof_showstmt_spec_type () -
+ *   return:
+ *   ptr(in)    :
+ */
+static int
+xts_sizeof_showstmt_spec_type (const SHOWSTMT_SPEC_TYPE * showstmt_spec)
+{
+  int size = 0;
+
+  size += OR_INT_SIZE +		/* show_type */
+    PTR_SIZE;			/* arg_list */
 
   return size;
 }

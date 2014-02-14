@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Lỗi sau cùng
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 xin vui lòng kiểm tra tính chính xác của mã thông báo '%1$s'.
 4 'read uncommitted schema' không thể chấp nhận, dùng \n'read committed schema' để thay thế.
 5 Độ dài chuỗi ký tự char tối đa là 16383.
-6 %s vượt quá giới hạn của %lld.
+6 %s vượt quá giới hạn của %s.
 7 Độ dài chuỗi bit tối đa là %1$d bits.
 8 Không thể dùng truy vấn con trong mệnh đề điều kiện gia nhập.
 9 Không thể chỉ định thuộc tính "(%1$s)" trong mệnh đề đặc quyền update của câu lệnh grant/revoke.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 sử dụng phân loại vô hiệu\n COLLATION ( expression )\n
 119 sử dụng clob_to_char vô hiệu\n CLOB_TO_CHAR ( expression [using charset] )\n
 120 sử dụng index_prefix vô hiệu\n INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 Không đủ bộ nhớ.
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 Người dùng %1$s không ở trong cơ sở dữ liệu.
 44 Update không thể có aggregation.
 45 Tên thuộc tính trong mỗi lớp phải là duy nhất. Tên thuộc tính '%s' trong lớp '%s' được chỉ định nhiều hơn một lần.
-46 Có nhiều phép gán đến %1$s.
+46 Có nhiều phép gán đến %1$s.%2$s.
 47 Số trong sort spec không phải là một số nguyên.
 48 %1$d trong sort spec nằm ngoài phạm vi.
 49 Order by item không phải một số nguyên.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Không đủ bộ nhớ ảo: không thể cấp phát %1$d bytes.

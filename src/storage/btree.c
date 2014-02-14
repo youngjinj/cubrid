@@ -3682,6 +3682,8 @@ xbtree_test_unique (THREAD_ENTRY * thread_p, BTID * btid)
 
   if (mvcc_Enabled)
     {
+      /* Temporary, in MVCC we disabled B-tree statistics and processing that
+       * uses them */
       return 1;
     }
   root_vpid.pageid = btid->root_pageid;
@@ -4596,6 +4598,8 @@ end:
     {
       pr_clear_value (&(env->pkeys_val[i]));
     }
+
+  mnt_bt_get_stats (thread_p);
 
   return ret;
 
@@ -6311,6 +6315,15 @@ btree_dump_capacity (THREAD_ENTRY * thread_p, FILE * fp, BTID * btid)
 {
   BTREE_CAPACITY cpc;
   int ret = NO_ERROR;
+  char area[FILE_DUMP_DES_AREA_SIZE];
+  char *file_des = NULL;
+  char *index_name = NULL;
+  char *class_name = NULL;
+  int file_des_size = 0;
+  int size = 0;
+  OID class_oid;
+
+  assert (fp != NULL && btid != NULL);
 
   /* get index capacity information */
   ret = btree_index_capacity (thread_p, btid, &cpc);
@@ -6319,11 +6332,35 @@ btree_dump_capacity (THREAD_ENTRY * thread_p, FILE * fp, BTID * btid)
       goto exit_on_error;
     }
 
+  /* get class_name and index_name */
+  file_des = area;
+  file_des_size = FILE_DUMP_DES_AREA_SIZE;
+
+  size = file_get_descriptor (thread_p, &btid->vfid, file_des, file_des_size);
+  if (size <= 0)
+    {
+      goto exit_on_error;
+    }
+
+  class_oid = ((FILE_HEAP_DES *) file_des)->class_oid;
+
+  class_name = heap_get_class_name (thread_p, &class_oid);
+
+  /* get index name */
+  if (heap_get_indexinfo_of_btid (thread_p, &class_oid, btid,
+				  NULL, NULL, NULL, NULL, &index_name,
+				  NULL) != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
   fprintf (fp,
 	   "\n--------------------------------------------------"
 	   "-----------\n");
-  fprintf (fp, "BTID: {{%d, %d}, %d}  CAPACITY INFORMATION:\n",
-	   btid->vfid.volid, btid->vfid.fileid, btid->root_pageid);
+  fprintf (fp, "BTID: {{%d, %d}, %d}, %s ON %s, CAPACITY INFORMATION:\n",
+	   btid->vfid.volid, btid->vfid.fileid, btid->root_pageid,
+	   (index_name == NULL) ? "*UNKOWN_INDEX*" : index_name,
+	   (class_name == NULL) ? "*UNKOWN_CLASS*" : class_name);
 
   /* dump the capacity information */
   fprintf (fp, "\nDistinct Key Count: %d\n", cpc.dis_key_cnt);
@@ -6343,12 +6380,32 @@ btree_dump_capacity (THREAD_ENTRY * thread_p, FILE * fp, BTID * btid)
   fprintf (fp, "--------------------------------------------------"
 	   "-----------\n");
 
+end:
+
+  if (class_name != NULL)
+    {
+      free_and_init (class_name);
+    }
+
+  if (index_name != NULL)
+    {
+      free_and_init (index_name);
+    }
+
   return ret;
 
 exit_on_error:
 
-  return (ret == NO_ERROR
-	  && (ret = er_errid ()) == NO_ERROR) ? ER_FAILED : ret;
+  if (ret == NO_ERROR)
+    {
+      ret = er_errid ();
+      if (ret == NO_ERROR)
+	{
+	  ret = ER_FAILED;
+	}
+    }
+
+  goto end;
 }
 
 /*
@@ -14681,6 +14738,11 @@ start_point:
       slot_id = p_slot_id - 1;	/* if not found fetch current position */
     }
 
+   if (mvcc_Enabled)
+    {
+      goto curr_key_locking;
+    }
+
   memset (&tmp_bts, 0, sizeof (BTREE_SCAN));
   BTREE_INIT_SCAN (&tmp_bts);
   tmp_bts.C_page = P;
@@ -14761,10 +14823,6 @@ start_point:
 	{
 	  COPY_OID (&N_class_oid, &class_oid);
 	}
-    }
-  if (mvcc_Enabled)
-    {
-      goto curr_key_locking;
     }
 
   if (next_lock_flag == true)
@@ -19823,11 +19881,24 @@ int
 btree_rv_nodehdr_undoredo_update (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 {
   RECDES rec;
+#if !defined(NDEBUG)
+  RECDES peek_rec;
+#endif
   int sp_success;
 
   rec.area_size = rec.length = recv->length;
   rec.type = REC_HOME;
   rec.data = (char *) recv->data;
+
+#if !defined(NDEBUG)
+  if (spage_get_record (recv->pgptr, HEADER, &peek_rec, PEEK) != S_SUCCESS)
+    {
+      return ER_FAILED;
+    }
+
+  assert (rec.length == peek_rec.length);
+#endif
+
   sp_success = spage_update (thread_p, recv->pgptr, HEADER, &rec);
   if (sp_success != SP_SUCCESS)
     {
@@ -22639,12 +22710,13 @@ btree_verify_leaf_node (THREAD_ENTRY * thread_p, BTID_INT * btid,
  */
 int
 btree_ils_adjust_range (THREAD_ENTRY * thread_p, KEY_VAL_RANGE * key_range,
-			DB_VALUE * curr_key, int prefix_len)
+			DB_VALUE * curr_key, int prefix_len,
+			bool use_desc_index)
 {
-  DB_VALUE new_key, *new_key_dbvals, *target_key = &key_range->key1;
+  DB_VALUE new_key, *new_key_dbvals, *target_key;
+  TP_DOMAIN *dom;
   DB_MIDXKEY midxkey;
   int i;
-  bool limit_suffix = false;
 
   /* check environment */
   if (DB_VALUE_DOMAIN_TYPE (curr_key) != DB_TYPE_MIDXKEY)
@@ -22653,6 +22725,18 @@ btree_ils_adjust_range (THREAD_ENTRY * thread_p, KEY_VAL_RANGE * key_range,
       er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
 
       return ER_FAILED;
+    }
+
+  /* fetch target key */
+  if (use_desc_index)
+    {
+      /* descending index scan, we adjust upper bound */
+      target_key = &key_range->key2;
+    }
+  else
+    {
+      /* ascending index scan, we adjust lower bound */
+      target_key = &key_range->key1;
     }
 
   /* allocate key buffer */
@@ -22670,28 +22754,96 @@ btree_ils_adjust_range (THREAD_ENTRY * thread_p, KEY_VAL_RANGE * key_range,
   /* determine target key and adjust range */
   switch (key_range->range)
     {
+    case INF_INF:
+      if (use_desc_index)
+	{
+	  key_range->range = INF_LT;	/* (INF, INF) => (INF, ?) */
+	}
+      else
+	{
+	  key_range->range = GT_INF;	/* (INF, INF) => (?, INF) */
+	}
+      break;
+
     case INF_LE:
-    case GE_LE:
-      key_range->range = GT_LE;
-      limit_suffix = true;
+      if (use_desc_index)
+	{
+	  key_range->range = INF_LT;	/* (INF, ?] => (INF, ?) */
+	}
+      else
+	{
+	  key_range->range = GT_LE;	/* (INF, ?] => (?, ?] */
+	}
       break;
 
     case INF_LT:
-    case GE_LT:
-      key_range->range = GT_LT;
-      limit_suffix = true;
+      if (use_desc_index)
+	{
+	  /* range remains unchanged */
+	}
+      else
+	{
+	  key_range->range = GT_LT;	/* (INF, ?) => (?, ?) */
+	}
       break;
 
-    case INF_INF:
+    case GE_LE:
+      if (use_desc_index)
+	{
+	  key_range->range = GE_LT;	/* [?, ?] => [?, ?) */
+	}
+      else
+	{
+	  key_range->range = GT_LE;	/* [?, ?] => (?, ?] */
+	}
+      break;
+
+    case GE_LT:
+      if (use_desc_index)
+	{
+	  /* range remains unchanged */
+	}
+      else
+	{
+	  key_range->range = GT_LT;	/* [?, ?) => (?, ?) */
+	}
+      break;
+
     case GE_INF:
-      key_range->range = GT_INF;
-      limit_suffix = true;
+      if (use_desc_index)
+	{
+	  key_range->range = GE_LT;	/* [?, INF) => [?, ?) */
+	}
+      else
+	{
+	  key_range->range = GT_INF;	/* [?, INF) => (?, INF)  */
+	}
       break;
 
     case GT_LE:
+      if (use_desc_index)
+	{
+	  key_range->range = GT_LT;	/* (?, ?] => (?, ?) */
+	}
+      else
+	{
+	  /* range remains unchanged */
+	}
+      break;
+
     case GT_LT:
+      /* range remains unchanged */
+      break;
+
     case GT_INF:
-      /* nothing to do */
+      if (use_desc_index)
+	{
+	  key_range->range = GT_LT;	/* (?, INF) => (?, ?) */
+	}
+      else
+	{
+	  /* range remains unchanged */
+	}
       break;
 
     default:
@@ -22707,42 +22859,32 @@ btree_ils_adjust_range (THREAD_ENTRY * thread_p, KEY_VAL_RANGE * key_range,
     }
 
   /* build suffix */
-  if (limit_suffix)
+
+  dom = curr_key->data.midxkey.domain->setdomain;
+
+  /* get to domain */
+  for (i = 0; i < prefix_len; i++)
     {
-      TP_DOMAIN *dom = curr_key->data.midxkey.domain->setdomain;
-
-      /* get to domain */
-      for (i = 0; i < prefix_len; i++)
-	{
-	  dom = dom->next;
-	}
-
-      /* minimum or maximum suffix */
-      for (i = prefix_len; i < curr_key->data.midxkey.ncolumns; i++)
-	{
-	  if (dom->is_desc)
-	    {
-	      db_value_domain_min (&new_key_dbvals[i], dom->type->id,
-				   dom->precision, dom->scale, dom->codeset,
-				   dom->collation_id, &dom->enumeration);
-	    }
-	  else
-	    {
-	      db_value_domain_max (&new_key_dbvals[i], dom->type->id,
-				   dom->precision, dom->scale, dom->codeset,
-				   dom->collation_id, &dom->enumeration);
-	    }
-	  dom = dom->next;
-	}
+      dom = dom->next;
     }
-  else
+
+  /* minimum or maximum suffix */
+  for (i = prefix_len; i < curr_key->data.midxkey.ncolumns; i++)
     {
-      /* copy remaining of key */
-      for (i = prefix_len; i < target_key->data.midxkey.ncolumns; i++)
+      if ((dom->is_desc && !use_desc_index)
+	  || (!dom->is_desc && use_desc_index))
 	{
-	  pr_midxkey_get_element_nocopy (&target_key->data.midxkey, i,
-					 &new_key_dbvals[i], NULL, NULL);
+	  db_value_domain_min (&new_key_dbvals[i], dom->type->id,
+			       dom->precision, dom->scale, dom->codeset,
+			       dom->collation_id, &dom->enumeration);
 	}
+      else
+	{
+	  db_value_domain_max (&new_key_dbvals[i], dom->type->id,
+			       dom->precision, dom->scale, dom->codeset,
+			       dom->collation_id, &dom->enumeration);
+	}
+      dom = dom->next;
     }
 
   /* build midxkey */
@@ -23238,7 +23380,7 @@ start_locking:
 	{
 	  btrs_helper.cp_oid_cnt = 1;
 	}
-      else if (SCAN_IS_INDEX_COVERED (index_scan_id_p))
+       else if (SCAN_IS_INDEX_COVERED (index_scan_id_p) && !mvcc_Enabled)
 	{
 	  if ((btrs_helper.rec_oid_cnt - bts->oid_pos)
 	      > (btrs_helper.pg_oid_cnt - btrs_helper.oids_cnt))
@@ -23665,7 +23807,7 @@ start_locking:
       /* one oid necessary before restart of scan */
       btrs_helper.cp_oid_cnt = 1;
     }
-  else if (SCAN_IS_INDEX_COVERED (index_scan_id_p))
+  else if (SCAN_IS_INDEX_COVERED (index_scan_id_p) && !mvcc_Enabled)
     {
       if ((btrs_helper.rec_oid_cnt - bts->oid_pos)
 	  > (btrs_helper.pg_oid_cnt - btrs_helper.oids_cnt))

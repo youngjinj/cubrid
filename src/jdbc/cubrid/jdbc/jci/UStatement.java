@@ -598,6 +598,10 @@ public class UStatement {
 		if (isReturnable) {
 			return;
 		}
+		
+		if (relatedConnection.isConnectedToCubrid() == false) {
+			return;
+		}
 
 		try {
 			byte code = UFunctionCode.CURSOR_CLOSE;
@@ -845,11 +849,7 @@ public class UStatement {
 
 		if (relatedConnection.isErrorToReconnect(errorHandler
 		        .getJdbcErrorCode())) {
-			if (!relatedConnection.brokerInfoReconnectWhenServerDown()
-			        || !relatedConnection.isServerDownError(errorHandler
-			                .getJdbcErrorCode())) {
-				relatedConnection.clientSocketClose();
-			}
+			relatedConnection.clientSocketClose();
 
 			if (!relatedConnection.isActive() || isFirstExecInTran) {
 				try {
@@ -893,7 +893,14 @@ public class UStatement {
 		        .prepare(sql_stmt, prepare_flag, true);
 		UError err = relatedConnection.getRecentError();
 		if (err.getErrorCode() != UErrorCode.ER_NO_ERROR) {
-			throw new UJciException(err.getErrorCode());
+			int indicator =
+				(err.getErrorCode() == UErrorCode.ER_DBMS) ?
+						UErrorCode.DBMS_ERROR_INDICATOR :
+							UErrorCode.CAS_ERROR_INDICATOR;
+
+			throw new UJciException(err.getErrorCode(),
+						indicator, err.getJdbcErrorCode(),
+						err.getErrorMsg(false));
 		}
 
 		relatedConnection.pooled_ustmts.remove(tmp);
@@ -1026,11 +1033,7 @@ public class UStatement {
 
 		if (relatedConnection.isErrorToReconnect(errorHandler
 		        .getJdbcErrorCode())) {
-			if (!relatedConnection.brokerInfoReconnectWhenServerDown()
-			        || !relatedConnection.isServerDownError(errorHandler
-			                .getJdbcErrorCode())) {
-				relatedConnection.clientSocketClose();
-			}
+			relatedConnection.clientSocketClose();
 
 			if (!relatedConnection.isActive() || isFirstExecInTran) {
 				try {
@@ -1387,7 +1390,7 @@ public class UStatement {
 			else if (obj instanceof Time)
 				retValue = ((Time) obj).clone();
 			else if (obj instanceof Timestamp)
-				retValue = ((Timestamp) obj).clone();
+				retValue = new Timestamp(((Timestamp) obj).getTime());
 			else if (obj instanceof CUBRIDOutResultSet) {
 				try {
 					((CUBRIDOutResultSet) obj).createInstance();

@@ -841,6 +841,7 @@ shard_shm_set_as_client_info_with_db_param (T_PROXY_INFO * proxy_info_p,
   as_info_p->isolation_level = client_info_p->isolation_level;
   as_info_p->lock_timeout = client_info_p->lock_timeout;
 
+  assert (as_info_p->clt_version != 0);
   return true;
 }
 
@@ -933,7 +934,7 @@ shard_shm_get_max_context (int max_client)
       max_client = 1;
     }
 
-  return (MIN (max_client, PROXY_MAX_CLIENT) + RESERVED_FD);
+  return (max_client + PROXY_RESERVED_FD);
 }
 #else /* LINUX */
 static int
@@ -952,7 +953,8 @@ shard_shm_get_max_context (int max_num_appl_server)
    * so, we need to reserve enough RESERVED_FD.
    */
   max_context =
-    (MAX_FD - RESERVED_FD - max_num_appl_server /* proxy/cas connection */ );
+    (MAX_FD - PROXY_RESERVED_FD -
+     max_num_appl_server /* proxy/cas connection */ );
 
   return max_context;
 }

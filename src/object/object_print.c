@@ -1119,6 +1119,7 @@ obj_print_describe_constraint (PARSER_CONTEXT * parser,
     {
       MOP ref_clsop;
       SM_CLASS *ref_cls;
+      SM_CLASS_CONSTRAINT *c;
 
       ref_clsop = ws_mop (&(constraint_p->fk_info->ref_class_oid), NULL);
       if (au_fetch_class_force (ref_clsop, &ref_cls, AU_FETCH_READ) !=
@@ -1130,6 +1131,37 @@ obj_print_describe_constraint (PARSER_CONTEXT * parser,
       buffer = pt_append_nulstring (parser, buffer, " REFERENCES ");
       buffer =
 	obj_print_identifier (parser, buffer, ref_cls->header.name, prt_type);
+
+      if (prt_type == OBJ_PRINT_SHOW_CREATE_TABLE)
+	{
+	  for (c = ref_cls->constraints; c; c = c->next)
+	    {
+	      if (c->type == SM_CONSTRAINT_PRIMARY_KEY
+		  && c->attributes != NULL)
+		{
+		  buffer = pt_append_nulstring (parser, buffer, " (");
+		  for (k = 0; k < n_attrs; k++)
+		    {
+		      if (c->attributes[k] != NULL)
+			{
+			  buffer =
+			    obj_print_identifier (parser, buffer,
+						  c->attributes[k]->header.
+						  name, prt_type);
+			  if (k != (n_attrs - 1))
+			    {
+			      buffer =
+				pt_append_nulstring (parser, buffer, ", ");
+			    }
+			}
+		    }
+
+		  buffer = pt_append_nulstring (parser, buffer, ")");
+
+		  break;
+		}
+	    }
+	}
 
       buffer = pt_append_nulstring (parser, buffer, " ON DELETE ");
       buffer = pt_append_nulstring (parser, buffer,
@@ -1585,9 +1617,18 @@ obj_print_help_free_class (CLASS_HELP * info)
 {
   if (info != NULL)
     {
-      free_and_init (info->name);
-      free_and_init (info->class_type);
-      free_and_init (info->object_id);
+      if (info->name != NULL)
+	{
+	  free_and_init (info->name);
+	}
+      if (info->class_type != NULL)
+	{
+	  free_and_init (info->class_type);
+	}
+      if (info->object_id != NULL)
+	{
+	  free_and_init (info->object_id);
+	}
       if (info->collation != NULL)
 	{
 	  free_and_init (info->collation);

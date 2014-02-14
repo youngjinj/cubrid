@@ -244,7 +244,7 @@ namespace dbgw
         {
           if (m_pWorker != NULL)
             {
-              m_pWorker->changeWorkerState(DBGW_WORKTER_STATE_IDLE,
+              m_pWorker->changeWorkerState(DBGW_WORKER_STATE_IDLE,
                   m_pSelf->shared_from_this());
               m_pWorker->release(false);
             }
@@ -258,7 +258,7 @@ namespace dbgw
         {
           if (m_pWorker != NULL)
             {
-              m_pWorker->changeWorkerState(DBGW_WORKTER_STATE_TIMEOUT,
+              m_pWorker->changeWorkerState(DBGW_WORKER_STATE_TIMEOUT,
                   m_pSelf->shared_from_this());
               m_pWorker->release(true);
             }
@@ -515,6 +515,14 @@ namespace dbgw
   const char *_ExecuteQueryJob::getSqlName() const
   {
     return m_sqlName.c_str();
+  }
+
+  _ExecuteQueryBatchJob::_ExecuteQueryBatchJob(trait<_Service>::sp pService,
+      trait<_QueryMapper>::sp pQueryMapper, unsigned long ulTimeOutMilSec,
+      const char *szSqlName, const _ParameterList &parameterList) :
+    _AsyncWorkerJob(pService, pQueryMapper, ulTimeOutMilSec), m_sqlName(szSqlName),
+    m_parameterList(parameterList)
+  {
   }
 
   _ExecuteQueryBatchJob::_ExecuteQueryBatchJob(

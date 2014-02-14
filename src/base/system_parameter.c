@@ -873,9 +873,9 @@ static float prm_lk_run_deadlock_interval_default = 1.0f;
 static float prm_lk_run_deadlock_interval_lower = 0.1f;
 static unsigned int prm_lk_run_deadlock_interval_flag = 0;
 
-int PRM_LOG_NBUFFERS = 128;
-static int prm_log_nbuffers_default = 128;
-static int prm_log_nbuffers_lower = 3;
+int PRM_LOG_NBUFFERS = LOGPB_BUFFER_NPAGES_LOWER;
+static int prm_log_nbuffers_default = LOGPB_BUFFER_NPAGES_LOWER;
+static int prm_log_nbuffers_lower = LOGPB_BUFFER_NPAGES_LOWER;
 static unsigned int prm_log_nbuffers_flag = 0;
 
 int PRM_LOG_CHECKPOINT_NPAGES = 100000;
@@ -939,6 +939,8 @@ static unsigned int prm_gc_enable_flag = 0;
 int PRM_TCP_PORT_ID = 1523;
 static int prm_tcp_port_id_default = 1523;
 static unsigned int prm_tcp_port_id_flag = 0;
+static int prm_tcp_port_id_upper = USHRT_MAX;
+static int prm_tcp_port_id_lower = 1;
 
 int PRM_TCP_CONNECTION_TIMEOUT = 5;
 static int prm_tcp_connection_timeout_default = 5;
@@ -1022,10 +1024,10 @@ bool PRM_QUERY_MODE_SYNC = true;
 static bool prm_query_mode_sync_default = true;
 static unsigned int prm_query_mode_sync_flag = 0;
 
-int PRM_INSERT_MODE = 1 + 8 + 16;
-static int prm_insert_mode_default = 1 + 8 + 16;
+int PRM_INSERT_MODE = 1 + 2;
+static int prm_insert_mode_default = 1 + 2;
 static int prm_insert_mode_lower = 0;
-static int prm_insert_mode_upper = 31;
+static int prm_insert_mode_upper = 31;	/* For backward compatibility */
 static unsigned int prm_insert_mode_flag = 0;
 
 int PRM_LK_MAX_SCANID_BIT = 32;
@@ -1293,6 +1295,8 @@ static unsigned int prm_ha_apply_max_mem_size_flag = 0;
 int PRM_HA_PORT_ID = HB_DEFAULT_HA_PORT_ID;
 static int prm_ha_port_id_default = HB_DEFAULT_HA_PORT_ID;
 static unsigned int prm_ha_port_id_flag = 0;
+static int prm_ha_port_id_upper = USHRT_MAX;
+static int prm_ha_port_id_lower = 1;
 
 int PRM_HA_INIT_TIMER_IN_MSECS = HB_DEFAULT_INIT_TIMER_IN_MSECS;
 static int prm_ha_init_timer_im_msecs_default =
@@ -2267,7 +2271,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &prm_tcp_port_id_flag,
    (void *) &prm_tcp_port_id_default,
    (void *) &PRM_TCP_PORT_ID,
-   (void *) NULL, (void *) NULL,
+   (void *) &prm_tcp_port_id_upper, (void *) &prm_tcp_port_id_lower,
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
@@ -3097,7 +3101,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &prm_ha_port_id_flag,
    (void *) &prm_ha_port_id_default,
    (void *) &PRM_HA_PORT_ID,
-   (void *) NULL, (void *) NULL,
+   (void *) &prm_ha_port_id_upper, (void *) &prm_ha_port_id_lower,
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
@@ -3284,7 +3288,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_HA_COPY_LOG_TIMEOUT,
-   (PRM_FOR_SERVER | PRM_FOR_HA | PRM_HIDDEN),
+   (PRM_FOR_SERVER | PRM_FOR_HA | PRM_USER_CHANGE),
    PRM_INTEGER,
    (void *) &prm_ha_copy_log_timeout_flag,
    (void *) &prm_ha_copy_log_timeout_default,
@@ -4041,7 +4045,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_MAX_AGG_HASH_SIZE,
-   (PRM_FOR_SERVER | PRM_TEST_CHANGE),
+   (PRM_FOR_SERVER | PRM_TEST_CHANGE | PRM_SIZE_UNIT),
    PRM_BIGINT,
    (void *) &prm_max_agg_hash_size_flag,
    (void *) &prm_max_agg_hash_size_default,
@@ -5180,6 +5184,16 @@ prm_read_and_parse_ini_file (const char *prm_file_name, const char *db_name,
 	prm_load_by_section (ini, sec_name, true, reload, prm_file_name, ha,
 			     check_intl_param);
     }
+
+#if defined (SA_MODE)
+  if (error == NO_ERROR)
+    {
+      error =
+	prm_load_by_section (ini, "standalone", true, reload, prm_file_name,
+			     ha, check_intl_param);
+    }
+#endif /* SA_MODE */
+
   if (error == NO_ERROR && !ha)
     {
       error =
@@ -7328,32 +7342,13 @@ sysprm_generate_new_value (SYSPRM_PARAM * prm, const char *value, bool check,
 	  }
 	else
 	  {
-	    long l_val = 0;
+	    int result;
 
-	    errno = 0;
-	    l_val = strtol (value, &end, 10);
-	    if ((errno == ERANGE && (l_val == LONG_MAX
-				     || l_val == LONG_MIN))
-		|| (errno != 0 && l_val == 0))
-	      {
-		return PRM_ERR_BAD_VALUE;
-	      }
+	    result = parse_int (&val, value, 10);
 
-	    if (end == value)
+	    if (result != 0)
 	      {
 		return PRM_ERR_BAD_VALUE;
-	      }
-	    else if (*end != '\0')
-	      {
-		return PRM_ERR_BAD_VALUE;
-	      }
-	    else if (l_val > INT_MAX || l_val < INT_MIN)
-	      {
-		return PRM_ERR_BAD_RANGE;
-	      }
-	    else
-	      {
-		val = (int) l_val;
 	      }
 
 	    if (prm_check_range (prm, (void *) &val) != NO_ERROR)
@@ -7379,7 +7374,9 @@ sysprm_generate_new_value (SYSPRM_PARAM * prm, const char *value, bool check,
     case PRM_BIGINT:
       {
 	/* convert string to UINT64 */
+	int result;
 	UINT64 val;
+	char *end_p;
 
 	if (PRM_HAS_SIZE_UNIT (prm->static_flag))
 	  {
@@ -7390,13 +7387,8 @@ sysprm_generate_new_value (SYSPRM_PARAM * prm, const char *value, bool check,
 	  }
 	else
 	  {
-	    errno = 0;
-	    val = (UINT64) strtoll (value, &end, 10);
-	    if (end == value)
-	      {
-		return PRM_ERR_BAD_VALUE;
-	      }
-	    else if (*end != '\0')
+	    result = str_to_uint64 (&val, &end_p, value, 10);
+	    if (result != 0)
 	      {
 		return PRM_ERR_BAD_VALUE;
 	      }
@@ -7576,9 +7568,10 @@ sysprm_generate_new_value (SYSPRM_PARAM * prm, const char *value, bool check,
 		      }
 		    else
 		      {
-			errno = 0;
-			tmp = strtol (p, &end, 10);
-			if (end == p)
+			int result;
+
+			result = parse_int (&tmp, p, 10);
+			if (result != 0)
 			  {
 			    free_and_init (val);
 			    return PRM_ERR_BAD_VALUE;
@@ -7673,10 +7666,10 @@ sysprm_generate_new_value (SYSPRM_PARAM * prm, const char *value, bool check,
 	  }
 	else
 	  {
+	    int result;
 	    /* check if string can be converted to an integer */
-	    errno = 0;
-	    val = strtol (value, &end, 10);
-	    if (end == value)
+	    result = parse_int (&val, value, 10);
+	    if (result != 0)
 	      {
 		return PRM_ERR_BAD_VALUE;
 	      }

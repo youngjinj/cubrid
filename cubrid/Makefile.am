@@ -101,7 +101,6 @@ BASE_SOURCES = \
 	$(BASE_DIR)/environment_variable.c \
 	$(BASE_DIR)/misc_string.c \
 	$(BASE_DIR)/variable_string.c \
-	$(BASE_DIR)/stringl.c \
 	$(BASE_DIR)/getopt_long.c \
 	$(BASE_DIR)/binaryheap.c \
 	$(BASE_DIR)/event_log.c \
@@ -146,6 +145,7 @@ QUERY_SOURCES = \
 	$(QUERY_DIR)/string_opfunc.c \
 	$(QUERY_DIR)/method_scan.c \
 	$(QUERY_DIR)/query_executor.c \
+	$(QUERY_DIR)/show_scan.c \
 	$(QUERY_DIR)/partition.c \
 	$(QUERY_DIR)/query_opfunc.c \
 	$(QUERY_DIR)/stream_to_xasl.c \

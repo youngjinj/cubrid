@@ -6072,6 +6072,7 @@ static QO_ENV *
 qo_env_new (PARSER_CONTEXT * parser, PT_NODE * query)
 {
   QO_ENV *env;
+  PT_NODE *spec;
 
   env = (QO_ENV *) malloc (sizeof (QO_ENV));
   if (env == NULL)
@@ -6108,7 +6109,9 @@ qo_env_new (PARSER_CONTEXT * parser, PT_NODE * query)
 
   assert (query->node_type == PT_SELECT);
   if (PT_SELECT_INFO_IS_FLAGED (query, PT_SELECT_INFO_COLS_SCHEMA)
-      || PT_SELECT_INFO_IS_FLAGED (query, PT_SELECT_FULL_INFO_COLS_SCHEMA))
+      || PT_SELECT_INFO_IS_FLAGED (query, PT_SELECT_FULL_INFO_COLS_SCHEMA)
+      || ((spec = query->info.query.q.select.from) != NULL
+	  && spec->info.spec.derived_table_type == PT_IS_SHOWSTMT))
     {
       env->plan_dump_enabled = false;
     }
@@ -7024,6 +7027,18 @@ qo_get_ils_prefix_length (QO_ENV * env, QO_NODE * nodep,
   if (prefix_len == -1 || prefix_len == index_entry->col_num)
     {
       return 0;
+    }
+
+  if (!pt_is_single_tuple (env->parser, env->pt_tree))
+    {
+      /* if not a single tuple query, then we either have a GROUP BY clause or
+       * we don't have any kind of aggregation; in these cases, pure NULL keys
+       * qualify iff no terms are used */
+      if (bitset_cardinality (&index_entry->terms) <= 0)
+	{
+	  /* no terms specified, so NULL keys can't be skipped; disable ILS */
+	  return 0;
+	}
     }
 
   /* all done */

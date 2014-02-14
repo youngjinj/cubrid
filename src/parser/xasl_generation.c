@@ -244,6 +244,8 @@ static REGU_VARIABLE *pt_make_regu_subquery (PARSER_CONTEXT * parser,
 					     XASL_NODE * xasl,
 					     const UNBOX unbox,
 					     const PT_NODE * node);
+static REGU_VARIABLE *pt_make_regu_insert (PARSER_CONTEXT * parser,
+					   PT_NODE * statement);
 static PT_NODE *pt_set_numbering_node_etc_pre (PARSER_CONTEXT * parser,
 					       PT_NODE * node, void *arg,
 					       int *continue_walk);
@@ -328,8 +330,7 @@ static PT_NODE *pt_append_assignment_references (PARSER_CONTEXT * parser,
 						 PT_NODE * from,
 						 PT_NODE * select_list);
 static ODKU_INFO *pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert,
-				   XASL_NODE * xasl,
-				   PT_NODE ** non_null_attrs);
+				   XASL_NODE * xasl);
 static REGU_VARIABLE
   * pt_to_cume_dist_percent_rank_regu_variable (PARSER_CONTEXT * parser,
 						PT_NODE * tree, UNBOX unbox);
@@ -430,6 +431,9 @@ static ACCESS_SPEC_TYPE *pt_to_subquery_table_spec_list (PARSER_CONTEXT *
 							 PT_NODE * subquery,
 							 PT_NODE *
 							 where_part);
+static ACCESS_SPEC_TYPE *pt_to_showstmt_spec_list (PARSER_CONTEXT * parser,
+						   PT_NODE * spec,
+						   PT_NODE * where_part);
 static ACCESS_SPEC_TYPE *pt_to_set_expr_table_spec_list (PARSER_CONTEXT *
 							 parser,
 							 PT_NODE * spec,
@@ -679,6 +683,12 @@ static ACCESS_SPEC_TYPE *pt_make_list_access_spec (XASL_NODE * xasl,
 						   attr_list_pred,
 						   REGU_VARIABLE_LIST
 						   attr_list_rest);
+
+static ACCESS_SPEC_TYPE *pt_make_showstmt_access_spec (PRED_EXPR * where_pred,
+						       SHOWSTMT_TYPE
+						       show_type,
+						       REGU_VARIABLE_LIST
+						       arg_list);
 
 static ACCESS_SPEC_TYPE *pt_make_set_access_spec (REGU_VARIABLE * set_expr,
 						  ACCESS_METHOD access,
@@ -3654,10 +3664,10 @@ pt_flush_classes (PARSER_CONTEXT * parser, PT_NODE * node,
  *   parser(in):
  *   statement(in/out):
  */
-CLASS_STATUS
+DB_CLASS_MODIFICATION_STATUS
 pt_has_modified_class (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
-  CLASS_STATUS status = CLS_NOT_MODIFIED;
+  DB_CLASS_MODIFICATION_STATUS status = DB_CLASS_NOT_MODIFIED;
 
   parser_walk_tree (parser, statement, pt_has_modified_class_helper,
 		    &status, NULL, NULL);
@@ -3678,13 +3688,13 @@ static PT_NODE *
 pt_has_modified_class_helper (PARSER_CONTEXT * parser, PT_NODE * node,
 			      void *arg, int *continue_walk)
 {
-  CLASS_STATUS *status = (CLASS_STATUS *) arg;
+  DB_CLASS_MODIFICATION_STATUS *status = (DB_CLASS_MODIFICATION_STATUS *) arg;
   PT_NODE *class_;
   MOP clsmop = NULL;
   SM_CLASS *sm_class = NULL;
   int error = NO_ERROR;
 
-  if (*status != CLS_NOT_MODIFIED)
+  if (*status != DB_CLASS_NOT_MODIFIED)
     {
       *continue_walk = PT_STOP_WALK;
       return node;
@@ -3706,7 +3716,7 @@ pt_has_modified_class_helper (PARSER_CONTEXT * parser, PT_NODE * node,
 	  if (clsmop->decached)
 	    {
 	      /* the class might be aborted. */
-	      *status = CLS_MODIFIED;
+	      *status = DB_CLASS_MODIFIED;
 	    }
 	  else
 	    {
@@ -3716,15 +3726,15 @@ pt_has_modified_class_helper (PARSER_CONTEXT * parser, PT_NODE * node,
 		  if (error == ER_HEAP_UNKNOWN_OBJECT)
 		    {
 		      /* the class might be dropped. */
-		      *status = CLS_MODIFIED;
+		      *status = DB_CLASS_MODIFIED;
 		    }
 		  else
 		    {
-		      *status = CLS_ERROR;
+		      *status = DB_CLASS_ERROR;
 		    }
 		}
 	    }
-	  if (*status != CLS_NOT_MODIFIED)
+	  if (*status != DB_CLASS_NOT_MODIFIED)
 	    {
 	      /* don't revisit leaves */
 	      *continue_walk = PT_STOP_WALK;
@@ -3744,7 +3754,7 @@ pt_has_modified_class_helper (PARSER_CONTEXT * parser, PT_NODE * node,
 	  else if (class_->info.name.db_object_chn
 		   != locator_get_cache_coherency_number (clsmop))
 	    {
-	      *status = CLS_MODIFIED;
+	      *status = DB_CLASS_MODIFIED;
 
 	      /* don't revisit leaves */
 	      *continue_walk = PT_STOP_WALK;
@@ -4696,6 +4706,11 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
       /* Do not proceed down the leaves. */
       *continue_walk = PT_LIST_WALK;
     }
+  else if (tree->node_type == PT_METHOD_CALL)
+    {
+      /* Do not proceed down the leaves */
+      *continue_walk = PT_LIST_WALK;
+    }
 
   if (tree->node_type == PT_NAME)
     {
@@ -5427,6 +5442,34 @@ pt_make_list_access_spec (XASL_NODE * xasl,
       spec->s.list_node.list_regu_list_pred = attr_list_pred;
       spec->s.list_node.list_regu_list_rest = attr_list_rest;
       spec->s.list_node.xasl_node = xasl;
+    }
+
+  return spec;
+}
+
+/*
+ * pt_make_showstmt_access_spec () - Create an initialized
+ *                               ACCESS_SPEC_TYPE TARGET_SHOWSTMT structure
+ *   return:
+ *   where_pred(in):
+ *   show_type(in):
+ *   arg_list(in):
+ */
+static ACCESS_SPEC_TYPE *
+pt_make_showstmt_access_spec (PRED_EXPR * where_pred,
+			      SHOWSTMT_TYPE show_type,
+			      REGU_VARIABLE_LIST arg_list)
+{
+  ACCESS_SPEC_TYPE *spec;
+
+  spec =
+    pt_make_access_spec (TARGET_SHOWSTMT, SEQUENTIAL, NULL, NULL, where_pred,
+			 NULL);
+
+  if (spec)
+    {
+      spec->s.showstmt_node.show_type = show_type;
+      spec->s.showstmt_node.arg_list = arg_list;
     }
 
   return spec;
@@ -7032,16 +7075,15 @@ pt_function_to_regu (PARSER_CONTEXT * parser, PT_NODE * function)
   return regu;
 }
 
-
 /*
- * pt_make_regu_subquery () - takes a db_value and db_type and makes
- *                            a regu_variable constant
- *   return: A NULL return indicates an error occurred
- *   parser(in):
- *   xasl(in/out):
- *   unbox(in):
- *   db_type(in):
- *   node(in):
+ * pt_make_regu_subquery () - Creates a regu variable that executes a
+ *			      sub-query and stores its results.
+ *
+ * return      : Pointer to generated regu variable.
+ * parser (in) : Parser context.
+ * xasl (in)   : XASL node for sub-query.
+ * unbox (in)  : UNBOX value (as table or as value).
+ * node (in)   : Parse tree node for sub-query.
  */
 static REGU_VARIABLE *
 pt_make_regu_subquery (PARSER_CONTEXT * parser, XASL_NODE * xasl,
@@ -7104,6 +7146,55 @@ pt_make_regu_subquery (PARSER_CONTEXT * parser, XASL_NODE * xasl,
   return regu;
 }
 
+/*
+ * pt_make_regu_insert () - Creates a regu variable that executes an insert
+ *			    statement and stored the OID of inserted object.
+ *
+ * return	  : Pointer to generated regu variable.
+ * parser (in)	  : Parser context.
+ * statement (in) : Parse tree node for insert statement.
+ */
+static REGU_VARIABLE *
+pt_make_regu_insert (PARSER_CONTEXT * parser, PT_NODE * statement)
+{
+  XASL_NODE *xasl = NULL;
+  REGU_VARIABLE *regu = NULL;
+
+  if (statement == NULL || statement->node_type != PT_INSERT)
+    {
+      assert (false);
+      return NULL;
+    }
+
+  /* Generate xasl for insert statement */
+  xasl = pt_to_insert_xasl (parser, statement);
+  if (xasl == NULL)
+    {
+      return NULL;
+    }
+
+  /* Create the value to store the inserted object */
+  xasl->proc.insert.obj_oid = db_value_create ();
+  if (xasl->proc.insert.obj_oid == NULL)
+    {
+      return NULL;
+    }
+
+  regu = regu_var_alloc ();
+  if (regu == NULL)
+    {
+      return regu;
+    }
+  regu->domain = pt_xasl_node_to_domain (parser, statement);
+
+  /* set as linked to regu var */
+  XASL_SET_FLAG (xasl, XASL_LINK_TO_REGU_VARIABLE);
+  REGU_VARIABLE_XASL (regu) = xasl;
+  regu->type = TYPE_CONSTANT;
+  regu->value.dbvalptr = xasl->proc.insert.obj_oid;
+
+  return regu;
+}
 
 /*
  * pt_set_numbering_node_etc_pre () -
@@ -9752,6 +9843,22 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		}
 	      break;
 
+	    case PT_INSERT_VALUE:
+	      /* Create a constant regu variable using the evaluated value */
+	      if (!node->info.insert_value.is_evaluated)
+		{
+		  assert (false);
+		  break;
+		}
+	      value = &node->info.insert_value.value;
+	      regu =
+		pt_make_regu_constant (parser, value,
+				       pt_node_to_db_type (node->info.
+							   insert_value.
+							   original_node),
+				       node->info.insert_value.original_node);
+	      break;
+
 	    case PT_NAME:
 	      if (node->info.name.meta_class == PT_PARAMETER)
 		{
@@ -9829,6 +9936,10 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 
 		  regu = pt_make_regu_subquery (parser, xasl, unbox, node);
 		}
+	      break;
+
+	    case PT_INSERT:
+	      regu = pt_make_regu_insert (parser, node);
 	      break;
 
 	    default:
@@ -10305,7 +10416,6 @@ pt_attribute_to_regu (PARSER_CONTEXT * parser, PT_NODE * attr)
 		{
 		  regu = pt_make_vid (parser, attr->data_type, regu);
 		}
-
 	    }
 	  else if (symbols->current_listfile
 		   && (list_index = pt_find_attribute
@@ -12964,6 +13074,56 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 }
 
 /*
+ * pt_to_showstmt_spec_list () - Convert a QUERY PT_NODE
+ * 	an showstmt query
+ *   return:
+ *   parser(in):
+ *   spec(in):
+ *   where_part(in):
+ */
+static ACCESS_SPEC_TYPE *
+pt_to_showstmt_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
+			  PT_NODE * where_part)
+{
+  PT_NODE *saved_current_class;
+  PT_NODE *derived_table;
+  SHOWSTMT_TYPE show_type;
+  PT_NODE *show_args;
+  REGU_VARIABLE_LIST arg_list;
+  ACCESS_SPEC_TYPE *access;
+  PRED_EXPR *where = NULL;
+
+  if (spec->info.spec.derived_table_type != PT_IS_SHOWSTMT
+      || (derived_table = spec->info.spec.derived_table) == NULL
+      || derived_table->node_type != PT_SHOWSTMT)
+    {
+      return NULL;
+    }
+
+  saved_current_class = parser->symbols->current_class;
+  parser->symbols->current_class = NULL;
+  where = pt_to_pred_expr (parser, where_part);
+  parser->symbols->current_class = saved_current_class;
+  if (where_part != NULL && where == NULL)
+    {
+      return NULL;
+    }
+
+  show_type = derived_table->info.showstmt.show_type;
+  show_args = derived_table->info.showstmt.show_args;
+  arg_list =
+    pt_to_regu_variable_list (parser, show_args, UNBOX_AS_VALUE, NULL, NULL);
+  if (show_args != NULL && arg_list == NULL)
+    {
+      return NULL;
+    }
+
+  access = pt_make_showstmt_access_spec (where, show_type, arg_list);
+
+  return access;
+}
+
+/*
  * pt_to_subquery_table_spec_list () - Convert a QUERY PT_NODE
  * 	an ACCESS_SPEC_LIST list for its list file
  *   return:
@@ -13187,6 +13347,10 @@ pt_to_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	  /* a set expression derived table */
 	  access = pt_to_set_expr_table_spec_list
 	    (parser, spec, spec->info.spec.derived_table, where_part);
+	}
+      else if (spec->info.spec.derived_table_type == PT_IS_SHOWSTMT)
+	{
+	  access = pt_to_showstmt_spec_list (parser, spec, where_part);
 	}
       else
 	{
@@ -16947,6 +17111,20 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	  /* sanity check */
 	  orderby_ok = ((xasl->orderby_list != NULL) || orderby_skip);
 	}
+      else if (select_node->info.query.order_by == NULL
+	       && select_node->info.query.orderby_for != NULL
+	       && xasl->option == Q_DISTINCT)
+	{
+	  ordbynum_flag = 0;
+	  xasl->ordbynum_pred =
+	    pt_to_pred_expr_with_arg (parser,
+				      select_node->info.query.orderby_for,
+				      &ordbynum_flag);
+	  if (ordbynum_flag & PT_PRED_ARG_ORDBYNUM_CONTINUE)
+	    {
+	      xasl->ordbynum_flag = XASL_ORDBYNUM_FLAG_SCAN_CONTINUE;
+	    }
+	}
 
       if ((xasl->instnum_pred != NULL
 	   || buildlist->a_instnum_flag & XASL_INSTNUM_FLAG_EVAL_DEFER)
@@ -17621,10 +17799,13 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
   qo_get_optimization_param (&level, QO_PARAM_LEVEL);
   if (level >= 0x100 && plan)
     {
+      PT_NODE *spec;
       if (!PT_SELECT_INFO_IS_FLAGED (select_node,
 				     PT_SELECT_INFO_COLS_SCHEMA) &&
 	  !PT_SELECT_INFO_IS_FLAGED (select_node,
-				     PT_SELECT_FULL_INFO_COLS_SCHEMA))
+				     PT_SELECT_FULL_INFO_COLS_SCHEMA) &&
+	  !((spec = select_node->info.query.q.select.from) != NULL
+	    && spec->info.spec.derived_table_type == PT_IS_SHOWSTMT))
 	{
 	  if (query_Plan_dump_fp == NULL)
 	    {
@@ -18310,22 +18491,25 @@ error:
   return -1;
 }
 
-
 /*
- * pt_make_aptr_parent_node () - Builds a BUILDLIST proc for the query node
- *  	and attaches it as the aptr to the xasl node. Attaches a list scan spec
- * 	for the xasl node from the aptr's list file
- *   return:
- *   parser(in):
- *   node(in): pointer to a query structure
- *   type(in):
+ * pt_make_aptr_parent_node () - Builds a BUILDLIST proc for the query node and
+ *				 attaches it as the aptr to the xasl node.
+ *				 A list scan spec from the aptr's list file is
+ *				 attached to the xasl node.
+ *
+ * return      : XASL node.
+ * parser (in) : Parser context.
+ * node (in)   : Parser node containing sub-query.
+ * type (in)   : XASL proc type.
+ *
+ * NOTE: This function should not be used in the INSERT ... VALUES case.
  */
 static XASL_NODE *
 pt_make_aptr_parent_node (PARSER_CONTEXT * parser, PT_NODE * node,
 			  PROC_TYPE type)
 {
-  XASL_NODE *aptr;
-  XASL_NODE *xasl;
+  XASL_NODE *aptr = NULL;
+  XASL_NODE *xasl = NULL;
   REGU_VARIABLE_LIST regu_attributes;
 
   xasl = regu_xasl_node_alloc (type);
@@ -18400,45 +18584,17 @@ pt_make_aptr_parent_node (PARSER_CONTEXT * parser, PT_NODE * node,
 		  parser_free_tree (parser, namelist);
 		}
 	    }
+	  if (type == INSERT_PROC)
+	    {
+	      xasl->proc.insert.no_val_lists = 0;
+	      xasl->proc.insert.valptr_lists = NULL;
+	    }
 	}
       else
 	{
-	  /* collect serial oid list in values */
-	  int n;
-	  pt_init_xasl_supp_info ();
-
-	  node =
-	    parser_walk_tree (parser, node, NULL, NULL,
-			      parser_generate_xasl_post, &xasl_Supp_info);
-
-	  if ((n = xasl_Supp_info.n_oid_list) > 0
-	      && (xasl->class_oid_list = regu_oid_array_alloc (n))
-	      && (xasl->tcard_list = regu_int_array_alloc (n)))
-	    {
-	      xasl->n_oid_list = n;
-	      (void) memcpy (xasl->class_oid_list,
-			     xasl_Supp_info.class_oid_list, sizeof (OID) * n);
-	      (void) memcpy (xasl->tcard_list,
-			     xasl_Supp_info.tcard_list, sizeof (int) * n);
-	    }
-
-	  pt_init_xasl_supp_info ();
-
-	  /* set the outptr and vall lists from a list of expressions */
-	  xasl->outptr_list = pt_to_outlist (parser, node,
-					     &xasl->selected_upd_list,
-					     UNBOX_AS_VALUE);
-	  if (xasl->outptr_list == NULL)
-	    {
-	      goto exit_on_error;
-	    }
-
-	  xasl->val_list = pt_make_val_list (parser, node);
-	  if (xasl->val_list == NULL)
-	    {
-	      PT_ERRORm (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
-			 MSGCAT_SEMANTIC_OUT_OF_MEMORY);
-	    }
+	  /* Shouldn't be here */
+	  assert (0);
+	  return NULL;
 	}
     }
 
@@ -18634,41 +18790,38 @@ outofmem:
 
 }
 
-
 /*
- * pt_to_insert_xasl () - Converts an insert parse tree to
- *                        an XASL graph for an insert
- *   return:
- *   parser(in): context
- *   statement(in): insert parse tree
- *   values_list(in): the list of values ot insert
- *   has_uniques(in):
- *   non_null_attrs(in):
- *   bool is_first_value(in):
+ * pt_to_insert_xasl () - Converts an insert parse tree to an XASL tree for
+ *			  insert server execution.
+ *
+ * return	  : Xasl node.
+ * parser (in)	  : Parser context.
+ * statement (in) : Parse tree node for insert statement.
  */
 XASL_NODE *
-pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
-		   PT_NODE * values_list, int has_uniques,
-		   PT_NODE * non_null_attrs, PT_NODE ** upd_non_null_attrs,
-		   PT_NODE * default_expr_attrs, bool is_first_value)
+pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
   XASL_NODE *xasl = NULL;
   INSERT_PROC_NODE *insert = NULL;
-  PT_NODE *value_clause = NULL;
-  PT_NODE *attr, *attrs;
+  PT_NODE *value_clauses = NULL, *query = NULL, *val_list = NULL;
+  PT_NODE *attr = NULL, *attrs = NULL;
+  PT_NODE *non_null_attrs = NULL, *default_expr_attrs = NULL;
   MOBJ class_;
-  OID *class_oid;
-  DB_OBJECT *class_obj;
-  HFID *hfid;
+  OID *class_oid = NULL;
+  DB_OBJECT *class_obj = NULL;
+  HFID *hfid = NULL;
   int no_vals, no_default_expr;
-  int a;
+  int a, i, has_uniques;
   int error = NO_ERROR;
-  PT_NODE *hint_arg;
+  PT_NODE *hint_arg = NULL;
   float hint_wait_secs;
 
   assert (parser != NULL && statement != NULL);
 
-  value_clause = values_list->info.node_list.list;
+  has_uniques = statement->info.insert.has_uniques;
+  non_null_attrs = statement->info.insert.non_null_attrs;
+
+  value_clauses = statement->info.insert.value_clauses;
   attrs = statement->info.insert.attr_list;
 
   class_obj =
@@ -18694,42 +18847,149 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       return NULL;
     }
 
+  error =
+    check_for_default_expr (parser, attrs, &default_expr_attrs, class_obj);
+  if (error != NO_ERROR)
+    {
+      return NULL;
+    }
   no_default_expr = pt_length_of_list (default_expr_attrs);
 
-  if (values_list->info.node_list.list_type == PT_IS_SUBQUERY)
+  if (value_clauses->info.node_list.list_type == PT_IS_SUBQUERY)
     {
-      assert (PT_IS_QUERY (value_clause));
+      query = value_clauses->info.node_list.list;
+      assert (PT_IS_QUERY (query));
       no_vals =
-	pt_length_of_select_list (pt_get_select_list (parser, value_clause),
+	pt_length_of_select_list (pt_get_select_list (parser, query),
 				  EXCLUDE_HIDDEN_COLUMNS);
       /* also add columns referenced in assignments */
-      if (PT_IS_SELECT (value_clause)
+      if (PT_IS_SELECT (query)
 	  && statement->info.insert.odku_assignments != NULL)
 	{
-	  PT_NODE *select_list = value_clause->info.query.q.select.list;
-	  PT_NODE *select_from = value_clause->info.query.q.select.from;
+	  PT_NODE *select_list = query->info.query.q.select.list;
+	  PT_NODE *select_from = query->info.query.q.select.from;
 	  PT_NODE *assigns = statement->info.insert.odku_assignments;
 	  select_list =
 	    pt_append_assignment_references (parser, assigns, select_from,
 					     select_list);
 	  if (select_list == NULL)
 	    {
+	      PT_INTERNAL_ERROR (parser, "Error appending odku references to "
+				 "select list");
 	      return NULL;
 	    }
 	}
     }
   else
     {
-      no_vals = pt_length_of_list (value_clause);
+      val_list = value_clauses->info.node_list.list;
+      no_vals = pt_length_of_list (val_list);
     }
 
-  xasl = pt_make_aptr_parent_node (parser, value_clause, INSERT_PROC);
+  if (value_clauses->info.node_list.list_type == PT_IS_SUBQUERY)
+    {
+      xasl =
+	pt_make_aptr_parent_node (parser, value_clauses->info.node_list.list,
+				  INSERT_PROC);
+    }
+  else
+    {
+      /* INSERT VALUES */
+      int n;
+      TABLE_INFO *ti;
+
+      xasl = regu_xasl_node_alloc (INSERT_PROC);
+      if (xasl == NULL)
+	{
+	  return NULL;
+	}
+
+      pt_init_xasl_supp_info ();
+
+      /* init parser->symbols */
+      parser->symbols = pt_symbol_info_alloc ();
+      ti = pt_make_table_info (parser, statement->info.insert.spec);
+      if (ti == NULL)
+	{
+	  PT_ERRORm (parser, statement->info.insert.spec,
+		     MSGCAT_SET_PARSER_RUNTIME,
+		     MSGCAT_RUNTIME_RESOURCES_EXHAUSTED);
+	  return NULL;
+	}
+      if (parser->symbols->table_info != NULL)
+	{
+	  ti->next = parser->symbols->table_info;
+	}
+      parser->symbols->table_info = ti;
+
+      value_clauses =
+	parser_walk_tree (parser, value_clauses, parser_generate_xasl_pre,
+			  NULL, parser_generate_xasl_post, &xasl_Supp_info);
+
+      if ((n = xasl_Supp_info.n_oid_list) > 0
+	  && (xasl->class_oid_list = regu_oid_array_alloc (n))
+	  && (xasl->tcard_list = regu_int_array_alloc (n)))
+	{
+	  xasl->n_oid_list = n;
+	  (void) memcpy (xasl->class_oid_list, xasl_Supp_info.class_oid_list,
+			 sizeof (OID) * n);
+	  (void) memcpy (xasl->tcard_list, xasl_Supp_info.tcard_list,
+			 sizeof (int) * n);
+	}
+
+      pt_init_xasl_supp_info ();
+
+      insert = &xasl->proc.insert;
+
+      /* generate xasl->val_list */
+      xasl->val_list = pt_make_val_list (parser, attrs);
+      if (xasl->val_list == NULL)
+	{
+	  return NULL;
+	}
+
+      parser->symbols->current_class = statement->info.insert.spec;
+      parser->symbols->listfile_value_list = xasl->val_list;
+      parser->symbols->current_listfile = statement->info.insert.attr_list;
+      parser->symbols->listfile_attr_offset = 0;
+      parser->symbols->listfile_unbox = UNBOX_AS_VALUE;
+
+      /* count the number of value lists in values clause */
+      for (insert->no_val_lists = 0, val_list = value_clauses;
+	   val_list != NULL;
+	   insert->no_val_lists++, val_list = val_list->next);
+      /* alloc valptr_lists for each list of values */
+      insert->valptr_lists =
+	regu_outlistptr_array_alloc (insert->no_val_lists);
+      if (insert->valptr_lists == NULL)
+	{
+	  return NULL;
+	}
+      for (i = 0, val_list = value_clauses; val_list != NULL;
+	   i++, val_list = val_list->next)
+	{
+	  assert (i < insert->no_val_lists);
+	  if (i >= insert->no_val_lists)
+	    {
+	      PT_INTERNAL_ERROR (parser, "Generated insert xasl is corrupted:"
+				 " incorrect number of value lists");
+	    }
+	  insert->valptr_lists[i] =
+	    pt_to_outlist (parser, val_list->info.node_list.list,
+			   &xasl->selected_upd_list, UNBOX_AS_VALUE);
+	  if (insert->valptr_lists[i] == NULL)
+	    {
+	      return NULL;
+	    }
+	}
+    }
+
   if (xasl)
     {
       insert = &xasl->proc.insert;
       insert->class_hfid = *hfid;
       class_oid = ws_identifier (class_obj);
-      if (class_oid)
+      if (class_oid != NULL)
 	{
 	  insert->class_oid = *class_oid;
 	}
@@ -18763,7 +19023,6 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       insert->no_logging = (statement->info.insert.hint & PT_HINT_NO_LOGGING);
       insert->release_lock = (statement->info.insert.hint & PT_HINT_REL_LOCK);
       insert->do_replace = (statement->info.insert.do_replace ? 1 : 0);
-      insert->is_first_value = is_first_value;
 
       if (error >= 0 && (no_vals + no_default_expr > 0))
 	{
@@ -18773,6 +19032,8 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	      /* the identifiers of the attributes that have a default
 	         expression are placed first
 	       */
+	      int save_au;
+	      AU_DISABLE (save_au);
 	      for (attr = default_expr_attrs, a = 0; error >= 0 &&
 		   a < no_default_expr; attr = attr->next, ++a)
 		{
@@ -18793,6 +19054,7 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 		      error = er_errid ();
 		    }
 		}
+	      AU_ENABLE (save_au);
 	      insert->vals = NULL;
 	      insert->no_vals = no_vals + no_default_expr;
 	      insert->no_default_expr = no_default_expr;
@@ -18902,8 +19164,7 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
   if (xasl && statement->info.insert.odku_assignments)
     {
-      xasl->proc.insert.odku = pt_to_odku_info (parser, statement, xasl,
-						upd_non_null_attrs);
+      xasl->proc.insert.odku = pt_to_odku_info (parser, statement, xasl);
       if (xasl->proc.insert.odku == NULL)
 	{
 	  if (pt_has_error (parser))
@@ -19001,11 +19262,9 @@ pt_append_assignment_references (PARSER_CONTEXT * parser,
  * parser (in)	: parser context
  * insert (in)	: insert statement
  * xasl (in)	: INSERT XASL node
- * non_null_attrs (in/out) : attributes with NOT_NULL constraint
  */
 static ODKU_INFO *
-pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl,
-		 PT_NODE ** non_null_attrs)
+pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl)
 {
   PT_NODE *insert_spec = NULL;
   PT_NODE *select_specs = NULL;
@@ -19152,7 +19411,8 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl,
 	    }
 
 	  prev = NULL;
-	  for (node = *non_null_attrs; node != NULL; node = next)
+	  for (node = insert->info.insert.odku_non_null_attrs; node != NULL;
+	       node = next)
 	    {
 	      /* Check to see if this is a NON NULL attr */
 	      next = node->next;
@@ -19178,7 +19438,8 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl,
 	       */
 	      if (prev == NULL)
 		{
-		  *non_null_attrs = (*non_null_attrs)->next;
+		  insert->info.insert.odku_non_null_attrs =
+		    insert->info.insert.odku_non_null_attrs->next;
 		}
 	      else
 		{
@@ -19197,8 +19458,8 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl,
 	      goto exit_on_error;
 	    }
 	  domain = db_attribute_domain (attr);
-	  error = tp_value_coerce (val, odku->assignments[i].constant,
-				   domain);
+	  error = tp_value_cast (val, odku->assignments[i].constant, domain,
+				 false);
 	  if (error != DOMAIN_COMPATIBLE)
 	    {
 	      error = ER_OBJ_DOMAIN_CONFLICT;
@@ -19217,11 +19478,11 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl,
       i++;
     }
 
-  if (*non_null_attrs)
+  if (insert->info.insert.odku_non_null_attrs)
     {
       /* build constraint pred */
       pt_init_assignments_helper (parser, &assignments_helper, assignments);
-      node = *non_null_attrs;
+      node = insert->info.insert.odku_non_null_attrs;
       while (node)
 	{
 	  save = node->next;
@@ -19273,12 +19534,12 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl,
   return odku;
 
 exit_on_error:
-  if (!er_errid () && !pt_has_error (parser))
+  if (er_errid () == NO_ERROR && !pt_has_error (parser))
     {
       PT_INTERNAL_ERROR (parser, "ODKU Info generation failed");
       error = ER_FAILED;
     }
-  if (pt_pred)
+  if (pt_pred != NULL)
     {
       parser_free_tree (parser, pt_pred);
     }
@@ -25811,7 +26072,6 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   insert->no_logging = (statement->info.merge.hint & PT_HINT_NO_LOGGING);
   insert->release_lock = (statement->info.merge.hint & PT_HINT_REL_LOCK);
   insert->do_replace = 0;
-  insert->is_first_value = 1;
 
   if (no_vals + no_default_expr > 0)
     {

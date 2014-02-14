@@ -254,7 +254,7 @@ broker_create_dir (const char *new_dir)
 	  p++;
 	}
     }
-  return -1;
+  return 0;
 }
 
 #if defined (ENABLE_UNUSED_FUNCTION)
@@ -327,6 +327,7 @@ admin_start_cmd (T_BROKER_INFO * br_info, int br_num, int master_shm_id,
       broker_create_dir (br_info[i].log_dir);
       broker_create_dir (br_info[i].slow_log_dir);
       broker_create_dir (br_info[i].err_log_dir);
+      broker_create_dir (br_info[i].access_log_dir);
 
       if (br_info[i].shard_flag == ON)
 	{
@@ -1158,150 +1159,6 @@ admin_off_cmd (int master_shm_id, const char *broker_name)
 }
 
 int
-admin_broker_suspend_cmd (int master_shm_id, const char *broker_name)
-{
-  int i, br_index;
-  T_SHM_BROKER *shm_br;
-  T_SHM_APPL_SERVER *shm_appl;
-
-  shm_br =
-    (T_SHM_BROKER *) uw_shm_open (master_shm_id, SHM_BROKER, SHM_MODE_ADMIN);
-  if (shm_br == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      return -1;
-    }
-
-  br_index = -1;
-  for (i = 0; i < shm_br->num_broker; i++)
-    {
-      if (strcmp (shm_br->br_info[i].name, broker_name) == 0)
-	{
-	  if (shm_br->br_info[i].service_flag == OFF)
-	    {
-	      sprintf (admin_err_msg, "Broker[%s] is not running",
-		       broker_name);
-	      uw_shm_detach (shm_br);
-	      return -1;
-	    }
-	  else
-	    {
-	      br_index = i;
-	    }
-	  break;
-	}
-    }
-
-  if (br_index < 0)
-    {
-      sprintf (admin_err_msg, "Cannot find broker [%s]", broker_name);
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  if (shm_br->br_info[br_index].shard_flag == ON)
-    {
-      uw_shm_detach (shm_br);
-      return 0;
-    }
-
-  shm_appl =
-    (T_SHM_APPL_SERVER *) uw_shm_open (shm_br->br_info[br_index].
-				       appl_server_shm_id, SHM_APPL_SERVER,
-				       SHM_MODE_ADMIN);
-  if (shm_appl == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  shm_appl->suspend_mode = SUSPEND_REQ;
-  while (1)
-    {
-      SLEEP_MILISEC (0, 100);
-      if (shm_appl->suspend_mode == SUSPEND)
-	{
-	  break;
-	}
-    }
-
-  uw_shm_detach (shm_appl);
-  uw_shm_detach (shm_br);
-  return 0;
-}
-
-int
-admin_broker_resume_cmd (int master_shm_id, const char *broker_name)
-{
-  int i, br_index;
-  T_SHM_BROKER *shm_br;
-  T_SHM_APPL_SERVER *shm_appl;
-
-  shm_br =
-    (T_SHM_BROKER *) uw_shm_open (master_shm_id, SHM_BROKER, SHM_MODE_ADMIN);
-  if (shm_br == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      return -1;
-    }
-
-  br_index = -1;
-  for (i = 0; i < shm_br->num_broker; i++)
-    {
-      if (strcmp (shm_br->br_info[i].name, broker_name) == 0)
-	{
-	  if (shm_br->br_info[i].service_flag == OFF)
-	    {
-	      sprintf (admin_err_msg, "Broker[%s] is not running",
-		       broker_name);
-	      uw_shm_detach (shm_br);
-	      return -1;
-	    }
-	  else
-	    {
-	      br_index = i;
-	    }
-	  break;
-	}
-    }
-
-  if (br_index < 0)
-    {
-      sprintf (admin_err_msg, "Cannot find broker [%s]", broker_name);
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  if (shm_br->br_info[br_index].shard_flag == ON)
-    {
-      uw_shm_detach (shm_br);
-      return 0;
-    }
-
-  shm_appl =
-    (T_SHM_APPL_SERVER *) uw_shm_open (shm_br->br_info[br_index].
-				       appl_server_shm_id, SHM_APPL_SERVER,
-				       SHM_MODE_ADMIN);
-  if (shm_appl == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  shm_appl->suspend_mode = SUSPEND_NONE;
-
-  uw_shm_detach (shm_appl);
-  uw_shm_detach (shm_br);
-  return 0;
-}
-
-int
 admin_reset_cmd (int master_shm_id, const char *broker_name)
 {
   bool reset_next = FALSE;
@@ -1465,158 +1322,6 @@ admin_info_cmd (int master_shm_id)
 
   uw_shm_detach (shm_br);
   return 0;
-}
-
-int
-admin_get_broker_status (int master_shm_id, const char *broker_name)
-{
-  int i, br_index;
-  T_SHM_BROKER *shm_br;
-  T_SHM_APPL_SERVER *shm_appl;
-  int br_status;
-
-  shm_br =
-    (T_SHM_BROKER *) uw_shm_open (master_shm_id, SHM_BROKER, SHM_MODE_ADMIN);
-  if (shm_br == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      return -1;
-    }
-
-  br_index = -1;
-  for (i = 0; i < shm_br->num_broker; i++)
-    {
-      if (strcmp (shm_br->br_info[i].name, broker_name) == 0)
-	{
-	  if (shm_br->br_info[i].service_flag == OFF)
-	    {
-	      sprintf (admin_err_msg, "Broker[%s] is not running",
-		       broker_name);
-	      uw_shm_detach (shm_br);
-	      return -1;
-	    }
-	  else
-	    {
-	      br_index = i;
-	    }
-	  break;
-	}
-    }
-
-  if (br_index < 0)
-    {
-      sprintf (admin_err_msg, "Cannot find broker [%s]", broker_name);
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  shm_appl =
-    (T_SHM_APPL_SERVER *) uw_shm_open (shm_br->br_info[br_index].
-				       appl_server_shm_id, SHM_APPL_SERVER,
-				       SHM_MODE_ADMIN);
-  if (shm_appl == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  br_status = shm_appl->suspend_mode;
-
-  uw_shm_detach (shm_appl);
-  uw_shm_detach (shm_br);
-  return br_status;
-}
-
-int
-admin_broker_job_first_cmd (int master_shm_id, const char *broker_name,
-			    int job_id)
-{
-  int i, br_index;
-  int ret_value = 0;
-  int new_priority;
-  T_SHM_BROKER *shm_br;
-  T_SHM_APPL_SERVER *shm_appl;
-
-  shm_br =
-    (T_SHM_BROKER *) uw_shm_open (master_shm_id, SHM_BROKER, SHM_MODE_ADMIN);
-  if (shm_br == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      return -1;
-    }
-
-  br_index = -1;
-  for (i = 0; i < shm_br->num_broker; i++)
-    {
-      if (strcmp (shm_br->br_info[i].name, broker_name) == 0)
-	{
-	  if (shm_br->br_info[i].service_flag == OFF)
-	    {
-	      sprintf (admin_err_msg, "Broker[%s] is not running",
-		       broker_name);
-	      uw_shm_detach (shm_br);
-	      return -1;
-	    }
-	  else
-	    {
-	      br_index = i;
-	    }
-	  break;
-	}
-    }
-
-  if (br_index < 0)
-    {
-      sprintf (admin_err_msg, "Cannot find broker [%s]", broker_name);
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  shm_appl =
-    (T_SHM_APPL_SERVER *) uw_shm_open (shm_br->br_info[br_index].
-				       appl_server_shm_id, SHM_APPL_SERVER,
-				       SHM_MODE_ADMIN);
-  if (shm_appl == NULL)
-    {
-      SHM_OPEN_ERR_MSG (admin_err_msg, uw_get_error_code (),
-			uw_get_os_error_code ());
-      uw_shm_detach (shm_br);
-      return -1;
-    }
-
-  shm_appl->suspend_mode = SUSPEND_CHANGE_PRIORITY_REQ;
-  while (1)
-    {
-      SLEEP_MILISEC (0, 100);
-      if (shm_appl->suspend_mode == SUSPEND_CHANGE_PRIORITY)
-	break;
-    }
-
-  new_priority = shm_appl->job_queue[1].priority + 1;
-  if (new_priority < 40)
-    new_priority = 40;
-
-  if (max_heap_change_priority (shm_appl->job_queue, job_id, new_priority) <
-      0)
-    {
-      sprintf (admin_err_msg, "Job id (%d)  not found", job_id);
-      ret_value = -1;
-    }
-  shm_appl->suspend_mode = SUSPEND_END_CHANGE_PRIORITY;
-  while (1)
-    {
-      SLEEP_MILISEC (0, 100);
-      if (shm_appl->suspend_mode == SUSPEND)
-	break;
-    }
-
-  uw_shm_detach (shm_appl);
-  uw_shm_detach (shm_br);
-  return ret_value;
 }
 
 static bool
@@ -2207,11 +1912,11 @@ admin_conf_change (int master_shm_id, const char *br_name,
     }
   else if (strcasecmp (conf_name, "MAX_NUM_DELAYED_HOSTS_LOOKUP") == 0)
     {
-      int max_num_delayed_hosts_lookup;
-      char *end_p = NULL;
+      int max_num_delayed_hosts_lookup = 0, result;
 
-      max_num_delayed_hosts_lookup = (int) strtol (conf_value, &end_p, 10);
-      if (errno == ERANGE || (end_p && *end_p != '\0')
+      result = parse_int (&max_num_delayed_hosts_lookup, conf_value, 10);
+
+      if (result != 0
 	  || max_num_delayed_hosts_lookup <
 	  DEFAULT_MAX_NUM_DELAYED_HOSTS_LOOKUP)
 	{
@@ -2268,11 +1973,17 @@ admin_conf_change (int master_shm_id, const char *br_name,
 
       long_query_time = (float) ut_time_string_to_sec (conf_value, "sec");
 
-      if (long_query_time <= 0)
+      if (long_query_time < 0)
 	{
 	  sprintf (admin_err_msg, "invalid value : %s", conf_value);
 	  goto set_conf_error;
 	}
+      else if (long_query_time > LONG_QUERY_TIME_LIMIT)
+	{
+	  sprintf (admin_err_msg, "value is out of range : %s", conf_value);
+	  goto set_conf_error;
+	}
+
       br_info_p->long_query_time = (int) (long_query_time * 1000.0);
       shm_as_p->long_query_time = (int) (long_query_time * 1000.0);
     }
@@ -2283,11 +1994,17 @@ admin_conf_change (int master_shm_id, const char *br_name,
       long_transaction_time =
 	(float) ut_time_string_to_sec (conf_value, "sec");
 
-      if (long_transaction_time <= 0)
+      if (long_transaction_time < 0)
 	{
 	  sprintf (admin_err_msg, "invalid value : %s", conf_value);
 	  goto set_conf_error;
 	}
+      else if (long_transaction_time > LONG_TRANSACTION_TIME_LIMIT)
+	{
+	  sprintf (admin_err_msg, "value is out of range : %s", conf_value);
+	  goto set_conf_error;
+	}
+
       br_info_p->long_transaction_time =
 	(int) (long_transaction_time * 1000.0);
       shm_as_p->long_transaction_time =
@@ -2387,13 +2104,23 @@ admin_conf_change (int master_shm_id, const char *br_name,
     {
       int size;
 
-      size = (int) ut_size_string_to_kbyte (conf_value, "M");
+      /*
+       * Use "KB" as unit, because MAX_ACCESS_LOG_MAX_SIZE uses this unit.
+       * the range of the config value should be verified to avoid the invalid setting.
+       */
+      size = (int) ut_size_string_to_kbyte (conf_value, "K");
 
       if (size < 0)
 	{
 	  sprintf (admin_err_msg, "invalid value : %s", conf_value);
 	  goto set_conf_error;
 	}
+      else if (size > MAX_ACCESS_LOG_MAX_SIZE)
+	{
+	  sprintf (admin_err_msg, "value is out of range : %s", conf_value);
+	  goto set_conf_error;
+	}
+
 
       br_info_p->access_log_max_size = size;
       shm_as_p->access_log_max_size = size;
@@ -2426,10 +2153,10 @@ admin_conf_change (int master_shm_id, const char *br_name,
     }
   else if (strcasecmp (conf_name, "SQL_LOG2") == 0)
     {
-      int val;
+      int val, result;
 
-      val = atoi (conf_value);
-      if (val < SQL_LOG2_NONE || val > SQL_LOG2_MAX)
+      result = parse_int (&val, conf_value, 10);
+      if (result != 0 || val < SQL_LOG2_NONE || val > SQL_LOG2_MAX)
 	{
 	  sprintf (admin_err_msg, "invalid value : %s", conf_value);
 	  goto set_conf_error;
@@ -4273,7 +4000,7 @@ shard_shm_check_max_file_open_limit (T_BROKER_INFO * br_info,
 
   required_fd_num += proxy_info_p->max_context;
   required_fd_num += proxy_info_p->max_shard * shard_info_p->max_appl_server;
-  required_fd_num += RESERVED_FD;
+  required_fd_num += PROXY_RESERVED_FD;
 
   error = getrlimit (RLIMIT_NOFILE, &sys_limit);
   if (error < 0)

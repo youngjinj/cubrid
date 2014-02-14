@@ -236,7 +236,7 @@ static MYSQL *_db_conn;
 static char mysql_connected_info[DBINFO_MAX_LENGTH] = "";
 static int mysql_connect_status = DB_CONNECTION_STATUS_NOT_CONNECTED;
 
-static char database_name[MAX_HA_DBNAME_LENGTH] = "";
+static char database_name[MAX_DBNAME_LENGTH] = "";
 static char database_user[SRV_CON_DBUSER_SIZE] = "";
 static char database_passwd[SRV_CON_DBPASSWD_SIZE] = "";
 static int multi_byte_character_max_length = 3;
@@ -295,9 +295,11 @@ ux_database_connect (char *db_alias, char *db_user, char *db_passwd,
 		     "ux_database_connect: cas_mysql_connect_db(%s, %s) at %s",
 		     db_user, db_alias, host_connected);
       /* as_info->database_name is alias name */
-      strncpy (as_info->database_name, db_alias, MAX_HA_DBNAME_LENGTH - 1);
+      strncpy (as_info->database_name, db_alias,
+	       sizeof (as_info->database_name) - 1);
       /* as_info->database_host is real_db_name:connected_host_addr:connected_port */
-      strncpy (as_info->database_host, host_connected, MAXHOSTNAMELEN);
+      strncpy (as_info->database_host, host_connected,
+	       sizeof (as_info->database_host) - 1);
       as_info->last_connect_time = time (NULL);
 
       strncpy (database_name, db_alias, sizeof (database_name) - 1);
@@ -2591,18 +2593,19 @@ cas_mysql_find_db (const char *alias, char *dbname, char *host, int *port)
 
   if (cas_shard_flag == ON)
     {
+      strncpy (dbname, shm_appl->shard_conn_info[shm_shard_id].db_name,
+	       MAX_DBNAME_LENGTH - 1);
+
       memset (tmpdbinfo, 0x00, BROKER_PATH_MAX);
       memcpy (tmpdbinfo, shm_appl->shard_conn_info[shm_shard_id].db_host,
 	      BROKER_PATH_MAX);
-
-      strcpy (dbname, alias);
 
       str = strtok_r (tmpdbinfo, delim, &save);	/* SET HOST ADDRESS */
       if (str == NULL)
 	{
 	  goto cas_mysql_find_db_error;
 	}
-      strncpy (host, str, MAX_HOSTNAME_LENGTH);
+      strncpy (host, str, MAXHOSTNAMELEN - 1);
 
       str = strtok_r (NULL, delim, &save);	/* SET PORT */
       if (str == NULL)
@@ -2646,14 +2649,14 @@ cas_mysql_find_db (const char *alias, char *dbname, char *host, int *port)
 		{
 		  goto cas_mysql_find_db_error;
 		}
-	      strncpy (dbname, str, MAX_DBNAME_LENGTH);
+	      strncpy (dbname, str, MAX_DBNAME_LENGTH - 1);
 
 	      str = strtok_r (NULL, delim, &save);	/* SET HOST ADDRESS */
 	      if (str == NULL)
 		{
 		  goto cas_mysql_find_db_error;
 		}
-	      strncpy (host, str, MAX_HOSTNAME_LENGTH);
+	      strncpy (host, str, MAXHOSTNAMELEN - 1);
 
 	      str = strtok_r (NULL, delim, &save);	/* SET PORT */
 	      if (str == NULL)
@@ -2696,7 +2699,7 @@ cas_mysql_connect_db (char *alias, char *user, char *passwd)
 {
   int ret;
   char dbname[MAX_DBNAME_LENGTH] = "";
-  char host[MAX_HOSTNAME_LENGTH] = "";
+  char host[MAXHOSTNAMELEN] = "";
   int port;
   unsigned int read_timeout;
 
@@ -3251,7 +3254,7 @@ update_query_execution_count (T_APPL_SERVER_INFO * as_info_p, char stmt_type)
 static void
 cas_mysql_set_mysql_wait_timeout (void)
 {
-  char *p = NULL;
+  int result = 0;
   int ret_val = 0;
   int wait_timeout = MYSQL_DEFAULT_WAIT_TIMEOUT;
   int num_fields = 0;
@@ -3283,8 +3286,8 @@ cas_mysql_set_mysql_wait_timeout (void)
       goto release_and_return;
     }
 
-  wait_timeout = (int) strtol (row[1], &p, 10);
-  if (p != NULL && *p != '\0')
+  result = parse_int (&wait_timeout, row[1], 10);
+  if (result != 0)
     {
       wait_timeout = MYSQL_DEFAULT_WAIT_TIMEOUT;
 

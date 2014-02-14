@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 ラストエラー
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 トークン「%1$s」が正確かチェックしてください。
 4 「read uncommitted schema」は許可しません。\nその代わりに「read committed schema」を使ってください。
 5 最大ストリングレングスは16383です。
-6 「%s」は「%lld」の限界を超えました。
+6 「%s」は「%s」の限界を超えました。
 7 ビットストリングの最大レングスは「%1$d」ビットです。
 8 ジョイン条件にサブクエリーは許可しません。
 9 grant/revokeステートメントのupdate権限にアトリビュート「(%1$s)」を指定できません。
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 正しくないcollationの使い方です。\n  COLLATION ( expression )\n
 119 正しくないclob_to_charの使い方です。\n  CLOB_TO_CHAR ( 数字 [using charset] )\n
 120 正しくないindex_prefixの使い方です。\n  INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 メモリーが足りません。
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 ユーザー「%1$s」はデータベースにいません。
 44 Updateクエリーではaggregationを使ってはいけません。
 45 クラス内でアトリビュート名は唯一になるべきです。アトリビュート名「%s」がクラス「%s」２つ以上使われました。
-46 「%1$s」に対するマルチプルアロケーションがあります。
+46 「%1$s.%2$s」に対するマルチプルアロケーションがあります。
 47 ソートスペックに使った数字が正数ではありません。
 48 ソートスペックの「%1$d」は範囲を超えました。
 49 「order by」アイテムが正数ではありませ。
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 バチャールメモリーが足りません。: %1$dバイトがアロケーションできません。

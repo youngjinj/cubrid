@@ -1095,8 +1095,18 @@ db_string_truncate (DB_VALUE * value, const int precision)
 DB_TYPE
 db_value_domain_type (const DB_VALUE * value)
 {
+  DB_TYPE db_type;
+
   CHECK_1ARG_UNKNOWN (value);
-  return (DB_TYPE) value->domain.general_info.type;
+
+  db_type = (DB_TYPE) value->domain.general_info.type;
+
+#if 0				/* TODO */
+  assert (DB_IS_NULL (value)
+	  || (DB_TYPE_FIRST < db_type && db_type <= DB_TYPE_LAST));
+#endif
+
+  return db_type;
 }
 
 /*
@@ -1755,6 +1765,31 @@ db_make_string (DB_VALUE * value, const char *str)
       error = db_make_db_char (value, LANG_SYS_CODESET, LANG_SYS_COLLATION,
 			       str, size);
     }
+  return error;
+}
+
+
+/*
+ * db_make_string_copy() - alloc buffer and copy str into the buffer.
+ *                         need_clear will set as true.
+ * return :
+ * value(out) :
+ * str(in):
+ */
+int
+db_make_string_copy (DB_VALUE * value, const char *str)
+{
+  int error;
+  DB_VALUE tmp_value;
+
+  CHECK_1ARG_ERROR (value);
+
+  error = db_make_string (&tmp_value, str);
+  if (error == NO_ERROR)
+    {
+      error = pr_clone_value (&tmp_value, value);
+    }
+
   return error;
 }
 
@@ -6447,7 +6482,10 @@ valcnv_convert_data_to_string (VALCNV_BUFFER * buffer_p,
 	      && db_get_enum_string (value_p) == NULL)
 	    {
 	      /* ENUM special error value */
-	      DB_MAKE_STRING (&dbval, "");
+	      db_value_domain_default (&dbval, DB_TYPE_VARCHAR,
+				       DB_DEFAULT_PRECISION, 0,
+				       LANG_SYS_CODESET, LANG_SYS_COLLATION,
+				       NULL);
 	      buffer_p = valcnv_convert_data_to_string (buffer_p, &dbval);
 	    }
 	  else if (db_get_enum_string_size (value_p) > 0)

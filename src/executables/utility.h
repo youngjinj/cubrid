@@ -792,6 +792,7 @@ typedef struct _ha_config
 #define COMMDB_IS_REG           "-C"
 #define COMMDB_HA_NODE_LIST     "-N"
 #define COMMDB_HA_PROC_LIST     "-L"
+#define COMMDB_HA_PING_HOST_LIST "-p"
 #define COMMDB_HA_RELOAD        "-F"
 #define COMMDB_HA_DEACTIVATE    "-U"
 #define COMMDB_HA_ACTIVATE      "-T"
@@ -1108,6 +1109,8 @@ typedef struct _ha_config
 #define LOAD_CS_MODE_L                          "CS-hidden"
 #define LOAD_TABLE_NAME_S                       't'
 #define LOAD_TABLE_NAME_L                       "table"
+#define LOAD_COMPARE_STORAGE_ORDER_S		11817
+#define LOAD_COMPARE_STORAGE_ORDER_L		"compare-storage-order"
 
 /* unloaddb option list */
 #define UNLOAD_INPUT_CLASS_FILE_S               'i'
@@ -1146,6 +1149,8 @@ typedef struct _ha_config
 #define UNLOAD_USER_L                           "user"
 #define UNLOAD_PASSWORD_S                       'p'
 #define UNLOAD_PASSWORD_L                       "password"
+#define UNLOAD_KEEP_STORAGE_ORDER_S		11918
+#define UNLOAD_KEEP_STORAGE_ORDER_L		"keep-storage-order"
 
 /* compactdb option list */
 #define COMPACT_VERBOSE_S                       'v'
@@ -1217,6 +1222,8 @@ typedef struct _ha_config
 #define COMMDB_HA_NODE_LIST_L                   "node-list"
 #define COMMDB_HA_PROCESS_LIST_S                'L'
 #define COMMDB_HA_PROCESS_LIST_L                "process-list"
+#define COMMDB_HA_PING_HOST_LIST_S              'p'
+#define COMMDB_HA_PING_HOST_LIST_L              "ping-host"
 #define COMMDB_DEREG_HA_BY_PID_S                'D'
 #define COMMDB_DEREG_HA_BY_PID_L                "dereg-process"
 #define COMMDB_DEREG_HA_BY_ARGS_S               'R'

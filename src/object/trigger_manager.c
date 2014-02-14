@@ -5747,6 +5747,10 @@ tr_execute_deferred_activities (DB_OBJECT * trigger_object,
 		  status = execute_activity (trigger, TR_TIME_DEFERRED,
 					     t->target, NULL, &rejected);
 
+		  /* execute_activity() maybe include trigger and change the
+		   * next pointer. we need get it again.
+		   */
+		  next = t->next;
 		  if (status == TR_RETURN_TRUE)
 		    {
 		      /* successful processing, remove it from the list */

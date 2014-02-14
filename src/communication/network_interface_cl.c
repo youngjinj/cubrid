@@ -7811,13 +7811,66 @@ qmgr_execute_query (const XASL_ID * xasl_id, QUERY_ID * query_idp,
   return list_id;
 #else /* CS_MODE */
   QFILE_LIST_ID *list_id = NULL;
+  int i;
+  DB_VALUE *server_db_values = NULL;
+  OID *oid;
 
   ENTER_SERVER ();
 
+  /* reallocate dbvals to use server allocation */
+  if (dbval_cnt > 0)
+    {
+      server_db_values =
+	(DB_VALUE *) db_private_alloc (NULL, dbval_cnt * sizeof (DB_VALUE));
+      if (server_db_values == NULL)
+	{
+	  goto cleanup;
+	}
+      for (i = 0; i < dbval_cnt; i++)
+	{
+	  /* Initialize value */
+	  DB_MAKE_NULL (&server_db_values[i]);
+	  switch (DB_VALUE_TYPE (&dbvals[i]))
+	    {
+	    case DB_TYPE_OBJECT:
+	      /* server cannot handle objects, convert to OID instead */
+	      oid = ws_identifier (DB_GET_OBJECT (&dbvals[i]));
+	      if (oid != NULL)
+		{
+		  DB_MAKE_OID (&server_db_values[i], oid);
+		}
+	      break;
+	    default:
+	      /* Clone value */
+	      if (db_value_clone (&dbvals[i], &server_db_values[i]) !=
+		  NO_ERROR)
+		{
+		  goto cleanup;
+		}
+	      break;
+	    }
+	}
+    }
+  else
+    {
+      /* No dbvals */
+      server_db_values = NULL;
+    }
+
   /* call the server routine of query execute */
   list_id = xqmgr_execute_query (NULL, xasl_id, query_idp, dbval_cnt,
-				 dbvals, &flag, clt_cache_time,
+				 server_db_values, &flag, clt_cache_time,
 				 srv_cache_time, query_timeout, NULL);
+
+cleanup:
+  if (server_db_values != NULL)
+    {
+      for (i = 0; i < dbval_cnt; i++)
+	{
+	  db_value_clear (&server_db_values[i]);
+	}
+      db_private_free (NULL, server_db_values);
+    }
 
   EXIT_SERVER ();
 
@@ -8033,7 +8086,7 @@ qmgr_end_query (QUERY_ID query_id)
  */
 int
 qmgr_drop_query_plan (const char *qstmt, const OID * user_oid,
-		      const XASL_ID * xasl_id, bool drop)
+		      const XASL_ID * xasl_id)
 {
 #if defined(CS_MODE)
   int status = ER_FAILED;
@@ -8044,7 +8097,7 @@ qmgr_drop_query_plan (const char *qstmt, const OID * user_oid,
   reply = OR_ALIGNED_BUF_START (a_reply);
 
   request_size = length_const_string (qstmt, &strlen)
-    + OR_OID_SIZE + OR_XASL_ID_SIZE + OR_INT_SIZE;
+    + OR_OID_SIZE + OR_XASL_ID_SIZE;
 
   request = (char *) malloc (request_size);
   if (request)
@@ -8055,8 +8108,6 @@ qmgr_drop_query_plan (const char *qstmt, const OID * user_oid,
       ptr = or_pack_oid (ptr, (OID *) user_oid);
       /* pack XASL file id (XASL_ID) */
       OR_PACK_XASL_ID (ptr, xasl_id);
-      /* pack 'delete' flag */
-      ptr = or_pack_int (ptr, drop);
 
       /* send SERVER_QM_QUERY_DROP_PLAN request with request data;
          receive status code (int) as a reply */
@@ -8084,7 +8135,7 @@ qmgr_drop_query_plan (const char *qstmt, const OID * user_oid,
   ENTER_SERVER ();
 
   /* call the server routine of query drop plan */
-  status = xqmgr_drop_query_plan (NULL, qstmt, user_oid, xasl_id, drop);
+  status = xqmgr_drop_query_plan (NULL, qstmt, user_oid, xasl_id);
 
   EXIT_SERVER ();
 

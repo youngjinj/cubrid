@@ -2678,7 +2678,7 @@ logpb_fetch_start_append_page_new (THREAD_ENTRY * thread_p)
  *              flushing this page to disk (e.g., page replacement),
  *              otherwise, during crash recovery we could try to read a log
  *              record that has never been finished and the end of the log may
- *              mot be detected. That is, the log would be corrupted.
+ *              not be detected. That is, the log would be corrupted.
  *
  *              If the current append page does not contain the beginning of
  *              the log record, the page can be freed and flushed at any time.
@@ -4719,7 +4719,7 @@ logpb_prior_lsa_append_all_list (THREAD_ENTRY * thread_p)
 static int
 logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
 {
-  LOG_RECORD_HEADER *eof;	/* End of log record */
+  LOG_RECORD_HEADER *tmp_eof = NULL;	/* End of log record */
   struct log_buffer *bufptr;	/* The current buffer log append page
 				 * scanned
 				 */
@@ -4881,12 +4881,12 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
 	}
 #endif /* CUBRID_DEBUG */
 
-      eof = (LOG_RECORD_HEADER *) LOG_PREV_APPEND_PTR ();
-      save_record = *eof;
+      tmp_eof = (LOG_RECORD_HEADER *) LOG_PREV_APPEND_PTR ();
+      save_record = *tmp_eof;
 
       /* Overwrite it with an end of log marker */
-      LSA_SET_NULL (&eof->forw_lsa);
-      eof->type = LOG_END_OF_LOG;
+      LSA_SET_NULL (&tmp_eof->forw_lsa);
+      tmp_eof->type = LOG_END_OF_LOG;
       LSA_COPY (&log_Gl.hdr.eof_lsa, &log_Gl.append.prev_lsa);
 
       logpb_set_dirty (thread_p, log_Gl.append.delayed_free_log_pgptr,
@@ -4898,18 +4898,16 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
        * Add an end of log marker to detect the end of the log. Don't advance the
        * log address, the log end of file is overwritten at a later point.
        */
-      LOG_APPEND_ADVANCE_WHEN_DOESNOT_FIT (thread_p, sizeof (*eof));
-      eof = (LOG_RECORD_HEADER *) LOG_APPEND_PTR ();
+      LOG_RECORD_HEADER eof;
 
-      eof->trid = LOG_READ_NEXT_TRANID;
-      eof->mvcc_id = LOG_READ_NEXT_MVCCID;
-      LSA_SET_NULL (&eof->prev_tranlsa);
-      LSA_COPY (&eof->back_lsa, &log_Gl.append.prev_lsa);
-      LSA_SET_NULL (&eof->forw_lsa);
-      eof->type = LOG_END_OF_LOG;
-      LSA_COPY (&log_Gl.hdr.eof_lsa, &log_Gl.hdr.append_lsa);
+      eof.trid = LOG_READ_NEXT_TRANID;
+      eof.mvcc_id = LOG_READ_NEXT_MVCCID;
+      LSA_SET_NULL (&eof.prev_tranlsa);
+      LSA_COPY (&eof.back_lsa, &log_Gl.append.prev_lsa);
+      LSA_SET_NULL (&eof.forw_lsa);
+      eof.type = LOG_END_OF_LOG;
 
-      logpb_set_dirty (thread_p, log_Gl.append.log_pgptr, DONT_FREE);
+      logpb_start_append (thread_p, &eof);
     }
 
   /*
@@ -5224,7 +5222,9 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
       /*
        * Restore the log append record
        */
-      *eof = save_record;
+      assert (tmp_eof != NULL);
+
+      *tmp_eof = save_record;
       logpb_set_dirty (thread_p, log_Gl.append.delayed_free_log_pgptr,
 		       DONT_FREE);
 
@@ -5616,13 +5616,21 @@ logpb_start_append (THREAD_ENTRY * thread_p, LOG_RECORD_HEADER * header)
       log_Gl.append.log_pgptr->hdr.offset = log_Gl.hdr.append_lsa.offset;
     }
 
-  LSA_COPY (&log_Gl.append.prev_lsa, &log_Gl.hdr.append_lsa);
+  if (log_rec->type == LOG_END_OF_LOG)
+    {
+      LSA_COPY (&log_Gl.hdr.eof_lsa, &log_Gl.hdr.append_lsa);
 
-  /*
-   * Set the page dirty, increase and align the append offset
-   */
-  LOG_APPEND_SETDIRTY_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER));
+      logpb_set_dirty (thread_p, log_Gl.append.log_pgptr, DONT_FREE);
+    }
+  else
+    {
+      LSA_COPY (&log_Gl.append.prev_lsa, &log_Gl.hdr.append_lsa);
 
+      /*
+       * Set the page dirty, increase and align the append offset
+       */
+      LOG_APPEND_SETDIRTY_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER));
+    }
 #if 0
   /*
    * LOG_DUMMY_FILLPAGE_FORARCHIVE isn't generated no more
@@ -10108,7 +10116,11 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
   float db_compatibility;
   PGLENGTH bkdb_iopagesize;
   float bkdb_compatibility;
-  FILEIO_RESTORE_PAGE_CACHE pages_cache;
+
+  FILEIO_RESTORE_PAGE_BITMAP_LIST page_bitmap_list;
+  FILEIO_RESTORE_PAGE_BITMAP *page_bitmap = NULL;
+  DKNPAGES total_pages;
+
   FILEIO_BACKUP_LEVEL try_level, start_level;
   bool first_time = true;
   bool remember_pages = false;
@@ -10122,7 +10134,6 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
   struct stat stat_buf;
   int error_code = NO_ERROR, success = NO_ERROR;
   bool printtoc;
-  char format_string[64];
   INT64 backup_time;
   REL_COMPATIBILITY compat;
   int dummy;
@@ -10134,8 +10145,6 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
   memset (lgat_tmpname, 0, PATH_MAX);
 
   LOG_CS_ENTER (thread_p);
-  pages_cache.ht = NULL;
-  pages_cache.heap_id = HL_NULL_HEAPID;
 
   if (logpb_find_header_parameters (thread_p, db_fullname, logpath,
 				    prefix_logname, &db_iopagesize,
@@ -10147,6 +10156,8 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
       db_creation = 0;
       db_compatibility = rel_disk_compatible ();
     }
+
+  fileio_page_bitmap_list_init (&page_bitmap_list);
 
   /*
    * Must lock the database if possible. Would be nice to have a way
@@ -10164,49 +10175,10 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 	}
     }
 
-  /*
-   * Create a memory hash table to remember the id's of pages
-   * that have been written.  We only need to write the page (once)
-   * from the most recent backup.
-   */
-
-  /* For the hash table size, it would be nice to have a real estimate
-   * of the number of pages.  The trouble is, we are restoring, and thus
-   * haven't the foggiest notion of the eventual number of pages in all
-   * restored volumes.
-   */
-  pages_cache.ht = mht_create ("Restored Pages hash table",
-			       LOG_BKUP_HASH_NUM_PAGEIDS, pgbuf_hash_vpid,
-			       pgbuf_compare_vpid);
-  if (pages_cache.ht == NULL)
-    {
-      error_code = ER_FAILED;
-      LOG_CS_EXIT (thread_p);
-      goto error;
-    }
-  pages_cache.heap_id = db_create_fixed_heap (sizeof (VPID),
-					      LOG_BKUP_HASH_NUM_PAGEIDS);
-  if (pages_cache.heap_id == HL_NULL_HEAPID)
-    {
-      error_code = ER_FAILED;
-      LOG_CS_EXIT (thread_p);
-      goto error;
-    }
-
-  sprintf (format_string, "%%%ds", PATH_MAX - 1);
-
   /* The enum type can be negative in Windows. */
   while (success == NO_ERROR && try_level >= FILEIO_BACKUP_FULL_LEVEL
 	 && try_level < FILEIO_BACKUP_UNDEFINED_LEVEL)
     {
-      /*
-       * Open the backup information/directory file. This backup file contains
-       * information related to the volumes that were backed up.
-       */
-      nopath_name = fileio_get_base_file_name (db_fullname);
-      fileio_make_backup_volume_info_name (from_volbackup, logpath,
-					   nopath_name);
-
       if (!first_time)
 	{
 	  /* Prepare to reread bkvinf file restored by higher level */
@@ -10228,131 +10200,18 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 	    }
 	}
 
-
-      /*
-       * Mount the backup directory information, if it exists.
-       */
-      while ((stat (from_volbackup, &stbuf) == -1) ||
-	     (backup_volinfo_fp = fopen (from_volbackup, "r")) == NULL)
+      error_code = fileio_get_backup_volume (thread_p, db_fullname, logpath,
+					     r_args, from_volbackup);
+      if (error_code == ER_LOG_CANNOT_ACCESS_BACKUP)
 	{
-
-	  /*
-	   * When user specifies an explicit location, the backup vinf
-	   * file is optional.
-	   */
-	  if (r_args->backuppath)
-	    {
-	      break;
-	    }
-
-	  /*
-	   * Backup volume information is not online
-	   */
-	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					   MSGCAT_SET_LOG,
-					   MSGCAT_LOG_STARTS));
-	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					   MSGCAT_SET_LOG,
-					   MSGCAT_LOG_BACKUPINFO_NEEDED),
-		   from_volbackup);
-	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					   MSGCAT_SET_LOG,
-					   MSGCAT_LOG_STARTS));
-
-	  if (scanf ("%d", &retry) != 1)
-	    {
-	      retry = 0;
-	    }
-
-	  switch (retry)
-	    {
-	    case 0:		/* quit */
-	      /* Cannot access backup file.. Restore from backup is cancelled */
-	      er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_LOG_CANNOT_ACCESS_BACKUP, 1, from_volbackup);
-	      error_expected = true;
-	      error_code = ER_LOG_CANNOT_ACCESS_BACKUP;
-	      LOG_CS_EXIT (thread_p);
-	      goto error;
-
-	    case 2:
-	      fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					       MSGCAT_SET_LOG,
-					       MSGCAT_LOG_NEWLOCATION));
-	      if (scanf (format_string, from_volbackup) != 1)
-		{
-		  /* Cannot access backup file.. Restore from backup is cancelled */
-		  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
-			  ER_LOG_CANNOT_ACCESS_BACKUP, 1, from_volbackup);
-		  error_code = ER_LOG_CANNOT_ACCESS_BACKUP;
-		  LOG_CS_EXIT (thread_p);
-		  goto error;
-		}
-	      break;
-
-	    case 1:
-	    default:
-	      break;
-	    }
-	}			/* while */
-
-      /*
-       * If we get to here, we can read the bkvinf file, OR one does not
-       * exist and it is not required.
-       */
-      if (backup_volinfo_fp != NULL)
-	{
-	  if (fileio_read_backup_info_entries (backup_volinfo_fp,
-					       FILEIO_FIRST_BACKUP_VOL_INFO)
-	      == NO_ERROR)
-	    {
-	      volnameptr =
-		fileio_get_backup_info_volume_name (try_level,
-						    FILEIO_INITIAL_BACKUP_UNITS,
-						    FILEIO_FIRST_BACKUP_VOL_INFO);
-	      if (volnameptr != NULL)
-		{
-		  strcpy (from_volbackup, volnameptr);
-		}
-	      else
-		{
-		  fileio_make_backup_name (from_volbackup, nopath_name,
-					   logpath, try_level,
-					   FILEIO_INITIAL_BACKUP_UNITS);
-		}
-	    }
-	  else
-	    {
-	      fclose (backup_volinfo_fp);
-	      backup_volinfo_fp = NULL;
-	      error_code = ER_FAILED;
-	      LOG_CS_EXIT (thread_p);
-	      goto error;
-	    }
-
-	  fclose (backup_volinfo_fp);
-	  backup_volinfo_fp = NULL;
-	}
-
-      /* User wishes to override the bkvinf file entry for some locations. */
-      if (r_args->backuppath)
-	{
-	  strncpy (from_volbackup, r_args->backuppath, PATH_MAX);
-	}
-
-      /* User only wants information about the backup */
-      if (r_args->printtoc)
-	{
-	  error_code = fileio_list_restore (thread_p, db_fullname,
-					    from_volbackup, &bkdb_iopagesize,
-					    &bkdb_compatibility, try_level,
-					    r_args->newvolpath);
-
-	  mht_destroy (pages_cache.ht);
-	  db_destroy_fixed_heap (pages_cache.heap_id);
+	  error_expected = true;
 	  LOG_CS_EXIT (thread_p);
-
-	  return error_code;
+	  goto error;
+	}
+      else if (error_code != NO_ERROR)
+	{
+	  LOG_CS_EXIT (thread_p);
+	  goto error;
 	}
 
       printtoc = (r_args->printtoc) ? false : true;
@@ -10401,8 +10260,7 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 		{
 		  error_code = fileio_finish_restore (thread_p, session);
 
-		  mht_destroy (pages_cache.ht);
-		  db_destroy_fixed_heap (pages_cache.heap_id);
+		  fileio_page_bitmap_list_destroy (&page_bitmap_list);
 		  LOG_CS_EXIT (thread_p);
 		  return error_code;
 		}
@@ -10538,7 +10396,6 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 		case LOG_DBVOLINFO_VOLID:
 		case LOG_DBLOG_ARCHIVE_VOLID:
 
-
 		  /* We can only take the most recent information, and we
 		   * do not want to overwrite it with out of data information
 		   * from earlier backups.  This is because we are
@@ -10575,10 +10432,34 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 		{
 		  remember_pages = false;
 		}
+	      else
+		{
+		  total_pages = CEIL_PTVDIV (session->dbfile.nbytes,
+					     IO_PAGESIZE);
+		  /*
+		   * Create a page_bitmap to remember the id's of pages
+		   * that have been written. We only need to write the page 
+		   * (once) from the most recent backup.
+		   */
+		  page_bitmap =
+		    fileio_page_bitmap_list_find (&page_bitmap_list,
+						  to_volid);
+		  if (page_bitmap == NULL)
+		    {
+		      page_bitmap = fileio_page_bitmap_create (to_volid,
+							       total_pages);
+		      if (page_bitmap == NULL)
+			{
+			  goto error;
+			}
+		      fileio_page_bitmap_list_add (&page_bitmap_list,
+						   page_bitmap);
+		    }
+		}
 
 	      success = fileio_restore_volume (thread_p, session,
 					       to_volname, verbose_to_volname,
-					       prev_volname, &pages_cache,
+					       prev_volname, page_bitmap,
 					       remember_pages);
 	    }
 	  else if (another_vol == 0)
@@ -10669,8 +10550,7 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 
   LOG_CS_EXIT (thread_p);
 
-  mht_destroy (pages_cache.ht);
-  db_destroy_fixed_heap (pages_cache.heap_id);
+  fileio_page_bitmap_list_destroy (&page_bitmap_list);
 
   fileio_finalize_backup_info (FILEIO_SECOND_BACKUP_VOL_INFO);
 
@@ -10717,15 +10597,7 @@ error:
       fileio_abort_restore (thread_p, session);
     }
 
-  if (pages_cache.ht != NULL)
-    {
-      mht_destroy (pages_cache.ht);
-    }
-
-  if (pages_cache.heap_id != HL_NULL_HEAPID)
-    {
-      db_destroy_fixed_heap (pages_cache.heap_id);
-    }
+  fileio_page_bitmap_list_destroy (&page_bitmap_list);
 
   if (lgat_vdes != NULL_VOLDES)
     {

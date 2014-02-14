@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Ultima eroare
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 vă rugăm verificaţi corectitudinea tokenului '%1$s'.
 4 'read uncommitted schema' nu este acceptat, se foloseşte \n'read committed schema' în loc.
 5 Lungimea maximă pentru şiruri de caractere este 16383.
-6 %s depăşeste limita de %lld.
+6 %s depăşeste limita de %s.
 7 Lungimea maximă în biţi pentru un şir de caractere este %1$d bits.
 8 Nu se poate utiliza o subinterogare în clauza condiţie pentru JOIN.
 9 Nu se poate specifica atributul "(%1$s)" în clauza de actualizarea drepturilor din instrucţiunile grant/revoke.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 utilizare invalidă a lui collation\n  COLLATION ( expression )\n
 119 utilizare invalidă a lui clob_to_char\n  CLOB_TO_CHAR ( expression [using charset] )\n
 120 utilizare invalidă a lui index_prefix\n  INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 Memorie epuizată.
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 Utilizatorul %1$s nu se află în baza de date.
 44 UPDATE nu poate conţine agregări.
 45 Numele de atribute din fiecare clasă trebuie să fie unice. Numele atributului '%s' din clasa '%s' este specificat mai mult de o singură dată.
-46 Există asignări multiple pentru %1$s.
+46 Există asignări multiple pentru %1$s.%2$s.
 47 Numărul din specificaţia de ordonare nu este întreg.
 48 %1$d din specificaţia de ordonare este în afara domeniului.
 49 Un element din ORDER BY nu este întreg.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Inserarea în mai multe tabele nu este permisă.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Memorie virtuală epuizată: nu s-au putut aloca %1$d bytes.

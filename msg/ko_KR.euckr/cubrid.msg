@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake 에러 (peer host %1$s): 알 수 없는 서버 버전.
 1143 Handshake 에러 (peer host %1$s): 원격 접속 불허.
 1144 %1$s로의 연결 시도 타임아웃 (timeout: %2$d 초)
+1145 시스템 클래스의 소유자를 변경하는 것은 허용되지 않습니다.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 마지막 에러
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 토큰 '%1$s'의 정확성을 점검해 주십시오.
 4 'read uncommitted schema'는 허용되지 않습니다.\n대신에 'read committed schema'를 이용 하시기 바랍니다.
 5 최대 문자열 길이는 16383 입니다.
-6 %1$s는(은) %2$lld의 한계를 초과 했습니다.
+6 %1$s는(은) %2$s의 한계를 초과 했습니다.
 7 비트 문자열의 최대 크기는 %1$d 비트입니다.
 8 조인 조건에는 부 질의를 사용할 수 없습니다.
 9 grant/revoke 문의 update 권한 부분에 에트리뷰트"(%1$s)"를 지정할 수 없습니다.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 잘못된 형식의 collation 함수입니다.\n  COLLATION ( expression )\n
 119 잘못된 형식의 clob_to_char 함수입니다.\n  CLOB_TO_CHAR ( expression [using charset] )\n
 120 잘못된 형식의 index_prefix 함수입니다.\n  INDEX_PREFIX ( expression, expression, expression )\n
+121 Expecting ON. Outer Joins require join condition.
+122 Incorrect usage of UNION and ORDER BY
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 메모리가 부족합니다
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 사용자 %1$s 은(는) 데이터베이스에 정의되지 않았습니다.
 44 Update 질의에서는 aggregation을 사용할 수 없습니다.
 45 클래스 내에서 속성 이름은 유일해야 합니다. 속성 이름인 '%1$s' (이)가 클래스 '%2$s' 에서 두 번 이상 명세 되었습니다.
-46 %1$s 에 대한 다중 할당이 있습니다.
+46 %1$s.%2$s 에 대한 다중 할당이 있습니다.
 47 sort spec에 사용된 숫자가 정수가 아닙니다.
 48 sort spec의 %1$d 은(는) 범위를 벗어났습니다. 
 49 order by item이 정수가 아닙니다.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 가상 메모리 없음: %1$d 바이트를 할당할 수 없습니다.

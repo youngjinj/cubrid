@@ -4868,6 +4868,15 @@ au_change_owner_method (MOP obj, DB_VALUE * returnval, DB_VALUE * class_,
       goto fail_return;
     }
 
+  /* To change the owner of a system class is not allowed. */
+  if (sm_issystem (clsobj))
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+	      ER_AU_CANT_ALTER_OWNER_OF_SYSTEM_CLASS, 0);
+      db_make_error (returnval, er_errid ());
+      return;
+    }
+
   user = au_find_user (owner_name);
   if (user == NULL)
     {
@@ -7363,6 +7372,7 @@ au_print_grant_entry (DB_SET * grants, int grant_index, FILE * fp)
 			       MSGCAT_SET_AUTHORIZATION,
 			       MSGCAT_AUTH_CLASS_NAME),
 	   sm_class_name (db_get_object (&value)));
+  fprintf (fp, " ");
 
   set_get_element (grants, GRANT_ENTRY_SOURCE (grant_index), &value);
   obj_get (db_get_object (&value), "name", &value);

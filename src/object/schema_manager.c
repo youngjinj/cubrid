@@ -257,9 +257,6 @@ const char *sm_Root_class_name = ROOTCLASS_NAME;
 /* Heap file identifier for the root class */
 HFID *sm_Root_class_hfid = &sm_Root_class.header.heap;
 
-/* Flag to do update statistics */
-bool sm_Disable_updating_statistics = false;
-
 static unsigned int local_schema_version = 0;
 static unsigned int global_schema_version = 0;
 
@@ -3854,11 +3851,6 @@ sm_update_statistics (MOP classop, bool with_fullscan)
   int error = NO_ERROR;
   SM_CLASS *class_;
 
-  if (sm_Disable_updating_statistics == true)
-    {
-      return NO_ERROR;
-    }
-
   assert_release (classop != NULL);
 
   /* only try to get statistics if we know the class has been flushed
@@ -6339,85 +6331,86 @@ sm_virtual_queries (DB_OBJECT * class_object)
   unsigned int current_schema_id;
   PARSER_CONTEXT *cache = NULL, *tmp = NULL, *old_cache = NULL;
 
-  if (au_fetch_class_force (class_object, &cl, AU_FETCH_READ) == NO_ERROR)
+  if (au_fetch_class_force (class_object, &cl, AU_FETCH_READ) != NO_ERROR)
     {
-      (void) ws_pin (class_object, 1);
+      return NULL;
+    }
 
-      if (cl->virtual_query_cache != NULL
-	  && cl->virtual_query_cache->view_cache != NULL
-	  && cl->virtual_query_cache->view_cache->vquery_for_query != NULL)
+  (void) ws_pin (class_object, 1);
+
+  if (cl->virtual_query_cache != NULL
+      && cl->virtual_query_cache->view_cache != NULL
+      && cl->virtual_query_cache->view_cache->vquery_for_query != NULL)
+    {
+      (void) pt_class_pre_fetch (cl->virtual_query_cache,
+				 cl->virtual_query_cache->view_cache->
+				 vquery_for_query);
+      if (er_has_error ())
 	{
-	  (void) pt_class_pre_fetch (cl->virtual_query_cache,
-				     cl->virtual_query_cache->view_cache->
-				     vquery_for_query);
-	  if (er_has_error ())
-	    {
-	      return NULL;
-	    }
-
-	  if (pt_has_error (cl->virtual_query_cache))
-	    {
-	      mq_free_virtual_query_cache (cl->virtual_query_cache);
-	      cl->virtual_query_cache = NULL;
-	    }
+	  return NULL;
 	}
 
-      current_schema_id = sm_local_schema_version ()
-	+ sm_global_schema_version ();
-
-      if (cl->virtual_query_cache != NULL
-	  && cl->virtual_cache_schema_id != current_schema_id)
+      if (pt_has_error (cl->virtual_query_cache))
 	{
-	  old_cache = cl->virtual_query_cache;
+	  mq_free_virtual_query_cache (cl->virtual_query_cache);
 	  cl->virtual_query_cache = NULL;
 	}
+    }
 
-      if (cl->class_type != SM_CLASS_CT && cl->virtual_query_cache == NULL)
+  current_schema_id = (sm_local_schema_version ()
+		       + sm_global_schema_version ());
+
+  if (cl->virtual_query_cache != NULL
+      && cl->virtual_cache_schema_id != current_schema_id)
+    {
+      old_cache = cl->virtual_query_cache;
+      cl->virtual_query_cache = NULL;
+    }
+
+  if (cl->class_type != SM_CLASS_CT && cl->virtual_query_cache == NULL)
+    {
+      /* Okay, this is a bit of a kludge:  If there happens to be a
+       * cyclic view definition, then the virtual_query_cache will be
+       * allocated during the call to mq_virtual_queries. So, we'll
+       * assign it to a temp pointer and check it again.  We need to
+       * keep the old one and free the new one because the parser
+       * assigned originally contains the error message.
+       */
+      tmp = mq_virtual_queries (class_object);
+      if (tmp == NULL)
 	{
-	  /* Okay, this is a bit of a kludge:  If there happens to be a
-	   * cyclic view definition, then the virtual_query_cache will be
-	   * allocated during the call to mq_virtual_queries. So, we'll
-	   * assign it to a temp pointer and check it again.  We need to
-	   * keep the old one and free the new one because the parser
-	   * assigned originally contains the error message.
-	   */
-	  tmp = mq_virtual_queries (class_object);
-	  if (tmp == NULL)
-	    {
-	      if (old_cache)
-		{
-		  cl->virtual_query_cache = old_cache;
-		}
-	      return NULL;
-	    }
-
 	  if (old_cache)
 	    {
-	      mq_free_virtual_query_cache (old_cache);
+	      cl->virtual_query_cache = old_cache;
 	    }
-
-	  if (cl->virtual_query_cache)
-	    {
-	      mq_free_virtual_query_cache (tmp);
-	    }
-	  else
-	    {
-	      cl->virtual_query_cache = tmp;
-	    }
-
-	  /* need to re-evalutate current_schema_id as global_schema_version
-	   * was changed by the call to mq_virtual_queries() */
-	  current_schema_id = sm_local_schema_version ()
-	    + sm_global_schema_version ();
-	  cl->virtual_cache_schema_id = current_schema_id;
+	  return NULL;
 	}
 
-      cache = cl->virtual_query_cache;
+      if (old_cache)
+	{
+	  mq_free_virtual_query_cache (old_cache);
+	}
+
+      if (cl->virtual_query_cache)
+	{
+	  mq_free_virtual_query_cache (tmp);
+	}
+      else
+	{
+	  cl->virtual_query_cache = tmp;
+	}
+
+      /* need to re-evalutate current_schema_id as global_schema_version
+       * was changed by the call to mq_virtual_queries() */
+      current_schema_id = (sm_local_schema_version ()
+			   + sm_global_schema_version ());
+      cl->virtual_cache_schema_id = current_schema_id;
     }
+
+  cache = cl->virtual_query_cache;
 
   return cache;
 }
-
 
 /*
  * sm_get_attribute_descriptor() - Find the named attribute structure
@@ -10715,6 +10708,78 @@ update_foreign_key_ref (MOP ref_clsop, SM_FOREIGN_KEY_INFO * fk_info)
 }
 
 /*
+ * sm_rename_foreign_key_ref() - Rename constraint name in PK referenced by FK
+ *   return: NO_ERROR on success, non-zero for ERROR
+ *   ref_clsop(in): referenced class by FK
+ *   old_name(in): old constraint name
+ *   new_name(in): new constraint name
+ */
+int
+sm_rename_foreign_key_ref (MOP ref_clsop, char *old_name, char *new_name)
+{
+  SM_TEMPLATE *template_;
+  SM_CLASS *ref_class_;
+  SM_CLASS_CONSTRAINT *pk;
+  MOP owner_clsop = NULL;
+  int save, error;
+
+  AU_DISABLE (save);
+
+  error = au_fetch_class_force (ref_clsop, &ref_class_, AU_FETCH_READ);
+  if (error != NO_ERROR)
+    {
+      AU_ENABLE (save);
+      return error;
+    }
+
+  if (ref_class_->inheritance != NULL)
+    {
+      /* the PK of referenced table may come from.its parent table */
+      pk = classobj_find_cons_primary_key (ref_class_->constraints);
+      if (pk == NULL)
+	{
+	  AU_ENABLE (save);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_FK_REF_CLASS_HAS_NOT_PK, 1, ref_class_->header.name);
+	  return ER_FK_REF_CLASS_HAS_NOT_PK;
+	}
+      owner_clsop = pk->attributes[0]->class_mop;
+    }
+  else
+    {
+      owner_clsop = ref_clsop;
+    }
+
+  template_ = dbt_edit_class (owner_clsop);
+  if (template_ == NULL)
+    {
+      AU_ENABLE (save);
+      return (er_errid () != NO_ERROR) ? er_errid () : ER_FAILED;
+    }
+
+  error =
+    classobj_rename_foreign_key_ref (&(template_->properties), old_name,
+				     new_name);
+  if (error != NO_ERROR)
+    {
+      dbt_abort_class (template_);
+      AU_ENABLE (save);
+      return error;
+    }
+
+  ref_clsop = dbt_finish_class (template_);
+  if (ref_clsop == NULL)
+    {
+      dbt_abort_class (template_);
+      AU_ENABLE (save);
+      return (er_errid () != NO_ERROR) ? er_errid () : ER_FAILED;
+    }
+
+  AU_ENABLE (save);
+  return NO_ERROR;
+}
+
+/*
  * allocate_unique_constraint() - Allocate index for unique constraints
  *   return: NO_ERROR on success, non-zero for ERROR
  *   classop(in): class object
@@ -11040,7 +11105,7 @@ allocate_disk_structures_index (MOP classop, SM_CLASS * class_,
  *    definition was actually inherited from a super class. When we find these,
  *    go to the super class and use the BTID that will have by now been
  *    allocated in there rather than allocating a new one of our own.
- *   return: NO_ERROR on success, non-zero for ERROR
+ *   return: The number of indexes of the table on success, non-zero for ERROR
  *   classop(in): class object
  *   class(in): class structure
  *   subclasses(in):
@@ -11050,8 +11115,9 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_,
 			  DB_OBJLIST * subclasses)
 {
   SM_CLASS_CONSTRAINT *con;
+  int num_indexes = 0;
+  int err;
   bool recache_cls_cons = false;
-  int num_index = 0;
 
   assert (classop != NULL);
 
@@ -11083,7 +11149,7 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_,
 	      goto structure_error;
 	    }
 
-	  num_index++;
+	  num_indexes++;
 	}
     }
 
@@ -11100,7 +11166,7 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_,
 	      goto structure_error;
 	    }
 
-	  num_index++;
+	  num_indexes++;
 	}
     }
 
@@ -11126,21 +11192,14 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_,
       goto structure_error;
     }
 
-  if (num_index > 0)
-    {
-      if (sm_update_statistics (classop, STATS_WITH_SAMPLING))
-	{
-	  goto structure_error;
-	}
-    }
-
-  return NO_ERROR;
+  return num_indexes;
 
 structure_error:
   /* the workspace has already been damaged by this point, the caller will
    * have to recognize the error and abort the transaction.
    */
-  return er_errid ();
+  err = er_errid ();
+  return ((err == NO_ERROR) ? ER_FAILED : err);
 }
 
 /*
@@ -12486,6 +12545,7 @@ static int
 update_subclasses (DB_OBJLIST * subclasses)
 {
   int error = NO_ERROR;
+  int num_indexes;
   DB_OBJLIST *sub;
   SM_CLASS *class_;
 
@@ -12512,17 +12572,26 @@ update_subclasses (DB_OBJLIST * subclasses)
 		   *   modify install_new_representation and
 		   *   remove allocated_disk_structures
 		   */
-		  error = allocate_disk_structures (sub->op, class_, NULL);
-		  if (error != NO_ERROR)
+		  num_indexes = allocate_disk_structures (sub->op, class_,
+							  NULL);
+		  if (num_indexes > 0)
 		    {
-		      classobj_free_template (class_->new_);
-		      class_->new_ = NULL;
-
-		      return error;
+		      error = sm_update_statistics (sub->op,
+						    STATS_WITH_SAMPLING);
+		    }
+		  else if (num_indexes < 0)
+		    {
+		      /* an error has happened */
+		      error = num_indexes;
 		    }
 
 		  classobj_free_template (class_->new_);
 		  class_->new_ = NULL;
+
+		  if (error != NO_ERROR)
+		    {
+		      return error;
+		    }
 		}
 	    }
 	}
@@ -12624,6 +12693,7 @@ static int
 update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res)
 {
   int error = NO_ERROR;
+  int num_indexes;
   SM_CLASS *class_;
   DB_OBJLIST *cursupers, *oldsupers, *newsupers, *cursubs, *newsubs;
   SM_TEMPLATE *flat;
@@ -12754,6 +12824,10 @@ update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res)
       if (class_ == NULL)
 	{
 	  error = er_errid ();
+	  if (error == NO_ERROR)
+	    {
+	      error = ER_FAILED;
+	    }
 	}
       else
 	{
@@ -12812,59 +12886,62 @@ update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res)
     }
 
   /* the next sequence of operations is extremely critical,
-     if any errors are detected, we'll have to abort the current
-     transaction or the database will be left in an inconsistent
-     state */
+   * if any errors are detected, we'll have to abort the current
+   * transaction or the database will be left in an inconsistent
+   * state.
+   */
 
-  if (error == NO_ERROR)
-    {
-      flat->partition_parent_atts = template_->partition_parent_atts;
-      error = install_new_representation (template_->op, class_, flat);
-      if (error == NO_ERROR)
-	{
-	  /* This used to be done toward the end but since the
-	   * unique btid has to be inherited, the disk structures
-	   * have to be created before we update the subclasses.
-	   */
-	  error = allocate_disk_structures (template_->op, class_, newsubs);
-	  if (error == NO_ERROR)
-	    {
-	      error = update_supers (template_->op, oldsupers, newsupers);
-	      if (error == NO_ERROR)
-		{
-		  error = update_subclasses (newsubs);
-		  if (error == NO_ERROR)
-		    {
-		      if (classmop != NULL)
-			{
-			  *classmop = template_->op;
-			}
-		      /* we're done */
-		      class_->new_ = NULL;
-
-		      classobj_free_template (flat);
-		      classobj_free_template (template_);
-		    }
-		}
-	    }
-	}
-    }
-
+  flat->partition_parent_atts = template_->partition_parent_atts;
+  error = install_new_representation (template_->op, class_, flat);
   if (error != NO_ERROR)
     {
-      classobj_free_template (flat);
-      abort_subclasses (newsubs);
-      if (error == ER_BTREE_UNIQUE_FAILED || error == ER_FK_INVALID
-	  || error == ER_SM_PRIMARY_KEY_EXISTS
-	  || error == ER_NOT_NULL_DOES_NOT_ALLOW_NULL_VALUE)
-	{
-	  (void) tran_abort_upto_system_savepoint (UNIQUE_SAVEPOINT_NAME);
-	}
-      else
-	{
-	  (void) tran_unilaterally_abort ();
-	}
+      goto error_return;
     }
+
+  /* This used to be done toward the end but since the
+   * unique btid has to be inherited, the disk structures
+   * have to be created before we update the subclasses.
+   * We also have to disable updating statistics for now
+   * because we haven't finshed modifying the all the classes
+   * yet and the code which updates statistics on partitioned
+   * classes does not work if partitions and the partitioned
+   * class have different schema.
+   */
+
+  num_indexes = allocate_disk_structures (template_->op, class_, newsubs);
+  if (num_indexes < 0)
+    {
+      error = num_indexes;
+      goto error_return;
+    }
+
+  error = update_supers (template_->op, oldsupers, newsupers);
+  if (error != NO_ERROR)
+    {
+      goto error_return;
+    }
+
+  error = update_subclasses (newsubs);
+  if (error != NO_ERROR)
+    {
+      goto error_return;
+    }
+
+  /* we're done */
+  if (classmop != NULL)
+    {
+      *classmop = template_->op;
+    }
+  class_->new_ = NULL;
+
+  /* All objects are updated, now we can update class statistics also. */
+  if (num_indexes > 0)
+    {
+      error = sm_update_statistics (template_->op, STATS_WITH_SAMPLING);
+    }
+
+  classobj_free_template (flat);
+  classobj_free_template (template_);
 
 end:
   ml_free (oldsupers);
@@ -12872,6 +12949,21 @@ end:
   ml_free (newsubs);
 
   return error;
+
+error_return:
+  classobj_free_template (flat);
+  abort_subclasses (newsubs);
+  if (error == ER_BTREE_UNIQUE_FAILED || error == ER_FK_INVALID
+      || error == ER_SM_PRIMARY_KEY_EXISTS
+      || error == ER_NOT_NULL_DOES_NOT_ALLOW_NULL_VALUE)
+    {
+      (void) tran_abort_upto_system_savepoint (UNIQUE_SAVEPOINT_NAME);
+    }
+  else
+    {
+      (void) tran_unilaterally_abort ();
+    }
+  goto end;
 }
 
 /*

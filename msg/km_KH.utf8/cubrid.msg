@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Last Error
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 សូមពិនិត្យមើលកំណែនៃtoken '%1$s'។
 4 'read uncommitted schema' មិនអាចទទួលយកបាន, ប្រើ \n'read committed schema' ជាជំនួស។
 5 ប្រវែងchar string length អតិបរមាគឺ 16383។
-6 %s លើសការកំណត់នៃ %lld។
+6 %s លើសការកំណត់នៃ %s។
 7 ប្រវែងbit stringអតិបរមាគឺ %1$d bits។
 8 មិនអាចប្រើ subquery ក្នុង clauseបន្ថែមរួមទេ។
 9 មិនអាចកំណត់ជាពិសេសនូវattribute "(%1$s)" ក្នុង clauseបុព្វសិទ្ធិទំនើបកម្ម នៃ grant/revoke statementទេ
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 ការរៀបចំឥតបានការ\n  COLLATION ( expression )\n
 119 ការប្រើប្រាស់clob_to_charត្រូវចាត់ទុកជាមោឃៈ\n  CLOB_TO_CHAR ( expression [using charset] )\n
 120 ការប្រើប្រាស់index_prefixត្រូវចាត់ទុកជាមោឃៈ\n  INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 គ្មាន memory។
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 User %1$s មិននៅក្នុងដែលតាបេស។
 44 Update មិនអាចមានការផ្តុំចូលគ្នាទាំងមូលទេ។
 45 ឈ្មោះAttribute ក្នុងថ្នាក់នីមួយៗត្រូវតែមានតែមួន។ ឈ្មោះ Attribute'%s' ក្នុងថ្នាក់ '%s' ត្រូវបានកំណត់ច្រើនជាងម្តង។
-46 មានការងារជាច្រើនចំពោះ %1$s។
+46 មានការងារជាច្រើនចំពោះ %1$s.%2$s។
 47 ចំនួនក្នុង sort spec មិនមែនជាលេខគត់ទេ។
 48 %1$d ក្នុង sort spec គ្មានលំដាប់។
 49 លំដាប់តាមitem មិនមែនជាលេខគត់ទេ។
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 អស់ memoryជាក់ស្តែង: មិនអាចប្រើ %1$d bytes។

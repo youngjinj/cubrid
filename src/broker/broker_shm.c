@@ -517,7 +517,6 @@ broker_shm_initialize_shm_as (T_BROKER_INFO * br_info_p,
     }
 
   shm_as_p->cci_default_autocommit = br_info_p->cci_default_autocommit;
-  shm_as_p->suspend_mode = SUSPEND_NONE;
   shm_as_p->job_queue_size = br_info_p->job_queue_size;
   shm_as_p->job_queue[0].id = 0;	/* initialize max heap */
   shm_as_p->max_prepared_stmt_count = br_info_p->max_prepared_stmt_count;
@@ -708,13 +707,13 @@ shard_shm_set_shard_conn_info (T_SHM_APPL_SERVER * shm_as_p,
       shard_conn_info_p = &shm_as_p->shard_conn_info[i];
 
       strncpy (shard_conn_info_p->db_user, user_p->db_user,
-	       sizeof (shard_conn_info_p->db_user));
+	       sizeof (shard_conn_info_p->db_user) - 1);
       strncpy (shard_conn_info_p->db_name, conn_p->db_name,
-	       sizeof (shard_conn_info_p->db_name));
+	       sizeof (shard_conn_info_p->db_name) - 1);
       strncpy (shard_conn_info_p->db_host, conn_p->db_conn_info,
-	       sizeof (shard_conn_info_p->db_host));
+	       sizeof (shard_conn_info_p->db_host) - 1);
       strncpy (shard_conn_info_p->db_password, user_p->db_password,
-	       sizeof (shard_conn_info_p->db_password));
+	       sizeof (shard_conn_info_p->db_password) - 1);
     }
 }
 

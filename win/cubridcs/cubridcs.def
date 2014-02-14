@@ -406,6 +406,7 @@ EXPORTS
     prm_get_integer_value
     prm_get_bigint_value
     prm_get_string_value
+    prm_set_integer_value
     rel_copy_version_string
     rel_build_number
     rel_release_string
@@ -695,6 +696,7 @@ EXPORTS
     db_get_user_name
     db_get_vclass_ldb_name
     db_get_warnings
+    db_has_modified_class
     db_init_query_result
     db_instance_equal
     db_is_any_class
@@ -900,6 +902,12 @@ EXPORTS
 ;   porting.h
 ;
 	port_win_mutex_init_and_lock
+	parse_int
+	parse_bigint
+	str_to_int32
+	str_to_uint32
+	str_to_int64
+	str_to_uint64
 ;
 ; memory hash function
 ;

@@ -3399,15 +3399,6 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 	  cfg_free_directory (dir);
 	  return error_code;
 	}
-      else
-	{
-	  /* if table of contents only do not restart */
-	  if (r_args->printtoc)
-	    {
-	      cfg_free_directory (dir);
-	      return NO_ERROR;
-	    }
-	}
     }
 
   /*
@@ -3992,6 +3983,9 @@ xboot_register_client (THREAD_ENTRY * thread_p,
       return NULL_TRAN_INDEX;
     }
 #endif /* SA_MODE */
+
+  /* Initialize scan function pointers of show statements */
+  showstmt_scan_init ();
 
   db_user_save = client_credential->db_user;
   if (client_credential->db_user != NULL)

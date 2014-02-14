@@ -64,6 +64,9 @@
 #define ACCESS_SPEC_LIST_SPEC(ptr) \
         ((ptr)->s.list_node)
 
+#define ACCESS_SPEC_SHOWSTMT_SPEC(ptr) \
+        ((ptr)->s.showstmt_node)
+
 #define ACCESS_SPEC_RLIST_SPEC(ptr) \
         ((ptr)->s.reguval_list_node)
 
@@ -221,7 +224,8 @@ typedef enum
   TARGET_LIST,
   TARGET_SET,
   TARGET_METHOD,
-  TARGET_REGUVAL_LIST
+  TARGET_REGUVAL_LIST,
+  TARGET_SHOWSTMT
 } TARGET_TYPE;
 
 typedef enum
@@ -275,6 +279,13 @@ struct list_spec_node
 				 */
 };
 
+typedef struct showstmt_spec_node SHOWSTMT_SPEC_TYPE;
+struct showstmt_spec_node
+{
+  SHOWSTMT_TYPE show_type;	/* show statement type */
+  REGU_VARIABLE_LIST arg_list;	/* show statement args */
+};
+
 typedef struct set_spec_node SET_SPEC_TYPE;
 struct set_spec_node
 {
@@ -303,6 +314,7 @@ union hybrid_node
 {
   CLS_SPEC_TYPE cls_node;	/* class specification */
   LIST_SPEC_TYPE list_node;	/* list specification */
+  SHOWSTMT_SPEC_TYPE showstmt_node;	/* show stmt specification */
   SET_SPEC_TYPE set_node;	/* set specification */
   METHOD_SPEC_TYPE method_node;	/* method specification */
   REGUVAL_LIST_SPEC_TYPE reguval_list_node;	/* reguval_list specification */
@@ -675,10 +687,11 @@ struct insert_proc_node
   int no_logging;		/* no logging */
   int release_lock;		/* release lock */
   int do_replace;		/* duplicate tuples should be replaced */
-  int is_first_value;		/* Indicates whether the first value of VALUES
-				 * clause. */
   int pruning_type;		/* DB_CLASS_PARTITION_TYPE indicating the way
 				 * in which pruning should be performed */
+  int no_val_lists;		/* number of value lists in values clause */
+  VALPTR_LIST **valptr_lists;	/* OUTPTR lists for each list of values */
+  DB_VALUE *obj_oid;		/* Inserted object OID, used for sub-inserts */
 };
 
 typedef struct delete_proc_node DELETE_PROC_NODE;
@@ -747,7 +760,8 @@ typedef enum
 {
   XASL_CLEARED,
   XASL_SUCCESS,
-  XASL_FAILURE
+  XASL_FAILURE,
+  XASL_INITIALIZED
 } XASL_STATUS;
 
 /* To handle selected update list,
@@ -982,7 +996,8 @@ do {                                                                          \
     if (_x) {                                                                 \
         if (XASL_IS_FLAGED(_x, XASL_LINK_TO_REGU_VARIABLE)) {                 \
             /* clear correlated subquery list files                      */   \
-            if ((_x)->status == XASL_CLEARED) {                               \
+            if ((_x)->status == XASL_CLEARED				      \
+		|| (_x)->status == XASL_INITIALIZED) {                        \
                 /* execute xasl query                                    */   \
                 qexec_execute_mainblock((thread_p), _x, (v)->xasl_state);     \
             } /* else: already evaluated. success or failure */               \
@@ -1122,8 +1137,7 @@ extern XASL_CACHE_ENTRY *qexec_update_filter_pred_cache_ent (THREAD_ENTRY *
 							     *tcards,
 							     int dbval_cnt);
 extern int qexec_end_use_of_xasl_cache_ent (THREAD_ENTRY * thread_p,
-					    const XASL_ID * xasl_id,
-					    bool marker);
+					    const XASL_ID * xasl_id);
 extern int qexec_end_use_of_filter_pred_cache_ent (THREAD_ENTRY * thread_p,
 						   const XASL_ID * xasl_id,
 						   bool marker);

@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Last Error
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 please check correctness of token '%1$s'.
 4 'read uncommitted schema' is not acceptable, using \n'read committed schema' instead.
 5 Maximum char string length is 16383.
-6 %1$s exceeds limit of %2$lld.
+6 %1$s exceeds limit of %2$s.
 7 Maximum bit string length is %1$d bits.
 8 Cannot use a subquery in join condition clause.
 9 Cannot specify attribute "(%1$s)" in update privilege clause of grant/revoke statement.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 invalid use of collation\n  COLLATION ( expression )\n
 119 invalid use of clob_to_char\n  CLOB_TO_CHAR ( expression [using charset] )\n
 120 invalid use of index_prefix\n  INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 Out of memory.
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 User %1$s is not in the database.
 44 Update cannot have aggregation.
 45 Attribute names in each class must be unique. Attribute name '%1$s' in class '%2$s' is specified more than once.
-46 There are multiple assignments to %1$s.
+46 There are multiple assignments to %1$s.%2$s.
 47 Number in sort spec is not an integer.
 48 %1$d in sort spec is out of range.
 49 Order by item is not an integer.
@@ -1575,7 +1579,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 209 ORDER BY items must appear in the select list if SELECT DISTINCT is specified.
 210 Host variable is not allowed on columns in the query specification.
 211 %1$s can not be an ORDER BY column
-212 %1$s can not be an GROUP BY column
+212 %1$s can not be a GROUP BY column
 213 Can not define '%1$s of %2$s' as a column type.
 214 Invalid value "%1$s" for prefix length of the index.
 215 '%1$s' function is not defined on types %2$s, %3$s, %4$s and %5$s.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Out of virtual memory: unable to allocate %1$d bytes.

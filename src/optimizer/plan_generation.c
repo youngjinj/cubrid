@@ -1025,7 +1025,7 @@ add_sort_spec (QO_ENV * env, XASL_NODE * xasl, QO_PLAN * plan,
 	}
     }
 
-  if (plan->plan_un.sort.sort_type == SORT_LIMIT)
+  if (xasl && plan->plan_un.sort.sort_type == SORT_LIMIT)
     {
       /* setup ORDER BY list here */
       int ordbynum_flag;
@@ -2630,27 +2630,6 @@ PT_NODE *
 qo_plan_iscan_sort_list (QO_PLAN * plan)
 {
   return plan->iscan_sort_list;
-}
-
-/*
- * qo_subplan_iscan_sort_list () - get after index scan PT_SORT_SPEC list for
- *                                 subplan of a sort plan
- *   return: sort list
- *   plan(in): QO_PLAN
- */
-PT_NODE *
-qo_subplan_iscan_sort_list (QO_PLAN * plan)
-{
-  if (!plan || plan->plan_type != QO_PLANTYPE_SORT)
-    {
-      return NULL;
-    }
-  if (!plan->plan_un.sort.subplan)
-    {
-      return NULL;
-    }
-
-  return plan->plan_un.sort.subplan->iscan_sort_list;
 }
 
 /*

@@ -2287,6 +2287,11 @@ qdata_add_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
     {
       /* add operation with zero date returns null */
       DB_MAKE_NULL (result_p);
+      if (!prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_DATE_CONVERSION, 0);
+	  return ER_DATE_CONVERSION;
+	}
       return NO_ERROR;
     }
 
@@ -3995,6 +4000,11 @@ qdata_subtract_dbval (DB_VALUE * dbval1_p, DB_VALUE * dbval2_p,
     {
       /* subtract operation with zero date returns null */
       DB_MAKE_NULL (result_p);
+      if (!prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_DATE_CONVERSION, 0);
+	  return ER_DATE_CONVERSION;
+	}
       return NO_ERROR;
     }
 
@@ -5893,6 +5903,9 @@ qdata_process_distinct_or_sort (THREAD_ENTRY * thread_p,
 
   db_private_free_and_init (thread_p, type_list.domp);
 
+  qfile_close_list (thread_p, agg_p->list_id);
+  qfile_destroy_list (thread_p, agg_p->list_id);
+
   if (qfile_copy_list_id (agg_p->list_id, list_id_p, true) != NO_ERROR)
     {
       QFILE_FREE_AND_INIT_LIST_ID (list_id_p);
@@ -6227,25 +6240,11 @@ qdata_aggregate_value_to_accumulator (THREAD_ENTRY * thread_p,
 	}
       else
 	{
-	  /* don't contain NUMERIC value additions to a certain precision or
-	     scale */
-	  TP_DOMAIN *value_dom =
-	    (TP_DOMAIN_TYPE (domain->value_dom) ==
-	     DB_TYPE_NUMERIC ? NULL : domain->value_dom);
-
 	  /* values are added up in acc.value */
 	  if (qdata_add_dbval
-	      (acc->value, value, acc->value, value_dom) != NO_ERROR)
+	      (acc->value, value, acc->value, domain->value_dom) != NO_ERROR)
 	    {
 	      return ER_FAILED;
-	    }
-
-	  /* retrieve NUMERIC domain */
-	  if (value_dom == NULL
-	      && DB_VALUE_TYPE (acc->value) == DB_TYPE_NUMERIC
-	      && !DB_IS_NULL (acc->value))
-	    {
-	      domain->value_dom = tp_domain_resolve_value (acc->value, NULL);
 	    }
 	}
       break;
@@ -6333,7 +6332,7 @@ qdata_aggregate_value_to_accumulator (THREAD_ENTRY * thread_p,
 	}
       else
 	{
-	  (*(domain->value_dom->type->setval)) (acc->value, value, true);
+	  pr_clone_value (value, acc->value);
 	}
     }
 
@@ -6427,6 +6426,14 @@ qdata_evaluate_aggregate_list (THREAD_ENTRY * thread_p,
       /* eliminate null values */
       if (DB_IS_NULL (&dbval))
 	{
+	  if ((agg_p->function == PT_COUNT
+	       || agg_p->function == PT_COUNT_STAR)
+	      && DB_IS_NULL (accumulator->value))
+	    {
+	      /* we might get a NULL count if aggregating with hash table and
+	         group has only one tuple; correct that */
+	      DB_MAKE_INT (accumulator->value, 0);
+	    }
 	  continue;
 	}
 
@@ -6890,12 +6897,14 @@ cleanup:
  * qdata_finalize_aggregate_list () -
  *   return: NO_ERROR, or ER_code
  *   agg_list(in)       : Aggregate expression node list
+ *   keep_list_file(in) : whether keep the list file for reuse
  *
  * Note: Make the final evaluation on the aggregate expression list.
  */
 int
 qdata_finalize_aggregate_list (THREAD_ENTRY * thread_p,
-			       AGGREGATE_TYPE * agg_list_p)
+			       AGGREGATE_TYPE * agg_list_p,
+			       bool keep_list_file)
 {
   int error = NO_ERROR;
   AGGREGATE_TYPE *agg_p;
@@ -7016,14 +7025,9 @@ qdata_finalize_aggregate_list (THREAD_ENTRY * thread_p,
 
 	  if (agg_p->flag_agg_optimize == false)
 	    {
-	      assert ((agg_p->sort_list == NULL
-		       && agg_p->list_id->sort_list != NULL)
-		      || (agg_p->sort_list != NULL
-			  && agg_p->list_id->sort_list == NULL));
-
 	      list_id_p = agg_p->list_id =
 		qfile_sort_list (thread_p, agg_p->list_id, agg_p->sort_list,
-				 agg_p->option, true);
+				 agg_p->option, false);
 
 	      if (list_id_p == NULL)
 		{
@@ -7285,8 +7289,11 @@ qdata_finalize_aggregate_list (THREAD_ENTRY * thread_p,
 	    }
 
 	  /* close and destroy temporary list files */
-	  qfile_close_list (thread_p, agg_p->list_id);
-	  qfile_destroy_list (thread_p, agg_p->list_id);
+	  if (!keep_list_file)
+	    {
+	      qfile_close_list (thread_p, agg_p->list_id);
+	      qfile_destroy_list (thread_p, agg_p->list_id);
+	    }
 	}
 
       if (agg_p->function == PT_GROUP_CONCAT
@@ -7786,13 +7793,13 @@ qdata_convert_dbvals_to_set (THREAD_ENTRY * thread_p, DB_TYPE stype,
 			     VAL_DESCR * val_desc_p, OID * obj_oid_p,
 			     QFILE_TUPLE tuple)
 {
-  DB_VALUE dbval, *result_p;
+  DB_VALUE dbval, *result_p = NULL;
   DB_COLLECTION *collection_p = NULL;
-  SETOBJ *setobj_p;
+  SETOBJ *setobj_p = NULL;
   int n, size;
-  REGU_VARIABLE_LIST regu_var_p, operand;
-  int error;
-  TP_DOMAIN *domain_p;
+  REGU_VARIABLE_LIST regu_var_p = NULL, operand = NULL;
+  int error_code = NO_ERROR;
+  TP_DOMAIN *domain_p = NULL;
 
   result_p = regu_func_p->value.funcp->value;
   operand = regu_func_p->value.funcp->operand;
@@ -7822,11 +7829,10 @@ qdata_convert_dbvals_to_set (THREAD_ENTRY * thread_p, DB_TYPE stype,
       return ER_FAILED;
     }
 
-  error = set_get_setobj (collection_p, &setobj_p, 1);
-  if (error != NO_ERROR || !setobj_p)
+  error_code = set_get_setobj (collection_p, &setobj_p, 1);
+  if (error_code != NO_ERROR || !setobj_p)
     {
-      set_free (collection_p);
-      return ER_FAILED;
+      goto error;
     }
 
   /*
@@ -7848,12 +7854,11 @@ qdata_convert_dbvals_to_set (THREAD_ENTRY * thread_p, DB_TYPE stype,
       if (fetch_copy_dbval (thread_p, &operand->value, val_desc_p, NULL,
 			    obj_oid_p, tuple, &dbval) != NO_ERROR)
 	{
-	  return ER_FAILED;
+	  goto error;
 	}
 
       if ((stype == DB_TYPE_VOBJ) && (n == 2))
 	{
-
 	  if (DB_IS_NULL (&dbval))
 	    {
 	      set_free (collection_p);
@@ -7864,23 +7869,21 @@ qdata_convert_dbvals_to_set (THREAD_ENTRY * thread_p, DB_TYPE stype,
       /* using setobj_put_value transfers "ownership" of the
        * db_value memory to the set. This avoids a redundant clone/free.
        */
-      error = setobj_put_value (setobj_p, n, &dbval);
+      error_code = setobj_put_value (setobj_p, n, &dbval);
 
       /*
        * if we attempt to add a duplicate value to a set,
-       * clear the value, but do not set an error
+       * clear the value, but do not set an error code
        */
-      if (error == SET_DUPLICATE_VALUE)
+      if (error_code == SET_DUPLICATE_VALUE)
 	{
 	  pr_clear_value (&dbval);
-	  error = NO_ERROR;
+	  error_code = NO_ERROR;
 	}
 
-      if (error != NO_ERROR)
+      if (error_code != NO_ERROR)
 	{
-	  pr_clear_value (&dbval);
-	  set_free (collection_p);
-	  return ER_FAILED;
+	  goto error;
 	}
 
       operand = operand->next;
@@ -7894,6 +7897,14 @@ qdata_convert_dbvals_to_set (THREAD_ENTRY * thread_p, DB_TYPE stype,
     }
 
   return NO_ERROR;
+
+error:
+  pr_clear_value (&dbval);
+  if (collection_p != NULL)
+    {
+      set_free (collection_p);
+    }
+  return ((error_code == NO_ERROR) ? ER_FAILED : error_code);
 }
 
 /*

@@ -484,6 +484,8 @@ static void pt_value_set_charset_coll (PARSER_CONTEXT *parser,
 static void pt_value_set_collation_info (PARSER_CONTEXT *parser,
 					 PT_NODE *node,
 					 PT_NODE *coll_node);
+static void pt_value_set_monetary (PARSER_CONTEXT *parser, PT_NODE *node,
+                   const char *str, const char *txt, DB_CURRENCY type);
 static PT_MISC_TYPE parser_attr_type;
 
 static bool allow_attribute_ordering;
@@ -651,6 +653,13 @@ typedef struct YYLTYPE
 %type <number> query_trace_spec
 %type <number> opt_trace_output_format
 %type <number> opt_if_not_exists
+%type <number> opt_if_exists
+%type <number> show_type_arg1
+/* uncomment it when implement other show statements.
+%type <number> show_type_arg1_opt
+%type <number> show_type_arg_named
+%type <number> show_type_id_dot_id
+*/
 /*}}}*/
 
 /* define rule type (node) */
@@ -782,9 +791,12 @@ typedef struct YYLTYPE
 %type <node> sp_param_def
 %type <node> esql_query_stmt
 %type <node> csql_query
+%type <node> csql_query_without_values_query
 %type <node> select_expression
+%type <node> select_expression_without_values_query
 %type <node> table_op
 %type <node> select_or_subquery
+%type <node> select_or_subquery_without_values_query
 %type <node> select_stmt
 %type <node> opt_select_param_list
 %type <node> opt_from_clause
@@ -947,6 +959,13 @@ typedef struct YYLTYPE
 %type <node> values_expr_item
 %type <node> opt_partition_spec
 %type <node> opt_for_update_clause
+/* uncomment it when implement other show statement.
+%type <node> of_or_where
+%type <node> named_arg
+%type <node> named_args
+%type <node> opt_arg_value
+*/
+%type <node> arg_value
 %type <node> vacuum_stmt
 /*}}}*/
 
@@ -1426,6 +1445,7 @@ typedef struct YYLTYPE
 %token <cptr> GT_LE_
 %token <cptr> GT_LT_
 %token <cptr> HASH
+%token <cptr> HEADER
 %token <cptr> IFNULL
 %token <cptr> INACTIVE
 %token <cptr> INCREMENT
@@ -1502,6 +1522,7 @@ typedef struct YYLTYPE
 %token <cptr> VAR_POP
 %token <cptr> VAR_SAMP
 %token <cptr> VARIANCE
+%token <cptr> VOLUME
 %token <cptr> WEEK
 %token <cptr> WORKSPACE
 
@@ -3563,38 +3584,20 @@ do_stmt
 	;
 
 drop_stmt
-	: DROP opt_class_type class_spec_list opt_cascade_constraints
+	: DROP opt_class_type opt_if_exists class_spec_list opt_cascade_constraints
 		{{
 
 			PT_NODE *node = parser_new_node (this_parser, PT_DROP);
 			if (node)
 			  {
-			    node->info.drop.spec_list = $3;
-			    node->info.drop.is_cascade_constraints = $4;
+			    node->info.drop.if_exists = ($3 == 1);
+			    node->info.drop.spec_list = $4;
+			    node->info.drop.is_cascade_constraints = $5;
 
 			    if ($2 == PT_EMPTY)
 			      node->info.drop.entity_type = PT_MISC_DUMMY;
 			    else
 			      node->info.drop.entity_type = $2;
-			  }
-
-			$$ = node;
-			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
-
-		DBG_PRINT}}
-	| DROP opt_class_type IF EXISTS class_spec_list opt_cascade_constraints
-		{{
-			PT_NODE *node = parser_new_node (this_parser, PT_DROP);
-			if (node)
-			  {
-			    node->info.drop.spec_list = $5;
-			    node->info.drop.if_exists = true;
-			    node->info.drop.is_cascade_constraints = $6;
-			    if ($2 == PT_EMPTY)
-			      node->info.drop.entity_type = PT_MISC_DUMMY;
-			    else
-			      node->info.drop.entity_type = $2;
-
 			  }
 
 			$$ = node;
@@ -3724,12 +3727,15 @@ drop_stmt
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| DROP SERIAL identifier
+	| DROP SERIAL opt_if_exists identifier
 		{{
 
 			PT_NODE *node = parser_new_node (this_parser, PT_DROP_SERIAL);
 			if (node)
-			  node->info.serial.serial_name = $3;
+			  {
+			    node->info.serial.if_exists = $3;
+			    node->info.serial.serial_name = $4;
+			  }
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -4077,6 +4083,18 @@ join_table_spec
 			PT_NODE *sopt = $3;
 			bool natural = false;
 
+			if ($4 == PT_JOIN_NONE)  
+			  {
+				/* Not exists ON condition, if it is outer join, report error */
+				if ($1 == PT_JOIN_LEFT_OUTER 
+				    || $1 == PT_JOIN_RIGHT_OUTER
+				    || $1 == PT_JOIN_FULL_OUTER)
+				  {
+					PT_ERRORm(this_parser, sopt,
+						  MSGCAT_SET_PARSER_SYNTAX,
+						  MSGCAT_SYNTAX_OUTER_JOIN_REQUIRES_JOIN_COND);
+				  }
+			  }
 			if (sopt)
 			  {
 			    sopt->info.spec.natural = natural;
@@ -4088,10 +4106,30 @@ join_table_spec
 			parser_restore_pseudoc ();
 
 		DBG_PRINT}}
+	| NATURAL opt_of_inner_left_right JOIN table_spec
+		{{
+
+			PT_NODE *sopt = $4;
+			bool natural = true;
+
+			if (sopt)
+			  {
+			    sopt->info.spec.natural = natural;
+			    sopt->info.spec.join_type = $2;
+			    sopt->info.spec.on_cond = NULL;
+			  }
+			$$ = sopt;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+		DBG_PRINT}}
 	;
 
 join_condition
-	: ON_
+	: /* empty */
+		{{
+			parser_save_and_set_pseudoc (0);
+			$$ = PT_JOIN_NONE;   /* just return NULL */
+		DBG_PRINT}} 
+	| ON_
 		{{
 			parser_save_and_set_pseudoc (0);
 			parser_save_and_set_wjc (1);
@@ -5978,14 +6016,14 @@ opt_path_attr_list
 	;
 
 insert_stmt_value_clause
-	: insert_expression_value_clause %dprec 2
+	: insert_expression_value_clause
 		{{
 
 			$$ = $1;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| csql_query %dprec 1
+	| csql_query_without_values_query
 		{{
 
 			PT_NODE *nls = pt_node_list (this_parser, PT_IS_SUBQUERY, $1);
@@ -6463,6 +6501,137 @@ show_stmt
 			$$ = node;
 
 		DBG_PRINT}}						
+	| SHOW show_type_arg1 OF arg_value
+		{{
+			int type = $2;
+			PT_NODE *args = $4;
+			PT_NODE *node = pt_make_query_showstmt (this_parser, type, args, NULL);
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+/* uncomment it when implement other show statements.
+	| SHOW show_type_arg1_opt opt_arg_value
+		{{
+			PT_NODE *node = NULL;
+			int type = $2;
+			PT_NODE *args = $3;
+
+			node = pt_make_query_showstmt (this_parser, type, args, NULL);
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| SHOW show_type_arg_named of_or_where named_args
+		{{
+			PT_NODE *node = NULL;
+			int type = $2;
+			PT_NODE *args = $4;
+
+			node = pt_make_query_showstmt (this_parser, type, args, NULL);
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| SHOW show_type_id_dot_id OF identifier DOT identifier
+		{{
+			int type = $2;
+			PT_NODE *args = $4;
+			args->next = $6;
+
+			PT_NODE *node = pt_make_query_showstmt (this_parser, type, args, NULL);
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+*/
+	;
+
+show_type_arg1
+	: VOLUME HEADER
+		{{
+			$$ = SHOWSTMT_VOLUME_HEADER;
+		}}
+	;
+
+/* uncomment it when implement other show statement.
+show_type_arg1_opt
+	:
+	;
+
+show_type_arg_named
+	: 
+	;
+
+show_type_id_dot_id
+	: 
+	;
+
+of_or_where
+	: OF
+		{{
+			$$ = NULL;
+		}}
+	| WHERE
+		{{
+			$$ = NULL;
+		}}
+	;
+
+named_args
+	: named_arg
+		{{
+			$$ = $1;
+		DBG_PRINT}}
+	| named_args AND named_arg
+		{{
+			$$ = parser_make_link ($1, $3);
+		DBG_PRINT}}
+	;
+
+named_arg
+	: identifier '=' arg_value
+		{{
+			PT_NODE * node = parser_new_node (this_parser, PT_NAMED_ARG);
+			node->info.named_arg.name = $1;
+			node->info.named_arg.value = $3;
+			$$ = node;
+		DBG_PRINT}}
+	;
+
+opt_arg_value
+	:
+		{{
+			PT_NODE *node = parser_new_node (this_parser, PT_VALUE);
+			if (node)
+			  node->type_enum = PT_TYPE_NULL;
+
+			$$ = node;
+		}}
+	| OF arg_value
+		{{
+			$$ = $2;
+		}}
+	;
+*/
+
+arg_value
+	: char_string_literal
+		{{
+			$$ = $1;
+		DBG_PRINT}}
+	| unsigned_integer
+		{{
+			$$ = $1;
+		DBG_PRINT}}
+	| identifier
+		{{
+			$$ = $1;
+		DBG_PRINT}}
 	;
 
 opt_full
@@ -7778,6 +7947,21 @@ opt_if_not_exists
 
 		DBG_PRINT}}
 	| IF NOT EXISTS
+		{{
+
+			$$ = 1;
+
+		DBG_PRINT}}
+	;
+
+opt_if_exists
+	: /*empty*/
+		{{
+
+			$$ = 0;
+
+		DBG_PRINT}}
+	| IF EXISTS
 		{{
 
 			$$ = 1;
@@ -11013,6 +11197,94 @@ csql_query
 		DBG_PRINT}}
 	;
 
+csql_query_without_values_query
+	:
+		{{
+
+			parser_save_and_set_cannot_cache (false);
+			parser_save_and_set_ic (0);
+			parser_save_and_set_gc (0);
+			parser_save_and_set_oc (0);
+			parser_save_and_set_wjc (0);
+			parser_save_and_set_sysc (0);
+			parser_save_and_set_prc (0);
+			parser_save_and_set_cbrc (0);
+			parser_save_and_set_serc (1);
+			parser_save_and_set_sqc (1);
+			parser_save_and_set_pseudoc (1);
+
+		DBG_PRINT}}
+	  select_expression_without_values_query
+		{{
+
+			PT_NODE *node = $2;
+			parser_push_orderby_node (node);
+
+		DBG_PRINT}}
+	  opt_orderby_clause
+		{{
+
+			PT_NODE *node = parser_pop_orderby_node ();
+
+			if (node && parser_cannot_cache)
+			  {
+			    node->info.query.reexecute = 1;
+			    node->info.query.do_cache = 0;
+			    node->info.query.do_not_cache = 1;
+			  }
+
+			parser_restore_cannot_cache ();
+			parser_restore_ic ();
+			parser_restore_gc ();
+			parser_restore_oc ();
+			parser_restore_wjc ();
+			parser_restore_sysc ();
+			parser_restore_prc ();
+			parser_restore_cbrc ();
+			parser_restore_serc ();
+			parser_restore_sqc ();
+			parser_restore_pseudoc ();
+
+			if (parser_subquery_check == 0)
+			    PT_ERRORmf(this_parser, pt_top(this_parser),
+				MSGCAT_SET_PARSER_SEMANTIC,
+				MSGCAT_SEMANTIC_NOT_ALLOWED_HERE, "Subquery");
+
+			if (node)
+			  {
+			    /* handle ORDER BY NULL */
+			    PT_NODE *order = node->info.query.order_by;
+			    if (order && order->info.sort_spec.expr
+				&& order->info.sort_spec.expr->node_type == PT_VALUE
+				&& order->info.sort_spec.expr->type_enum == PT_TYPE_NULL)
+			      {
+				if (!node->info.query.q.select.group_by)
+				  {
+				    PT_ERRORm (this_parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+					       MSGCAT_SEMANTIC_ORDERBYNULL_REQUIRES_GROUPBY);
+				  }
+				else
+				  {
+				    parser_free_tree (this_parser, node->info.query.order_by);
+				    node->info.query.order_by = NULL;
+				  }
+			      }
+			  }
+
+			parser_push_orderby_node (node);
+
+		DBG_PRINT}}
+	opt_select_limit_clause
+	opt_for_update_clause
+		{{
+
+			PT_NODE *node = parser_pop_orderby_node ();
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	;
+
 select_expression
 	: select_expression
     {{
@@ -11074,12 +11346,22 @@ select_expression
      {{
          
          PT_NODE *stmt = $8;
+         PT_NODE *arg1 = $1;
          
          if (stmt)
          {
 			    stmt->info.query.id = (UINTPTR) stmt;
 			    stmt->info.query.q.union_.arg1 = $1;
 			    stmt->info.query.q.union_.arg2 = $9;
+			    
+			    if (arg1 != NULL
+			        && arg1->info.query.is_subquery != PT_IS_SUBQUERY
+			        && arg1->info.query.order_by != NULL)
+			      {
+			        PT_ERRORm (this_parser, stmt,
+			               MSGCAT_SET_PARSER_SYNTAX,
+			               MSGCAT_SYNTAX_INVALID_UNION_ORDERBY);
+			      }
          }
 
 
@@ -11088,6 +11370,98 @@ select_expression
 
 		DBG_PRINT}}
 	| select_or_subquery
+		{{
+
+			$$ = $1;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	;
+
+select_expression_without_values_query
+	: select_expression_without_values_query
+    {{
+        PT_NODE *node = $1;
+        parser_push_orderby_node (node);      
+      }}
+    opt_orderby_clause 
+    {{
+      
+        PT_NODE *node = parser_pop_orderby_node ();
+        
+        if (node && parser_cannot_cache)
+        {
+          node->info.query.reexecute = 1;
+          node->info.query.do_cache = 0;
+          node->info.query.do_not_cache = 1;
+        }
+        
+
+        if (parser_subquery_check == 0)
+          PT_ERRORmf(this_parser, pt_top(this_parser),
+                     MSGCAT_SET_PARSER_SEMANTIC,
+                     MSGCAT_SEMANTIC_NOT_ALLOWED_HERE, "Subquery");
+        
+        if (node)
+        {
+
+         PT_NODE *order = node->info.query.order_by;
+          if (order && order->info.sort_spec.expr
+              && order->info.sort_spec.expr->node_type == PT_VALUE
+              && order->info.sort_spec.expr->type_enum == PT_TYPE_NULL)
+          {
+            if (!node->info.query.q.select.group_by)
+            {
+              PT_ERRORm (this_parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+                         MSGCAT_SEMANTIC_ORDERBYNULL_REQUIRES_GROUPBY);
+            }
+            else
+            {
+              parser_free_tree (this_parser, node->info.query.order_by);
+              node->info.query.order_by = NULL;
+            }
+          }
+        }
+        
+        parser_push_orderby_node (node);
+        
+		DBG_PRINT}}
+      opt_select_limit_clause
+      opt_for_update_clause
+		{{
+                        
+			PT_NODE *node = parser_pop_orderby_node ();
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+            
+            DBG_PRINT}}
+     table_op select_or_subquery_without_values_query
+     {{
+         
+         PT_NODE *stmt = $8;
+         PT_NODE *arg1 = $1;
+         
+         if (stmt)
+         {
+			    stmt->info.query.id = (UINTPTR) stmt;
+			    stmt->info.query.q.union_.arg1 = $1;
+			    stmt->info.query.q.union_.arg2 = $9;
+			    if (arg1 != NULL
+			        && arg1->info.query.is_subquery != PT_IS_SUBQUERY
+			        && arg1->info.query.order_by != NULL)
+			      {
+			        PT_ERRORm (this_parser, stmt,
+			               MSGCAT_SET_PARSER_SYNTAX,
+			               MSGCAT_SYNTAX_INVALID_UNION_ORDERBY);
+			      }
+         }
+
+
+			$$ = stmt;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| select_or_subquery_without_values_query
 		{{
 
 			$$ = $1;
@@ -11197,6 +11571,23 @@ select_or_subquery
 		{{
 			$$ = $1;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+		DBG_PRINT}}
+	;
+
+select_or_subquery_without_values_query
+	: select_stmt
+		{{
+
+			$$ = $1;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| subquery
+		{{
+
+			$$ = $1;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
 		DBG_PRINT}}
 	;
 
@@ -13444,6 +13835,11 @@ primary_w_collate
   			if (node != NULL && coll_node != NULL)
   			  {
   			    node = pt_set_collation_modifier (this_parser, node, coll_node);
+  			  }
+
+			if (node->node_type == PT_VALUE)
+  			  {
+  			    node->info.value.is_collate_allowed = true;
   			  }
 
 			$$ = node;
@@ -18029,7 +18425,6 @@ primitive_type
 			      }
 
 			    assert (elem->node_type == PT_VALUE);
-			    elem->info.value.print_collation = false;
 			    elem->info.value.print_charset = false;
 
 			    elem_cs = elem->data_type->info.data_type.units;
@@ -19160,6 +19555,16 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| HEADER
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	| INACTIVE
 		{{
 
@@ -19780,6 +20185,16 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| VOLUME
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	| WORKSPACE
 		{{
 
@@ -20029,10 +20444,6 @@ escape_literal
 		{{
 
 			PT_NODE *node = $1;
-			if (node->node_type == PT_VALUE)
-			  {
-			    node->info.value.print_collation = false;
-			  }
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
@@ -20081,6 +20492,7 @@ char_string_literal
 			    str->info.value.data_value.str =
 			      pt_append_bytes (this_parser, str->info.value.data_value.str, $2,
 					       strlen ($2));
+			    str->info.value.text = NULL;
 			    PT_NODE_PRINT_VALUE_TO_TEXT (this_parser, str);
 			  }
 
@@ -20248,6 +20660,7 @@ bit_string_literal
 			    str->info.value.data_value.str =
 			      pt_append_bytes (this_parser, str->info.value.data_value.str, $2,
 					       strlen ($2));
+			    str->info.value.text = NULL;
 			    PT_NODE_PRINT_VALUE_TO_TEXT (this_parser, str);
 			  }
 
@@ -20360,20 +20773,14 @@ unsigned_int32
 		{{
 
 			PT_NODE *val;
-			long int_val;
-			char *endptr;
+			int result = 0;
+			int int_val;
 
 			val = parser_new_node (this_parser, PT_VALUE);
 			if (val)
 			  {
-				PARSER_SAVE_ERR_CONTEXT (val, @$.buffer_pos)
-			    int_val = strtol($1, &endptr, 10);
-
-			    if ((errno == ERANGE
-			         && (int_val == LONG_MAX
-			             || int_val == LONG_MIN))
-				|| (errno != 0 && int_val == 0)
-				|| (int_val > INT_MAX))
+			    result = parse_int (&int_val, $1, 10);
+			    if (result != 0)
 			      {
 				PT_ERRORmf (this_parser, val, MSGCAT_SET_PARSER_SYNTAX,
 				            MSGCAT_SYNTAX_INVALID_UNSIGNED_INT32, $1);
@@ -20383,6 +20790,7 @@ unsigned_int32
 			    val->type_enum = PT_TYPE_INTEGER;
 			  }
 			$$ = val;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
 	;
@@ -20391,6 +20799,7 @@ unsigned_real
 	: UNSIGNED_REAL
 		{{
 
+			double dval;
 			PT_NODE *val = parser_new_node (this_parser, PT_VALUE);
 			if (val)
 			  {
@@ -20398,16 +20807,30 @@ unsigned_real
 			    if (strchr ($1, 'E') != NULL || strchr ($1, 'e') != NULL)
 			      {
 
+				errno = 0;
+				dval = strtod ($1, NULL);
+				if (errno == ERANGE)
+				  {
+				    PT_ERRORmf2 (this_parser, val, MSGCAT_SET_PARSER_SYNTAX,
+				                 MSGCAT_SYNTAX_FLT_DBL_OVERFLOW, $1, pt_show_type_enum (PT_TYPE_DOUBLE));
+				  }
 				val->info.value.text = $1;
 				val->type_enum = PT_TYPE_DOUBLE;
-				val->info.value.data_value.d = atof ($1);
+				val->info.value.data_value.d = dval;
 			      }
 			    else if (strchr ($1, 'F') != NULL || strchr ($1, 'f') != NULL)
 			      {
 
+				errno = 0;
+				dval = strtod ($1, NULL);
+				if (errno == ERANGE || (dval > FLT_MAX || dval < FLT_MIN))
+				  {
+				    PT_ERRORmf2 (this_parser, val, MSGCAT_SET_PARSER_SYNTAX,
+				                 MSGCAT_SYNTAX_FLT_DBL_OVERFLOW, $1, pt_show_type_enum (PT_TYPE_FLOAT));
+				  }
 				val->info.value.text = $1;
 				val->type_enum = PT_TYPE_FLOAT;
-				val->info.value.data_value.f = (float)atof ($1);
+				val->info.value.data_value.f = (float) dval;
 			      }
 			    else
 			      {
@@ -20439,10 +20862,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_YEN;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_YEN);
 			  }
 
 			$$ = val;
@@ -20460,10 +20880,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_DOLLAR;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_DOLLAR);
 			  }
 
 			$$ = val;
@@ -20481,10 +20898,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_WON;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_WON);
 			  }
 
 			$$ = val;
@@ -20502,10 +20916,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_TL;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_TL);
 			  }
 
 			$$ = val;
@@ -20523,10 +20934,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_BRITISH_POUND;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_BRITISH_POUND);
 			  }
 
 			$$ = val;
@@ -20543,10 +20951,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_CAMBODIAN_RIEL;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_CAMBODIAN_RIEL);
 			  }
 
 			$$ = val;
@@ -20563,10 +20968,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_CHINESE_RENMINBI;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_CHINESE_RENMINBI);
 			  }
 
 			$$ = val;
@@ -20583,10 +20985,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_INDIAN_RUPEE;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_INDIAN_RUPEE);
 			  }
 
 			$$ = val;
@@ -20603,10 +21002,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_RUSSIAN_RUBLE;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_RUSSIAN_RUBLE);
 			  }
 
 			$$ = val;
@@ -20623,10 +21019,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_AUSTRALIAN_DOLLAR;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_AUSTRALIAN_DOLLAR);
 			  }
 
 			$$ = val;
@@ -20643,10 +21036,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_CANADIAN_DOLLAR;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_CANADIAN_DOLLAR);
 			  }
 
 			$$ = val;
@@ -20663,10 +21053,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_BRASILIAN_REAL;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_BRASILIAN_REAL);
 			  }
 
 			$$ = val;
@@ -20683,10 +21070,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_ROMANIAN_LEU;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_ROMANIAN_LEU);
 			  }
 
 			$$ = val;
@@ -20703,10 +21087,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_EURO;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_EURO);
 			  }
 
 			$$ = val;
@@ -20723,10 +21104,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_SWISS_FRANC;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_SWISS_FRANC);
 			  }
 
 			$$ = val;
@@ -20743,10 +21121,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_DANISH_KRONE;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_DANISH_KRONE);
 			  }
 
 			$$ = val;
@@ -20763,10 +21138,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_NORWEGIAN_KRONE;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_NORWEGIAN_KRONE);
 			  }
 
 			$$ = val;
@@ -20783,10 +21155,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_BULGARIAN_LEV;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_BULGARIAN_LEV);
 			  }
 
 			$$ = val;
@@ -20803,10 +21172,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_VIETNAMESE_DONG;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_VIETNAMESE_DONG);
 			  }
 
 			$$ = val;
@@ -20823,10 +21189,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_CZECH_KORUNA;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_CZECH_KORUNA);
 			  }
 
 			$$ = val;
@@ -20843,10 +21206,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_POLISH_ZLOTY;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_POLISH_ZLOTY);
 			  }
 
 			$$ = val;
@@ -20863,10 +21223,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_SWEDISH_KRONA;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_SWEDISH_KRONA);
 			  }
 
 			$$ = val;
@@ -20883,10 +21240,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_CROATIAN_KUNA;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_CROATIAN_KUNA);
 			  }
 
 			$$ = val;
@@ -20903,10 +21257,7 @@ monetary_literal
 
 			if (val)
 			  {
-			    val->info.value.data_value.money.type = PT_CURRENCY_SERBIAN_DINAR;
-			    val->info.value.text = pt_append_string (this_parser, str, txt);
-			    val->type_enum = PT_TYPE_MONETARY;
-			    val->info.value.data_value.money.amount = atof (txt);
+			    pt_value_set_monetary (this_parser, val, str, txt, PT_CURRENCY_SERBIAN_DINAR);
 			  }
 
 			$$ = val;
@@ -22521,8 +22872,6 @@ PT_HINT parser_hint_table[] = {
   ,
   {"JDBC_CACHE", NULL, PT_HINT_JDBC_CACHE}
   ,
-  {"NO_STATS", NULL, PT_HINT_NO_STATS}
-  ,
   {"USE_DESC_IDX", NULL, PT_HINT_USE_IDX_DESC}
   ,
   {"NO_COVERING_IDX", NULL, PT_HINT_NO_COVERING_IDX}
@@ -24024,6 +24373,32 @@ pt_value_set_collation_info (PARSER_CONTEXT *parser, PT_NODE *node,
     }
 
   node->info.value.print_collation = true;
+}
+
+static void 
+pt_value_set_monetary (PARSER_CONTEXT *parser, PT_NODE *node,
+                   const char *currency_str, const char *value, DB_CURRENCY type)
+{
+  double dval;
+
+  assert (node != NULL);
+  assert (node->node_type == PT_VALUE);
+  assert (value != NULL);
+
+  errno = 0;
+  dval = strtod (value, NULL);
+  if (errno == ERANGE)
+    {
+      PT_ERRORmf2 (parser, node, MSGCAT_SET_PARSER_SYNTAX,
+                   MSGCAT_SYNTAX_FLT_DBL_OVERFLOW, value, pt_show_type_enum (PT_TYPE_MONETARY));
+    }
+
+  node->info.value.data_value.money.type = type;
+  node->info.value.text = pt_append_string (parser, currency_str, value);
+  node->type_enum = PT_TYPE_MONETARY;
+  node->info.value.data_value.money.amount = dval;
+
+  return;
 }
 
 static PT_NODE *

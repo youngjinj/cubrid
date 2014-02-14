@@ -41,6 +41,7 @@
 #include "page_buffer.h"
 #include "query_manager.h"
 #include "query_opfunc.h"
+#include "session.h"
 
 #if defined (SERVER_MODE)
 #include "connection_defs.h"
@@ -1228,11 +1229,16 @@ xqmgr_prepare_query (THREAD_ENTRY * thread_p,
 	      qfile_load_xasl_node_header (thread_p, stream->xasl_id,
 					   stream->xasl_header);
 	    }
-
 	}
       else
 	{
 	  XASL_ID_SET_NULL (stream->xasl_id);
+	}
+
+      if (cache_entry_p)
+	{
+	  (void) qexec_end_use_of_xasl_cache_ent (thread_p,
+						  &cache_entry_p->xasl_id);
 	}
 
       return stream->xasl_id;
@@ -1255,6 +1261,10 @@ xqmgr_prepare_query (THREAD_ENTRY * thread_p,
 		    "xqmgr_prepare_query: second qexec_lookup_xasl_cache_ent "
 		    "qstmt %s\n", context->sql_hash_text);
       XASL_ID_COPY (stream->xasl_id, &(cache_entry_p->xasl_id));
+
+      (void) qexec_end_use_of_xasl_cache_ent (thread_p,
+					      &cache_entry_p->xasl_id);
+
       goto exit_on_end;
     }
 
@@ -1674,9 +1684,6 @@ qmgr_process_query (THREAD_ENTRY * thread_p,
 			      cache_clone_p,
 			      &xasl_p, &xasl_buf_info) != NO_ERROR)
     {
-      /* end use of XASL cache entry */
-      (void) qexec_end_use_of_xasl_cache_ent (thread_p, xasl_id, false);
-
       goto exit_on_error;
     }
 
@@ -1691,17 +1698,6 @@ qmgr_process_query (THREAD_ENTRY * thread_p,
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE,
 		  0);
 	  goto exit_on_error;
-	}
-
-      /* If the XASL cache entry is required to be kept after a query
-         execution, do not end use of it. This means that the statement was
-         prepared once and will be executed several times repeatedly.
-         So, the XASL file and its xasl_id should not be freed and deleted by
-         another transaction, e.g. being cache replacement victim. */
-      if (DO_NOT_KEEP_PLAN_CACHE (flag))
-	{
-	  /* end use of XASL cache entry */
-	  (void) qexec_end_use_of_xasl_cache_ent (thread_p, xasl_id, false);
 	}
 
       /* Adjust XASL flag for query result cache.
@@ -1884,6 +1880,11 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 	{
 	  thread_set_trace_format (thread_p, QUERY_TRACE_JSON);
 	}
+    }
+
+  if (IS_TRIGGER_INVOLVED (*flag_p))
+    {
+      session_set_trigger_state (thread_p, true);
     }
 
   /* Check the existance of the given XASL. If someone marked it
@@ -2244,6 +2245,10 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
     }
 
 end:
+  if (IS_TRIGGER_INVOLVED (*flag_p))
+    {
+      session_set_trigger_state (thread_p, false);
+    }
 
   if (IS_SYNC_EXEC_MODE (*flag_p))
     {
@@ -2485,6 +2490,11 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
 	}
     }
 
+  if (IS_TRIGGER_INVOLVED (*flag_p))
+    {
+      session_set_trigger_state (thread_p, true);
+    }
+
   /* Make an query entry */
   /* mark that this transaction is running a query */
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
@@ -2635,6 +2645,10 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
     }
 
 end:
+  if (IS_TRIGGER_INVOLVED (*flag_p))
+    {
+      session_set_trigger_state (thread_p, false);
+    }
 
   if (IS_SYNC_EXEC_MODE (*flag_p))
     {
@@ -2839,57 +2853,40 @@ xqmgr_end_query (THREAD_ENTRY * thread_p, QUERY_ID query_id)
  *   qstmt(in)      : query string; used for hash key of the XASL cache
  *   user_oid(in)       :
  *   xasl_id(in)        : XASL file id which contains the XASL stream
- *   delete(in) :
  *
  * Note: Delete the XASL cache specified by either the query string or the XASL
  * file id upon request of the client.
  */
 int
 xqmgr_drop_query_plan (THREAD_ENTRY * thread_p, const char *qstmt,
-		       const OID * user_oid_p, const XASL_ID * xasl_id_p,
-		       bool is_drop)
+		       const OID * user_oid_p, const XASL_ID * xasl_id_p)
 {
   if (qstmt && user_oid_p)
     {
-      if (is_drop)
+      /* delete the XASL cache entry */
+      if (qexec_remove_xasl_cache_ent_by_qstr (thread_p, qstmt,
+					       user_oid_p) != NO_ERROR)
 	{
-	  /* delete the XASL cache entry */
-	  if (qexec_remove_xasl_cache_ent_by_qstr (thread_p, qstmt,
-						   user_oid_p) != NO_ERROR)
-	    {
-	      er_log_debug (ARG_FILE_LINE,
-			    "xqmgr_drop_query_plan: xs_remove_xasl_cache_ent_by_qstr failed for query_str %s\n",
-			    qstmt);
-	      return ER_FAILED;
-	    }
-	}
-      else
-	{
+	  er_log_debug (ARG_FILE_LINE,
+			"xqmgr_drop_query_plan: xs_remove_xasl_cache_ent_by_qstr failed for query_str %s\n",
+			qstmt);
 	  return ER_FAILED;
 	}
     }
 
   if (xasl_id_p)
     {
-      if (is_drop)
+      /* delete the XASL cache entry */
+      if (qexec_remove_xasl_cache_ent_by_xasl (thread_p, xasl_id_p) !=
+	  NO_ERROR)
 	{
-	  /* delete the XASL cache entry */
-	  if (qexec_remove_xasl_cache_ent_by_xasl (thread_p, xasl_id_p) !=
-	      NO_ERROR)
-	    {
-	      er_log_debug (ARG_FILE_LINE,
-			    "xqmgr_drop_query_plan: xs_remove_xasl_cache_ent_by_xasl failed for xasl_id { first_vpid { %d %d } temp_vfid { %d %d } }\n",
-			    xasl_id_p->first_vpid.pageid,
-			    xasl_id_p->first_vpid.volid,
-			    xasl_id_p->temp_vfid.fileid,
-			    xasl_id_p->temp_vfid.volid);
-	      return ER_FAILED;
-	    }
-	}
-      else
-	{
-	  /* end use of the XASL cache entry */
-	  (void) qexec_end_use_of_xasl_cache_ent (thread_p, xasl_id_p, false);
+	  er_log_debug (ARG_FILE_LINE,
+			"xqmgr_drop_query_plan: xs_remove_xasl_cache_ent_by_xasl failed for xasl_id { first_vpid { %d %d } temp_vfid { %d %d } }\n",
+			xasl_id_p->first_vpid.pageid,
+			xasl_id_p->first_vpid.volid,
+			xasl_id_p->temp_vfid.fileid,
+			xasl_id_p->temp_vfid.volid);
+	  return ER_FAILED;
 	}
     }
 
@@ -4419,8 +4416,6 @@ qmgr_execute_async_select (THREAD_ENTRY * thread_p,
 			      xasl_stream_size, cache_clone_p,
 			      &xasl_p, &xasl_buf_info) != NO_ERROR)
     {
-      (void) qexec_end_use_of_xasl_cache_ent (thread_p, xasl_id, false);
-
       goto exit_on_error;
     }
 
@@ -4436,17 +4431,6 @@ qmgr_execute_async_select (THREAD_ENTRY * thread_p,
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE,
 		  0);
 	  goto exit_on_error;
-	}
-
-      /* If the XASL cache entry is required to be kept after a query
-         execution, do not end use of it. This means that the statement was
-         prepared once and will be executed several times repeatedly.
-         So, the XASL file and its xasl_id should not be freed and deleted by
-         another transaction, e.g. being cache replacement victim. */
-      if (DO_NOT_KEEP_PLAN_CACHE (flag))
-	{
-	  /* end use of XASL cache entry */
-	  (void) qexec_end_use_of_xasl_cache_ent (thread_p, xasl_id, false);
 	}
 
       /* Adjust XASL flag for query result cache.

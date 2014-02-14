@@ -2943,7 +2943,7 @@ heap_classrepr_dump (THREAD_ENTRY * thread_p, FILE * fp,
 		     const OID * class_oid, const OR_CLASSREP * repr)
 {
   OR_ATTRIBUTE *attrepr;
-  int i, k;
+  int i, k, j;
   char *classname;
   const char *attr_name;
   DB_VALUE def_dbvalue;
@@ -2953,6 +2953,7 @@ heap_classrepr_dump (THREAD_ENTRY * thread_p, FILE * fp,
   bool copy;
   RECDES recdes;		/* Used to obtain attrnames */
   int ret = NO_ERROR;
+  char *index_name = NULL;
 
   /*
    * The class is feteched to print the attribute names.
@@ -3029,10 +3030,23 @@ heap_classrepr_dump (THREAD_ENTRY * thread_p, FILE * fp,
 	  fprintf (fp, " Number of Btids = %d,\n", attrepr->n_btids);
 	  for (k = 0; k < attrepr->n_btids; k++)
 	    {
-	      fprintf (fp, " BTID: VFID %d|%d, Root_PGID %d\n",
+	      index_name = NULL;
+	      /* find index_name */
+	      for (j = 0; j < repr->n_indexes; ++j)
+		{
+		  if (BTID_IS_EQUAL (&(repr->indexes[j].btid),
+				     &(attrepr->btids[k])))
+		    {
+		      index_name = repr->indexes[j].btname;
+		      break;
+		    }
+		}
+
+	      fprintf (fp, " BTID: VFID %d|%d, Root_PGID %d, %s\n",
 		       (int) attrepr->btids[k].vfid.volid,
 		       attrepr->btids[k].vfid.fileid,
-		       attrepr->btids[k].root_pageid);
+		       attrepr->btids[k].root_pageid,
+		       (index_name == NULL) ? "unknown" : index_name);
 	    }
 	}
 
@@ -11795,7 +11809,7 @@ exit_on_error:
  * to the portion of the buffer pool where the record is stored.
  * For more information on peeking description, see the slotted module.
  *
- * When ispeeking is DONT_PEEK (COPY), the desired record is read
+ * When ispeeking is COPY, the desired record is read
  * onto the area pointed by the record descriptor. If the record
  * does not fit in such an area, the length of the record is
  * returned as a negative value in recdes->length and an error
@@ -22390,6 +22404,8 @@ xheap_get_class_num_objects_pages (THREAD_ENTRY * thread_p, const HFID * hfid,
 {
   int length, num;
   int ret;
+
+  assert (!HFID_IS_NULL (hfid));
 
   if (approximation)
     {

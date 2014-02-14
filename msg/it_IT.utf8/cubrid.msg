@@ -1211,6 +1211,8 @@ $ LOADDB
 1142 Handshake error (peer host %1$s): unidentified server version.
 1143 Handshake error (peer host %1$s): remote access to server not allowed.
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
+1145 To change the owner of a system class is not allowed.
+1146 volume identifier %1$d does not exist.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Ultimo errore
@@ -1247,7 +1249,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 3 si prega di controlare la correttezza del token '%1$s'.
 4 'read uncommitted schema' non è accettabile, usando\n 'read committed schema' al posto.
 5 Massima lunghezza della stringa di caratteri è 16383.
-6 %s supera il limite di %lld.
+6 %s supera il limite di %s.
 7 La lunghezza massima della stringa di bit è %1$d.
 8 Non è possibile utilizzare una sottoquery nella condizione di clausola JOIN.
 9 Non è possibile specificare l'attributo "(%1$s)" nella clausola di aggiornamento dei privilegi dell'instruzione grant/revoke.
@@ -1362,6 +1364,8 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 118 utilizzo non valido del collation\n COLLATION ( expression )\n
 119 utilizzo non valido del clob_to_char\n CLOB_TO_CHAR ( expression [using charset] )\n
 120 utilizzo non valido del index_prefix\n INDEX_PREFIX ( expression, expression, expression )\n
+121 Incorrect usage of UNION and ORDER BY
+122 Expecting ON. Outer Joins require join condition.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 Memoria esaurita.
@@ -1409,7 +1413,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 43 utente %1$s non è nel database.
 44 Aggiornamento non può avere l'aggregazione.
 45 I nomi degli attributi di ciascuna classe devono essere unici. Nome dell'attributo '%s' nella classe '%s' viene specificato più di una volta.
-46 Ci sono più assegnazioni per %1$s.
+46 Ci sono più assegnazioni per %1$s.%2$s.
 47 Numero nella specificazione di ordinamento non è un numero intero.
 48 %1$d nella specificazione di ordinamento è fuori portata.
 49 Oggetto nell'ORDER BY non è un numero intero.
@@ -1645,6 +1649,12 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 279 Multiple insert targets not allowed.
 280 '%1$s' type is vclass, drop vclass with cascade constraints is not allowed.
 281 The FOR UPDATE clause cannot be used in subqueries, unions, with GROUP BY clause, DISTINCT operator, aggregate functions.
+282 Expects %1$s in argument position %2$d.
+283 Too many arguments specified.
+284 Too few arguments, need %1$d arguments.
+285 Expects %1$s for argument %2$s.
+286 Argument %1$s is missing.
+287 Unknown argument %1$s.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Fuori di memoria virtuale: Impossibile allocare %1$d byte.
