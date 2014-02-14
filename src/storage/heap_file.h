@@ -263,12 +263,11 @@ extern int heap_assign_address_with_class_oid (THREAD_ENTRY * thread_p,
 extern OID *heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid,
 			 OID * class_oid, OID * oid, RECDES * recdes,
 			 HEAP_SCANCACHE * scan_cache);
-extern const OID *heap_perform_update (THREAD_ENTRY * thread_p,
-				       const HFID * hfid,
-				       const OID * class_oid, const OID * oid,
-				       RECDES * recdes, OID * new_oid,
-				       bool * old,
-				       HEAP_SCANCACHE * scan_cache);
+extern const OID *heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
+			       const OID * class_oid, const OID * oid,
+			       RECDES * recdes, OID * new_oid,
+			       bool * old, HEAP_SCANCACHE * scan_cache,
+			       bool update_in_place);
 extern const OID *heap_mvcc_update_to_row_version (THREAD_ENTRY * thread_p,
 						   const HFID * hfid,
 						   const OID * class_oid,

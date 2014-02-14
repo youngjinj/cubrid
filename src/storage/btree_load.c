@@ -430,7 +430,6 @@ btree_init_node_header (THREAD_ENTRY * thread_p, VFID * vfid,
 {
   RECDES rec;
   char rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
-  BTREE_NODE_TYPE node_type;
 
   rec.area_size = DB_PAGESIZE;
   rec.data = PTR_ALIGN (rec_buf, BTREE_MAX_ALIGN);
@@ -1814,7 +1813,7 @@ btree_connect_page (THREAD_ENTRY * thread_p, DB_VALUE * key, int max_key_len,
 
   if (btree_write_record (thread_p, load_args->btid, &nleaf_rec, key,
 			  BTREE_NON_LEAF_NODE, key_type, key_len, true, NULL,
-			  NULL, &load_args->out_recdes) != NO_ERROR)
+			  NULL, NULL, &load_args->out_recdes) != NO_ERROR)
     {
       return NULL;
     }
@@ -1926,7 +1925,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 				   only if type is one of the string types */
   int last_key_offset, first_key_offset;
   bool clear_last_key = false, clear_first_key = false;
-  int sp_success;
+
   int ret = NO_ERROR;
   int node_level = 2;		/* leaf level = 1, lowest non-leaf level = 2 */
 
@@ -2569,7 +2568,7 @@ btree_proceed_leaf (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args)
   PAGE_PTR new_leafpgptr = NULL;
   BTREE_NODE_HEADER new_leafhdr;
   RECDES temp_recdes;		/* Temporary record descriptor; */
-  int ret, sp_success;
+  int ret;
   OR_ALIGNED_BUF (NODE_HEADER_SIZE) a_temp_data;
 
   temp_recdes.data = OR_ALIGNED_BUF_START (a_temp_data);
@@ -2665,9 +2664,10 @@ btree_first_oid (THREAD_ENTRY * thread_p, DB_VALUE * this_key,
 	    }
 	}
     }
-  error = btree_write_record (thread_p, load_args->btid, NULL, this_key,
-			      BTREE_LEAF_NODE, key_type, key_len, true,
-			      class_oid, first_oid, &load_args->out_recdes);
+  error =
+    btree_write_record (thread_p, load_args->btid, NULL, this_key,
+			BTREE_LEAF_NODE, key_type, key_len, true, class_oid,
+			first_oid, NULL, &load_args->out_recdes);
   if (error != NO_ERROR)
     {
       /* this must be an overflow key insertion failure, we assume the
@@ -2725,6 +2725,16 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
   int key_size = -1;
   int max_key_len;
   int rec_length;
+  int fixed_mvccid_size = 0;
+  MVCC_REC_HEADER mvcc_rec_header, *p_mvcc_rec_header = NULL;
+
+  if (mvcc_Enabled)
+    {
+      fixed_mvccid_size = 2 * OR_MVCCID_SIZE;
+      mvcc_rec_header.mvcc_flag = 0;
+      BTREE_MVCC_SET_HEADER_FIXED_SIZE (&mvcc_rec_header);
+      p_mvcc_rec_header = &mvcc_rec_header;
+    }
 
   temp_recdes.data = OR_ALIGNED_BUF_START (a_temp_data);
   temp_recdes.area_size = NODE_HEADER_SIZE;
@@ -2747,7 +2757,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
       /* Skip forward link, value_has_null */
       or_advance (&buf, next_size + OR_INT_SIZE);
 
-      assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
+      /* assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT)); */
 
       /* Instance level uniqueness checking */
       if (BTREE_IS_UNIQUE (load_args->btid))
@@ -2764,7 +2774,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  goto error;
 	}
 
-      assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
+      /* assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT)); */
 
       /* Do not copy the string--just use the pointer.  The pr_ routines
        * for strings and sets have different semantics for length.
@@ -2868,8 +2878,9 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	      /* Check if there is space in the memory record for the new OID.
 	         If not dump the current record and create a new record. */
 
-	      if (((load_args->new_pos + OR_OID_SIZE + DISK_VPID_SIZE)
-		   - load_args->out_recdes.data) > load_args->max_recsize)
+	      if (((load_args->new_pos + OR_OID_SIZE + DISK_VPID_SIZE
+		    + fixed_mvccid_size) - load_args->out_recdes.data)
+		  > load_args->max_recsize)
 		{		/* There is no space for the new oid */
 		  if (load_args->overflowing == true)
 		    {
@@ -2927,9 +2938,10 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 							pgptr);
 
 		      rec_length =
-			load_args->new_pos - load_args->out_recdes.data +
-			OR_OID_SIZE + DB_ALIGN (DISK_VPID_SIZE,
-						INT_ALIGNMENT);
+			load_args->new_pos - load_args->out_recdes.data
+			+ OR_OID_SIZE + DB_ALIGN (DISK_VPID_SIZE,
+						  INT_ALIGNMENT) +
+			fixed_mvccid_size;
 
 		      if (cur_maxspace <
 			  rec_length + LOAD_FIXED_EMPTY_FOR_LEAF)
@@ -2955,7 +2967,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 
 		      /* Connect the new overflow page to the leaf page */
 		      btree_leaf_new_overflow_oids_vpid
-			(&load_args->out_recdes, &load_args->ovf.vpid);
+			(&load_args->out_recdes, &load_args->ovf.vpid,
+			 load_args->btid->unique, &this_class_oid);
 
 		      /* Try to Store the record into the current leaf page */
 		      sp_success = spage_insert (thread_p,
@@ -3002,7 +3015,9 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	      if (load_args->overflowing == true)
 		{
 		  btree_insert_oid_with_order (&load_args->out_recdes,
-					       &this_oid);
+					       &this_oid, &this_class_oid,
+					       load_args->btid->unique,
+					       p_mvcc_rec_header);
 		}
 	      else
 		{
@@ -3011,6 +3026,10 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		}
 
 	      load_args->new_pos += OR_OID_SIZE;
+	      if (mvcc_Enabled == true && load_args->overflowing == true)
+		{
+		  load_args->new_pos += fixed_mvccid_size;
+		}
 	    }			/* same key */
 	  else
 	    {
@@ -3661,7 +3680,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	    }
 
 	  or_advance (&buf, (OR_INT_SIZE - OR_BYTE_SIZE));
-	  assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
+	  /* assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT)); */
 
 	  if (sort_args->unique_flag)
 	    {
@@ -3677,7 +3696,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	      goto nofit;
 	    }
 
-	  assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
+	  /* assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT)); */
 
 	  if ((*(sort_args->key_type->type->data_writeval)) (&buf,
 							     dbvalue_ptr)

@@ -354,6 +354,7 @@ scan_init_index_scan (INDX_SCAN_ID * isidp, OID * oid_buf)
   isidp->duplicate_key_locked = false;
   scan_init_iss (isidp);
   isidp->for_update = false;
+  isidp->scan_cache.mvcc_snapshot = NULL;
 }
 
 /*
@@ -5964,9 +5965,8 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       scan_id->stats.key_qualified_rows++;
 
       /* get pages for read */
-      if (!SCAN_IS_INDEX_COVERED (isidp) || mvcc_Enabled == true)
+      if (!SCAN_IS_INDEX_COVERED (isidp))
 	{
-	  /* in mvcc, check whether the heap tuple satisfies snapshot */
 	  mnt_bt_noncovered (thread_p);
 
 	  if (thread_is_on_trace (thread_p))
@@ -6002,6 +6002,8 @@ scan_next_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	}
       else
 	{
+	  /* TO DO - in MVCC when mvcc_select_lock_needed is true
+	   * index coverage must be disabled */
 	  if (isidp->multi_range_opt.use)
 	    {
 	      assert (isidp->curr_oidno < isidp->multi_range_opt.cnt);
@@ -6229,8 +6231,8 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     }
 
   if (sp_scan == S_SNAPSHOT_NOT_SATISFIED)
-    {      
-      if (SCAN_IS_INDEX_COVERED (isidp) && mvcc_Enabled == true)
+    {
+      if (SCAN_IS_INDEX_COVERED (isidp))
 	{
 	  /* goto the next tuple */
 	  if (!isidp->multi_range_opt.use)

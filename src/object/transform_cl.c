@@ -1364,7 +1364,6 @@ tf_disk_to_mem (MOBJ classobj, RECDES * record, int *convertp)
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{
 	  int repid_and_flag_bits;
-	  int chn;
 	  char mvcc_flags;
 
 	  /* skip unnecessary mvcc fields */

@@ -4228,9 +4228,12 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 		      assert (obj->operation == LC_FLUSH_UPDATE
 			      || obj->operation == LC_FLUSH_UPDATE_PRUNE);
 		      /* Check if object OID has changed */
-		      if (!OID_ISNULL (&obj->updated_oid)
-			  && !OID_EQ (WS_OID (mop_toid->mop),
-				      &obj->updated_oid))
+		      if ((!OID_ISNULL (&obj->updated_oid)
+			   && !OID_EQ (WS_OID (mop_toid->mop),
+				       &obj->updated_oid))
+			  || (!OID_ISNULL (&obj->oid)
+			      && !OID_EQ (WS_OID (mop_toid->mop->class_mop),
+					  &obj->class_oid)))
 			{
 			  MOP new_mop;
 			  MOP new_class_mop =
@@ -4243,7 +4246,9 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 			  else
 			    {
 			      new_mop =
-				ws_mop (&obj->updated_oid, new_class_mop);
+				ws_mop (OID_ISNULL (&obj->updated_oid) ?
+					&obj->oid : &obj->updated_oid,
+					new_class_mop);
 			      if (new_mop == NULL)
 				{
 				  error_code = ER_FAILED;
@@ -4275,7 +4280,7 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 				  /* Add object to class */
 				  ws_set_class (new_mop, new_class_mop);
 
-				  /* Update mvcc snapshot version */
+				  /* Update MVCC snapshot version */
 				  new_mop->mvcc_snapshot_version =
 				    ws_get_mvcc_snapshot_version ();
 				}
@@ -4311,6 +4316,28 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 	  mop_toid->mop = NULL;
 	  free_and_init (mop_toid);
 	  mop_toid = next_mop_toid;
+	}
+
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  /* Adjust class_of attribute from _db_partition catalog class for
+	   * each partitioned class that has been flushed. This is
+	   * needed because in MVCC every update in _db_class produces new
+	   * OID. However, we assume that this is a temporary solution. The
+	   * correct one must integrate _db_partiton class in catalog classes
+	   * structure and unlink it from each partition schema */
+	  for (i = 0; error_code == NO_ERROR && i < mflush->mobjs->num_objs;
+	       i++)
+	    {
+	      obj = LC_FIND_ONEOBJ_PTR_IN_COPYAREA (mflush->mobjs, i);
+	      if (OID_IS_ROOTOID (&obj->class_oid)
+		  && (obj->operation == LC_FLUSH_UPDATE
+		      || obj->operation == LC_FLUSH_UPDATE_PRUNE))
+		{
+		  MOP mop = ws_mop (&obj->oid, sm_Root_class_mop);
+		  error_code = sm_adjust_partitions_parent (mop, true);
+		}
+	    }
 	}
 
       if (error_code != NO_ERROR)
@@ -5180,7 +5207,7 @@ locator_internal_flush_instance (MOP inst_mop, bool decache)
       return ER_OBJ_INVALID_ARGUMENTS;
     }
 
-  inst_mop = ws_mvcc_latest_version(inst_mop);
+  inst_mop = ws_mvcc_latest_version (inst_mop);
 retry:
   if (WS_ISDIRTY (inst_mop)
       && (ws_find (inst_mop, &inst) == WS_FIND_MOP_DELETED || inst != NULL))

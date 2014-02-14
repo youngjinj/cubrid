@@ -1120,7 +1120,7 @@ logtb_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 }
 
 /*
- * logtb_initialize_mvcctable - initialize mvcc table
+ * logtb_initialize_mvcctable - initialize MVCC table
  *
  * return: error code
  *
@@ -1153,7 +1153,7 @@ logtb_initialize_mvcctable (THREAD_ENTRY * thread_p)
 }
 
 /*
- * logtb_finalize_mvcctable - cleanup mvcc table
+ * logtb_finalize_mvcctable - cleanup MVCC table
  *
  * return: error code
  *
@@ -1871,7 +1871,7 @@ logtb_get_new_tran_id (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   if (tdes->trid < 0)
     {
       tdes->trid = LOG_SYSTEM_TRANID + 1;
-      /* set mvcc next id to null */
+      /* set MVCC next id to null */
       log_Gl.hdr.next_trid = tdes->trid + 1;
     }
 
@@ -3524,7 +3524,7 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
     {
       /* allocate only once */
       int size;
-      size = NUM_TOTAL_TRAN_INDICES * sizeof (MVCCID);
+      size = NUM_TOTAL_TRAN_INDICES * OR_MVCCID_SIZE;
 
       snapshot->active_ids = malloc (size);
       if (snapshot->active_ids == NULL)
@@ -3676,12 +3676,12 @@ logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
 }
 
 /*
- * logtb_get_new_mvccid - mvcc get new id
+ * logtb_get_new_mvccid - MVCC get new id
  *
  * return: error code
  *
  *  thread_p(in):
- *  curr_mvcc_info(in/out): current mvcc info
+ *  curr_mvcc_info(in/out): current MVCC info
  *
  *  Note: This function set mvcc_id field of curr_mvcc_info. By keeping mvccid
  *	    into curr_mvcc_info before releasing CSECT_MVCC_ACTIVE_TRANS,

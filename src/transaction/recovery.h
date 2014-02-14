@@ -187,6 +187,10 @@ typedef enum
 
   RVHF_MVCC_UPDATE_ROW_VERSION = 121,
 
+  RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID = 122,
+
+  RVBT_KEYVAL_DEL_RECORD_MVCC_DELID = 123,
+
   RV_NOT_DEFINED = 999
 } LOG_RCVINDEX;
 
@@ -239,6 +243,9 @@ extern void rv_check_rvfuns (void);
              || ((idx) == RVBT_KEYVAL_DEL_LFRECORD_DEL)    \
              || ((idx) == RVBT_KEYVAL_DEL_NDRECORD_UPD)    \
              || ((idx) == RVBT_KEYVAL_DEL_NDHEADER_UPD)    \
-             || ((idx) == RVBT_KEYVAL_DEL_OID_TRUNCATE) ) ? true : false )
+             || ((idx) == RVBT_KEYVAL_DEL_OID_TRUNCATE)	   \
+	     || ((idx) == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID)	\
+	     || ((idx) == RVBT_KEYVAL_DEL_RECORD_MVCC_DELID)	\
+) ? true : false )
 
 #endif /* _RECOVERY_H_ */

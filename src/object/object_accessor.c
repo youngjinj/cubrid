@@ -1128,7 +1128,6 @@ get_object_value (MOP op, SM_ATTRIBUTE * att, char *mem,
     {
       current = DB_GET_OBJECT (source);
     }
-  current = ws_mvcc_latest_version (current);
 
   /* check for existence of the object
    * this is expensive so only do this if enabled by a parameter.

@@ -350,4 +350,6 @@ extern bool sm_is_global_only_constraint (SM_CLASS_CONSTRAINT * constraint);
 extern int sm_rename_foreign_key_ref (MOP ref_clsop, char *old_name,
 				      char *new_name);
 
+extern int sm_adjust_partitions_parent (MOP class_mop, bool flush);
+
 #endif /* _SCHEMA_MANAGER_H_ */

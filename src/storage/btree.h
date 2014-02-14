@@ -384,13 +384,14 @@ extern DB_VALUE *btree_delete (THREAD_ENTRY * thread_p, BTID * btid,
 			       DB_VALUE * key, OID * cls_oid, OID * oid,
 			       BTREE_LOCKED_KEYS locked_keys, int *unique,
 			       int op_type,
-			       BTREE_UNIQUE_STATS * unique_stat_info);
+			       BTREE_UNIQUE_STATS * unique_stat_info,
+			       bool delete_delid_only);
 extern int btree_update (THREAD_ENTRY * thread_p, BTID * btid,
 			 DB_VALUE * old_key, DB_VALUE * new_key,
 			 BTREE_LOCKED_KEYS locked_keys,
-			 OID * cls_oid, OID * oid,
+			 OID * cls_oid, OID * oid, OID * new_oid,
 			 int op_type, BTREE_UNIQUE_STATS * unique_stat_info,
-			 int *unique);
+			 int *unique, MVCC_REC_HEADER * p_mvcc_rec_header);
 extern int btree_reflect_unique_statistics (THREAD_ENTRY * thread_p,
 					    BTREE_UNIQUE_STATS *
 					    unique_stat_info);
@@ -468,6 +469,10 @@ extern void btree_rv_newpage_dump_undo_alloc (FILE * fp, int length,
 					      void *data);
 extern int btree_rv_keyval_undo_insert (THREAD_ENTRY * thread_p,
 					LOG_RCV * recv);
+extern int btree_rv_keyval_undo_insert_mvcc_delid (THREAD_ENTRY * thread_p,
+						   LOG_RCV * recv);
+extern int btree_rv_keyval_undo_delete_mvccid (THREAD_ENTRY * thread_p,
+					       LOG_RCV * recv);
 extern int btree_rv_keyval_undo_delete (THREAD_ENTRY * thread_p,
 					LOG_RCV * recv);
 extern void btree_rv_keyval_dump (FILE * fp, int length, void *data);
@@ -477,6 +482,8 @@ extern int btree_rv_leafrec_redo_delete (THREAD_ENTRY * thread_p,
 					 LOG_RCV * recv);
 extern int btree_rv_leafrec_redo_insert_key (THREAD_ENTRY * thread_p,
 					     LOG_RCV * recv);
+extern int btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p,
+					    LOG_RCV * recv);
 extern int btree_rv_leafrec_undo_insert_key (THREAD_ENTRY * thread_p,
 					     LOG_RCV * recv);
 extern int btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p,
@@ -547,8 +554,17 @@ extern DB_VALUE *btree_perform_insert (THREAD_ENTRY * thread_p, BTID * btid,
 				       DB_VALUE * key,
 				       OID * cls_oid, OID * oid, int op_type,
 				       BTREE_UNIQUE_STATS * unique_stat_info,
-				       int *unique, bool use_mvcc);
+				       int *unique,
+				       MVCC_REC_HEADER * p_mvcc_rec_header);
 
 extern int btree_vacuum (THREAD_ENTRY * thread_p, BTID * btid,
 			 OID * remove_oids, int n_remove_oids);
+extern void btree_set_mvcc_header_ids_for_update (THREAD_ENTRY * thread_p,
+						  bool do_delete_only,
+						  bool do_insert_only,
+						  MVCCID * mvccid,
+						  MVCC_REC_HEADER *
+						  mvcc_rec_header);
+extern bool btree_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p,
+					      OID * class_oid);
 #endif /* _BTREE_H_ */

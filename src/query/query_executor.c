@@ -1780,7 +1780,7 @@ qexec_end_one_iteration (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	}
       ret = NO_ERROR;
 
-      /* add composite locks if mvcc is disabled */
+      /* add composite locks if MVCC is disabled */
       if (mvcc_Enabled == false)
 	{
 	  if (xasl->aptr_list && xasl->aptr_list->type == BUILDLIST_PROC
@@ -8697,7 +8697,7 @@ qexec_intprt_fnc (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	    }
 
 	  agg_ptr = buildvalue->agg_list;
-	  if (mvcc_Enabled == false	/* non-mvcc */
+	  if (mvcc_Enabled == false	/* non-MVCC */
 	      && !xasl->scan_ptr	/* no scan procedure */
 	      && !xasl->fptr_list	/* no path expressions */
 	      && !xasl->if_pred	/* no if predicates */
@@ -10205,11 +10205,8 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					      internal_class->needs_pruning,
 					      pcontext, NULL,
 					      &mvcc_reev_data);
-	      if (error == ER_MVCC_ROW_ALREADY_DELETED)
-		{
-		  error = NO_ERROR;
-		}
-	      else if (error != NO_ERROR && error != ER_HEAP_UNKNOWN_OBJECT)
+	      if (error != NO_ERROR && error != ER_HEAP_UNKNOWN_OBJECT
+		  && error != ER_MVCC_ROW_ALREADY_DELETED)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
@@ -10499,8 +10496,7 @@ qexec_process_unique_stats (THREAD_ENTRY * thread_p, OID * class_oid,
 	  continue;
 	}
       /* uniqueness checking based on local statistical information */
-      if (mvcc_Enabled == false
-	  && (unique_stat_info[i].num_nulls + unique_stat_info[i].num_keys) !=
+      if ((unique_stat_info[i].num_nulls + unique_stat_info[i].num_keys) !=
 	  unique_stat_info[i].num_oids)
 	{
 	  BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, NULL, NULL, class_oid,
@@ -10558,9 +10554,8 @@ qexec_process_partition_unique_stats (THREAD_ENTRY * thread_p,
 		{
 		  continue;
 		}
-	      if (mvcc_Enabled == false
-		  && (unique_stat_info[i].num_nulls +
-		      unique_stat_info[i].num_keys) !=
+	      if ((unique_stat_info[i].num_nulls +
+		   unique_stat_info[i].num_keys) !=
 		  unique_stat_info[i].num_oids)
 		{
 		  BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, NULL, NULL,
@@ -12635,10 +12630,9 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		  /*assert (scan_cache.index_stat_info[k].num_nulls +
 		     scan_cache.index_stat_info[k].num_keys ==
 		     scan_cache.index_stat_info[k].num_oids); */
-		  if (mvcc_Enabled == false
-		      && (scan_cache.index_stat_info[k].num_nulls +
-			  scan_cache.index_stat_info[k].num_keys !=
-			  scan_cache.index_stat_info[k].num_oids))
+		  if (scan_cache.index_stat_info[k].num_nulls +
+		      scan_cache.index_stat_info[k].num_keys !=
+		      scan_cache.index_stat_info[k].num_oids)
 		    {
 		      GOTO_EXIT_ON_ERROR;
 		    }
@@ -13361,13 +13355,22 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   CL_ATTR_ID attrid;
   int n_increment;
   int savepoint_used = 0;
-  OID *oid, *class_oid, class_oid_buf;
+  OID *oid = NULL, *class_oid = NULL, class_oid_buf, mvcc_oid,
+    last_cached_class_oid;
   HFID *class_hfid;
   int lock_ret;
   int tran_index;
   int err = NO_ERROR;
   int needs_pruning = DB_NOT_PARTITIONED_CLASS;
+  HEAP_SCANCACHE scan_cache;
+  RECDES copy_recdes;
+  bool scan_cache_inited = false;
+  SCAN_CODE scan_code;
 
+  if (mvcc_Enabled == true)
+    {
+      OID_SET_NULL (&last_cached_class_oid);
+    }
   list = xasl->selected_upd_list;
 
   /* in this function,
@@ -13540,6 +13543,46 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      continue;
 	    }
 
+	  if (mvcc_Enabled == true)
+	    {
+	      /* starting with the second position we need last version */
+
+	      if (!OID_EQ (&last_cached_class_oid, class_oid)
+		  && scan_cache_inited == true)
+		{
+		  (void) heap_scancache_end (thread_p, &scan_cache);
+		  scan_cache_inited = false;
+		}
+
+	      if (scan_cache_inited == false)
+		{
+		  (void) heap_scancache_start (thread_p, &scan_cache,
+					       class_hfid, class_oid, false,
+					       false, LOCKHINT_NONE,
+					       logtb_get_mvcc_snapshot
+					       (thread_p));
+		  scan_cache_inited = true;
+		  COPY_OID (&last_cached_class_oid, class_oid);
+		}
+
+	      copy_recdes.data = NULL;
+	      scan_code = heap_get_last (thread_p, oid, &copy_recdes,
+					 &scan_cache, COPY, NULL_CHN,
+					 &mvcc_oid);
+	      if (scan_code = S_SUCCESS)
+		{
+		  if (!OID_ISNULL (&mvcc_oid))
+		    {
+		      oid = &mvcc_oid;
+		    }
+
+		}
+	      else
+		{
+		  goto exit_on_error;
+		}
+	    }
+
 	  if (qexec_execute_increment (thread_p, oid, class_oid, class_hfid,
 				       attrid, n_increment, needs_pruning)
 	      != NO_ERROR)
@@ -13547,6 +13590,12 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      goto exit_on_error;
 	    }
 	}
+    }
+
+  if (mvcc_Enabled == true && scan_cache_inited == true)
+    {
+      (void) heap_scancache_end (thread_p, &scan_cache);
+      scan_cache_inited = false;
     }
 
   if (!LOG_CHECK_LOG_APPLIER (thread_p)
@@ -13589,6 +13638,12 @@ exit:
     }
 
 exit_on_error:
+
+  if (mvcc_Enabled == true && scan_cache_inited == true)
+    {
+      (void) heap_scancache_end (thread_p, &scan_cache);
+      scan_cache_inited = false;
+    }
 
   err = ER_FAILED;
 
@@ -20623,13 +20678,6 @@ qexec_gby_finalize_group_val_list (THREAD_ENTRY * thread_p,
 	  gby_vallist = gby_vallist->next;
 	}
     }
-
-wrapup:
-  return;
-
-exit_on_error:
-  gbstate->state = er_errid ();
-  goto wrapup;
 }
 
 /*
@@ -20727,10 +20775,6 @@ qexec_gby_finalize_group_dim (THREAD_ENTRY * thread_p,
 
 wrapup:
   return level;
-
-exit_on_error:
-  gbstate->state = er_errid ();
-  goto wrapup;
 }
 
 /*
@@ -23397,9 +23441,6 @@ qexec_analytic_start_group (THREAD_ENTRY * thread_p,
       /* reinitialize counters */
       func_state->curr_sort_key_tuple_count = 0;
     }
-
-wrapup:
-  return NO_ERROR;
 
 exit_on_error:
   return er_errid ();
@@ -28128,7 +28169,7 @@ qexec_clear_internal_classes (THREAD_ENTRY * thread_p,
  * mvcc_data_filter (in) : filter info
  * class_oid (in) : class oid
  *
- * Note: this function is used only in mvcc
+ * Note: this function is used only in MVCC
  */
 static int
 qexec_upddel_mvcc_set_filters (THREAD_ENTRY * thread_p,

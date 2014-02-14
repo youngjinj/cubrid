@@ -123,6 +123,10 @@ extern void oid_set_serial (const OID * oid);
 extern bool oid_is_serial (const OID * oid);
 extern void oid_get_serial_oid (OID * oid);
 
+extern void oid_set_partition (const OID * oid);
+extern bool oid_is_partition (const OID * oid);
+extern void oid_get_partition_oid (OID * oid);
+
 extern int oid_compare (const void *oid1, const void *oid2);
 extern unsigned int oid_hash (const void *key_oid, unsigned int htsize);
 extern int oid_compare_equals (const void *key_oid1, const void *key_oid2);

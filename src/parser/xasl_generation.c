@@ -843,6 +843,15 @@ static int pt_get_mvcc_reev_range_data (PARSER_CONTEXT * parser,
 					REGU_VARIABLE_LIST *
 					regu_attributes_range,
 					HEAP_CACHE_ATTRINFO ** cache_range);
+static PT_NODE *pt_has_reev_in_subquery_pre (PARSER_CONTEXT * parser,
+					     PT_NODE * tree, void *arg,
+					     int *continue_walk);
+static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
+					      PT_NODE * tree, void *arg,
+					      int *continue_walk);
+static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
+					      PT_NODE * tree, void *arg,
+					      int *continue_walk);
 
 
 static void
@@ -4349,6 +4358,7 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	      || aggregate_list->function == PT_MIN))
 	{
 	  bool need_unique_index;
+	  bool mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
 
 	  classop = sm_find_class (info->class_name);
 	  if (aggregate_list->function == PT_COUNT_STAR
@@ -4361,30 +4371,33 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	      need_unique_index = false;
 	    }
 
-	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false)
+	  /* enable count optimization in MVCC if have unique index */
+	  if (mvcc_Enabled == false
+	      && aggregate_list->function == PT_COUNT_STAR)
 	    {
-	      /* enable count optimization in non-mvcc */
-	      if (aggregate_list->function == PT_COUNT_STAR)
+	      BTID *btid = NULL;
+	      btid = sm_find_index (classop, NULL, 0,
+				    need_unique_index, false,
+				    &aggregate_list->btid);
+	      if (mvcc_Enabled == false || btid != NULL)
 		{
-		  (void) sm_find_index (classop, NULL, 0,
-					need_unique_index, false,
-					&aggregate_list->btid);
-		  /* If btree does not exist, optimize with heap */
+		  /* If btree does not exist, optimize with heap in non-MVCC */
 		  aggregate_list->flag_agg_optimize = true;
 		}
-	      else
+	    }
+	  else
+	    {
+	      if (mvcc_Enabled == false
+		  && tree->info.function.arg_list->node_type == PT_NAME)
 		{
-		  if (tree->info.function.arg_list->node_type == PT_NAME)
+		  (void) sm_find_index (classop,
+					(char **) &tree->info.
+					function.arg_list->info.name.
+					original, 1, need_unique_index,
+					true, &aggregate_list->btid);
+		  if (!BTID_IS_NULL (&aggregate_list->btid))
 		    {
-		      (void) sm_find_index (classop,
-					    (char **) &tree->info.
-					    function.arg_list->info.name.
-					    original, 1, need_unique_index,
-					    true, &aggregate_list->btid);
-		      if (!BTID_IS_NULL (&aggregate_list->btid))
-			{
-			  aggregate_list->flag_agg_optimize = true;
-			}
+		      aggregate_list->flag_agg_optimize = true;
 		    }
 		}
 	    }
@@ -4923,21 +4936,18 @@ pt_to_aggregate (PARSER_CONTEXT * parser, PT_NODE * select_node,
   info.class_name = NULL;
   info.flag_agg_optimize = false;
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+  if (pt_is_single_tuple (parser, select_node))
     {
-      if (pt_is_single_tuple (parser, select_node))
+      if (where == NULL
+	  && pt_length_of_list (from) == 1
+	  && pt_length_of_list (from->info.spec.flat_entity_list) == 1
+	  && from->info.spec.only_all != PT_ALL)
 	{
-	  if (where == NULL
-	      && pt_length_of_list (from) == 1
-	      && pt_length_of_list (from->info.spec.flat_entity_list) == 1
-	      && from->info.spec.only_all != PT_ALL)
+	  if (from->info.spec.entity_name)
 	    {
-	      if (from->info.spec.entity_name)
-		{
-		  info.class_name =
-		    from->info.spec.entity_name->info.name.original;
-		  info.flag_agg_optimize = true;
-		}
+	      info.class_name =
+		from->info.spec.entity_name->info.name.original;
+	      info.flag_agg_optimize = true;
 	    }
 	}
     }
@@ -15917,7 +15927,7 @@ pt_optimize_analytic_list (PARSER_CONTEXT * parser, ANALYTIC_INFO * info)
   ANALYTIC_TYPE *func_p, *save_next;
   PT_NODE *sort_list;
   bool found;
-  int group_id = 0, i, j, k, level = 0;
+  int group_id = 0, i, j, level = 0;
 
   /* sort list index */
   PT_NODE *sc_index[ANALYTIC_OPT_MAX_SORT_LIST_COLUMNS];
@@ -17920,7 +17930,7 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
 	      context->sql_plan_alloc_size = size;
 	      context->sql_plan_text[0] = '\0';
 	    }
-	  else if (context->sql_plan_alloc_size -
+	  else if ((size_t) (context->sql_plan_alloc_size) -
 		   strlen (context->sql_plan_text) < plan_len)
 	    {
 	      char *ptr;
@@ -18270,7 +18280,7 @@ pt_spec_to_xasl_class_oid_list (PARSER_CONTEXT * parser, const PT_NODE * spec,
 	      prev_o_num = o_num;
 	      (void) lsearch (oid, o_list, &o_num, sizeof (OID), oid_compare);
 
-	      if (o_num > prev_o_num && o_num > (size_t) (*nump))
+	      if (o_num > prev_o_num && o_num > (*nump))
 		{
 		  *(t_list + o_num - 1) = -1;	/* init #pages */
 
@@ -18433,7 +18443,7 @@ pt_serial_to_xasl_class_oid_list (PARSER_CONTEXT * parser,
 
   prev_o_num = o_num;
   (void) lsearch (serial_oid_p, o_list, &o_num, sizeof (OID), oid_compare);
-  if (o_num > prev_o_num && o_num > (size_t) * nump)
+  if (o_num > prev_o_num && o_num > (int) *nump)
     {
       *(t_list + o_num - 1) = -1;	/* init #pages */
     }
@@ -20625,6 +20635,9 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    }
 	}
 
+      PT_SELECT_INFO_SET_FLAG (aptr_statement,
+			       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
+      abort_reevaluation = true;
       if (abort_reevaluation)
 	{
 	  /* In order to abort reevaluation is enough to clear reevaluation flags
@@ -20989,6 +21002,94 @@ error_return:
   return xasl;
 }
 
+/*
+ * pt_has_reev_in_subquery_pre - increments subquery level and check for
+ *				 reevaluation spec in subquery
+ *  returns: unmodified tree
+ *  parser(in): parser context
+ *  tree(in): tree that can be a subquery
+ *  arg(in/out): a pointer to an integer which represents the subquery level
+ *  continue_walk(in/out): walk type
+ *
+ *  Note: used by pt_has_reev_in_subquery
+ */
+static PT_NODE *
+pt_has_reev_in_subquery_pre (PARSER_CONTEXT * parser, PT_NODE * tree,
+			     void *arg, int *continue_walk)
+{
+  int level = *(int *) arg;
+
+  if (level < 0)
+    {
+      return tree;
+    }
+
+  if (PT_IS_QUERY (tree))
+    {
+      level++;
+    }
+  else if (tree->node_type == PT_SPEC
+	   && (tree->info.spec.flag | PT_SPEC_FLAG_MVCC_COND_REEV |
+	       PT_SPEC_FLAG_MVCC_ASSIGN_REEV) && level > 1)
+    {
+      level = -1;
+      *continue_walk = PT_STOP_WALK;
+    }
+
+  return tree;
+}
+
+/*
+ * pt_has_reev_in_subquery_post - decrements subquery level
+ *  returns: unmodified tree
+ *  parser(in): parser context
+ *  tree(in): tree that can be a subquery
+ *  arg(in/out): a pointer to an integer which represents the subquery level
+ *  continue_walk(in/out): walk type
+ *
+ *  Note: used by pt_has_reev_in_subquery
+ */
+static PT_NODE *
+pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser, PT_NODE * tree,
+			      void *arg, int *continue_walk)
+{
+  int level = *(int *) arg;
+
+  if (level < 0)
+    {
+      return tree;
+    }
+
+  if (PT_IS_QUERY (tree))
+    {
+      level--;
+    }
+
+  return tree;
+}
+
+/*
+ * pt_has_reev_in_subquery () - Checks if the statement has a subquery with
+ *				specs involved in reevaluation
+ *   return:
+ *   parser(in): context
+ *   statement(in): statement to be checked
+ */
+static bool
+pt_has_reev_in_subquery (PARSER_CONTEXT * parser, PT_NODE * statement)
+{
+  int level = 0;
+
+  (void) parser_walk_tree (parser, statement,
+			   pt_has_reev_in_subquery_pre, &level,
+			   pt_has_reev_in_subquery_post, &level);
+  if (level < 0)
+    {
+      return true;
+    }
+
+  return false;
+}
 
 /*
  * pt_to_update_xasl () - Converts an update parse tree to
@@ -21054,22 +21155,19 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
   /* flush all classes */
   p = from;
-  while (p != NULL)
+  while (p != NULL && !has_partitioned)
     {
       cl_name_node = p->info.spec.flat_entity_list;
 
-      while (cl_name_node != NULL)
+      while (cl_name_node != NULL && !has_partitioned)
 	{
 	  error = locator_flush_class (cl_name_node->info.name.db_object);
 	  if (error != NO_ERROR)
 	    {
 	      goto cleanup;
 	    }
-	  if (!has_partitioned)
-	    {
-	      has_partitioned =
-		sm_is_partitioned_class (cl_name_node->info.name.db_object);
-	    }
+	  has_partitioned =
+	    sm_is_partitioned_class (cl_name_node->info.name.db_object);
 	  cl_name_node = cl_name_node->next;
 	}
 
@@ -21137,12 +21235,6 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       goto cleanup;
     }
 
-  error = pt_copy_upddel_hints_to_select (parser, statement, aptr_statement);
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
   aptr_statement = mq_translate (parser, aptr_statement);
   if (aptr_statement == NULL)
     {
@@ -21159,6 +21251,15 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
     {
       /* remove reevaluation flags if we have GROUP BY because the locking will be
        * made at SELECT stage */
+      abort_reevaluation = true;
+    }
+  else if (has_partitioned
+	   || pt_has_reev_in_subquery (parser, aptr_statement))
+    {
+      /* if we have at least one class partitioned then  perform locking at
+       * SELECT stage */
+      PT_SELECT_INFO_SET_FLAG (aptr_statement,
+			       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
       abort_reevaluation = true;
     }
   else
@@ -21180,6 +21281,9 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	    }
 	}
     }
+
+  PT_SELECT_INFO_SET_FLAG (aptr_statement, PT_SELECT_INFO_MVCC_LOCK_NEEDED);
+  abort_reevaluation = true;
 
   if (abort_reevaluation)
     {
@@ -25052,7 +25156,7 @@ PT_NODE *
 pt_to_merge_update_query (PARSER_CONTEXT * parser, PT_NODE * select_list,
 			  PT_MERGE_INFO * info)
 {
-  PT_NODE *statement, *where, *group_by, *oid, *save_next, *save_list, *from;
+  PT_NODE *statement, *where, *group_by, *oid, *save_next;
 
   statement = parser_new_node (parser, PT_SELECT);
   if (!statement)

@@ -319,14 +319,14 @@ struct recdes
 typedef struct mvcc_rec_header MVCC_REC_HEADER;
 struct mvcc_rec_header
 {
-  MVCCID mvcc_ins_id;		/* mvcc insert id */
+  MVCCID mvcc_ins_id;		/* MVCC insert id */
   union
   {
-    MVCCID mvcc_del_id;		/* mvcc delete id */
+    MVCCID mvcc_del_id;		/* MVCC delete id */
     int chn;			/* cache coherency number */
   };
   OID next_version;		/* next row version */
-  INT32 mvcc_flag:8;		/* mvcc flags */
+  INT32 mvcc_flag:8;		/* MVCC flags */
   INT32 repid:24;		/* representation id */
 };
 
@@ -380,7 +380,9 @@ typedef int TRANID;		/* Transaction identifier      */
 #define NULL_TRANID     (-1)
 #define NULL_TRAN_INDEX (-1)
 #define MVCCID_NULL (0)
-#define MVCCID_FIRST	      ((MVCCID) 3)
+
+#define MVCCID_FREE	      ((MVCCID) 3)	/* visible for all transactions */
+#define MVCCID_FIRST	      ((MVCCID) 4)
 
 /* is MVCC ID valid? */
 #define MVCCID_IS_VALID(id)	  ((id) != MVCCID_NULL)
@@ -389,7 +391,7 @@ typedef int TRANID;		/* Transaction identifier      */
 /* are MVCC IDs equal? */
 #define MVCCID_IS_EQUAL(id1,id2)	  ((id1) == (id2))
 
-/* advance mvcc ID */
+/* advance MVCC ID */
 #define MVCCID_FORWARD(id)	\
   do { \
     (id)++; \
@@ -468,10 +470,10 @@ typedef enum
 
 typedef enum
 {
-  BTREE_KEY_FOUND,		/* in mvcc inserted and committed or deleted and aborted */
+  BTREE_KEY_FOUND,		/* in MVCC inserted and committed or deleted and aborted */
   BTREE_KEY_NOTFOUND,
   BTREE_ERROR_OCCURRED,
-  BTREE_ACTIVE_KEY_FOUND	/* used only in mvcc - inserted/deleted but not committed/aborted */
+  BTREE_ACTIVE_KEY_FOUND	/* used only in MVCC - inserted/deleted but not committed/aborted */
 } BTREE_SEARCH;
 
 /* TYPEDEFS FOR BACKUP/RESTORE */

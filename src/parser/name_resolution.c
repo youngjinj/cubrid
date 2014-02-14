@@ -45,6 +45,7 @@
 #include "transform.h"
 #include "execute_statement.h"
 #include "show_meta.h"
+#include "network_interface_cl.h"
 
 /* this must be the last header file included!!! */
 #include "dbval.h"

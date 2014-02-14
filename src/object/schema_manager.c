@@ -3507,6 +3507,7 @@ sm_coerce_object_domain (TP_DOMAIN * domain, MOP object, MOP * dest_object)
 		      if (class_->class_type == SM_VCLASS_CT)
 			{
 			  object = vid_get_referenced_mop (object);
+			  object_class_mop = ws_class_mop (object);
 			  if (object
 			      && (au_fetch_class_force (object_class_mop,
 							&class_,
@@ -16030,4 +16031,175 @@ sm_is_global_only_constraint (SM_CLASS_CONSTRAINT * constraint)
     }
 
   return true;
+}
+
+/*
+ * sm_adjust_partitions_parent() - Adjusts class_of attribute from _db_partition
+ *				    catalog class
+ *   return: Error code
+ *   class_mop(in): MOP of the parent class (partitioned class) of the
+ *		    partitions to be adjusted
+ *   flush(in): true if after adjust we must flush changes
+ */
+int
+sm_adjust_partitions_parent (MOP class_mop, bool flush)
+{
+  int error_code = NO_ERROR;
+  int au_save;
+  MOP class_cat = NULL, class_entry = NULL;
+  DB_VALUE val;
+  char *name = NULL;
+  DB_OBJLIST *obj = NULL;
+  SM_CLASS *smclass = NULL, *subclass = NULL;
+  bool has_changes = false;
+
+  AU_DISABLE (au_save);
+
+  DB_MAKE_NULL (&val);
+
+  if (class_mop == NULL)
+    {
+      error_code = ER_FAILED;
+      goto error;
+    }
+
+  if (WS_IS_DELETED (class_mop)
+      || !OID_IS_ROOTOID (ws_oid (class_mop->class_mop)))
+    {
+      goto end;
+    }
+
+  error_code = au_fetch_class (class_mop, &smclass, AU_FETCH_READ, AU_SELECT);
+  if (error_code != NO_ERROR)
+    {
+      goto error;
+    }
+
+  if (smclass->partition_of == NULL || smclass->users == NULL)
+    {
+      goto end;
+    }
+
+  /* get classes list table from catalog */
+  class_cat = sm_find_class (CT_CLASS_NAME);
+  if (class_cat == NULL)
+    {
+      goto error;
+    }
+
+  /* search entry in catalog for our partitioned class using its name */
+  name = (char *) smclass->header.name;
+  db_make_varchar (&val, PARTITION_VARCHAR_LEN, name, strlen (name),
+		   LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  class_entry = db_find_unique (class_cat, CLASS_ATT_NAME, &val);
+  if (class_entry == NULL)
+    {
+      goto error;
+    }
+  pr_clear_value (&val);
+
+  /* iterate through partitions and update parent link */
+  for (obj = smclass->users; obj != NULL; obj = obj->next)
+    {
+      /* fetch partition */
+      error_code =
+	au_fetch_class (obj->op, &subclass, AU_FETCH_READ, AU_SELECT);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+
+      /* if we don't have partition info then skip */
+      if (subclass->partition_of == NULL)
+	{
+	  continue;
+	}
+
+      error_code =
+	db_get (subclass->partition_of, PARTITION_ATT_CLASSOF, &val);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+
+      if (!OID_EQ (ws_oid (DB_GET_OBJECT (&val)), ws_oid (class_entry)))
+	{
+	  /* update parent link of partition info entry */
+	  pr_clear_value (&val);
+	  db_make_object (&val, class_entry);
+	  error_code =
+	    db_put_internal (subclass->partition_of, PARTITION_ATT_CLASSOF,
+			     &val);
+	  if (error_code != NO_ERROR)
+	    {
+	      goto error;
+	    }
+	  has_changes = true;
+	}
+      pr_clear_value (&val);
+    }
+
+  error_code = db_get (smclass->partition_of, PARTITION_ATT_CLASSOF, &val);
+  if (error_code != NO_ERROR)
+    {
+      goto error;
+    }
+
+  if (!OID_EQ (ws_oid (DB_GET_OBJECT (&val)), ws_oid (class_entry)))
+    {
+      /* update parent link of partitioned table info entry */
+      pr_clear_value (&val);
+      db_make_object (&val, class_entry);
+      error_code =
+	db_put_internal (smclass->partition_of, PARTITION_ATT_CLASSOF, &val);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+      has_changes = true;
+    }
+  pr_clear_value (&val);
+
+  if (flush && has_changes)
+    {
+      MOP db_part_cat = smclass->partition_of->class_mop;
+
+      /* load _db_partition catalog class */
+      if (db_part_cat == NULL)
+	{
+	  db_part_cat = sm_get_class (smclass->partition_of);
+	}
+
+      /* flush all instances of _db_partition */
+      error_code =
+	locator_flush_all_instances (db_part_cat, DONT_DECACHE,
+				     LC_STOP_ON_ERROR);
+      if (error_code != NO_ERROR)
+	{
+	  goto error;
+	}
+    }
+
+end:
+
+  AU_ENABLE (au_save);
+
+  return NO_ERROR;
+
+error:
+
+  AU_ENABLE (au_save);
+
+  pr_clear_value (&val);
+
+  if (error_code == NO_ERROR)
+    {
+      error_code = er_errid ();
+      if (error_code == NO_ERROR)
+	{
+	  error_code = ER_FAILED;
+	}
+    }
+
+  return error_code;
 }

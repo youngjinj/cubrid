@@ -499,13 +499,14 @@
 #define OR_NON_MVCC_CHN_OFFSET	  4
 
 /* MVCC */
+#define OR_MVCCID_SIZE			OR_BIGINT_SIZE
 #define OR_MVCC_INSID_OFFSET		0
 #define OR_MVCC_DELID_OFFSET		8
 #define OR_MVCC_NEXT_VERSION_OFFSET	16
 #define OR_MVCC_REP_AND_FLAG_OFFSET	24
 
 /* In case MVCC is enabled and chn is needed it will be saved instead of
- * delete mvcc id.
+ * delete MVCC id.
  */
 #define OR_MVCC_CHN_OFFSET OR_MVCC_DELID_OFFSET
 
@@ -530,12 +531,17 @@
 #define OR_MVCC_FLAG_ENABLED	  0x01	/* MVCC is enabled. Entries in root
 					 * class do not have this flag set
 					 */
-#define OR_MVCC_FLAG_VALID_DELID  0x02	/* Ignore delete identifier
+#define OR_MVCC_FLAG_VALID_DELID  0x02	/* Use delete identifier
 					 * In some cases, delete id is
 					 * used as chn when this flag is
-					 * set.
+					 * not set. The meaning of this flag
+					 * will be changed when MVCC dynamic
+					 * heap will be implemented.
 					 */
-/* Reserved flags 0x04, 0x08 and 0x10 */
+/* The following flag is used for dynamic MVCC information */
+#define OR_MVCC_FLAG_VALID_INSID	  0x04	/* The record contains insert id */
+
+/* Reserved flags 0x08 and 0x10 */
 
 #define OR_MVCC_REPID_MASK	  0x00FFFFFF
 

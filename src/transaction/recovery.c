@@ -798,6 +798,18 @@ struct rvfun RV_fun[] = {
    heap_rv_mvcc_undo_delete,
    heap_rv_mvcc_redo_update_row_version,
    NULL,
+   NULL},
+  {RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID,
+   "RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID",
+   btree_rv_keyval_undo_insert_mvcc_delid,
+   btree_rv_redo_insert_mvcc_delid,
+   NULL,
+   NULL},
+  {RVBT_KEYVAL_DEL_RECORD_MVCC_DELID,
+   "RVBT_KEYVAL_DEL_RECORD_MVCC_DELID",
+   btree_rv_keyval_undo_delete_mvccid,
+   NULL,
+   btree_rv_keyval_dump,
    NULL}
 };
 

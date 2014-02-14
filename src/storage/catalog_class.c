@@ -135,6 +135,7 @@ extern int catcls_get_db_collation (THREAD_ENTRY * thread_p,
 extern int catcls_get_apply_info_log_record_time (THREAD_ENTRY * thread_p,
 						  time_t * log_record_time);
 extern int catcls_find_and_set_serial_class_oid (THREAD_ENTRY * thread_p);
+extern int catcls_find_and_set_partition_class_oid (THREAD_ENTRY * thread_p);
 
 static int catcls_initialize_class_oid_to_oid_hash_table (int num_entry);
 static int catcls_get_or_value_from_class (THREAD_ENTRY * thread_p,
@@ -733,7 +734,7 @@ catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p,
     }
 
   class_oid_p = DB_PULL_OID (oid_val_p);
-  /* temporary disable search in catcls_Class_oid_to_oid_hash_table in mvcc */
+  /* temporary disable search in catcls_Class_oid_to_oid_hash_table in MVCC */
   if (mvcc_Enabled == false)
     {
       if (csect_enter_as_reader (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) !=
@@ -3026,11 +3027,11 @@ catcls_put_or_value_into_buffer (OR_VALUE * value_p, int chn, OR_BUF * buf_p,
 
   if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
     {
-      /* mvcc related fields */
-      or_put_bigint (buf_p, 0);	/* mvcc insert id */
+      /* MVCC related fields */
+      or_put_bigint (buf_p, 0);	/* MVCC insert id */
       or_put_int (buf_p, chn);	/* chn */
       or_put_int (buf_p, 0);	/* dummy */
-      or_put_oid (buf_p, (OID *) & oid_Null_oid);	/* mvcc next version */
+      or_put_oid (buf_p, (OID *) & oid_Null_oid);	/* MVCC next version */
       or_put_int (buf_p, repr_id_bits);
     }
   else
@@ -3152,10 +3153,10 @@ catcls_get_or_value_from_buffer (THREAD_ENTRY * thread_p, OR_BUF * buf_p,
 
   if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
     {
-      /* skip mvcc related fields */
-      or_advance (buf_p, OR_INT64_SIZE);	/* mvcc insert id */
-      or_advance (buf_p, OR_INT64_SIZE);	/* mvcc delete id */
-      or_advance (buf_p, OR_OID_SIZE);	/* mvcc next version */
+      /* skip MVCC related fields */
+      or_advance (buf_p, OR_INT64_SIZE);	/* MVCC insert id */
+      or_advance (buf_p, OR_INT64_SIZE);	/* MVCC delete id */
+      or_advance (buf_p, OR_OID_SIZE);	/* MVCC next version */
       repr_id_bits = or_get_int (buf_p, &rc);
       bound_bits_flag = repr_id_bits & OR_BOUND_BIT_FLAG;
     }
@@ -3906,8 +3907,9 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
       goto error;
     }
 
-  if (heap_perform_update (thread_p, hfid_p, class_oid_p, oid_p, &record,
-			   NULL, &old, scan_p) == NULL)
+  if (heap_update
+      (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
+       false) == NULL)
     {
       error = er_errid ();
       goto error;
@@ -4069,7 +4071,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   record.data = NULL;
   old_record.data = NULL;
 #if defined(SERVER_MODE)
-  /* in mvcc the lock has been already acquired */
+  /* in MVCC the lock has been already acquired */
   if (mvcc_Enabled == false)
     {
       if (lock_object (thread_p, oid_p, class_oid_p, X_LOCK, LK_UNCOND_LOCK)
@@ -4187,9 +4189,9 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 	  goto error;
 	}
 
-      if (heap_perform_update
-	  (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old,
-	   scan_p) == NULL)
+      if (heap_update
+	  (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
+	   true) == NULL)
 	{
 	  error = er_errid ();
 	  goto error;
@@ -4333,7 +4335,7 @@ catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
     }
 
   hfid_p = &cls_info_p->hfid;
-  /* in mvcc, do not phisically remove the row */
+  /* in MVCC, do not phisically remove the row */
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p,
 				   ct_class_oid_p,
 				   SINGLE_ROW_DELETE, NULL) != NO_ERROR)
@@ -4442,7 +4444,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
     }
   else
     {
-      /* update catalog classes in mvcc */
+      /* update catalog classes in MVCC */
       PAGE_PTR pgptr = NULL, forward_pgptr = NULL;
       bool need_mvcc_update;
       bool ignore_record = false;
@@ -4454,6 +4456,9 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
        * alter the same table.
        */
 
+#if !defined (SERVER_MODE)
+      need_mvcc_update = false;
+#else
       if (heap_get_pages_for_mvcc_chain_read (thread_p, &oid, &pgptr,
 					      &forward_pgptr, &ignore_record)
 	  != NO_ERROR)
@@ -4483,7 +4488,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	}
       else
 	{
-	  /* mvcc update */
+	  /* MVCC update */
 	  need_mvcc_update = true;
 	}
 
@@ -4496,6 +4501,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	{
 	  pgbuf_unfix_and_init (thread_p, forward_pgptr);
 	}
+#endif
 
       if (need_mvcc_update == false)
 	{
@@ -4821,7 +4827,7 @@ exit:
 }
 
 /*
- * catcls_mvcc_update_subset () - mvcc update catalog class subset
+ * catcls_mvcc_update_subset () - MVCC update catalog class subset
  *   return:
  *   thread_p(in): thred entry
  *   value(in): new values
@@ -5022,7 +5028,7 @@ error:
 }
 
 /*
- * catcls_insert_instance () - mvcc update catalog class instance
+ * catcls_insert_instance () - MVCC update catalog class instance
  *   return: error code
  *   thread_p(in): thread entry
  *   value_p(in/out): the values to insert into catalog classes
@@ -5117,8 +5123,7 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 		    {
 		      if (DB_VALUE_TYPE (&attr_p[k].value) == DB_TYPE_OID)
 			{
-			  if (OID_EQ
-			      (new_oid, DB_PULL_OID (&attr_p[k].value)))
+			  if (OID_EQ (oid_p, DB_PULL_OID (&attr_p[k].value)))
 			    {
 			      db_value_put_null (&attr_p[k].value);
 			    }
@@ -5162,9 +5167,9 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
     }
 
   /* heap update new object */
-  if (heap_perform_update
-      (thread_p, hfid_p, class_oid_p, new_oid, &record, NULL, &old,
-       scan_p) == NULL)
+  if (heap_update
+      (thread_p, hfid_p, class_oid_p, new_oid, &record, NULL, &old, scan_p,
+       false) == NULL)
     {
       error = er_errid ();
       goto error;
@@ -5643,5 +5648,34 @@ catcls_find_and_set_serial_class_oid (THREAD_ENTRY * thread_p)
       return ER_FAILED;
     }
   oid_set_serial (&serial_class_oid);
+  return NO_ERROR;
+}
+
+/*
+ * catcls_find_and_set_partition_class_oid () - Used to find OID for partition
+ *						class and set the global
+ *						variable for partition class
+ *						OID.
+ *
+ * return	 : Error code.
+ * thread_p (in) : Thread entry.
+ *
+ * NOTE: This was required for MVCC. It is probably a good idea to extend
+ *	 cached OID's for all system classes, to avoid looking for them every
+ *	 time they're needed.
+ */
+int
+catcls_find_and_set_partition_class_oid (THREAD_ENTRY * thread_p)
+{
+  OID partition_class_oid;
+  LC_FIND_CLASSNAME status =
+    xlocator_find_class_oid (thread_p, CT_PARTITION_NAME,
+			     &partition_class_oid,
+			     NULL_LOCK);
+  if (status == LC_CLASSNAME_ERROR)
+    {
+      return ER_FAILED;
+    }
+  oid_set_partition (&partition_class_oid);
   return NO_ERROR;
 }

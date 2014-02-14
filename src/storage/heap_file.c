@@ -387,10 +387,6 @@ static SCAN_CODE heap_get_page_info (THREAD_ENTRY * thread_p,
 				     const VPID * vpid,
 				     const PAGE_PTR pgptr,
 				     DB_VALUE ** page_info);
-static const OID *heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
-			       const OID * class_oid, const OID * oid,
-			       RECDES * recdes, OID * new_oid,
-			       bool * old, HEAP_SCANCACHE * scan_cache);
 static int heap_scancache_start_chain_update (THREAD_ENTRY * thread_p,
 					      HEAP_SCANCACHE * new_scan_cache,
 					      HEAP_SCANCACHE * old_scan_cache,
@@ -7550,12 +7546,15 @@ heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid, OID * class_oid,
  *                it is set to false (i.e., only the address was stored)
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                       between heap changes.
+ *   update_in_place(in): if true, then enforce an update in-place. Otherwise,
+ *			  this function will decide the update style. This make
+ *			  sense only in MVCC.
  */
-static const OID *
+const OID *
 heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
 	     const OID * class_oid, const OID * oid,
 	     RECDES * recdes, OID * new_oid,
-	     bool * old, HEAP_SCANCACHE * scan_cache)
+	     bool * old, HEAP_SCANCACHE * scan_cache, bool update_in_place)
 {
   VPID vpid;			/* Volume and page identifiers */
   VPID *vpidptr_incache;
@@ -7586,8 +7585,8 @@ heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
   CUBRID_OBJ_UPDATE_START (class_oid);
 #endif /* ENABLE_SYSTEMTAP */
 
-  use_mvcc =
-    mvcc_Enabled && !heap_is_mvcc_disabled_for_class (thread_p, class_oid);
+  use_mvcc = mvcc_Enabled
+    && !heap_is_mvcc_disabled_for_class (thread_p, class_oid);
   if (use_mvcc)
     {
       /* If MVCC is not disabled for current class, initiatialize MVCC record
@@ -7604,6 +7603,11 @@ heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
       /* Update record data */
       or_mvcc_set_header (recdes, mvcc_header);
     }
+  if (update_in_place)
+    {
+      use_mvcc = false;
+    }
+
   if (new_oid != NULL)
     {
       OID_SET_NULL (new_oid);
@@ -13154,7 +13158,12 @@ error:
     {
       pgbuf_unfix (thread_p, forward_pgptr);
     }
-  return S_ERROR;
+  if (scan == S_SUCCESS)
+    {
+      scan = S_ERROR;
+    }
+
+  return scan;
 }
 
 /*
@@ -26178,36 +26187,6 @@ heap_get_mvcc_data (THREAD_ENTRY * thread_p, const OID * oid,
 }
 
 /*
- * heap_perform_update () - Perform heap update
- *
- *   return: OID *(oid on success or NULL on failure)
- *   hfid(in): Heap file identifier
- *   class_oid(in):
- *   oid(in): Object identifier in non mvcc / old object identifier in mvcc
- *   recdes(in): Record descriptor
- *   new_oid(in/out): New record identifier - set only for mvcc rows
- *   old(in/out): Flag. Set to true, if content of object has been stored
- *                it is set to false (i.e., only the address was stored)
- *   scan_cache(in/out): Scan cache
- */
-const OID *
-heap_perform_update (THREAD_ENTRY * thread_p, const HFID * hfid,
-		     const OID * class_oid, const OID * oid, RECDES * recdes,
-		     OID * new_oid, bool * old, HEAP_SCANCACHE * scan_cache)
-{
-  if (mvcc_Enabled == false)
-    {
-      return heap_update (thread_p, hfid, class_oid, oid, recdes, NULL, old,
-			  scan_cache);
-    }
-  else
-    {
-      return heap_update (thread_p, hfid, class_oid, oid, recdes,
-			  new_oid, old, scan_cache);
-    }
-}
-
-/*
  * heap_mvcc_update_to_row_version () - Update to row version
  *   return: OID *(oid on success or NULL on failure)
  *   hfid(in): Heap file identifier
@@ -28334,6 +28313,11 @@ heap_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p,
       return true;
     }
   if (oid_is_serial (class_oid))
+    {
+      return true;
+    }
+
+  if (oid_is_partition (class_oid))
     {
       return true;
     }

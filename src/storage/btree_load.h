@@ -66,6 +66,11 @@
 #define LEAFENTSZ(n)  ( LEAF_RECORD_SIZE + BTREE_MAX_ALIGN \
                             + OR_OID_SIZE + BTREE_MAX_ALIGN + n )
 					     /* Maximum Non_Leaf Entry Size  */
+#define MVCC_LEAFENTSZ(n)  ( LEAF_RECORD_SIZE + BTREE_MAX_ALIGN \
+			      + OR_MVCCID_SIZE \
+			      + OR_OID_SIZE + BTREE_MAX_ALIGN + n )
+					/* MVCC Maximum Non_Leaf Entry Size  */
+
 #define NLEAFENTSZ(n) ( NON_LEAF_RECORD_SIZE + BTREE_MAX_ALIGN + n )
 
 #define OIDCMP( n1, n2 )  \
@@ -93,6 +98,7 @@
  */
 #define BTREE_MAX_KEYLEN_INPAGE ((int)(DB_PAGESIZE / 8))
 #define BTREE_MAX_SEPARATOR_KEYLEN_INPAGE ((int)(DB_PAGESIZE / 8))
+/* in MVCC BTREE_MAX_OIDLEN_INPAGE include MVCC fields too */
 #define BTREE_MAX_OIDLEN_INPAGE ((int)(DB_PAGESIZE / 8))
 
 /* B+tree node types */
@@ -141,6 +147,21 @@ extern int btree_get_next_overflow_vpid (PAGE_PTR page_ptr, VPID * vpid);
 		ER_NOTIFICATION_SEVERITY, ER_BTREE_DELETED_OVERFLOW_PAGE, \
 		__FILE__, __LINE__)
 
+/* set fixed size for MVCC record header */
+#define BTREE_MVCC_SET_HEADER_FIXED_SIZE(p_mvcc_rec_header)  \
+  do {	\
+  assert (p_mvcc_rec_header != NULL); \
+  if (!((p_mvcc_rec_header)->mvcc_flag & OR_MVCC_FLAG_VALID_INSID)) \
+  { \
+  (p_mvcc_rec_header)->mvcc_flag |= OR_MVCC_FLAG_VALID_INSID;	\
+  (p_mvcc_rec_header)->mvcc_ins_id = MVCCID_NULL; \
+  } \
+  if (!((p_mvcc_rec_header)->mvcc_flag & OR_MVCC_FLAG_VALID_DELID)) \
+  { \
+  (p_mvcc_rec_header)->mvcc_flag |= OR_MVCC_FLAG_VALID_DELID;	\
+  (p_mvcc_rec_header)->mvcc_del_id = MVCCID_NULL; \
+  } \
+}while (0)
 /*
  * Type definitions related to b+tree structure and operations
  */
@@ -258,7 +279,9 @@ extern int btree_write_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			       void *node_rec, DB_VALUE * key,
 			       int node_type, int key_type,
 			       int key_len, bool during_loading,
-			       OID * class_oid, OID * oid, RECDES * rec);
+			       OID * class_oid, OID * oid,
+			       MVCC_REC_HEADER * p_mvcc_rec_header,
+			       RECDES * rec);
 extern void btree_read_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			       RECDES * Rec, DB_VALUE * key, void *rec_header,
 			       int node_type, bool * clear_key, int *offset,
@@ -276,12 +299,16 @@ extern int btree_compare_key (DB_VALUE * key1, DB_VALUE * key2,
 			      TP_DOMAIN * key_domain,
 			      int do_coercion, int total_order,
 			      int *start_colp);
-extern int btree_leaf_new_overflow_oids_vpid (RECDES * rec, VPID * ovfl_vpid);
+extern int btree_leaf_new_overflow_oids_vpid (RECDES * rec, VPID * ovfl_vpid,
+					      bool is_unique,
+					      OID * class_oid);
 extern int btree_get_asc_desc (THREAD_ENTRY * thread_p, BTID * btid,
 			       int col_idx, int *asc_desc);
 
 extern void btree_dump_key (FILE * fp, DB_VALUE * key);
 
-extern int btree_insert_oid_with_order (RECDES * rec, OID * oid);
+extern int btree_insert_oid_with_order (RECDES * rec, OID * oid,
+					OID * class_oid, bool is_unique,
+					MVCC_REC_HEADER * p_mvcc_rec_header);
 
 #endif /* _BTREE_LOAD_H_ */

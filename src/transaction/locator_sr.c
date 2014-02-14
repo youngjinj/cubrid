@@ -339,7 +339,8 @@ static int locator_area_op_to_pruning_type (LC_COPYAREA_OPERATION op);
 static int locator_check_primary_key_upddel (THREAD_ENTRY * thread_p,
 					     OID * class_oid, OID * inst_oid,
 					     RECDES * recdes,
-					     bool for_update);
+					     LOCATOR_INDEX_ACTION_FLAG
+					     idx_action_flag);
 
 
 /*
@@ -4083,12 +4084,14 @@ error:
  *   class_oid(in):
  *   inst_oid(in):
  *   recdes(in):
- *   for_update(in):
+ *   idx_action_flag(in): is moving record between partitioned table? 
+ *			 If FOR_MOVE, this delete(&insert) is caused by 
+ *			 'UPDATE ... SET ...', NOT 'DELETE FROM ...'
  */
 static int
 locator_check_primary_key_upddel (THREAD_ENTRY * thread_p, OID * class_oid,
 				  OID * inst_oid, RECDES * recdes,
-				  bool for_update)
+				  LOCATOR_INDEX_ACTION_FLAG idx_action_flag)
 {
   int num_found, i;
   HEAP_CACHE_ATTRINFO index_attrinfo;
@@ -4150,23 +4153,27 @@ locator_check_primary_key_upddel (THREAD_ENTRY * thread_p, OID * class_oid,
 
       if (!is_null)
 	{
-	  if (for_update)
+	  switch (idx_action_flag)
 	    {
+	    case FOR_MOVE:
 	      error_code = locator_check_primary_key_update (thread_p, index,
 							     key_dbvalue);
 	      if (error_code != NO_ERROR)
 		{
 		  goto error;
 		}
-	    }
-	  else
-	    {
+	      break;
+	    case FOR_INSERT_OR_DELETE:
 	      error_code = locator_check_primary_key_delete (thread_p, index,
 							     key_dbvalue);
 	      if (error_code != NO_ERROR)
 		{
 		  goto error;
 		}
+	      break;
+	    default:
+	      error_code = ER_FAILED;
+	      goto error;
 	    }
 	}
     }
@@ -4856,7 +4863,8 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
 							 REPL_INFO_TYPE_STMT_NORMAL,
 							 DB_NOT_PARTITIONED_CLASS,
 							 NULL, NULL, NULL);
-	      if (error_code != NO_ERROR)
+	      if (error_code != NO_ERROR
+		  && error_code != ER_MVCC_ROW_ALREADY_DELETED)
 		{
 		  goto error1;
 		}
@@ -5240,7 +5248,6 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
   OID null_oid = {
     NULL_PAGEID, NULL_SLOTID, NULL_VOLID
   };
-  OID new_oid;
 
   assert (class_oid != NULL && !OID_ISNULL (class_oid));
 
@@ -5445,9 +5452,9 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 
 	      recdes = &new_recdes;
 	      /* Cache object has been updated, we need update the value again */
-	      if (heap_perform_update
-		  (thread_p, &real_hfid, &real_class_oid, oid, recdes,
-		   &new_oid, &isold_object, local_scan_cache) == NULL)
+	      if (heap_update
+		  (thread_p, &real_hfid, &real_class_oid, oid, recdes, NULL,
+		   &isold_object, local_scan_cache, true) == NULL)
 		{
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
@@ -5531,7 +5538,7 @@ error2:
  * has_index (in)	: true if the class has indexes
  * force_count (in/out)	:
  * context(in)	        : pruning context
- * mvcc_reev_data(in)	: mvcc reevaluation data
+ * mvcc_reev_data(in)	: MVCC reevaluation data
  *
  * Note: this function calls locator_delete_force on the current object oid
  * and locator_insert_force for the RECDES it receives. The record has already
@@ -5648,7 +5655,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
  *   repl_inf(in): replication info
  *   pruning_type(in): pruning type
  *   pcontext(in): pruning context
- *   mvcc_reev_data(in): mvcc reevaluation data
+ *   mvcc_reev_data(in): MVCC reevaluation data
  *
  * Note: The given object is updated on this heap and all appropriate
  *              index entries are updated.
@@ -5764,9 +5771,9 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    }
 	}
 
-      if (heap_perform_update
+      if (heap_update
 	  (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
-	   scan_cache) == NULL)
+	   scan_cache, false) == NULL)
 	{
 	  /*
 	   * Problems updating the object...Maybe, the transaction should be
@@ -5876,11 +5883,25 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	       * because new recdes fields may refer fields of old recdes */
 	      mvcc_reev_data->upddel_reev_data->new_recdes = recdes;
 	    }
-	  scan =
-	    heap_mvcc_get_version_for_delete (thread_p, hfid, &last_oid,
-					      class_oid, &copy_recdes,
-					      local_scan_cache, false,
-					      mvcc_reev_data);
+
+	  if (pruning_type == DB_NOT_PARTITIONED_CLASS)
+	    {
+	      scan =
+		heap_mvcc_get_version_for_delete (thread_p, hfid, &last_oid,
+						  class_oid, &copy_recdes,
+						  local_scan_cache, false,
+						  mvcc_reev_data);
+	    }
+	  else
+	    {
+	      /* do not affect class_oid since is used at partition pruning */
+	      scan =
+		heap_mvcc_get_version_for_delete (thread_p, hfid, &last_oid,
+						  NULL, &copy_recdes,
+						  local_scan_cache, false,
+						  mvcc_reev_data);
+	    }
+
 	  if ((scan == S_SNAPSHOT_NOT_SATISFIED)
 	      || (scan == S_SUCCESS && mvcc_reev_data != NULL
 		  && mvcc_reev_data->filter_result == V_FALSE))
@@ -5927,7 +5948,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		  is_update_inplace = true;
 		}
 	    }
-	  oid = &last_oid;
+	  COPY_OID (oid, &last_oid);
 	}
       else
 	{
@@ -6050,10 +6071,10 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 
       if (!is_update_inplace)
 	{
-	  /* in mvcc update heap and then indexes */
-	  if (heap_perform_update
+	  /* in MVCC update heap and then indexes */
+	  if (heap_update
 	      (thread_p, hfid, class_oid, oid, recdes, new_oid_p,
-	       &isold_object, local_scan_cache) == NULL)
+	       &isold_object, local_scan_cache, false) == NULL)
 	    {
 	      /*
 	       * Problems updating the object...Maybe, the transaction should be
@@ -6161,13 +6182,13 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    }
 	}
 
-      /* in non-mvcc or when we update in place then update indexes and then
+      /* in non-MVCC or when we update in place then update indexes and then
        * heap */
       if (is_update_inplace)
 	{
-	  if (heap_perform_update
+	  if (heap_update
 	      (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
-	       local_scan_cache) == NULL)
+	       local_scan_cache, true) == NULL)
 	    {
 	      /*
 	       * Problems updating the object...Maybe, the transaction should be
@@ -6245,7 +6266,7 @@ error:
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                   between heap changes.
  *   force_count(in):
- *   mvcc_reev_data(in): mvcc data
+ *   mvcc_reev_data(in): MVCC data
  *   idx_action_flag(in): is moving record between partitioned table? 
  *			  If FOR_MOVE, this delete&insert is caused by 
  *			  'UPDATE ... SET ...', NOT 'DELETE FROM ...'
@@ -6288,7 +6309,7 @@ locator_delete_force (THREAD_ENTRY * thread_p,
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                   between heap changes.
  *   force_count(in):
- *   mvcc_reev_data(in): mvcc data
+ *   mvcc_reev_data(in): MVCC data
  *   idx_action_flag(in): is moving record between partitioned table? 
  *			  If FOR_MOVE, this delete&insert is caused by 
  *			  'UPDATE ... SET ...', NOT 'DELETE FROM ...'
@@ -6334,7 +6355,7 @@ locator_delete_force_for_moving (THREAD_ENTRY * thread_p,
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                   between heap changes.
  *   force_count(in):
- *   mvcc_reev_data(in): mvcc data
+ *   mvcc_reev_data(in): MVCC data
  *   idx_action_flag(in): is moving record between partitioned table? 
  *			  If FOR_MOVE, this delete&insert is caused by 
  *			  'UPDATE ... SET ...', NOT 'DELETE FROM ...'
@@ -6845,7 +6866,8 @@ locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 				  MULTI_ROW_UPDATE, &scan_cache, &force_count,
 				  false, repl_info, DB_NOT_PARTITIONED_CLASS,
 				  NULL, NULL);
-	  if (error_code != NO_ERROR)
+	  if (error_code != NO_ERROR
+	      && error_code != ER_MVCC_ROW_ALREADY_DELETED)
 	    {
 	      /*
 	       * Problems updating the object...Maybe, the transaction should be
@@ -6923,10 +6945,9 @@ locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 	    {
 	      continue;		/* no modification : non-unique index */
 	    }
-	  if (mvcc_Enabled == false
-	      && ((tdes->tran_unique_stats[s].num_nulls
-		   + tdes->tran_unique_stats[s].num_keys)
-		  != tdes->tran_unique_stats[s].num_oids))
+	  if ((tdes->tran_unique_stats[s].num_nulls
+	       + tdes->tran_unique_stats[s].num_keys)
+	      != tdes->tran_unique_stats[s].num_oids)
 	    {
 	      BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, NULL, NULL,
 						&mobjs->objs.class_oid,
@@ -7359,7 +7380,7 @@ locator_allocate_copy_area_by_attr_info (THREAD_ENTRY * thread_p,
  *   pruning_type(in):
  *   pcontext(in): partition pruning context
  *   func_preds(in): cached function index expressions
- *   mvcc_reev_data(in): mvcc reevaluation data
+ *   mvcc_reev_data(in): MVCC reevaluation data
  *
  * Note: Force an object represented by an attribute information structure.
  *       For insert the oid is set as a side effect.
@@ -7721,6 +7742,9 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
   DB_LOGICAL ev_res;
   BTREE_LOCKED_KEYS locked_keys;
   bool use_mvcc = false;
+  MVCCID mvccid;
+  MVCC_REC_HEADER mvcc_rec_header[2], *p_mvcc_rec_header = NULL;
+
 #if defined(ENABLE_SYSTEMTAP)
   char *classname = NULL;
 #endif /* ENABLE_SYSTEMTAP */
@@ -7732,19 +7756,11 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
 
-  if (mvcc_Enabled && !heap_is_mvcc_disabled_for_class (thread_p, class_oid))
+  if (mvcc_Enabled && !btree_is_mvcc_disabled_for_class (thread_p, class_oid))
     {
-      if (is_insert)
-	{
-	  /* Use MVCC if it's not disabled for current class */
-	  use_mvcc = true;
-	}
-      else
-	{
-	  /* mvcc case, delete does not remove the old record */
-	  return locator_check_primary_key_upddel (thread_p, class_oid,
-						   inst_oid, recdes, false);
-	}
+      /* Use MVCC if it's not disabled for current class */
+      use_mvcc = true;
+      mvccid = logtb_get_current_mvccid (thread_p);
     }
   /*
    *  Populate the index_attrinfo structure.
@@ -7837,6 +7853,14 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 		}
 	    }
 
+	  if (use_mvcc)
+	    {
+	      btree_set_mvcc_header_ids_for_update (thread_p, !is_insert,
+						    is_insert, &mvccid,
+						    mvcc_rec_header);
+	      p_mvcc_rec_header = mvcc_rec_header;
+	    }
+
 	  if (is_insert)
 	    {
 #if defined(ENABLE_SYSTEMTAP)
@@ -7855,7 +7879,7 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 	      key_ins_del =
 		btree_perform_insert (thread_p, &btid, key_dbvalue, class_oid,
 				      inst_oid, op_type, unique_stat_info,
-				      &unique, use_mvcc);
+				      &unique, p_mvcc_rec_header);
 
 #if defined(ENABLE_SYSTEMTAP)
 	      if (key_ins_del == NULL)
@@ -7868,11 +7892,22 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 		}
 #endif /* ENABLE_SYSTEMTAP */
 	    }
+	  else if (use_mvcc == true)
+	    {
+	      /* in MVCC logical deletion means MVCC DEL_ID insertion */
+	      key_ins_del =
+		btree_perform_insert (thread_p, &btid, key_dbvalue, class_oid,
+				      inst_oid, op_type, unique_stat_info,
+				      &unique, p_mvcc_rec_header);
+	    }
 	  else
 	    {
-	      locked_keys =
-		btree_get_locked_keys (&btid, search_btid,
-				       search_btid_duplicate_key_locked);
+	      if (mvcc_Enabled == false)
+		{
+		  locked_keys =
+		    btree_get_locked_keys (&btid, search_btid,
+					   search_btid_duplicate_key_locked);
+		}
 
 #if defined(ENABLE_SYSTEMTAP)
 	      CUBRID_IDX_DELETE_START (classname, index->btname);
@@ -7880,7 +7915,8 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 
 	      key_ins_del = btree_delete (thread_p, &btid, key_dbvalue,
 					  class_oid, inst_oid, locked_keys,
-					  &unique, op_type, unique_stat_info);
+					  &unique, op_type, unique_stat_info,
+					  false);
 #if defined(ENABLE_SYSTEMTAP)
 	      if (key_ins_del == NULL)
 		{
@@ -8373,12 +8409,22 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   bool same_key = true;
   int c = DB_UNK;
   BTREE_LOCKED_KEYS locked_keys;
+  bool use_mvcc = false;
+  MVCC_REC_HEADER mvcc_rec_header[2], *p_mvcc_rec_header = NULL;
+  MVCCID mvccid;
 #if defined(ENABLE_SYSTEMTAP)
   char *classname = NULL;
 #endif /* ENABLE_SYSTEMTAP */
 
   assert_release (class_oid != NULL);
   assert_release (!OID_ISNULL (class_oid));
+
+  if (mvcc_Enabled && !btree_is_mvcc_disabled_for_class (thread_p, class_oid)
+      && !OID_EQ (old_oid, new_oid))
+    {
+      use_mvcc = true;
+      mvccid = logtb_get_current_mvccid (thread_p);
+    }
 
   DB_MAKE_NULL (&new_dbvalue);
   DB_MAKE_NULL (&old_dbvalue);
@@ -8478,9 +8524,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
        * after UPDATE that must be reflected in B-tree because vacuum can delete
        * old key. So, in this case we must update index even if no attribute
        * that is part of index was updated */
-      if (att_id && (!mvcc_Enabled
-		     || heap_is_mvcc_disabled_for_class (thread_p, class_oid)
-		     || OID_EQ (old_oid, new_oid)))
+      if ((att_id != NULL) && (use_mvcc == false))
 	{
 	  found_btid = false;	/* geuss as not found */
 
@@ -8620,19 +8664,10 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 	}
       assert (key_domain != NULL);
 
-      if (mvcc_Enabled
-	  && !heap_is_mvcc_disabled_for_class (thread_p, class_oid)
-	  && !OID_EQ (old_oid, new_oid))
+      if (use_mvcc)
 	{
-	  /* in MVCC we don't delete keys */
-	  if (do_delete_only)
-	    {
-	      do_delete_only = false;
-	    }
-	  else
-	    {
-	      do_insert_only = true;
-	    }
+	  /* in MVCC need to update even if we have the same key */
+	  same_key = false;
 	}
       else
 	{
@@ -8671,18 +8706,27 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 	  if (i < 1 || !locator_was_index_already_applied (new_attrinfo,
 							   &index->btid, i))
 	    {
+	      if (use_mvcc)
+		{
+		  btree_set_mvcc_header_ids_for_update (thread_p,
+							do_delete_only,
+							do_insert_only,
+							&mvccid,
+							mvcc_rec_header);
+		  p_mvcc_rec_header = mvcc_rec_header;
+		}
+
 	      if (do_delete_only)
 		{
-		  locked_keys =
-		    btree_get_locked_keys (&old_btid, search_btid,
-					   search_btid_duplicate_key_locked);
-		  if (btree_delete (thread_p, &old_btid, old_key, class_oid,
-				    old_oid, locked_keys, &unique, op_type,
-				    unique_stat_info) == NULL)
+		  if (use_mvcc)
 		    {
-		      error_code = er_errid ();
-		      if (!(unique && error_code == ER_BTREE_UNKNOWN_KEY))
+		      /* in MVCC logical deletion means MVCC DEL_ID insertion */
+		      if (btree_perform_insert (thread_p, &old_btid, old_key,
+						class_oid, new_oid, op_type,
+						unique_stat_info, &unique,
+						p_mvcc_rec_header) == NULL)
 			{
+			  error_code = er_errid ();
 #if defined(ENABLE_SYSTEMTAP)
 			  CUBRID_IDX_UPDATE_END (classname, index->btname, 1);
 #endif /* ENABLE_SYSTEMTAP */
@@ -8690,10 +8734,31 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 			  goto error;
 			}
 		    }
+		  else
+		    {
+		      if (mvcc_Enabled == false)
+			{
+			  locked_keys =
+			    btree_get_locked_keys (&old_btid, search_btid,
+						   search_btid_duplicate_key_locked);
+			}
+
+		      if (btree_delete
+			  (thread_p, &old_btid, old_key, class_oid, old_oid,
+			   locked_keys, &unique, op_type,
+			   unique_stat_info, false) == NULL)
+			{
+			  error_code = er_errid ();
+			  if (!(unique && error_code == ER_BTREE_UNKNOWN_KEY))
+			    {
+			      goto error;
+			    }
+			}
+		    }
 		}
 	      else
 		{
-		  /* in mvcc - update index key means insert index key */
+		  /* in MVCC - update index key means insert index key */
 		  if ((do_insert_only == true))
 		    {
 		      if (mvcc_Enabled && index->type == BTREE_FOREIGN_KEY)
@@ -8709,7 +8774,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		      if (btree_perform_insert (thread_p, &old_btid, new_key,
 						class_oid, new_oid, op_type,
 						unique_stat_info, &unique,
-						false) == NULL)
+						p_mvcc_rec_header) == NULL)
 			{
 #if defined(ENABLE_SYSTEMTAP)
 			  CUBRID_IDX_UPDATE_END (classname, index->btname, 1);
@@ -8721,13 +8786,18 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		    }
 		  else
 		    {
-		      locked_keys =
-			btree_get_locked_keys (&old_btid, search_btid,
-					       search_btid_duplicate_key_locked);
+		      if (mvcc_Enabled == false)
+			{
+			  locked_keys =
+			    btree_get_locked_keys (&old_btid, search_btid,
+						   search_btid_duplicate_key_locked);
+			}
+
 		      error_code =
 			btree_update (thread_p, &old_btid, old_key, new_key,
-				      locked_keys, class_oid, new_oid,
-				      op_type, unique_stat_info, &unique);
+				      locked_keys, class_oid, old_oid,
+				      new_oid, op_type, unique_stat_info,
+				      &unique, p_mvcc_rec_header);
 
 		      if (error_code != NO_ERROR)
 			{
@@ -9072,7 +9142,7 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
 
       key_del = btree_delete (thread_p, btid, dbvalue_ptr,
 			      class_oid, &inst_oid, BTREE_NO_KEY_LOCKED,
-			      &dummy, MULTI_ROW_DELETE, &unique_info);
+			      &dummy, MULTI_ROW_DELETE, &unique_info, false);
     }
 
   if (unique_info.num_nulls != 0 || unique_info.num_keys != 0
@@ -9271,7 +9341,7 @@ locator_repair_btree_by_insert (THREAD_ENTRY * thread_p, OID * class_oid,
     {
       if (btree_perform_insert (thread_p, btid, key,
 				class_oid, inst_oid, SINGLE_ROW_INSERT, NULL,
-				NULL, mvcc_Enabled) != NULL)
+				NULL, NULL /* TO DO */ ) != NULL)
 	{
 	  isvalid = DISK_VALID;
 	  xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_COMMIT, &lsa);
@@ -9318,7 +9388,7 @@ locator_repair_btree_by_delete (THREAD_ENTRY * thread_p, OID * class_oid,
 	{
 	  if (btree_delete (thread_p, btid, &key,
 			    class_oid, inst_oid, locked_keys, &unique,
-			    SINGLE_ROW_DELETE, NULL) != NULL)
+			    SINGLE_ROW_DELETE, NULL, false) != NULL)
 	    {
 	      isvalid = DISK_VALID;
 	      xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_COMMIT,
