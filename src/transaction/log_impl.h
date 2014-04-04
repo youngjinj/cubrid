@@ -264,6 +264,13 @@
   ((tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS ||         \
    (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS)
 
+#define LOG_SET_DATA_ADDR(data_addr, page, vol_file_id, off) \
+  do { \
+      (data_addr)->pgptr  = page;	  \
+      (data_addr)->vfid   = vol_file_id;  \
+      (data_addr)->offset = off;	  \
+  } while (0)
+
 #define MAXLOGNAME          (30 - 12)
 
 #define LOGPB_HEADER_PAGE_ID             (-9)	/* The first log page in the infinite
@@ -715,7 +722,37 @@ enum tran_abort_reason
   TRAN_ABORT_DUE_ROLLBACK_ON_ESCALATION = 2
 };
 
-/* LOG_INS_DEL_ENTRY
+typedef struct log_unique_stats LOG_UNIQUE_STATS;
+struct log_unique_stats
+{
+  int num_nulls;		/* number of nulls */
+  int num_keys;			/* number of keys */
+  int num_oids;			/* number of oids */
+};
+
+typedef struct log_mvcc_btid_unique_stats LOG_MVCC_BTID_UNIQUE_STATS;
+struct log_mvcc_btid_unique_stats
+{
+  BTID btid;			/* id of B-tree */
+  bool deleted;			/* true if the B-tree was deleted */
+
+  LOG_UNIQUE_STATS command_stats;	/* statistics accumulated only during curremt
+					 * query */
+  LOG_UNIQUE_STATS tran_stats;	/* statistics accumulated durin entire
+				 * transaction */
+  LOG_UNIQUE_STATS global_stats;	/* statistics loaded from index */
+};
+
+typedef enum count_optim_state COUNT_OPTIM_STATE;
+enum count_optim_state
+{
+  COS_NOT_LOADED = 0,		/* the global statistics was not loaded yet */
+  COS_TO_LOAD = 1,		/* the global statistics must be loaded when snapshot is
+				 * taken */
+  COS_LOADED = 2		/* the global statistics were loaded */
+};
+
+/* LOG_MVCC_CLASS_UPDATE_STATS
  * Structure used to collect statistics on inserted and deleted records
  * during a transaction. For now, these statistics are used in the auto
  * vacuuming algorithm. Each command collects inserted/deleted record counts
@@ -723,45 +760,29 @@ enum tran_abort_reason
  * the statistics are then passed to current transaction. At the end of
  * the transaction, these statistics are finally passed to vacuum_Stats_table.
  */
-typedef struct log_ins_del_entry LOG_INS_DEL_ENTRY;
-struct log_ins_del_entry
+typedef struct log_mvcc_class_update_stats LOG_MVCC_CLASS_UPDATE_STATS;
+struct log_mvcc_class_update_stats
 {
   OID class_oid;		/* Class object identifier. */
-  int n_deleted;		/* The number of deleted records during
-				 * transaction. Counts as dead on commit and
-				 * is ignored on rollback.
-				 */
-  int n_inserted;		/* The number of inserted records during
-				 * transaction. Counts as dead on rollback
-				 * and is added to the total count of records on
-				 * both commit/rollback.
-				 */
-  int n_last_command_deleted;	/* The number of deleted records during last
-				 * command
-				 */
-  int n_last_command_inserted;	/* The number of inserted records during last
-				 * command
-				 */
-  bool is_system_class;		/* TODO: this may be only temporary. System
-				 * classes do not use MVCC, therefore they do
-				 * not benefit for vacuuming. In the current
-				 * context, these statistics make sense only for
-				 * non-system classes.
-				 */
+  COUNT_OPTIM_STATE count_state;
+  int n_max_btids;
+  int n_btids;
+  LOG_MVCC_BTID_UNIQUE_STATS *unique_stats;
 
-  LOG_INS_DEL_ENTRY *next;	/* Pointer to the next entry */
+  LOG_MVCC_CLASS_UPDATE_STATS *next;	/* Pointer to the next entry */
 };
 
-/* LOG_INSERTED_DELETED
+/* LOG_MVCC_UPDATE_STATS
  * Structure used to collect inserted/deleted record counts on multiple
  * classes during a transaction. Also used to reuse memory allocated by
  * previous transactions.
  */
-typedef struct log_inserted_deleted LOG_INSERTED_DELETED;
-struct log_inserted_deleted
+typedef struct log_mvcc_update_stats LOG_MVCC_UPDATE_STATS;
+struct log_mvcc_update_stats
 {
-  LOG_INS_DEL_ENTRY *crt_tran_entries;
-  LOG_INS_DEL_ENTRY *free_entries;
+  LOG_MVCC_CLASS_UPDATE_STATS *crt_tran_entries;
+  LOG_MVCC_CLASS_UPDATE_STATS *free_entries;
+  int topop_id;
 };
 
 
@@ -885,7 +906,7 @@ struct log_tdes
   int num_exec_queries;
   DB_VALUE_ARRAY bind_history[MAX_NUM_EXEC_QUERY_HISTORY];
 
-  LOG_INSERTED_DELETED log_ins_del;	/* Collects data about inserted/
+  LOG_MVCC_UPDATE_STATS log_upd_stats;	/* Collects data about inserted/
 					 * deleted records during last
 					 * command/transaction
 					 */
@@ -2219,10 +2240,38 @@ extern MVCC_SNAPSHOT *logtb_get_mvcc_snapshot (THREAD_ENTRY * thread_p);
 extern void logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 				 bool committed);
 
-extern int logtb_update_command_inserted_deleted (THREAD_ENTRY * thread_p,
-						  const OID * class_oid,
-						  int n_inserted,
-						  int n_deleted);
-extern int logtb_update_transaction_inserted_deleted (THREAD_ENTRY * thread_p,
-						      bool cancel_command);
+extern int logtb_mvcc_update_tran_class_stats (THREAD_ENTRY * thread_p,
+					       bool cancel_command);
+extern LOG_MVCC_CLASS_UPDATE_STATS *logtb_mvcc_find_class_stats (THREAD_ENTRY
+								 * thread_p,
+								 const OID *
+								 class_oid,
+								 bool create);
+extern int logtb_mvcc_update_class_unique_stats (THREAD_ENTRY * thread_p,
+						 OID * class_oid, BTID * btid,
+						 int n_keys, int n_oids,
+						 int n_nulls);
+extern int logtb_mvcc_update_btid_unique_stats (THREAD_ENTRY * thread_p,
+						LOG_MVCC_CLASS_UPDATE_STATS *
+						class_stats, BTID * btid,
+						int n_keys, int n_oids,
+						int n_nulls);
+extern LOG_MVCC_BTID_UNIQUE_STATS *logtb_mvcc_find_btid_stats (THREAD_ENTRY *
+							       thread_p,
+							       LOG_MVCC_CLASS_UPDATE_STATS
+							       * class_stats,
+							       const BTID *
+							       btid,
+							       bool create);
+extern LOG_MVCC_BTID_UNIQUE_STATS
+  *logtb_mvcc_find_class_oid_btid_stats (THREAD_ENTRY * thread_p,
+					 OID * class_oid, BTID * btid,
+					 bool create);
+extern LOG_MVCC_BTID_UNIQUE_STATS
+  *logtb_mvcc_search_btid_stats_all_classes (THREAD_ENTRY * thread_p,
+					     const BTID * btid, bool create);
+extern int logtb_mvcc_prepare_count_optim_classes (THREAD_ENTRY * thread_p,
+						   const char **classes,
+						   LC_PREFETCH_FLAGS * flags,
+						   int n_classes);
 #endif /* _LOG_IMPL_H_ */

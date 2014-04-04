@@ -941,6 +941,8 @@ extern "C"
 					  PT_NODE * from_list);
   extern int pt_is_server_insert_with_generated_keys (PARSER_CONTEXT * parser,
 						      PT_NODE * statement);
+  extern int pt_prepare_count_optim_classes (PARSER_CONTEXT * parser,
+					     PT_NODE * stmt);
 #ifdef __cplusplus
 }
 #endif

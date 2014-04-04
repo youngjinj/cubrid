@@ -485,30 +485,36 @@
    OR_VAR_TABLE_ELEMENT_OFFSET_INTERNAL(table, (index), offset_size))
 
 /* OBJECT HEADER LAYOUT */
-#define OR_MVCC_HEADER_SIZE	      (28)	/* 2 BIGINT + OID + INT */
+/* header fixed-size in non-MVCC only, in MVCC the header has variable size */
+
+/* representation id, MVCC insert id and CHN */
+#define OR_MVCC_MAX_HEADER_SIZE  28
+
+/* representation id and CHN */
+#define OR_MVCC_MIN_HEADER_SIZE  8
+
+/* representation id, MVCC insert id and CHN */
+#define OR_MVCC_INSERT_HEADER_SIZE  16
+
 #define OR_NON_MVCC_HEADER_SIZE	      (8)	/* two integers */
+#define OR_HEADER_SIZE(ptr) (or_header_size ((char *)ptr))
 
-#define OR_HEADER_SIZE (or_header_size ())
+/* representation offset in MVCC and non-MVCC. In MVCC the representation
+ * contains flags that allow to compute header size and CHN offset.
+ */
+#define OR_REP_OFFSET    0
+#define OR_MVCC_REP_SIZE 4
 
-/* NON-MVCC */
-#define OR_REP_OFFSET   (or_rep_offset ())
-#define OR_CHN_OFFSET   (or_chn_offset ())
+/* CHN fixed-offset in NON-MVCC only, in MVCC the CHN offset is variable */
+#define OR_NON_MVCC_CHN_OFFSET   4
 
-/* NON-MVCC */
-#define OR_NON_MVCC_REP_OFFSET	  0
-#define OR_NON_MVCC_CHN_OFFSET	  4
 
 /* MVCC */
 #define OR_MVCCID_SIZE			OR_BIGINT_SIZE
-#define OR_MVCC_INSID_OFFSET		0
-#define OR_MVCC_DELID_OFFSET		8
-#define OR_MVCC_NEXT_VERSION_OFFSET	16
-#define OR_MVCC_REP_AND_FLAG_OFFSET	24
 
 /* In case MVCC is enabled and chn is needed it will be saved instead of
  * delete MVCC id.
  */
-#define OR_MVCC_CHN_OFFSET OR_MVCC_DELID_OFFSET
 
 /* high bit of the repid word is reserved for the bound bit flag,
    need to keep representations from going negative ! */
@@ -524,24 +530,21 @@
 
 /* Use for MVCC flags the remainder of 5 bits in the first byte. */
 /* Flag will be shifter by 24 bits to the right */
-#define OR_MVCC_FLAG_MASK	    0x1F
+#define OR_MVCC_FLAG_MASK	    0x0f
 #define OR_MVCC_FLAG_SHIFT_BITS	    24
 
-/* MVCC Flags */
-#define OR_MVCC_FLAG_ENABLED	  0x01	/* MVCC is enabled. Entries in root
-					 * class do not have this flag set
-					 */
-#define OR_MVCC_FLAG_VALID_DELID  0x02	/* Use delete identifier
-					 * In some cases, delete id is
-					 * used as chn when this flag is
-					 * not set. The meaning of this flag
-					 * will be changed when MVCC dynamic
-					 * heap will be implemented.
-					 */
-/* The following flag is used for dynamic MVCC information */
-#define OR_MVCC_FLAG_VALID_INSID	  0x04	/* The record contains insert id */
+/* The following flags are used for dynamic MVCC information */
+/* The record contains MVCC insert id */
+#define OR_MVCC_FLAG_VALID_INSID	  0x01
 
-/* Reserved flags 0x08 and 0x10 */
+/* The record contains MVCC delete id. If not set, the record contains chn */
+#define OR_MVCC_FLAG_VALID_DELID	  0x02
+
+/* The record contains next version */
+#define OR_MVCC_FLAG_VALID_NEXT_VERSION	  0x04
+
+/* The record contains 8 bytes CHN */
+#define OR_MVCC_FLAG_VALID_LONG_CHN	  0x08
 
 #define OR_MVCC_REPID_MASK	  0x00FFFFFF
 
@@ -553,8 +556,8 @@
 #define OR_GET_BOUND_BIT_FLAG(ptr) \
   ((OR_GET_INT((ptr) + OR_REP_OFFSET)) & OR_BOUND_BIT_FLAG)
 
-#define OR_GET_CHN(ptr) \
-  (OR_GET_INT((ptr) + OR_CHN_OFFSET))
+#define OR_GET_NON_MVCC_CHN(ptr) \
+  (OR_GET_INT((ptr) + OR_NON_MVCC_CHN_OFFSET))
 
 #define OR_GET_OFFSET_SIZE(ptr) \
   ((((OR_GET_INT(((char*)ptr) + OR_REP_OFFSET)) & OR_OFFSET_SIZE_FLAG) == OR_OFFSET_SIZE_1BYTE) ? \
@@ -576,39 +579,59 @@
   ))
 
 /* MVCC OBJECT HEADER ACCESS MACROS */
-#define OR_GET_MVCC_INSERT_ID(ptr, valp)  \
-  OR_GET_BIGINT (((char *) (ptr)) + OR_MVCC_INSID_OFFSET, valp)
+#define OR_GET_MVCC_INSERT_ID(ptr, mvcc_flags, valp)  \
+  do { \
+    if (((mvcc_flags) & OR_MVCC_FLAG_VALID_INSID) == 0) \
+      {	\
+	*valp = MVCCID_FREE;  \
+      }	\
+    else  \
+      {	\
+	OR_GET_BIGINT(((char *) (ptr)) + OR_REP_OFFSET + OR_MVCC_REP_SIZE, valp); \
+      }	\
+  } while (0)
 
-#define OR_GET_MVCC_DELETE_ID(ptr, valp)  \
-  OR_GET_BIGINT (((char *) (ptr)) + OR_MVCC_DELID_OFFSET, valp)
-
-#define OR_GET_MVCC_NEXT_VERSION(ptr, oidp) \
-  OR_GET_OID (((char *) (ptr)) + OR_MVCC_NEXT_VERSION_OFFSET, oidp)
+#define OR_GET_MVCC_DELETE_ID(ptr, mvcc_flags, valp)  \
+  (((mvcc_flags & OR_MVCC_FLAG_VALID_DELID) == 0) ? MVCCID_NULL \
+  :  \
+  ((mvcc_flags & OR_MVCC_FLAG_VALID_INSID) ? \
+  (OR_GET_BIGINT(((char *) (ptr)) + OR_REP_OFFSET + OR_MVCC_REP_SIZE + OR_BIGINT_SIZE, valp)) \
+  :  \
+  ((OR_GET_BIGINT(((char *) (ptr)) + OR_REP_OFFSET + OR_MVCC_REP_SIZE, valp)))))
 
 #define OR_GET_MVCC_REPID(ptr)	\
-  ((OR_GET_INT(((char *) (ptr)) + OR_MVCC_REP_AND_FLAG_OFFSET)) \
+  ((OR_GET_INT(((char *) (ptr)) + OR_REP_OFFSET)) \
    & OR_MVCC_REPID_MASK)
 
-#define OR_GET_MVCC_CHN(ptr)  \
-  (OR_GET_INT (((char *) (ptr)) + OR_MVCC_CHN_OFFSET))
+/* in MVCC, chn follow by rep_id and/or ins_id depending by flags */
+#define OR_GET_MVCC_CHN(ptr, mvcc_flags)  \
+  ((mvcc_flags & OR_MVCC_FLAG_VALID_DELID) ? NULL_CHN \
+   :  \
+   ((mvcc_flags & OR_MVCC_FLAG_VALID_INSID) ? \
+    (OR_GET_INT(((char *) (ptr)) + OR_REP_OFFSET + OR_MVCC_REP_SIZE + OR_INT64_SIZE)) \
+    :  \
+    ((OR_GET_INT(((char *) (ptr)) + OR_REP_OFFSET + OR_MVCC_REP_SIZE))) \
+   )  \
+  )
 
 #define OR_GET_MVCC_FLAG(ptr) \
-  (((OR_GET_INT (((char *) (ptr)) + OR_MVCC_REP_AND_FLAG_OFFSET)) \
+  (((OR_GET_INT (((char *) (ptr)) + OR_REP_OFFSET)) \
     >> OR_MVCC_FLAG_SHIFT_BITS) & OR_MVCC_FLAG_MASK)
 
 #define OR_GET_MVCC_REPID_AND_FLAG(ptr) \
-  (OR_GET_INT (((char *) (ptr)) + OR_MVCC_REP_AND_FLAG_OFFSET))
+  (OR_GET_INT (((char *) (ptr)) + OR_REP_OFFSET))
 
 /* VARIABLE OFFSET TABLE ACCESSORS */
 
 #define OR_GET_OBJECT_VAR_TABLE(obj) \
-  ((short *)(((char *)(obj)) + OR_HEADER_SIZE))
+  ((short *)(((char *)(obj)) + OR_HEADER_SIZE((char *)obj)))
 
 #define OR_VAR_ELEMENT_PTR(obj, index) \
   (OR_VAR_TABLE_ELEMENT_PTR(OR_GET_OBJECT_VAR_TABLE(obj), index, OR_GET_OFFSET_SIZE(obj)))
 
 #define OR_VAR_OFFSET(obj, index) \
-  (OR_VAR_TABLE_ELEMENT_OFFSET_INTERNAL(OR_GET_OBJECT_VAR_TABLE(obj), index, OR_GET_OFFSET_SIZE(obj)))
+  (OR_HEADER_SIZE (obj)	\
+   + OR_VAR_TABLE_ELEMENT_OFFSET_INTERNAL(OR_GET_OBJECT_VAR_TABLE(obj), index, OR_GET_OFFSET_SIZE(obj)))
 
 #define OR_VAR_IS_NULL(obj, index) \
   ((OR_VAR_TABLE_ELEMENT_LENGTH_INTERNAL(OR_GET_OBJECT_VAR_TABLE(obj), index, OR_GET_OFFSET_SIZE(obj))) ? 0 : 1)
@@ -650,7 +673,7 @@
   ((*OR_GET_BOUND_BIT_BYTE(bitptr, element)) & OR_BOUND_BIT_MASK(element))
 
 #define OR_GET_BOUND_BITS(obj, nvars, fsize) \
-  (char *)(((char *)(obj)) + OR_HEADER_SIZE + OR_VAR_TABLE_SIZE_INTERNAL(nvars, OR_GET_OFFSET_SIZE(obj)) + fsize)
+  (char *)(((char *)(obj)) + OR_HEADER_SIZE ((char *)(obj)) + OR_VAR_TABLE_SIZE_INTERNAL(nvars, OR_GET_OFFSET_SIZE(obj)) + fsize)
 
 /* These are the most useful ones if we're only testing a single attribute */
 
@@ -1141,20 +1164,17 @@ struct or_buf
 extern int or_rep_id (RECDES * record);
 extern int or_set_rep_id (RECDES * record, int repid);
 extern int or_chn (RECDES * record);
+extern int or_mvcc_chn (OR_BUF * buf, int mvcc_flags, int *errror);
+extern int or_mvcc_get_repid_and_flags (OR_BUF * buf, int *error);
 extern int or_set_chn (RECDES * record, int chn);
 extern char *or_class_name (RECDES * record);
-extern void or_mvcc_get_header (RECDES * record,
-				MVCC_REC_HEADER * mvcc_header);
-extern void or_mvcc_set_header (RECDES * record,
-				MVCC_REC_HEADER mvcc_rec_header);
-extern MVCCID or_mvcc_get_insert_id (RECDES * record);
-extern void or_mvcc_set_insert_id (RECDES * record, MVCCID insert_id);
-extern MVCCID or_mvcc_get_delete_id (RECDES * record);
-extern void or_mvcc_set_delete_id (RECDES * record, MVCCID delete_id);
-extern OID or_mvcc_get_next_version (RECDES * record);
-extern void or_mvcc_set_next_version (RECDES * record, OID next_version);
-extern char or_mvcc_get_flag (RECDES * record);
-extern void or_mvcc_set_flag (RECDES * record, char flag);
+extern int or_mvcc_get_header (RECDES * record,
+			       MVCC_REC_HEADER * mvcc_rec_header);
+extern int or_mvcc_set_header (RECDES * record,
+			       MVCC_REC_HEADER * mvcc_rec_header);
+extern int or_mvcc_add_header (RECDES * record,
+			       MVCC_REC_HEADER * mvcc_rec_header,
+			       int bound_bit, int variable_offset_size);
 
 /* Pointer based decoding functions */
 extern int or_set_element_offset (char *setptr, int element);
@@ -1445,9 +1465,8 @@ extern char *or_unpack_mem_value (char *buf, DB_VALUE * value);
 extern int or_packed_enumeration_size (const DB_ENUMERATION * e);
 extern int or_put_enumeration (OR_BUF * buf, const DB_ENUMERATION * e);
 extern int or_get_enumeration (OR_BUF * buf, DB_ENUMERATION * e);
-extern int or_header_size ();
-extern int or_rep_offset ();
-extern int or_chn_offset ();
-extern void or_init_header_size_and_offsets (bool mvcc_enabled);
+extern int or_header_size_from_flags (char mvcc_flags);
+extern int or_header_size (char *ptr);
+extern int or_mvcc_header_size_from_flags (char mvcc_flags);
 
 #endif /* _OBJECT_REPRESENTATION_H_ */

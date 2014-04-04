@@ -2311,12 +2311,6 @@ end:
     }
 #endif
 
-  if (mvcc_Enabled)
-    {
-      /* If error_flag is true, the command is canceled */
-      logtb_update_transaction_inserted_deleted (thread_p, error_flag);
-    }
-
   return list_id_p;
 
 exit_on_error:
@@ -2698,12 +2692,6 @@ end:
   if (DO_NOT_COLLECT_EXEC_STATS (*flag_p) && saved_is_stats_on == true)
     {
       xmnt_server_start_stats (thread_p, false);
-    }
-
-  if (mvcc_Enabled)
-    {
-      /* If error_flag is true, the command is canceled */
-      logtb_update_transaction_inserted_deleted (thread_p, error_flag);
     }
 
 #if defined (SERVER_MODE)

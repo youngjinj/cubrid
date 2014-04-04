@@ -1726,7 +1726,7 @@ sort_validate (char **vector, long size,
 #endif
 
 /*
- * px_sort_assign() - 
+ * px_sort_assign() -
  *   return:
  *   thread_p(in):
  *   sort_param(in): sort parameters
@@ -2629,7 +2629,8 @@ sort_inphase_sort (THREAD_ENTRY * thread_p, SORT_PARAM * sort_param,
 	       */
 	      if (overflow_insert (thread_p, &sort_param->multipage_file,
 				   (VPID *) item_ptr, &long_recdes,
-				   &sort_param->multipage_npages) == NULL)
+				   &sort_param->multipage_npages,
+				   NULL) == NULL)
 		{
 		  error = er_errid ();
 		  assert (error != NO_ERROR);

@@ -45,6 +45,13 @@
 				  (oidp)->slotid = - tm_Tran_index)
 #endif /* !SERVER_MODE */
 
+#define SET_OID(dest_oid_ptr, vol_id, page_id, slot_id)  \
+  do {	\
+      (dest_oid_ptr)->volid = vol_id; \
+      (dest_oid_ptr)->pageid = page_id;	\
+      (dest_oid_ptr)->slot_id = slot_id;  \
+  }while(0)
+
 #define COPY_OID(dest_oid_ptr, src_oid_ptr) do { \
 					     *(dest_oid_ptr)=*(src_oid_ptr);\
 					    } while (0)

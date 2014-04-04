@@ -5852,6 +5852,16 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
        * Transaction updated data.
        */
 
+      /* clear mvccid before releasing the locks */
+      if (mvcc_Enabled == true)
+	{
+	  /* This operation must be done before do_postpone because it stores
+	   * unique statistics for all B-trees and if an error occurs those
+	   * operations and all operations of current transaction must be rolled
+	   * back. */
+	  logtb_complete_mvcc (thread_p, tdes, true);
+	}
+
       log_do_postpone (thread_p, tdes, &tdes->posp_nxlsa,
 		       LOG_COMMIT_WITH_POSTPONE);
 
@@ -5879,12 +5889,6 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 	{
 	  /* for the replication agent guarantee the order of transaction */
 	  log_append_repl_info_and_unlock_log (thread_p, tdes);
-	}
-
-      /* clear mvccid before releasing the locks */
-      if (mvcc_Enabled == true)
-	{
-	  logtb_complete_mvcc (thread_p, tdes, true);
 	}
 
       if (retain_lock != true)
@@ -6888,10 +6892,29 @@ log_complete_system_op (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
     case LOG_RESULT_TOPOP_COMMIT:
     case LOG_RESULT_TOPOP_ABORT:
       state = log_complete_topop (thread_p, tdes, result);
+      if (tdes->log_upd_stats.topop_id == tdes->topops.last)
+	{
+	  if (result == LOG_RESULT_TOPOP_ABORT)
+	    {
+	      (void) logtb_mvcc_update_tran_class_stats (thread_p, true);
+	    }
+	  else
+	    {
+	      (void) logtb_mvcc_update_tran_class_stats (thread_p, false);
+	    }
+	}
       break;
 
     case LOG_RESULT_TOPOP_ATTACH_TO_OUTER:
       log_complete_topop_attach (tdes);
+      if (tdes->log_upd_stats.topop_id >= 0)
+	{
+	  tdes->log_upd_stats.topop_id = tdes->topops.last - 1;
+	  if (tdes->log_upd_stats.topop_id < 0)
+	    {
+	      (void) logtb_mvcc_update_tran_class_stats (thread_p, false);
+	    }
+	}
       break;
     }
 

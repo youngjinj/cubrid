@@ -9924,7 +9924,12 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 
 	      /* class has changed to a new subclass */
 	      if (class_oid
-		  && !OID_EQ (&internal_class->prev_class_oid, class_oid))
+		  && (!OID_EQ (&internal_class->prev_class_oid, class_oid)
+		      || (!should_delete && BTREE_IS_MULTI_ROW_OP (op_type)
+			  && upd_cls->has_uniques
+			  && internal_class->scan_cache != NULL
+			  && internal_class->scan_cache->index_stat_info ==
+			  NULL)))
 		{
 		  /* Load internal_class object with information for class_oid
 		   */
@@ -10071,7 +10076,7 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		       internal_class->scan_cache, &force_count, false,
 		       REPL_INFO_TYPE_STMT_NORMAL,
 		       DB_NOT_PARTITIONED_CLASS, NULL, NULL,
-		       &mvcc_reev_data) != NO_ERROR)
+		       &mvcc_reev_data, false) != NO_ERROR)
 		    {
 		      GOTO_EXIT_ON_ERROR;
 		    }
@@ -10269,7 +10274,7 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					      &force_count, false, repl_info,
 					      internal_class->needs_pruning,
 					      pcontext, NULL,
-					      &mvcc_reev_data);
+					      &mvcc_reev_data, false);
 	      if (error != NO_ERROR && error != ER_HEAP_UNKNOWN_OBJECT
 		  && error != ER_MVCC_ROW_ALREADY_DELETED)
 		{
@@ -10303,7 +10308,7 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
     }
 
   /* check uniques */
-  if (op_type == MULTI_ROW_UPDATE)
+  if (mvcc_Enabled || op_type == MULTI_ROW_UPDATE)
     {
       for (s = 0; s < class_oid_cnt; s++)
 	{
@@ -10528,8 +10533,9 @@ static int
 qexec_process_unique_stats (THREAD_ENTRY * thread_p, OID * class_oid,
 			    UPDDEL_CLASS_INFO_INTERNAL * internal_class)
 {
-  BTREE_UNIQUE_STATS *unique_stat_info;
+  BTREE_UNIQUE_STATS *unique_stat_info, *unique_stat1 = NULL;
   int error = NO_ERROR, i;
+  LOG_MVCC_CLASS_UPDATE_STATS *class_stats = NULL;
 
   if (internal_class->unique_stats.scan_cache_inited)
     {
@@ -10543,6 +10549,16 @@ qexec_process_unique_stats (THREAD_ENTRY * thread_p, OID * class_oid,
 	}
     }
 
+  if (mvcc_Enabled)
+    {
+      /* find statistics for current class */
+      class_stats = logtb_mvcc_find_class_stats (thread_p, class_oid, true);
+      if (class_stats == NULL)
+	{
+	  return ER_FAILED;
+	}
+    }
+
   unique_stat_info = internal_class->unique_stats.unique_stat_info;
 
   /* When uniqueness checking based on each local statistical information
@@ -10552,30 +10568,47 @@ qexec_process_unique_stats (THREAD_ENTRY * thread_p, OID * class_oid,
    */
   for (i = 0; i < internal_class->unique_stats.num_unique_btrees; i++)
     {
+      unique_stat1 = &unique_stat_info[i];
       /* If local statistical information is not valid, skip it. */
-      if (unique_stat_info[i].num_nulls == 0
-	  && unique_stat_info[i].num_keys == 0
-	  && unique_stat_info[i].num_oids == 0)
+      if (unique_stat1->num_nulls == 0
+	  && unique_stat1->num_keys == 0 && unique_stat1->num_oids == 0)
 	{
 	  /* no modification : non-unique index */
 	  continue;
 	}
       /* uniqueness checking based on local statistical information */
-      if ((unique_stat_info[i].num_nulls + unique_stat_info[i].num_keys) !=
-	  unique_stat_info[i].num_oids)
+      if ((unique_stat1->num_nulls + unique_stat1->num_keys) !=
+	  unique_stat1->num_oids)
 	{
 	  BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, NULL, NULL, class_oid,
-					    &unique_stat_info[i].btid, NULL);
+					    &unique_stat1->btid, NULL);
 	  return ER_FAILED;
 	}
 
-      /* (num_nulls + num_keys) == num_oids */
-      /* reflect the local information into the global information. */
-      error = btree_reflect_unique_statistics (thread_p,
-					       &unique_stat_info[i]);
-      if (error != NO_ERROR)
+      if (class_stats != NULL)
 	{
-	  return error;
+	  /* In MVCC, at this point, we will update only in-memory statistics */
+	  error =
+	    logtb_mvcc_update_btid_unique_stats (thread_p, class_stats,
+						 &unique_stat1->btid,
+						 unique_stat1->num_keys,
+						 unique_stat1->num_oids,
+						 unique_stat1->num_nulls);
+	  if (error != NO_ERROR)
+	    {
+	      return error;
+	    }
+	}
+      else
+	{
+	  /* (num_nulls + num_keys) == num_oids */
+	  /* reflect the local information into the global information. */
+	  error =
+	    btree_reflect_unique_statistics (thread_p, unique_stat1, true);
+	  if (error != NO_ERROR)
+	    {
+	      return error;
+	    }
 	}
     }
   return NO_ERROR;
@@ -10599,8 +10632,10 @@ qexec_process_partition_unique_stats (THREAD_ENTRY * thread_p,
 {
   PRUNING_SCAN_CACHE *scan_cache = NULL;
   SCANCACHE_LIST *node = NULL;
-  BTREE_UNIQUE_STATS *unique_stat_info;
+  BTREE_UNIQUE_STATS *unique_stat_info, *unique_stat = NULL;
   int error = NO_ERROR, i;
+  LOG_MVCC_CLASS_UPDATE_STATS *class_stats = NULL;
+
   for (node = pcontext->scan_cache_list; node != NULL; node = node->next)
     {
       scan_cache = &node->scan_cache;
@@ -10611,30 +10646,65 @@ qexec_process_partition_unique_stats (THREAD_ENTRY * thread_p,
       unique_stat_info = scan_cache->scan_cache.index_stat_info;
       if (unique_stat_info != NULL)
 	{
+	  if (mvcc_Enabled && !OID_ISNULL (&scan_cache->scan_cache.class_oid))
+	    {
+	      class_stats =
+		logtb_mvcc_find_class_stats (thread_p,
+					     &scan_cache->scan_cache.
+					     class_oid, true);
+	      if (class_stats == NULL)
+		{
+		  return ER_FAILED;
+		}
+	    }
+	  else
+	    {
+	      class_stats = NULL;
+	    }
 	  for (i = 0; i < scan_cache->scan_cache.num_btids; i++)
 	    {
-	      if (unique_stat_info[i].num_keys == 0
-		  && unique_stat_info[i].num_nulls == 0
-		  && unique_stat_info[i].num_oids == 0)
+	      unique_stat = &unique_stat_info[i];
+	      if (unique_stat->num_keys == 0
+		  && unique_stat->num_nulls == 0
+		  && unique_stat->num_oids == 0)
 		{
 		  continue;
 		}
-	      if ((unique_stat_info[i].num_nulls +
-		   unique_stat_info[i].num_keys) !=
-		  unique_stat_info[i].num_oids)
+	      if ((unique_stat->num_nulls +
+		   unique_stat->num_keys) != unique_stat->num_oids)
 		{
 		  BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, NULL, NULL,
 						    &pcontext->root_oid,
-						    &unique_stat_info[i].
-						    btid, NULL);
+						    &unique_stat->btid, NULL);
 		  return ER_FAILED;
 		}
 
-	      error = btree_reflect_unique_statistics (thread_p,
-						       &unique_stat_info[i]);
-	      if (error != NO_ERROR)
+	      if (class_stats != NULL)
 		{
-		  return error;
+		  error =
+		    logtb_mvcc_update_btid_unique_stats (thread_p,
+							 class_stats,
+							 &unique_stat->btid,
+							 unique_stat->
+							 num_keys,
+							 unique_stat->
+							 num_oids,
+							 unique_stat->
+							 num_nulls);
+		  if (error != NO_ERROR)
+		    {
+		      return error;
+		    }
+		}
+	      else
+		{
+		  error =
+		    btree_reflect_unique_statistics (thread_p, unique_stat,
+						     true);
+		  if (error != NO_ERROR)
+		    {
+		      return error;
+		    }
 		}
 	    }
 	}
@@ -11011,7 +11081,7 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					      &force_count, false,
 					      REPL_INFO_TYPE_STMT_NORMAL,
 					      DB_NOT_PARTITIONED_CLASS, NULL,
-					      NULL, &mvcc_reev_data);
+					      NULL, &mvcc_reev_data, false);
 	      if (error == ER_MVCC_ROW_ALREADY_DELETED)
 		{
 		  error = NO_ERROR;
@@ -11063,7 +11133,7 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
     }
 
   /* reflect local statistical information into the root page */
-  if (op_type == MULTI_ROW_DELETE)
+  if (mvcc_Enabled || op_type == MULTI_ROW_DELETE)
     {
       for (s = 0; s < class_oid_cnt; s++)
 	{
@@ -11537,7 +11607,7 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 					  local_scan_cache, &force_count,
 					  false, REPL_INFO_TYPE_STMT_NORMAL,
 					  DB_NOT_PARTITIONED_CLASS, NULL,
-					  NULL, NULL);
+					  NULL, NULL, false);
 	  if (error_code != NO_ERROR)
 	    {
 	      goto error_exit;
@@ -11980,7 +12050,8 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
 					odku->no_assigns, LC_FLUSH_UPDATE,
 					local_op_type, local_scan_cache,
 					force_count, false, repl_info,
-					pruning_type, pcontext, NULL, NULL);
+					pruning_type, pcontext, NULL, NULL,
+					false);
   if (error != NO_ERROR)
     {
       goto exit_on_error;
@@ -12484,7 +12555,7 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 						REPL_INFO_TYPE_STMT_NORMAL,
 						insert->pruning_type,
 						pcontext, func_indx_preds,
-						NULL) != NO_ERROR)
+						NULL, false) != NO_ERROR)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
@@ -12684,7 +12755,7 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 						false,
 						REPL_INFO_TYPE_STMT_NORMAL,
 						insert->pruning_type,
-						pcontext, NULL, NULL)
+						pcontext, NULL, NULL, false)
 		  != NO_ERROR)
 		{
 		  GOTO_EXIT_ON_ERROR;
@@ -12731,7 +12802,7 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
     }
 
   /* check uniques */
-  if (BTREE_IS_MULTI_ROW_OP (scan_cache_op_type))
+  if (mvcc_Enabled || BTREE_IS_MULTI_ROW_OP (scan_cache_op_type))
     {
       /* In this case, consider only single class.
        * Therefore, uniqueness checking is performed based on
@@ -12744,37 +12815,56 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	}
       else
 	{
+	  BTREE_UNIQUE_STATS *unique_stats = NULL;
+	  LOG_MVCC_CLASS_UPDATE_STATS *class_stats =
+	    logtb_mvcc_find_class_stats (thread_p, &class_oid, true);
+
+	  if (class_stats == NULL)
+	    {
+	      GOTO_EXIT_ON_ERROR;
+	    }
+
 	  for (k = 0; k < scan_cache.num_btids; k++)
 	    {
-	      if (scan_cache.index_stat_info[k].num_nulls == 0
-		  && scan_cache.index_stat_info[k].num_keys == 0
-		  && scan_cache.index_stat_info[k].num_oids == 0)
+	      unique_stats = &scan_cache.index_stat_info[k];
+	      if (unique_stats->num_nulls == 0
+		  && unique_stats->num_keys == 0
+		  && unique_stats->num_oids == 0)
 		{
 		  /* No modification to be done. Either a non-unique index or
 		     the delete/insert operations canceled each other out. */
 		  continue;
 		}
-	      else
-		{
-		  /* FIXME: temporary crash fix. Must be fixed once vacuum
-		   * index is finished.
-		   */
-		  /*assert (scan_cache.index_stat_info[k].num_nulls +
-		     scan_cache.index_stat_info[k].num_keys ==
-		     scan_cache.index_stat_info[k].num_oids); */
-		  if (scan_cache.index_stat_info[k].num_nulls +
-		      scan_cache.index_stat_info[k].num_keys !=
-		      scan_cache.index_stat_info[k].num_oids)
-		    {
-		      GOTO_EXIT_ON_ERROR;
-		    }
 
-		  if (btree_reflect_unique_statistics
-		      (thread_p,
-		       &(scan_cache.index_stat_info[k])) != NO_ERROR)
+	      if (unique_stats->num_nulls +
+		  unique_stats->num_keys != unique_stats->num_oids)
+		{
+		  GOTO_EXIT_ON_ERROR;
+		}
+
+	      if (mvcc_Enabled)
+		{
+		  error =
+		    logtb_mvcc_update_btid_unique_stats (thread_p,
+							 class_stats,
+							 &unique_stats->btid,
+							 unique_stats->
+							 num_keys,
+							 unique_stats->
+							 num_oids,
+							 unique_stats->
+							 num_nulls);
+		  if (error != NO_ERROR)
 		    {
 		      GOTO_EXIT_ON_ERROR;
 		    }
+		  continue;
+		}
+
+	      if (btree_reflect_unique_statistics
+		  (thread_p, unique_stats, true) != NO_ERROR)
+		{
+		  GOTO_EXIT_ON_ERROR;
 		}
 	    }
 	}
@@ -13431,7 +13521,7 @@ qexec_execute_increment (THREAD_ENTRY * thread_p, OID * oid, OID * class_oid,
 					&force_count, false,
 					REPL_INFO_TYPE_STMT_NORMAL,
 					pruning_type, NULL, NULL,
-					NULL) != NO_ERROR)
+					NULL, false) != NO_ERROR)
 	{
 	  error = ER_FAILED;
 	  goto wrapup;
@@ -28691,7 +28781,7 @@ qexec_upddel_setup_current_class (THREAD_ENTRY * thread_p,
     {
       if (internal_class->unique_stats.scan_cache_inited)
 	{
-	  if (query_class->has_uniques && op_type == MULTI_ROW_UPDATE)
+	  if (query_class->has_uniques && BTREE_IS_MULTI_ROW_OP (op_type))
 	    {
 	      /* In this case, consider class hierarchy as well as single
 	       * class. Therefore, construct the local statistical information
@@ -29067,6 +29157,37 @@ qexec_evaluate_aggregates_optimize (THREAD_ENTRY * thread_p,
 	}
     }
 
+  /* If MVCC, we deal with a count optimization and the snapshot wasn't already
+   * taken then prepare current class for optimization and force a snapshot */
+  if (!*is_scan_needed && mvcc_Enabled && agg_list->function == PT_COUNT_STAR)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+      LOG_MVCC_CLASS_UPDATE_STATS *class_stats =
+	logtb_mvcc_find_class_stats (thread_p, &ACCESS_SPEC_CLS_OID (spec),
+				     true);
+      if (class_stats == NULL)
+	{
+	  return ER_FAILED;
+	}
+
+      if (tdes->mvcc_info->mvcc_snapshot.valid)
+	{
+	  if (class_stats->count_state != COS_LOADED)
+	    {
+	      *is_scan_needed = true;
+	    }
+	}
+      else
+	{
+	  if (logtb_mvcc_find_btid_stats
+	      (thread_p, class_stats, &agg_list->btid, true) == NULL)
+	    {
+	      return ER_FAILED;
+	    }
+	  class_stats->count_state = COS_TO_LOAD;
+	  logtb_get_mvcc_snapshot (thread_p);
+	}
+    }
   if (spec->pruning_type == DB_PARTITIONED_CLASS)
     {
       /* evaluate aggregate across partition hierarchy */

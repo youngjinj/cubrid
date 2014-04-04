@@ -354,6 +354,10 @@ extern int btree_is_unique (THREAD_ENTRY * thread_p, BTID * btid);
 extern int btree_get_unique_statistics (THREAD_ENTRY * thread_p, BTID * btid,
 					int *oid_cnt, int *null_cnt,
 					int *key_cnt);
+extern int btree_get_unique_statistics_for_count (THREAD_ENTRY * thread_p,
+						  BTID * btid, int *oid_cnt,
+						  int *null_cnt,
+						  int *key_cnt);
 
 extern int btree_get_stats (THREAD_ENTRY * thread_p,
 			    BTREE_STATS * stat_info_p, bool with_fullscan);
@@ -397,7 +401,8 @@ extern int btree_update (THREAD_ENTRY * thread_p, BTID * btid,
 			 int *unique, MVCC_REC_HEADER * p_mvcc_rec_header);
 extern int btree_reflect_unique_statistics (THREAD_ENTRY * thread_p,
 					    BTREE_UNIQUE_STATS *
-					    unique_stat_info);
+					    unique_stat_info,
+					    bool only_active_tran);
 extern int btree_find_min_or_max_key (THREAD_ENTRY * thread_p, BTID * btid,
 				      DB_VALUE * key, int flag_minkey);
 extern bool btree_multicol_key_is_null (DB_VALUE * key);
@@ -577,6 +582,4 @@ extern void btree_set_mvcc_header_ids_for_update (THREAD_ENTRY * thread_p,
 						  MVCCID * mvccid,
 						  MVCC_REC_HEADER *
 						  mvcc_rec_header);
-extern bool btree_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p,
-					      OID * class_oid);
 #endif /* _BTREE_H_ */

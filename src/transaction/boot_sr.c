@@ -118,7 +118,6 @@ struct boot_dbparm
   HFID hfid;			/* Heap file where this information is stored.
 				 * It is only used for validation purposes */
   HFID rootclass_hfid;		/* Heap file where classes are stored */
-  VFID mvccid_status_vfid;	/* Heap file where mvccid status is stored */
   EHID classname_table;		/* The hash file of class names */
   CTID ctid;			/* The catalog file */
   VFID query_vfid;		/* Query file */
@@ -2718,9 +2717,6 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
   sysprm_load_and_init (boot_Db_full_name, NULL);
 #endif /* SERVER_MODE */
 
-  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
-  or_init_header_size_and_offsets (mvcc_Enabled);
-
   /* If the server is already restarted, shutdown the server */
   if (BO_IS_SERVER_RESTARTED ())
     {
@@ -3357,9 +3353,6 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 	}
       db_charset_db_header = INTL_CODESET_NONE;
     }
-
-  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
-  or_init_header_size_and_offsets (mvcc_Enabled);
 
   /* Initialize the transaction table */
   logtb_define_trantable (thread_p, -1, -1);
@@ -5716,7 +5709,6 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
   boot_Db_parm->hfid.vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->rootclass_hfid.vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->classname_table.vfid.volid = LOG_DBFIRST_VOLID;
-  boot_Db_parm->mvccid_status_vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->ctid.vfid.volid = LOG_DBFIRST_VOLID;
   boot_Db_parm->ctid.xhid.vfid.volid = LOG_DBFIRST_VOLID;
 
@@ -5892,9 +5884,6 @@ boot_remove_all_volumes (THREAD_ENTRY * thread_p, const char *db_fullname,
 
   if (!BO_IS_SERVER_RESTARTED ())
     {
-      mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
-      or_init_header_size_and_offsets (mvcc_Enabled);
-
       /* System is not restarted. Read the system parameters */
       if (msgcat_init () != NO_ERROR)
 	{
@@ -6157,9 +6146,6 @@ xboot_emergency_patch (THREAD_ENTRY * thread_p, const char *db_name,
 	  return ER_FAILED;
 	}
     }
-
-  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
-  or_init_header_size_and_offsets (mvcc_Enabled);
 
   /* Initialize the transaction table */
   logtb_define_trantable (thread_p, -1, -1);

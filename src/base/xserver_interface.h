@@ -136,6 +136,8 @@ extern LC_FIND_CLASSNAME xlocator_find_lockhint_class_oids (THREAD_ENTRY *
 							    LOCK * many_locks,
 							    int
 							    *many_need_subclasses,
+							    LC_PREFETCH_FLAGS
+							    * many_flags,
 							    OID *
 							    guessed_class_oids,
 							    int

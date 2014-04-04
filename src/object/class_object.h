@@ -1100,6 +1100,8 @@ extern int classobj_rename_constraint (DB_SEQ * properties,
 extern int classobj_get_cached_constraint (SM_CONSTRAINT * constraints,
 					   SM_CONSTRAINT_TYPE type,
 					   BTID * id);
+extern bool classobj_has_class_unique_constraint (SM_CLASS_CONSTRAINT *
+						  constraints);
 extern bool classobj_has_unique_constraint (SM_CONSTRAINT * constraints);
 extern bool classobj_has_function_constraint (SM_CONSTRAINT * constraints);
 extern int classobj_decompose_property_oid (const char *buffer, int *volid,

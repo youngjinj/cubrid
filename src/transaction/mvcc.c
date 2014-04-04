@@ -33,19 +33,19 @@
   (logtb_is_active_mvccid (thread_p, (rec_header_p)->mvcc_ins_id))
 
 #define MVCC_IS_REC_DELETER_ACTIVE(thread_p, rec_header_p) \
-  (logtb_is_active_mvccid (thread_p, (rec_header_p)->mvcc_del_id))
+  (logtb_is_active_mvccid (thread_p, (rec_header_p)->delid_chn.mvcc_del_id))
 
 #define MVCC_IS_REC_INSERTER_IN_SNAPSHOT(thread_p, rec_header_p, snapshot) \
   (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->mvcc_ins_id, snapshot))
 
 #define MVCC_IS_REC_DELETER_IN_SNAPSHOT(thread_p, rec_header_p, snapshot) \
-  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->mvcc_del_id, snapshot))
+  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->delid_chn.mvcc_del_id, snapshot))
 
 #define MVCC_IS_REC_INSERTED_SINCE_MVCCID(rec_header_p, mvcc_id) \
   (!mvcc_id_precedes ((rec_header_p)->mvcc_ins_id, mvcc_id))
 
 #define MVCC_IS_REC_DELETED_SINCE_MVCCID(rec_header_p, mvcc_id) \
-  (!mvcc_id_precedes ((rec_header_p)->mvcc_del_id, mvcc_id))
+  (!mvcc_id_precedes ((rec_header_p)->delid_chn.mvcc_del_id, mvcc_id))
 
 
 /* Used by mvcc_chain_satisfies_vacuum to avoid handling the same OID twice */
@@ -118,16 +118,15 @@ mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
 {
   assert (rec_header != NULL && snapshot != NULL);
 
-  if (MVCC_IS_DISABLED (rec_header))
-    {
-      /* MVCC is disabled for this record so it is visible to everyone */
-      return true;
-    }
-
-  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
+  if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_DELID))
     {
       /* The record is not deleted */
-      if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
+      if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_INSID))
+	{
+	  /* Record was inserted and is visible for all transactions */
+	  return true;
+	}
+      else if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
 	{
 	  /* Record was inserted by current transaction and is visible */
 	  return true;
@@ -189,16 +188,15 @@ MVCC_SATISFIES_VACUUM_RESULT
 mvcc_satisfies_vacuum (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header,
 		       MVCCID oldest_mvccid)
 {
-  if (MVCC_IS_DISABLED (rec_header))
-    {
-      /* do not vacuum this record ever */
-      return VACUUM_RECORD_ALIVE;
-    }
-
-  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
+  if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_DELID))
     {
       /* The record was not deleted */
-      if (MVCC_IS_REC_INSERTED_SINCE_MVCCID (rec_header, oldest_mvccid))
+      if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_INSID))
+	{
+	  /* Record was inserted and is visible for all transactions */
+	  return VACUUM_RECORD_ALIVE;
+	}
+      else if (MVCC_IS_REC_INSERTED_SINCE_MVCCID (rec_header, oldest_mvccid))
 	{
 	  /* Record was recently inserted and may be still invisible to some
 	   * active transactions.
@@ -744,14 +742,14 @@ mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header)
 {
   assert (rec_header != NULL);
 
-  if (MVCC_IS_DISABLED (rec_header))
-    {
-      return DELETE_RECORD_CAN_DELETE;
-    }
-
-  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
+  if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_DELID))
     {
       /* Record was not deleted */
+      if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_INSID))
+	{
+	  /* Record was inserted and is visible for all transactions */
+	  return DELETE_RECORD_CAN_DELETE;
+	}
       if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
 	{
 	  /* Record is only visible to current transaction and can be safely
@@ -825,15 +823,15 @@ mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
   snapshot->lowest_active_mvccid = snapshot->highest_completed_mvccid =
     MVCCID_NULL;
 
-  if (MVCC_IS_DISABLED (rec_header))
-    {
-      return true;
-    }
-
-  if (!MVCC_IS_FLAG_SET (rec_header, MVCC_FLAG_VALID_DELID))
+  if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_DELID))
     {
       /* Record was not deleted */
-      if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
+      if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_INSID))
+	{
+	  /* Record was inserted and is visible for all transactions */
+	  return true;
+	}
+      else if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
 	{
 	  /* Record was inserted by current transaction and is visible */
 	  return true;
@@ -862,7 +860,8 @@ mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
 	{
 	  /* Record was deleted by other active transaction and is still visible
 	   */
-	  snapshot->highest_completed_mvccid = rec_header->mvcc_del_id;
+	  snapshot->highest_completed_mvccid =
+	    rec_header->delid_chn.mvcc_del_id;
 	  return true;
 	}
       else

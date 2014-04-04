@@ -149,7 +149,7 @@ estimate_object_size (SM_CLASS * class_, int *offset_size_ptr)
 
   exact = 1;
 re_check:
-  size = OR_HEADER_SIZE;
+  size = OR_NON_MVCC_HEADER_SIZE;
   if (class_ != NULL)
     {
       size +=

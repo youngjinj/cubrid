@@ -186,7 +186,11 @@ extern int spage_update (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
 extern void spage_update_record_type (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
 				      PGSLOTID slotid, INT16 type);
 extern bool spage_is_updatable (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
-				PGSLOTID slotid, const RECDES * recdes);
+				PGSLOTID slotid, int recdes_length);
+extern bool spage_is_mvcc_updatable (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+				     PGSLOTID slot_id,
+				     int delete_record_length,
+				     int insert_record_length);
 extern bool spage_reclaim (THREAD_ENTRY * thread_p, PAGE_PTR pgptr);
 extern int spage_split (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
 			PGSLOTID slotid, int offset, PGSLOTID * new_slotid);

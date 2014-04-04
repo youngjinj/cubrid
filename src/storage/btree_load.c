@@ -2986,7 +2986,7 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
 					  &upd_scancache, &force_count, true,
 					  REPL_INFO_TYPE_STMT_NORMAL,
 					  DB_NOT_PARTITIONED_CLASS, NULL,
-					  NULL, NULL);
+					  NULL, NULL, false);
       if (ret != NO_ERROR)
 	{
 	  if (ret == ER_MVCC_ROW_ALREADY_DELETED)

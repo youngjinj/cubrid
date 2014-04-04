@@ -2305,6 +2305,28 @@ classobj_get_cached_constraint (SM_CONSTRAINT * constraints,
  *   constraints(in): constraint list
  */
 bool
+classobj_has_class_unique_constraint (SM_CLASS_CONSTRAINT * constraints)
+{
+  SM_CLASS_CONSTRAINT *c;
+
+  for (c = constraints; c != NULL; c = c->next)
+    {
+      if (SM_IS_CONSTRAINT_UNIQUE_FAMILY (c->type))
+	{
+	  return true;
+	}
+    }
+
+  return false;
+}
+
+/*
+ * classobj_has_unique_constraint ()
+ *   return: true if an unique constraint is contained in the constraint list,
+ *           otherwise false.
+ *   constraints(in): constraint list
+ */
+bool
 classobj_has_unique_constraint (SM_CONSTRAINT * constraints)
 {
   SM_CONSTRAINT *c;

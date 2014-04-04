@@ -90,7 +90,8 @@ extern int locator_attribute_info_force (THREAD_ENTRY * thread_p,
 					 int pruning_type,
 					 PRUNING_CONTEXT * pcontext,
 					 FUNC_PRED_UNPACK_INFO * func_preds,
-					 MVCC_REEV_DATA * mvcc_reev_data);
+					 MVCC_REEV_DATA * mvcc_reev_data,
+					 bool force_update_inplace);
 extern LC_COPYAREA *locator_allocate_copy_area_by_attr_info (THREAD_ENTRY *
 							     thread_p,
 							     HEAP_CACHE_ATTRINFO

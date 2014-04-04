@@ -648,6 +648,7 @@ createdb (UTIL_FUNCTION_ARG * arg)
   sm_mark_system_classes ();
 
   (void) lang_db_put_charset ();
+
   if (verbose)
     {
       au_dump_to_file (output_file);

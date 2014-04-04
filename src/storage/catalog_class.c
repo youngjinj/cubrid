@@ -123,7 +123,8 @@ extern int catcls_insert_catalog_classes (THREAD_ENTRY * thread_p,
 extern int catcls_delete_catalog_classes (THREAD_ENTRY * thread_p,
 					  const char *name, OID * class_oid);
 extern int catcls_update_catalog_classes (THREAD_ENTRY * thread_p,
-					  const char *name, RECDES * record);
+					  const char *name, RECDES * record,
+					  bool force_in_place);
 extern int catcls_finalize_class_oid_to_oid_hash_table (void);
 extern int catcls_remove_entry (OID * class_oid);
 extern int catcls_get_server_lang_charset (THREAD_ENTRY * thread_p,
@@ -559,8 +560,10 @@ catcls_guess_record_length (OR_VALUE * value_p)
   attrs_p = value_p->sub.value;
   n_attrs = value_p->sub.count;
 
-  length = OR_HEADER_SIZE + OR_VAR_TABLE_SIZE (n_attrs)
-    + OR_BOUND_BIT_BYTES (n_attrs);
+  length =
+    ((mvcc_Enabled == true) ?
+     OR_MVCC_MAX_HEADER_SIZE : OR_NON_MVCC_HEADER_SIZE) +
+    OR_VAR_TABLE_SIZE (n_attrs) + OR_BOUND_BIT_BYTES (n_attrs);
 
   for (i = 0; i < n_attrs; i++)
     {
@@ -812,7 +815,7 @@ catcls_convert_attr_id_to_name (THREAD_ENTRY * thread_p, OR_BUF * orbuf_p,
   buf_p = &orep;
   or_init (buf_p, orbuf_p->buffer, (int) (orbuf_p->endptr - orbuf_p->buffer));
 
-  or_advance (buf_p, OR_HEADER_SIZE);
+  or_advance (buf_p, OR_NON_MVCC_HEADER_SIZE);
 
   size = tf_Metaclass_class.n_variable;
   vars = or_get_var_table (buf_p, size, catcls_unpack_allocator);
@@ -828,8 +831,10 @@ catcls_convert_attr_id_to_name (THREAD_ENTRY * thread_p, OR_BUF * orbuf_p,
   /* jump to the 'attributes' and extract its id/name.
    * there are no indexes for shared or class attributes,
    * so we need only id/name for 'attributes'.
+   * the offsets are relative to end of the class record header
    */
-  or_seek (buf_p, vars[ORC_ATTRIBUTES_INDEX].offset);
+  or_seek (buf_p,
+	   vars[ORC_ATTRIBUTES_INDEX].offset + OR_NON_MVCC_HEADER_SIZE);
 
   id_val_p = catcls_allocate_or_value (1);
   if (id_val_p == NULL)
@@ -2995,7 +3000,7 @@ catcls_put_or_value_into_buffer (OR_VALUE * value_p, int chn, OR_BUF * buf_p,
   char *bound_bits = NULL;
   int bound_size;
   char *offset_p, *start_p;
-  int i, pad, offset;
+  int i, pad, offset, header_size;
   int error = NO_ERROR;
 
   fixed_p = repr_p->fixed;
@@ -3028,17 +3033,17 @@ catcls_put_or_value_into_buffer (OR_VALUE * value_p, int chn, OR_BUF * buf_p,
 
   if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
     {
-      /* MVCC related fields */
-      or_put_bigint (buf_p, 0);	/* MVCC insert id */
-      or_put_int (buf_p, chn);	/* chn */
-      or_put_int (buf_p, 0);	/* dummy */
-      or_put_oid (buf_p, (OID *) & oid_Null_oid);	/* MVCC next version */
+      repr_id_bits |= (OR_MVCC_FLAG_VALID_INSID << OR_MVCC_FLAG_SHIFT_BITS);
       or_put_int (buf_p, repr_id_bits);
+      or_put_bigint (buf_p, MVCCID_NULL);	/* MVCC insert id */
+      or_put_int (buf_p, chn);	/* CHN */
+      header_size = OR_MVCC_INSERT_HEADER_SIZE;
     }
   else
     {
       or_put_int (buf_p, repr_id_bits);
       or_put_int (buf_p, chn);
+      header_size = OR_NON_MVCC_HEADER_SIZE;
     }
 
   /* offset table */
@@ -3086,7 +3091,8 @@ catcls_put_or_value_into_buffer (OR_VALUE * value_p, int chn, OR_BUF * buf_p,
   var_attrs = &attrs[n_fixed];
   for (i = 0; i < n_variable; i++)
     {
-      offset = (int) (buf_p->ptr - buf_p->buffer);
+      /* the variable offsets are relative to end of the class record header */
+      offset = (int) (buf_p->ptr - buf_p->buffer - header_size);
 
       data_type = variable_p[i].type;
       (*((*tp_Type_id_map[data_type]).data_writeval)) (buf_p,
@@ -3097,7 +3103,7 @@ catcls_put_or_value_into_buffer (OR_VALUE * value_p, int chn, OR_BUF * buf_p,
     }
 
   /* put last offset */
-  offset = (int) (buf_p->ptr - buf_p->buffer);
+  offset = (int) (buf_p->ptr - buf_p->buffer - header_size);
   OR_PUT_OFFSET (offset_p, offset);
 
   if (bound_bits)
@@ -3154,12 +3160,35 @@ catcls_get_or_value_from_buffer (THREAD_ENTRY * thread_p, OR_BUF * buf_p,
 
   if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
     {
-      /* skip MVCC related fields */
-      or_advance (buf_p, OR_INT64_SIZE);	/* MVCC insert id */
-      or_advance (buf_p, OR_INT64_SIZE);	/* MVCC delete id */
-      or_advance (buf_p, OR_OID_SIZE);	/* MVCC next version */
-      repr_id_bits = or_get_int (buf_p, &rc);
+      char mvcc_flags;
+      repr_id_bits = or_mvcc_get_repid_and_flags (buf_p, &rc);
+      /* get bound_bits_flag and skip other MVCC header fields */
       bound_bits_flag = repr_id_bits & OR_BOUND_BIT_FLAG;
+      mvcc_flags =
+	(char) ((repr_id_bits >> OR_MVCC_FLAG_SHIFT_BITS) &
+		OR_MVCC_FLAG_MASK);
+      repr_id_bits = repr_id_bits & OR_MVCC_REPID_MASK;
+      /* check that only OR_MVCC_FLAG_VALID_INSID is set */
+
+      if (mvcc_flags & OR_MVCC_FLAG_VALID_INSID)
+	{
+	  or_advance (buf_p, OR_INT64_SIZE);	/* skip INS_ID */
+	}
+
+      if (mvcc_flags &
+	  (OR_MVCC_FLAG_VALID_DELID | OR_MVCC_FLAG_VALID_LONG_CHN))
+	{
+	  or_advance (buf_p, OR_INT64_SIZE);	/* skip DEL_ID / long CHN */
+	}
+      else
+	{
+	  or_advance (buf_p, OR_INT_SIZE);	/* skip short CHN */
+	}
+
+      if (mvcc_flags & OR_MVCC_FLAG_VALID_NEXT_VERSION)
+	{
+	  or_advance (buf_p, OR_OID_SIZE);	/* skip short CHN */
+	}
     }
   else
     {
@@ -3181,7 +3210,9 @@ catcls_get_or_value_from_buffer (THREAD_ENTRY * thread_p, OR_BUF * buf_p,
       memset (bound_bits, 0, size);
     }
 
-  /* offset table */
+  /* get the offsets relative to the end of the header (beginning
+   * of variable table)
+   */
   vars = or_get_var_table (buf_p, n_variable, catcls_unpack_allocator);
   if (vars == NULL)
     {
@@ -3351,7 +3382,8 @@ catcls_get_or_value_from_class_record (THREAD_ENTRY * thread_p,
   buf_p = &repr_buffer;
   or_init (buf_p, record_p->data, record_p->length);
 
-  or_advance (buf_p, OR_HEADER_SIZE);
+  /* class record header does not contain MVCC info */
+  or_advance (buf_p, OR_NON_MVCC_HEADER_SIZE);
   if (catcls_get_or_value_from_class (thread_p, buf_p, value_p) != NO_ERROR)
     {
       catcls_free_or_value (value_p);
@@ -4389,10 +4421,13 @@ error:
  *   return:
  *   name(in):
  *   record(in):
+ *   force_in_place(in): in MVCC the update of the instances will be made in
+ *			 place. Otherwise the decision will be made in this
+ *			 function. Doesn't matter in non-MVCC.
  */
 int
 catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
-			       RECDES * record_p)
+			       RECDES * record_p, bool force_in_place)
 {
   OR_VALUE *value_p = NULL;
   OID oid, *class_oid_p;
@@ -4448,7 +4483,9 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
       PAGE_PTR pgptr = NULL, forward_pgptr = NULL;
       bool need_mvcc_update;
       bool ignore_record = false;
+#if defined (SERVER_MODE)
       MVCC_REC_HEADER mvcc_rec_header;
+#endif
 
       /* The oid is visible for current transaction, so it can't be
        * removed by vacuum. More, can't be other transaction that
@@ -4456,53 +4493,60 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
        * alter the same table.
        */
 
-#if !defined (SERVER_MODE)
-      need_mvcc_update = false;
-#else
-      if (heap_get_pages_for_mvcc_chain_read (thread_p, &oid, &pgptr,
-					      &forward_pgptr, &ignore_record)
-	  != NO_ERROR)
+      if (force_in_place)
 	{
-	  goto error;
-	}
-
-      if (ignore_record)
-	{
-	  /* Is this possible? */
-	  assert (0);
-	  goto error;
-	}
-
-      if (heap_get_mvcc_data (thread_p, &oid, &mvcc_rec_header, pgptr,
-			      forward_pgptr, NULL) != S_SUCCESS)
-	{
-	  goto error;
-	}
-
-      if (mvcc_rec_header.mvcc_ins_id == logtb_get_current_mvccid (thread_p))
-	{
-	  /* The record is inserted by current transaction, update in-place
-	   * can be used instead of duplicating record
-	   */
 	  need_mvcc_update = false;
 	}
       else
 	{
-	  /* MVCC update */
-	  need_mvcc_update = true;
-	}
+#if !defined (SERVER_MODE)
+	  need_mvcc_update = false;
+#else
+	  if (heap_get_pages_for_mvcc_chain_read (thread_p, &oid, &pgptr,
+						  &forward_pgptr,
+						  &ignore_record) != NO_ERROR)
+	    {
+	      goto error;
+	    }
 
-      if (pgptr != NULL)
-	{
-	  pgbuf_unfix_and_init (thread_p, pgptr);
-	}
+	  if (ignore_record)
+	    {
+	      /* Is this possible? */
+	      assert (0);
+	      goto error;
+	    }
 
-      if (forward_pgptr != NULL)
-	{
-	  pgbuf_unfix_and_init (thread_p, forward_pgptr);
-	}
+	  if (heap_get_mvcc_data (thread_p, &oid, &mvcc_rec_header, pgptr,
+				  forward_pgptr, NULL) != S_SUCCESS)
+	    {
+	      goto error;
+	    }
+
+	  if (mvcc_rec_header.mvcc_ins_id ==
+	      logtb_get_current_mvccid (thread_p))
+	    {
+	      /* The record is inserted by current transaction, update in-place
+	       * can be used instead of duplicating record
+	       */
+	      need_mvcc_update = false;
+	    }
+	  else
+	    {
+	      /* MVCC update */
+	      need_mvcc_update = true;
+	    }
+
+	  if (pgptr != NULL)
+	    {
+	      pgbuf_unfix_and_init (thread_p, pgptr);
+	    }
+
+	  if (forward_pgptr != NULL)
+	    {
+	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+	    }
 #endif
-
+	}
       if (need_mvcc_update == false)
 	{
 	  /* already inserted by the current transaction, need to replace

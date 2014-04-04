@@ -908,7 +908,7 @@ serial_update_serial_object (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
 
 #if defined (DEBUG)
   if (spage_is_updatable (thread_p, addr.pgptr, serial_oidp->slotid,
-			  &new_recdesc) == false)
+			  new_recdesc.length) == false)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 	      ER_QPROC_CANNOT_UPDATE_SERIAL, 0);

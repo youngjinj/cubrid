@@ -256,15 +256,23 @@ struct recdes
 typedef struct mvcc_rec_header MVCC_REC_HEADER;
 struct mvcc_rec_header
 {
+  INT32 mvcc_flag:8;		/* MVCC flags */
+  INT32 repid:24;		/* representation id */
   MVCCID mvcc_ins_id;		/* MVCC insert id */
-  union
+  union DELID_CHN
   {
     MVCCID mvcc_del_id;		/* MVCC delete id */
     int chn;			/* cache coherency number */
-  };
+  } delid_chn;
   OID next_version;		/* next row version */
-  INT32 mvcc_flag:8;		/* MVCC flags */
-  INT32 repid:24;		/* representation id */
+};
+
+typedef struct mvcc_relocate_delete_info MVCC_RELOCATE_DELETE_INFO;
+struct mvcc_relocate_delete_info
+{
+  OID *mvcc_delete_oid;		/* MVCC delete oid */
+  OID *next_version;		/* MVCC next version */
+  MVCCID *mvcc_del_id;		/* MVCC delete id */
 };
 
 typedef struct lorecdes LORECDES;	/* Work area descriptor */

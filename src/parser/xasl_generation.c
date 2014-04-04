@@ -4198,8 +4198,7 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	    }
 
 	  /* enable count optimization in MVCC if have unique index */
-	  if (mvcc_Enabled == false
-	      && aggregate_list->function == PT_COUNT_STAR)
+	  if (aggregate_list->function == PT_COUNT_STAR)
 	    {
 	      BTID *btid = NULL;
 	      btid = sm_find_index (classop, NULL, 0,

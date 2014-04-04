@@ -231,7 +231,7 @@ process_object (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scancache,
 				      &force_count, false,
 				      REPL_INFO_TYPE_STMT_NORMAL,
 				      DB_NOT_PARTITIONED_CLASS, NULL,
-				      NULL, NULL);
+				      NULL, NULL, false);
       if (error_code != NO_ERROR)
 	{
 	  if (error_code == ER_MVCC_ROW_ALREADY_DELETED)

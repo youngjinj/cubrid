@@ -45,6 +45,15 @@
    ((hfid_ptr1)->hpgid == (hfid_ptr2)->hpgid && \
     VFID_EQ(&((hfid_ptr1)->vfid), &((hfid_ptr2)->vfid))))
 
+#define HEAP_SET_RECORD(recdes, record_area_size, record_length, record_type, \
+			record_data)	\
+  do  {	\
+  (recdes)->area_size = record_area_size;  \
+  (recdes)->length    = record_length;  \
+  (recdes)->type      = record_type; \
+  (recdes)->data      = (char *)record_data; \
+  }while(0)
+
 #define HEAP_HEADER_AND_CHAIN_SLOTID  0	/* Slot for chain and header */
 
 #define HEAP_MAX_ALIGN INT_ALIGNMENT	/* maximum alignment for heap record */
@@ -602,10 +611,6 @@ extern int heap_rv_redo_delete_newhome (THREAD_ENTRY * thread_p,
 extern int heap_rv_redo_mark_reusable_slot (THREAD_ENTRY * thread_p,
 					    LOG_RCV * rcv);
 extern int heap_rv_undoredo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
-extern int heap_rv_mvcc_undo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
-extern int heap_rv_mvcc_redo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
-extern int heap_rv_mvcc_redo_update_row_version (THREAD_ENTRY * thread_p,
-						 LOG_RCV * rcv);
 extern int heap_rv_undoredo_update_type (THREAD_ENTRY * thread_p,
 					 LOG_RCV * rcv);
 extern int heap_rv_redo_reuse_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
@@ -692,7 +697,7 @@ extern void heap_get_mvcc_rec_header_from_overflow (PAGE_PTR ovf_page,
 						    mvcc_header,
 						    RECDES * peek_recdes);
 extern void heap_set_mvcc_rec_header_on_overflow (PAGE_PTR ovf_page,
-						  MVCC_REC_HEADER
+						  MVCC_REC_HEADER *
 						  mvcc_header);
 extern OID *heap_get_serial_class_oid (THREAD_ENTRY * thread_p);
 extern SCAN_CODE heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
@@ -702,7 +707,14 @@ extern SCAN_CODE heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
 						   HEAP_SCANCACHE *
 						   scan_cache, int ispeeking,
 						   void *mvcc_reev_data);
-extern bool heap_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p,
-					     const OID * class_oid);
-
+extern bool heap_is_mvcc_disabled_for_class (const OID * class_oid);
+extern int heap_rv_mvcc_redo_delete_relocated (THREAD_ENTRY * thread_p,
+					       LOG_RCV * rcv);
+extern int heap_rv_mvcc_undo_delete_relocated (THREAD_ENTRY * thread_p,
+					       LOG_RCV * rcv);
+extern int heap_rv_mvcc_redo_delete_relocation (THREAD_ENTRY * thread_p,
+						LOG_RCV * rcv);
+extern int heap_rv_mvcc_undo_delete_relocation (THREAD_ENTRY * thread_p,
+						LOG_RCV * rcv);
+extern bool heap_is_big_length (int length);
 #endif /* _HEAP_FILE_H_ */

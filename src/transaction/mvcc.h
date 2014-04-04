@@ -29,9 +29,6 @@
 #include "storage_common.h"
 #include "vacuum.h"
 
-#define MVCC_FLAG_VALID_DELID	OR_MVCC_FLAG_VALID_DELID
-#define MVCC_FLAG_ENABLED	OR_MVCC_FLAG_ENABLED
-
 /* MVCC Header Macros */
 #define MVCC_GET_INSID(header)   \
   ((header)->mvcc_ins_id)
@@ -40,10 +37,10 @@
   ((header)->mvcc_ins_id = (mvcc_id))
 
 #define MVCC_GET_DELID(header)   \
-  ((header)->mvcc_del_id)
+  ((header)->delid_chn.mvcc_del_id)
 
 #define MVCC_SET_DELID(header, mvcc_id)   \
-  ((header)->mvcc_del_id = (mvcc_id))
+  ((header)->delid_chn.mvcc_del_id = (mvcc_id))
 
 #define MVCC_SET_NEXT_VERSION(header, next_oid_version)  \
   ((header)->next_version = *(next_oid_version))
@@ -58,10 +55,10 @@
   ((header)->repid = (rep_id))
 
 #define MVCC_GET_CHN(header)  \
-  ((header)->chn)
+  ((header)->delid_chn.chn)
 
 #define MVCC_SET_CHN(header, chn_)  \
-  ((header)->chn = chn_)
+  ((header)->delid_chn.chn = chn_)
 
 #define MVCC_GET_FLAG(header) \
   ((header)->mvcc_flag)
@@ -69,14 +66,28 @@
 #define MVCC_SET_FLAG(header, flag) \
   ((header)->mvcc_flag = flag)
 
+#define MVCC_IS_ANY_FLAG_SET(rec_header_p) \
+  (MVCC_IS_FLAG_SET (rec_header_p,  \
+		     OR_MVCC_FLAG_VALID_INSID \
+		     | OR_MVCC_FLAG_VALID_DELID  \
+		     | OR_MVCC_FLAG_VALID_NEXT_VERSION	\
+		     | OR_MVCC_FLAG_VALID_LONG_CHN))
+
 #define MVCC_IS_FLAG_SET(rec_header_p, flags) \
-  (((rec_header_p)->mvcc_flag & (flags)) == (flags))
+  ((rec_header_p)->mvcc_flag & (flags))
 
 #define MVCC_SET_FLAG_BITS(rec_header_p, flag) \
-  ((rec_header_p)->mvcc_flag |= flag)
+  ((rec_header_p)->mvcc_flag |= (flag))
+
+#define MVCC_CLEAR_ALL_FLAG_BITS(rec_header_p) \
+  (MVCC_CLEAR_FLAG_BITS (rec_header_p,	\
+			 OR_MVCC_FLAG_VALID_INSID \
+			 | OR_MVCC_FLAG_VALID_DELID  \
+			 | OR_MVCC_FLAG_VALID_NEXT_VERSION	\
+			 | OR_MVCC_FLAG_VALID_LONG_CHN))
 
 #define MVCC_CLEAR_FLAG_BITS(rec_header_p, flag) \
-  ((rec_header_p)->mvcc_flag &= ~flag)
+  ((rec_header_p)->mvcc_flag &= ~(flag))
 
 /* MVCC Snapshot Macros */
 #define MVCC_SNAPSHOT_GET_LOWEST_ACTIVE_ID(snapshot) \
@@ -93,7 +104,7 @@
 
 /* Check if record is deleted by current transaction */
 #define MVCC_IS_REC_DELETED_BY_ME(thread_p, rec_header_p)	\
-  (logtb_is_current_mvccid (thread_p, (rec_header_p)->mvcc_del_id))
+  (logtb_is_current_mvccid (thread_p, (rec_header_p)->delid_chn.mvcc_del_id))
 
 /* Check if record was inserted by the transaction identified by mvcc_id */
 #define MVCC_IS_REC_INSERTED_BY(rec_header_p, mvcc_id)	\
@@ -101,11 +112,7 @@
 
 /* Check if record was deleted by the transaction identified by mvcc_id */
 #define MVCC_IS_REC_DELETED_BY(rec_header_p, mvcc_id)	\
-  ((rec_header_p)->mvcc_del_id == mvcc_id)
-
-/* Check whether MVCC is disabled for this record */
-#define MVCC_IS_DISABLED(rec_header_p)	\
-  (((rec_header_p)->mvcc_flag & MVCC_FLAG_ENABLED) == 0)
+  ((rec_header_p)->delid_chn.mvcc_del_id == mvcc_id)
 
 /* Check if record has a valid chn. This is true when:
  *  1. MVCC is disabled for current record (and in-place update is used).
@@ -114,7 +121,7 @@
  *     current transaction would remove it completely.
  */
 #define MVCC_IS_REC_CHN_VALID(thread_p, rec_header_p)	    \
-  (MVCC_IS_DISABLED (rec_header_p)			    \
+  (!MVCC_IS_FLAG_SET (rec_header_p, OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_VALID_DELID) \
     || MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header_p))
 
 #define MVCC_SET_SNAPSHOT_DATA(snapshot, fnc, low_act_mvccid, \

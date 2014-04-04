@@ -119,6 +119,7 @@ extern LC_FIND_CLASSNAME locator_lockhint_classes (int num_classes,
 						   **many_classnames,
 						   LOCK * many_locks,
 						   int *need_subclasses,
+						   LC_PREFETCH_FLAGS * flags,
 						   int quit_on_errors,
 						   LC_LOCKHINT **
 						   out_lockhint);

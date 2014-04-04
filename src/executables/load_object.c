@@ -192,9 +192,9 @@ object_disk_size (DESC_OBJ * obj, int *offset_size_ptr)
   class_ = obj->class_;
 
 re_check:
-  size =
-    OR_HEADER_SIZE + class_->fixed_size +
-    OR_BOUND_BIT_BYTES (class_->fixed_count);
+  size = (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
+	  ? OR_MVCC_INSERT_HEADER_SIZE : OR_NON_MVCC_HEADER_SIZE) +
+    class_->fixed_size + OR_BOUND_BIT_BYTES (class_->fixed_count);
 
   if (class_->variable_count)
     {
@@ -272,8 +272,10 @@ put_varinfo (OR_BUF * buf, DESC_OBJ * obj, int offset_size)
 
   if (class_->variable_count)
     {
-
-      offset = OR_HEADER_SIZE +
+      /* compute the variable offsets relative to the end of the header (beginning
+       * of variable table)
+       */
+      offset =
 	OR_VAR_TABLE_SIZE_INTERNAL (class_->variable_count, offset_size) +
 	class_->fixed_size + OR_BOUND_BIT_BYTES (class_->fixed_count);
 
@@ -603,11 +605,10 @@ desc_obj_to_disk (DESC_OBJ * obj, RECDES * record, bool * index_flag)
 
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{
-	  /* set mvcc fields */
-	  or_put_bigint (buf, 0);	/* mvcc insert id */
-	  or_put_bigint (buf, 0);	/* mvcc delete id / chn */
-	  or_put_oid (buf, (OID *) & oid_Null_oid);	/* mvcc next version */
+	  repid_bits |= (OR_MVCC_FLAG_VALID_INSID << OR_MVCC_FLAG_SHIFT_BITS);
 	  or_put_int (buf, repid_bits);
+	  or_put_bigint (buf, MVCCID_NULL);	/* MVCC insert id */
+	  or_put_int (buf, 0);	/* CHN, fixed size */
 	}
       else
 	{
@@ -677,6 +678,9 @@ get_desc_current (OR_BUF * buf, SM_CLASS * class_, DESC_OBJ * obj,
 	{
 	  return;
 	}
+      /* get the offsets relative to the end of the header (beginning
+       * of variable table)
+       */
       offset = or_get_offset_internal (buf, &rc, offset_size);
       for (i = 0; i < class_->variable_count; i++)
 	{
@@ -813,6 +817,9 @@ get_desc_old (OR_BUF * buf, SM_CLASS * class_, int repid,
 	    {
 	      goto abort_on_error;
 	    }
+	  /* compute the variable offsets relative to the end of the header (beginning
+	   * of variable table)
+	   */
 	  offset = or_get_offset_internal (buf, &rc, offset_size);
 	  for (i = 0; i < oldrep->variable_count; i++)
 	    {
@@ -1035,12 +1042,39 @@ desc_disk_to_obj (MOP classop, SM_CLASS * class_, RECDES * record,
 
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{
-	  /* skip mvcc fields */
-	  or_advance (buf, OR_INT64_SIZE);	/* mvcc insert id */
-	  or_advance (buf, OR_INT64_SIZE);	/* mvcc delete id / chn */
-	  or_advance (buf, OR_OID_SIZE);	/* mvcc next version */
-	  repid_bits = or_get_int (buf, &rc);
+	  char mvcc_flags;
+
+	  /* in case of MVCC, repid_bits contains MVCC flags */
+	  repid_bits = or_mvcc_get_repid_and_flags (buf, &rc);
 	  repid = repid_bits & OR_MVCC_REPID_MASK;
+
+	  mvcc_flags =
+	    (char) ((repid_bits >> OR_MVCC_FLAG_SHIFT_BITS)
+		    & OR_MVCC_FLAG_MASK);
+
+	  if (mvcc_flags & OR_MVCC_FLAG_VALID_INSID)
+	    {
+	      /* skip insert id */
+	      or_advance (buf, OR_INT64_SIZE);
+	    }
+
+	  if (mvcc_flags & OR_MVCC_FLAG_VALID_DELID
+	      || mvcc_flags & OR_MVCC_FLAG_VALID_LONG_CHN)
+	    {
+	      /* skip delete id */
+	      or_advance (buf, OR_INT64_SIZE);
+	    }
+	  else
+	    {
+	      /* skip chn */
+	      or_advance (buf, OR_INT_SIZE);
+	    }
+
+	  if (mvcc_flags & OR_MVCC_FLAG_VALID_NEXT_VERSION)
+	    {
+	      /* skip next version */
+	      or_advance (buf, OR_OID_SIZE);
+	    }
 	}
       else
 	{

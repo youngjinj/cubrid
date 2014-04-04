@@ -92,9 +92,9 @@
 
 #define BTREE_INIT_MVCC_HEADER(p_mvcc_rec_header) \
   do {	\
+    MVCC_SET_FLAG (p_mvcc_rec_header, 0); \
     MVCC_SET_INSID (p_mvcc_rec_header, MVCCID_NULL); \
     MVCC_SET_DELID (p_mvcc_rec_header, MVCCID_NULL); \
-    MVCC_SET_FLAG (p_mvcc_rec_header, MVCC_FLAG_ENABLED);  \
     MVCC_SET_REPID (p_mvcc_rec_header, 0);  \
     MVCC_SET_NEXT_VERSION (p_mvcc_rec_header, &oid_Null_oid);  \
   }while (0)
@@ -1614,7 +1614,7 @@ btree_leaf_mvcc_get_num_visible_oids (THREAD_ENTRY * thread_p,
 	   * by MVCC satisfies functions. This will be changed, when dynamic
 	   * MVCC heap will be implemented.
 	   */
-	  flag = OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_ENABLED;
+	  flag = OR_MVCC_FLAG_VALID_INSID;
 	}
       else
 	{
@@ -1630,10 +1630,10 @@ btree_leaf_mvcc_get_num_visible_oids (THREAD_ENTRY * thread_p,
 					     BTREE_LEAF_OID_HAS_MVCC_DELID))
 	{
 	  OR_GET_BIGINT (rec->data + oid_size + mvcc_info_size,
-			 &(mvcc_rec_header.mvcc_del_id));
-	  if (MVCCID_IS_VALID (mvcc_rec_header.mvcc_del_id))
+			 &(mvcc_rec_header.delid_chn.mvcc_del_id));
+	  if (MVCCID_IS_VALID (mvcc_rec_header.delid_chn.mvcc_del_id))
 	    {
-	      flag = OR_MVCC_FLAG_VALID_DELID | OR_MVCC_FLAG_ENABLED;
+	      flag = OR_MVCC_FLAG_VALID_DELID;
 	    }
 	}
 
@@ -1685,7 +1685,7 @@ btree_leaf_mvcc_get_num_visible_oids (THREAD_ENTRY * thread_p,
 	   * by MVCC satisfies functions. This will be changed, when dynamic
 	   * MVCC heap will be implemented.
 	   */
-	  flag = OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_ENABLED;
+	  flag = OR_MVCC_FLAG_VALID_INSID;
 	}
       else
 	{
@@ -1702,10 +1702,10 @@ btree_leaf_mvcc_get_num_visible_oids (THREAD_ENTRY * thread_p,
 						BTREE_LEAF_OID_HAS_MVCC_DELID))
 	{
 	  OR_GET_BIGINT (rec_ptr + oid_size + mvcc_info_size,
-			 &(mvcc_rec_header.mvcc_del_id));
-	  if (MVCCID_IS_VALID (mvcc_rec_header.mvcc_del_id))
+			 &(mvcc_rec_header.delid_chn.mvcc_del_id));
+	  if (MVCCID_IS_VALID (mvcc_rec_header.delid_chn.mvcc_del_id))
 	    {
-	      flag = OR_MVCC_FLAG_VALID_DELID | OR_MVCC_FLAG_ENABLED;
+	      flag = OR_MVCC_FLAG_VALID_DELID;
 	    }
 	  mvcc_info_size += OR_MVCCID_SIZE;
 	}
@@ -1937,7 +1937,7 @@ btree_leaf_get_oid_from_oidptr (BTREE_SCAN * bts, char *rec_oid_ptr,
 	   * by MVCC satisfies functions. This will be changed, when dynamic
 	   * MVCC heap will be implemented.
 	   */
-	  flag = OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_ENABLED;
+	  flag = OR_MVCC_FLAG_VALID_INSID;
 	}
       else
 	{
@@ -1954,10 +1954,10 @@ btree_leaf_get_oid_from_oidptr (BTREE_SCAN * bts, char *rec_oid_ptr,
 						BTREE_LEAF_OID_HAS_MVCC_DELID))
 	{
 	  OR_GET_BIGINT (rec_oid_ptr + oid_size + mvcc_info_size,
-			 &(p_mvcc_header->mvcc_del_id));
-	  if (MVCCID_IS_VALID (p_mvcc_header->mvcc_del_id))
+			 &(p_mvcc_header->delid_chn.mvcc_del_id));
+	  if (MVCCID_IS_VALID (p_mvcc_header->delid_chn.mvcc_del_id))
 	    {
-	      flag = OR_MVCC_FLAG_VALID_DELID | OR_MVCC_FLAG_ENABLED;
+	      flag = OR_MVCC_FLAG_VALID_DELID;
 	    }
 	}
 
@@ -2290,7 +2290,7 @@ btree_leaf_set_fixed_mvcc_size_for_first_record_oid (RECDES * recp,
  *   node_type(in):
  *   mvcc_oid_list_offset(in): oid list offset, null in non-MVCC
  *   oidp(out):
- *   class_oidp(out): 
+ *   class_oidp(out):
  *   p_mvcc_header(out): MVCC rec header - null in non-MVCC
  *   last_oid_mvcc_offset(out): last oid MVCC offset - null in non-MVCC
  *
@@ -2411,7 +2411,7 @@ btree_leaf_get_last_oid (BTID_INT * btid, RECDES * recp,
 	       * by MVCC satisfies functions. This will be changed, when dynamic
 	       * MVCC heap will be implemented.
 	       */
-	      flag = OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_ENABLED;
+	      flag = OR_MVCC_FLAG_VALID_INSID;
 	    }
 	  else
 	    {
@@ -2428,12 +2428,12 @@ btree_leaf_get_last_oid (BTID_INT * btid, RECDES * recp,
 	      (rec_ptr, BTREE_LEAF_OID_HAS_MVCC_DELID))
 	    {
 	      OR_GET_BIGINT (rec_ptr + oid_size + mvcc_info_size,
-			     &(p_mvcc_header->mvcc_del_id));
+			     &(p_mvcc_header->delid_chn.mvcc_del_id));
 
 	      /* check whether is null */
-	      if (MVCCID_IS_VALID (p_mvcc_header->mvcc_del_id))
+	      if (MVCCID_IS_VALID (p_mvcc_header->delid_chn.mvcc_del_id))
 		{
-		  flag = OR_MVCC_FLAG_VALID_DELID | OR_MVCC_FLAG_ENABLED;
+		  flag = OR_MVCC_FLAG_VALID_DELID;
 		}
 	    }
 
@@ -2623,7 +2623,7 @@ btree_leaf_key_oid_set_mvcc_flag (char *rec_data, short record_flag)
 /*
  * btree_leaf_clear_flag () - clear leaf key oid flag
  *   return:  nothing
- *   recp(in/out):  
+ *   recp(in/out):
  *   record_flag(in):
  */
 static void
@@ -2811,7 +2811,7 @@ btree_add_mvcc_delid (RECDES * rec, int oid_offset, int mvcc_delid_offset,
  *   mvcc_delid_offset(in): MVCC delid offset
  *   p_mvcc_delid(in): MVCC delete id
  *
- * Note: This function must be called if the record already contain MVCC delid 
+ * Note: This function must be called if the record already contain MVCC delid
  *  for specified OID. Thus, the old MVCCC delid is replaced by the new one.
  *	The length of the record is not affected by this function.
  */
@@ -2834,7 +2834,7 @@ btree_set_mvcc_delid (RECDES * rec, int oid_offset, int mvcc_delid_offset,
  *   oid_offset(in): OID offset for which MVCC delid is deleted
  *   mvcc_delid_offset(in): MVCC delid offset inside rec
  *
- * Note: This function must be called if the record already contain MVCC delid 
+ * Note: This function must be called if the record already contain MVCC delid
  *  for specified OID.
  */
 static void
@@ -2943,7 +2943,7 @@ btree_append_mvcc_info (RECDES * rec, MVCC_REC_HEADER * p_mvcc_rec_header,
 						BTREE_LEAF_OID_HAS_MVCC_DELID);
 	    }
 	  OR_PUT_BIGINT (rec->data + rec->length,
-			 &p_mvcc_rec_header->mvcc_del_id);
+			 &(p_mvcc_rec_header->delid_chn.mvcc_del_id));
 	  rec->length += OR_BIGINT_SIZE;
 	}
     }
@@ -3056,7 +3056,7 @@ btree_insert_oid_with_order (RECDES * rec, OID * oid, OID * class_oid,
 
 	  OR_PUT_BIGINT (ptr, &p_mvcc_rec_header->mvcc_ins_id);
 	  ptr += OR_MVCCID_SIZE;
-	  OR_PUT_BIGINT (ptr, &p_mvcc_rec_header->mvcc_del_id);
+	  OR_PUT_BIGINT (ptr, &(p_mvcc_rec_header->delid_chn.mvcc_del_id));
 	  rec->length += 2 * OR_MVCCID_SIZE;
 	  assert ((is_unique && (rec->length % 32 == 0))
 		  || (rec->length % 24 == 0));
@@ -3123,7 +3123,7 @@ btree_insert_oid_with_order (RECDES * rec, OID * oid, OID * class_oid,
 
       OR_PUT_BIGINT (oid_ptr, &p_mvcc_rec_header->mvcc_ins_id);
       oid_ptr += OR_MVCCID_SIZE;
-      OR_PUT_BIGINT (oid_ptr, &p_mvcc_rec_header->mvcc_del_id);
+      OR_PUT_BIGINT (oid_ptr, &(p_mvcc_rec_header->delid_chn.mvcc_del_id));
       rec->length += 2 * OR_MVCCID_SIZE;
       assert ((is_unique && (rec->length % 32 == 0))
 	      || (rec->length % 24 == 0));
@@ -4636,7 +4636,9 @@ xbtree_delete_index (THREAD_ENTRY * thread_p, BTID * btid)
   PAGE_PTR P = NULL;
   VPID P_vpid;
   VFID ovfid;
-  int ret;
+  int ret = NO_ERROR;
+  LOG_MVCC_BTID_UNIQUE_STATS *unique_stats = NULL;
+  BTREE_ROOT_HEADER *root_header = NULL;
 
   P_vpid.volid = btid->vfid.volid;	/* read the root page */
   P_vpid.pageid = btid->root_pageid;
@@ -4648,6 +4650,13 @@ xbtree_delete_index (THREAD_ENTRY * thread_p, BTID * btid)
     }
 
   (void) pgbuf_check_page_ptype (thread_p, P, PAGE_BTREE);
+
+  root_header = btree_get_root_header_ptr (P);
+  if (root_header == NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, P);
+      return (((ret = er_errid ()) == NO_ERROR) ? ER_FAILED : ret);
+    }
 
   /* read the header record */
   btree_get_root_ovfid (P, &ovfid);
@@ -4668,6 +4677,16 @@ xbtree_delete_index (THREAD_ENTRY * thread_p, BTID * btid)
   if (!VFID_ISNULL (&ovfid))
     {
       ret = file_destroy (thread_p, &ovfid);
+    }
+
+  /* mark the statistics associated with deleted B-tree as deleted */
+  unique_stats =
+    logtb_mvcc_find_class_oid_btid_stats (thread_p,
+					  &root_header->topclass_oid, btid,
+					  true);
+  if (unique_stats != NULL)
+    {
+      unique_stats->deleted = true;
     }
 
   return ret;
@@ -5330,6 +5349,51 @@ btree_is_unique (THREAD_ENTRY * thread_p, BTID * btid)
   pgbuf_unfix_and_init (thread_p, root);
 
   return (num_nulls != -1);
+}
+
+/*
+ * btree_get_unique_statistics_for_count () - gets unique statistics
+ *   return:
+ *   btid(in): B+tree index identifier
+ *   oid_cnt(in/out): no. of oids
+ *   null_cnt(in/out): no. of nulls
+ *   key_cnt(in/out): no. of keys
+ *
+ * Note: In MVCC the statistics are taken from memory structures. In non-mvcc
+ *	 from B-tree header
+ */
+int
+btree_get_unique_statistics_for_count (THREAD_ENTRY * thread_p, BTID * btid,
+				       int *oid_cnt, int *null_cnt,
+				       int *key_cnt)
+{
+  LOG_MVCC_BTID_UNIQUE_STATS *unique_stats = NULL, *part_stats = NULL;
+
+  if (mvcc_Enabled)
+    {
+      unique_stats =
+	logtb_mvcc_search_btid_stats_all_classes (thread_p, btid, true);
+      if (unique_stats == NULL)
+	{
+	  return ER_FAILED;
+	}
+      *oid_cnt =
+	unique_stats->tran_stats.num_oids +
+	unique_stats->global_stats.num_oids;
+      *key_cnt =
+	unique_stats->tran_stats.num_keys +
+	unique_stats->global_stats.num_keys;
+      *null_cnt =
+	unique_stats->tran_stats.num_nulls +
+	unique_stats->global_stats.num_nulls;
+    }
+  else
+    {
+      return btree_get_unique_statistics (thread_p, btid, oid_cnt, null_cnt,
+					  key_cnt);
+    }
+
+  return NO_ERROR;
 }
 
 /*
@@ -10643,6 +10707,33 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
   is_active = logtb_is_current_active (thread_p);
   tran_isolation = logtb_find_current_isolation (thread_p);
 
+  /* Decide whether key range locking must be performed.
+   * If class_oid is transferred through a new argument,
+   * this operation will be performed more efficiently.
+   */
+  if (cls_oid != NULL && !OID_ISNULL (cls_oid))
+    {
+      /* cls_oid can be NULL_OID in case of non-unique index.
+       * But it does not make problem.
+       */
+      COPY_OID (&class_oid, cls_oid);
+    }
+  else
+    {
+      if (is_active)
+	{
+	  if (heap_get_class_oid (thread_p, &class_oid, oid) == NULL)
+	    {
+	      goto error;
+	      /* nextkey_lock_request = true; goto start_point; */
+	    }
+	}
+      else
+	{
+	  OID_SET_NULL (&class_oid);
+	}
+    }
+
 #if defined(BTREE_DEBUG)
   if (BTREE_INVALID_INDEX_ID (btid))
     {
@@ -10709,8 +10800,9 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
       if (is_active && BTREE_IS_UNIQUE (&btid_int))
 	{
 	  assert (delete_delid_only == false);
-	  if (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
-	      || op_type == SINGLE_ROW_MODIFY)
+	  if (!mvcc_Enabled
+	      && (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
+		  || op_type == SINGLE_ROW_MODIFY))
 	    {
 	      /* update the root header */
 	      ret_val =
@@ -10728,10 +10820,24 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	      /* Multiple instances will be deleted.  Update local statistics. */
 	      if (unique_stat_info == NULL)
 		{
-		  goto error;
+		  if (mvcc_Enabled)
+		    {
+		      if (logtb_mvcc_update_class_unique_stats
+			  (thread_p, &class_oid, btid, 0, -1, -1) != NO_ERROR)
+			{
+			  goto error;
+			}
+		    }
+		  else
+		    {
+		      goto error;
+		    }
 		}
-	      unique_stat_info->num_nulls--;
-	      unique_stat_info->num_oids--;
+	      else
+		{
+		  unique_stat_info->num_nulls--;
+		  unique_stat_info->num_oids--;
+		}
 	    }
 	}
 
@@ -10768,8 +10874,9 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
    */
   if (is_active && BTREE_IS_UNIQUE (&btid_int))
     {
-      if (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
-	  || op_type == SINGLE_ROW_MODIFY)
+      if (!mvcc_Enabled
+	  && (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
+	      || op_type == SINGLE_ROW_MODIFY))
 	{
 	  /* update the root header
 	   * guess existing key delete
@@ -10791,37 +10898,24 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	   */
 	  if (unique_stat_info == NULL)
 	    {
-	      goto error;
+	      if (mvcc_Enabled)
+		{
+		  if (logtb_mvcc_update_class_unique_stats
+		      (thread_p, &class_oid, btid, -1, -1, 0) != NO_ERROR)
+		    {
+		      goto error;
+		    }
+		}
+	      else
+		{
+		  goto error;
+		}
 	    }
-	  unique_stat_info->num_oids--;
-	  unique_stat_info->num_keys--;	/* guess existing key delete */
-	}
-    }
-
-  /* Decide whether key range locking must be performed.
-   * If class_oid is transferred through a new argument,
-   * this operation will be performed more efficiently.
-   */
-  if (cls_oid != NULL && !OID_ISNULL (cls_oid))
-    {
-      /* cls_oid can be NULL_OID in case of non-unique index.
-       * But it does not make problem.
-       */
-      COPY_OID (&class_oid, cls_oid);
-    }
-  else
-    {
-      if (is_active)
-	{
-	  if (heap_get_class_oid (thread_p, &class_oid, oid) == NULL)
+	  else
 	    {
-	      goto error;
-	      /* nextkey_lock_request = true; goto start_point; */
+	      unique_stat_info->num_oids--;
+	      unique_stat_info->num_keys--;	/* guess existing key delete */
 	    }
-	}
-      else
-	{
-	  OID_SET_NULL (&class_oid);
 	}
     }
 
@@ -11864,8 +11958,9 @@ key_deletion:
 
   if (is_active && BTREE_IS_UNIQUE (&btid_int))
     {
-      if (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
-	  || op_type == SINGLE_ROW_MODIFY)
+      if (!mvcc_Enabled
+	  && (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
+	      || op_type == SINGLE_ROW_MODIFY))
 	{
 	  /* at here, do nothing.
 	   * later, undo root header statistics
@@ -11875,11 +11970,25 @@ key_deletion:
 	{
 	  if (unique_stat_info == NULL)
 	    {
-	      goto error;
+	      if (mvcc_Enabled)
+		{
+		  if (key_deleted == false
+		      && logtb_mvcc_update_class_unique_stats (thread_p,
+							       &class_oid,
+							       btid, 1, 0,
+							       0) != NO_ERROR)
+		    {
+		      goto error;
+		    }
+		}
+	      else
+		{
+		  goto error;
+		}
 	    }
-	  /* revert local statistical information */
-	  if (key_deleted == false)
+	  else if (key_deleted == false)
 	    {
+	      /* revert local statistical information */
 	      unique_stat_info->num_keys++;
 	    }
 	}
@@ -13373,8 +13482,11 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added,
 					      oid_size);
 	}
 
-      if ((num_oids > 0)
-	  && (BTREE_NEED_UNIQUE_CHECK (thread_p, op_type) || num_oids >= 2))
+      if (num_oids == 0)
+	{
+	  /* need to insert into OID list */
+	}
+      else if (BTREE_NEED_UNIQUE_CHECK (thread_p, op_type) || num_oids >= 2)
 	{
 	  if (prm_get_bool_value (PRM_ID_UNIQUE_ERROR_KEY_VALUE))
 	    {
@@ -16543,6 +16655,30 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
     }
 #endif /* BTREE_DEBUG */
 
+  /* decide whether key range locking must be performed.
+   * if class_oid is transferred through a new argument,
+   * this operation will be performed more efficiently.
+   */
+  if (cls_oid != NULL && !OID_ISNULL (cls_oid))
+    {
+      COPY_OID (&class_oid, cls_oid);
+      /* cls_oid might be NULL_OID. But it does not make problem. */
+    }
+  else
+    {
+      if (is_active)
+	{
+	  if (heap_get_class_oid (thread_p, &class_oid, oid) == NULL)
+	    {
+	      goto error;
+	    }
+	}
+      else
+	{
+	  OID_SET_NULL (&class_oid);
+	}
+    }
+
   P_vpid.volid = btid->vfid.volid;	/* read the root page */
   P_vpid.pageid = btid->root_pageid;
   P = pgbuf_fix (thread_p, &P_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
@@ -16655,9 +16791,10 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	{
 	  if (BTREE_INSERT_IS_LOGICAL_DELETE (p_mvcc_rec_header))
 	    {
-	      if (op_type == SINGLE_ROW_DELETE
-		  || op_type == SINGLE_ROW_UPDATE
-		  || op_type == SINGLE_ROW_MODIFY)
+	      if (!mvcc_Enabled
+		  && (op_type == SINGLE_ROW_DELETE
+		      || op_type == SINGLE_ROW_UPDATE
+		      || op_type == SINGLE_ROW_MODIFY))
 		{
 		  ret_val =
 		    btree_change_root_header_delta (thread_p, &btid->vfid, P,
@@ -16671,15 +16808,31 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 		{
 		  if (unique_stat_info == NULL)
 		    {
-		      goto error;
+		      if (mvcc_Enabled)
+			{
+			  if (logtb_mvcc_update_class_unique_stats
+			      (thread_p, &class_oid, btid, 0, -1,
+			       -1) != NO_ERROR)
+			    {
+			      goto error;
+			    }
+			}
+		      else
+			{
+			  goto error;
+			}
 		    }
-		  unique_stat_info->num_nulls--;
-		  unique_stat_info->num_oids--;
+		  else
+		    {
+		      unique_stat_info->num_nulls--;
+		      unique_stat_info->num_oids--;
+		    }
 		}
 	    }
-	  else if (op_type == SINGLE_ROW_INSERT
-		   || op_type == SINGLE_ROW_UPDATE
-		   || op_type == SINGLE_ROW_MODIFY)
+	  else if (!mvcc_Enabled
+		   && (op_type == SINGLE_ROW_INSERT
+		       || op_type == SINGLE_ROW_UPDATE
+		       || op_type == SINGLE_ROW_MODIFY))
 	    {
 	      ret_val =
 		btree_change_root_header_delta (thread_p, &btid->vfid, P,
@@ -16695,10 +16848,24 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	    {			/* MULTI_ROW_INSERT, MULTI_ROW_UPDATE */
 	      if (unique_stat_info == NULL)
 		{
-		  goto error;
+		  if (mvcc_Enabled)
+		    {
+		      if (logtb_mvcc_update_class_unique_stats
+			  (thread_p, &class_oid, btid, 0, 1, 1) != NO_ERROR)
+			{
+			  goto error;
+			}
+		    }
+		  else
+		    {
+		      goto error;
+		    }
 		}
-	      unique_stat_info->num_nulls++;
-	      unique_stat_info->num_oids++;
+	      else
+		{
+		  unique_stat_info->num_nulls++;
+		  unique_stat_info->num_oids++;
+		}
 	    }
 	}
 
@@ -16737,8 +16904,9 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
     {
       if (BTREE_INSERT_IS_LOGICAL_DELETE (p_mvcc_rec_header))
 	{
-	  if (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
-	      || op_type == SINGLE_ROW_MODIFY)
+	  if (!mvcc_Enabled
+	      && (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
+		  || op_type == SINGLE_ROW_MODIFY))
 	    {
 	      ret_val =
 		btree_change_root_header_delta (thread_p, &btid->vfid, P, 0,
@@ -16752,14 +16920,30 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	    {
 	      if (unique_stat_info == NULL)
 		{
-		  goto error;
+		  if (mvcc_Enabled)
+		    {
+		      if (logtb_mvcc_update_class_unique_stats
+			  (thread_p, &class_oid, btid, -1, -1, 0) != NO_ERROR)
+			{
+			  goto error;
+			}
+		    }
+		  else
+		    {
+		      goto error;
+		    }
 		}
-	      unique_stat_info->num_oids--;
-	      unique_stat_info->num_keys--;
+	      else
+		{
+		  unique_stat_info->num_oids--;
+		  unique_stat_info->num_keys--;
+		}
 	    }
 	}
-      else if (op_type == SINGLE_ROW_INSERT || op_type == SINGLE_ROW_UPDATE
-	       || op_type == SINGLE_ROW_MODIFY)
+      else if (!mvcc_Enabled
+	       && (op_type == SINGLE_ROW_INSERT
+		   || op_type == SINGLE_ROW_UPDATE
+		   || op_type == SINGLE_ROW_MODIFY))
 	{
 	  /* update the root header */
 	  ret_val =
@@ -16776,34 +16960,24 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	{
 	  if (unique_stat_info == NULL)
 	    {
-	      goto error;
+	      if (mvcc_Enabled)
+		{
+		  if (logtb_mvcc_update_class_unique_stats
+		      (thread_p, &class_oid, btid, 1, 1, 0) != NO_ERROR)
+		    {
+		      goto error;
+		    }
+		}
+	      else
+		{
+		  goto error;
+		}
 	    }
-	  unique_stat_info->num_oids++;
-	  unique_stat_info->num_keys++;	/* guess new key insert */
-	}
-    }
-
-  /* decide whether key range locking must be performed.
-   * if class_oid is transferred through a new argument,
-   * this operation will be performed more efficiently.
-   */
-  if (cls_oid != NULL && !OID_ISNULL (cls_oid))
-    {
-      COPY_OID (&class_oid, cls_oid);
-      /* cls_oid might be NULL_OID. But it does not make problem. */
-    }
-  else
-    {
-      if (is_active)
-	{
-	  if (heap_get_class_oid (thread_p, &class_oid, oid) == NULL)
+	  else
 	    {
-	      goto error;
+	      unique_stat_info->num_oids++;
+	      unique_stat_info->num_keys++;	/* guess new key insert */
 	    }
-	}
-      else
-	{
-	  OID_SET_NULL (&class_oid);
 	}
     }
 
@@ -17981,8 +18155,10 @@ key_insertion:
   if (is_active && BTREE_IS_UNIQUE (&btid_int))
     {
       /* TO DO - unique statistics */
-      if (op_type == SINGLE_ROW_INSERT || op_type == SINGLE_ROW_UPDATE
-	  || op_type == SINGLE_ROW_MODIFY || op_type == SINGLE_ROW_DELETE)
+      if (!mvcc_Enabled
+	  && (op_type == SINGLE_ROW_INSERT || op_type == SINGLE_ROW_UPDATE
+	      || op_type == SINGLE_ROW_MODIFY
+	      || op_type == SINGLE_ROW_DELETE))
 	{
 	  /* at here, do nothing.
 	   * later, undo root header statistics
@@ -17993,14 +18169,32 @@ key_insertion:
 	{
 	  if (unique_stat_info == NULL)
 	    {
-	      goto error;
-	    }
-	  /* revert local statistical information */
-	  if (key_added == 0)
-	    {
-	      if (!BTREE_INSERT_IS_LOGICAL_DELETE (p_mvcc_rec_header))
+	      if (mvcc_Enabled)
 		{
-		  unique_stat_info->num_keys--;
+		  if (key_added == 0
+		      && !BTREE_INSERT_IS_LOGICAL_DELETE (p_mvcc_rec_header)
+		      && logtb_mvcc_update_class_unique_stats (thread_p,
+							       &class_oid,
+							       btid, -1, 0,
+							       0) != NO_ERROR)
+		    {
+		      goto error;
+		    }
+		}
+	      else
+		{
+		  goto error;
+		}
+	    }
+	  else
+	    {
+	      /* revert local statistical information */
+	      if (key_added == 0)
+		{
+		  if (!BTREE_INSERT_IS_LOGICAL_DELETE (p_mvcc_rec_header))
+		    {
+		      unique_stat_info->num_keys--;
+		    }
 		}
 	    }
 	}
@@ -18170,6 +18364,8 @@ exit_on_error:
  * btree_reflect_unique_statistics () -
  *   return: NO_ERROR
  *   unique_stat_info(in):
+ *   only_active_tran(in): if true then reflect statistics only if transaction
+ *			   is active
  *
  * Note: This function reflects the given local statistical
  * information into the global statistical information
@@ -18177,7 +18373,8 @@ exit_on_error:
  */
 int
 btree_reflect_unique_statistics (THREAD_ENTRY * thread_p,
-				 BTREE_UNIQUE_STATS * unique_stat_info)
+				 BTREE_UNIQUE_STATS * unique_stat_info,
+				 bool only_active_tran)
 {
   VPID root_vpid;
   PAGE_PTR root = NULL;
@@ -18214,7 +18411,8 @@ btree_reflect_unique_statistics (THREAD_ENTRY * thread_p,
       goto exit_on_error;
     }
 
-  if (logtb_is_current_active (thread_p) && (root_header->num_nulls != -1))
+  if ((!only_active_tran || logtb_is_current_active (thread_p))
+      && (root_header->num_nulls != -1))
     {
       /* update header information */
       ret =
@@ -26083,7 +26281,6 @@ btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
 
   if (mvcc_Enabled)
     {
-      MVCC_SET_FLAG_BITS (&mvcc_header, MVCC_FLAG_ENABLED);
       MVCC_SET_INSID (&mvcc_header, MVCCID_NULL);
       MVCC_SET_DELID (&mvcc_header, MVCCID_NULL);
       MVCC_SET_NEXT_VERSION (&mvcc_header, &oid_Null_oid);
@@ -29314,7 +29511,7 @@ cleanup:
 /*
  * btree_insert_init_locks () - Initialize lock request for btree_insert.
  *
- * return : 
+ * return :
  * THREAD_ENTRY * thread_p (in) :
  * bool is_active (in) :
  * OID * class_oid (in) :
@@ -29414,7 +29611,7 @@ btree_insert_init_locks (THREAD_ENTRY * thread_p, bool is_active,
  *   return: whether the visible row has been found
  *   btid(in): B+tree index identifier
  *   key_recdes(in): Key record descriptor
- *   offset(in): Offset of the second OID in key buffer 
+ *   offset(in): Offset of the second OID in key buffer
  *   visible_row_position(in/out): key buffer position
  *   oid(out): Object identifier of the visible row or NULL_OID
  *   class_oid(out): Object class identifier
@@ -29480,7 +29677,7 @@ btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
 		}
 	      else
 		{
-		  /* inserted by committed transaction,       
+		  /* inserted by committed transaction,
 		   */
 		  result = BTREE_KEY_FOUND;
 		}
@@ -29561,7 +29758,7 @@ btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
 		}
 	      else
 		{
-		  /* inserted by committed transaction,            
+		  /* inserted by committed transaction,
 		   */
 		  result = BTREE_KEY_FOUND;
 		}
@@ -29629,13 +29826,13 @@ btree_perform_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 
 /*
  * btree_key_find_visible_row () - MVCC find visible row
- *   return: whether the visible row has been found 
+ *   return: whether the visible row has been found
  *   key_oids(in): key oids : (OID, CLASS OID) pairs
  *   key_oids_cnt(in): key oids count
  *   visible_row_position(in/out): visible row position
  *
  * Note: This function must be called when only one of the supplied
- *    rows must be visible. This is the case of key oids of unique tree. 
+ *    rows must be visible. This is the case of key oids of unique tree.
  *	 It more than one row is visible, the function return error.
  *	 When enter in function, visible_row_position contains positions
  *    in oids buffer where to start searching visible row. When exit from
@@ -29743,7 +29940,7 @@ error:
  *   is_all_class_srch(in): the if search is based on all classes
  *			contained in the class hierarchy
  *
- * Note: This returns the oid for the given key. 
+ * Note: This returns the oid for the given key.
  *	 This function must be called only in MVCC.
  */
 static BTREE_SEARCH
@@ -30416,12 +30613,13 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 #endif
 
       btree_set_mvcc_delid (rec, oid_offset, mvcc_delid_offset,
-			    &p_mvcc_rec_header->mvcc_del_id);
+			    &(p_mvcc_rec_header->delid_chn.mvcc_del_id));
+
     }
   else
     {
       btree_add_mvcc_delid (rec, oid_offset, mvcc_delid_offset,
-			    &p_mvcc_rec_header->mvcc_del_id);
+			    &(p_mvcc_rec_header->delid_chn.mvcc_del_id));
       {
 	LEAF_REC leafrec_pnt;
 	int temp_offset;
@@ -30646,22 +30844,4 @@ btree_set_mvcc_header_ids_for_update (THREAD_ENTRY * thread_p,
   /* insert only case */
   MVCC_SET_FLAG_BITS (&mvcc_rec_header[0], OR_MVCC_FLAG_VALID_INSID);
   MVCC_SET_INSID (&mvcc_rec_header[0], *mvcc_id);
-}
-
-/*
- * btree_is_mvcc_disabled_for_class () - check whether MVCC is disabled in
- *					B-tree for specified class
- *
- * return	  : True if MVCC is disabled for class.
- * thread_p (in)  : Thread entry.
- * class_oid (in) : Class OID.
- */
-bool
-btree_is_mvcc_disabled_for_class (THREAD_ENTRY * thread_p, OID * class_oid)
-{
-#if !defined (SERVER_MODE)
-  return true;
-#endif
-
-  return heap_is_mvcc_disabled_for_class (thread_p, class_oid);
 }

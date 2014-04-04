@@ -55,9 +55,20 @@
 /* simple macro to calculate minimum bytes to contain given bits */
 #define BITS_TO_BYTES(bit_cnt)		(((bit_cnt) + 7) / 8)
 
-static int record_header_size = OR_MVCC_HEADER_SIZE;
-static int record_rep_offset = OR_MVCC_REP_AND_FLAG_OFFSET;
-static int record_chn_offset = OR_MVCC_CHN_OFFSET;
+/* TO DO - use this function in btree to */
+/* move the data inside the record */
+#define HEAP_MOVE_INSIDE_RECORD(rec, dest_offset, src_offset)  \
+  do {	\
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true && rec != NULL \
+	  && (dest_offset) >= 0 \
+  && (src_offset) >= 0); \
+  if ((dest_offset) != (src_offset))  \
+    { \
+    memmove (rec->data + (dest_offset), rec->data + (src_offset),	\
+    rec->length - (src_offset)); \
+    rec->length = rec->length + ((dest_offset) - (src_offset)); \
+    } \
+  }while (0)
 
 static TP_DOMAIN *unpack_domain (OR_BUF * buf, int *is_null);
 static char *or_pack_method_sig (char *ptr, void *method_sig_ptr);
@@ -74,6 +85,17 @@ static int or_put_varbit_internal (OR_BUF * buf, char *string, int bitlen,
 static char *or_unpack_var_table_internal (char *ptr, int nvars,
 					   OR_VARINFO * vars,
 					   int offset_size);
+static int or_mvcc_set_insid (OR_BUF * buf,
+			      MVCC_REC_HEADER * mvcc_rec_header);
+static union DELID_CHN or_mvcc_get_delid_chn (OR_BUF * buf, int mvcc_flags,
+					      int *error);
+static int or_mvcc_set_delid_chn (OR_BUF * buf,
+				  MVCC_REC_HEADER * mvcc_rec_header);
+static MVCCID or_mvcc_get_delete_id (RECDES * record);
+static int or_mvcc_get_next_version (OR_BUF * buf, int mvcc_flags, OID * oid);
+static int or_mvcc_set_next_version (OR_BUF * buf,
+				     MVCC_REC_HEADER * mvcc_rec_header);
+extern void or_mvcc_set_flag (RECDES * record, char flag);
 
 /*
  * classobj_get_prop - searches a property list for a value with the given name
@@ -318,7 +340,7 @@ or_rep_id (RECDES * record)
 
   assert (record != NULL && record->data != NULL);
 
-  if (record->length < OR_HEADER_SIZE)
+  if (record->length < OR_HEADER_SIZE (record->data))
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_TF_BUFFER_UNDERFLOW, 0);
     }
@@ -359,7 +381,7 @@ or_set_rep_id (RECDES * record, int repid)
   int offset_size = 0;
   unsigned int new_bits = 0;
 
-  if (record->length < OR_HEADER_SIZE)
+  if (record->length < OR_HEADER_SIZE (record->data))
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_TF_BUFFER_UNDERFLOW, 0);
       return ER_FAILED;
@@ -376,10 +398,10 @@ or_set_rep_id (RECDES * record, int repid)
       new_bits &= ~OR_MVCC_REPID_MASK;
 
       /* Add new repid */
-      new_bits += (repid & OR_MVCC_REPID_MASK);
+      new_bits |= (repid & OR_MVCC_REPID_MASK);
 
       /* Set buffer pointer to the right position */
-      buf->ptr = buf->buffer + OR_MVCC_REP_AND_FLAG_OFFSET;
+      buf->ptr = buf->buffer + OR_REP_OFFSET;
     }
   else
     {
@@ -415,12 +437,10 @@ or_set_rep_id (RECDES * record, int repid)
 int
 or_chn (RECDES * record)
 {
-  int chn = -1;
-
-  if (record->length < OR_HEADER_SIZE)
+  if (record->length < OR_HEADER_SIZE (record->data))
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_TF_BUFFER_UNDERFLOW, 0);
-      return chn;
+      return NULL_CHN;
     }
 
   if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
@@ -428,19 +448,25 @@ or_chn (RECDES * record)
       int mvcc_flag = OR_GET_MVCC_FLAG (record->data);
       if (mvcc_flag & OR_MVCC_FLAG_VALID_DELID)
 	{
-	  /* Record doesn't have chn */
 	  return NULL_CHN;
 	}
       else
 	{
-	  chn = OR_GET_MVCC_CHN (record->data);
+	  if (mvcc_flag & OR_MVCC_FLAG_VALID_INSID)
+	    {
+	      /* CHN is positioned after representation id and insert MVCC id */
+	      return OR_GET_INT (record->data + OR_MVCC_REP_SIZE +
+				 OR_MVCCID_SIZE);
+	    }
+	  else
+	    {
+	      /* CHN is positioned after representation id */
+	      return OR_GET_INT (record->data + OR_MVCC_REP_SIZE);
+	    }
 	}
     }
-  else
-    {
-      chn = OR_GET_CHN (record->data);
-    }
-  return chn;
+
+  return OR_GET_NON_MVCC_CHN (record->data);
 }
 
 int
@@ -448,17 +474,112 @@ or_set_chn (RECDES * record, int chn)
 {
   char *p = NULL;
 
-  if (record->length < OR_HEADER_SIZE)
+  /* For now, it is used in non MVCC only? */
+  assert (!prm_get_bool_value (PRM_ID_MVCC_ENABLED));
+
+  if (record->length < OR_HEADER_SIZE (record->data))
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_TF_BUFFER_UNDERFLOW, 0);
       return ER_FAILED;
     }
 
-  p = record->data;
-  p += OR_CHN_OFFSET;
-  OR_PUT_INT (p, chn);
+  OR_PUT_INT (record->data + OR_NON_MVCC_CHN_OFFSET, chn);
 
   return NO_ERROR;
+}
+
+/*
+ * or_mvcc_chn - extracts cache coherency number from the disk representation
+ *		in MVCC
+ * object
+ *    return: cache coherency number (chn), or -1 for error
+ *    buf(in/out): or buffer
+ *    mvcc_falgs(in): MVCC flags
+ *    error(out): NO_ERROR or error code
+ */
+int
+or_mvcc_chn (OR_BUF * buf, int mvcc_flags, int *error)
+{
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+
+  if (mvcc_flags & OR_MVCC_FLAG_VALID_DELID)
+    {
+      return NULL_CHN;
+    }
+  else if ((buf->ptr + OR_INT_SIZE) > buf->endptr)
+    {
+      *error = or_underflow (buf);
+      return NULL_CHN;
+    }
+  else
+    {
+      int chn = -1;
+      chn = OR_GET_INT (buf->ptr);
+      buf->ptr += OR_INT_SIZE;
+      *error = NO_ERROR;
+      return chn;
+    }
+}
+
+/*
+ * or_mvcc_get_repid_and_flags () - Gets MVCC representation id and flags.
+ *
+ * return	   : MVCC flags.
+ * buf (in/out) : or buffer 
+ * error(out): NO_ERROR or error code
+ */
+int
+or_mvcc_get_repid_and_flags (OR_BUF * buf, int *error)
+{
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+
+  if ((buf->ptr + OR_INT_SIZE) > buf->endptr)
+    {
+      *error = or_underflow (buf);
+      return 0;
+    }
+  else
+    {
+      int repid_and_flag_bits = 0;
+      repid_and_flag_bits = OR_GET_INT (buf->ptr);
+      buf->ptr += OR_INT_SIZE;
+      *error = NO_ERROR;
+      return repid_and_flag_bits;
+    }
+}
+
+/*
+ * or_mvcc_set_repid_and_flags () - Set MVCC representation id and flags.
+ *
+ * return	   : nothing
+ * buf (in/out) : or buffer 
+ * bound_bit(in) : bound bit
+ * variable_offset_size(in); variable offset size
+ * error(out): NO_ERROR or error code
+ */
+int
+or_mvcc_set_repid_and_flags (OR_BUF * buf,
+			     int mvcc_flag, int repid, int bound_bit,
+			     int variable_offset_size)
+{
+  int repid_and_flags;
+
+  /* Add repid */
+  repid_and_flags = repid;
+
+  /* Set bound bit flag -> unchanged */
+  if (bound_bit)
+    {
+      repid_and_flags |= OR_BOUND_BIT_FLAG;
+    }
+  OR_SET_VAR_OFFSET_SIZE (repid_and_flags, variable_offset_size);
+
+  repid_and_flags |=
+    (mvcc_flag & OR_MVCC_FLAG_MASK) << OR_MVCC_FLAG_SHIFT_BITS;
+
+  return or_put_int (buf, repid_and_flags);
 }
 
 /*
@@ -471,7 +592,7 @@ char
 or_mvcc_get_flag (RECDES * record)
 {
   assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
+	  && record->length >= OR_HEADER_SIZE (record->data));
 
   return (char) (OR_GET_MVCC_FLAG (record->data));
 }
@@ -492,9 +613,9 @@ or_mvcc_set_flag (RECDES * record, char flags)
 
   assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
   assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
+	  && record->length >= OR_MVCC_REP_SIZE);
 
-  repid_and_flag = OR_GET_INT (record->data + OR_MVCC_REP_AND_FLAG_OFFSET);
+  repid_and_flag = OR_GET_INT (record->data + OR_REP_OFFSET);
 
   /* Remove old mvcc flags */
   repid_and_flag &= ~OR_MVCC_FLAG_MASK;
@@ -503,7 +624,7 @@ or_mvcc_set_flag (RECDES * record, char flags)
 
   OR_BUF_INIT2 (orep, record->data, record->area_size);
   buf = &orep;
-  buf->ptr = buf->buffer + OR_MVCC_REP_AND_FLAG_OFFSET;
+  buf->ptr = buf->buffer + OR_REP_OFFSET;
   or_put_int (buf, repid_and_flag);
 }
 
@@ -511,208 +632,393 @@ or_mvcc_set_flag (RECDES * record, char flags)
  * or_mvcc_insert_id () - Get insert MVCCID from record data.
  *
  * return	   : Insert MVCCID.
- * record (in)	   : Record descriptor.
+ * buf (in/out)	   : or buffer
+ * mvcc_falgs(in)  : MVCC flags
+ * error(out): NO_ERROR or error code
  */
 MVCCID
-or_mvcc_get_insert_id (RECDES * record)
+or_mvcc_get_insid (OR_BUF * buf, int mvcc_flags, int *error)
 {
-  MVCCID insert_id = 0;
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
 
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
+  if (!(mvcc_flags & OR_MVCC_FLAG_VALID_INSID))
+    {
+      return MVCCID_FREE;
+    }
+  else if ((buf->ptr + OR_MVCCID_SIZE) > buf->endptr)
+    {
+      *error = or_underflow (buf);
+      return 0;
+    }
+  else
+    {
+      MVCCID insert_id = 0;
+      OR_GET_BIGINT (buf->ptr, &insert_id);
+      buf->ptr += OR_MVCCID_SIZE;
+      *error = NO_ERROR;
+      return insert_id;
+    }
 
-  OR_GET_MVCC_INSERT_ID (record->data, &insert_id);
-  return insert_id;
 }
 
 /*
- * or_mvcc_set_insert_id () - Set insert MVCCID to record data.
+ * or_mvcc_set_insid () - Set insert MVCCID into record data
  *
- * return	  : Void.
- * record (in)	  : Record descriptor.
- * insert_id (in) : Insert MVCCID.
+ * return	   : Insert MVCCID.
+ * buf (in/out)	   : or buffer
+ * mvcc_rec_header(in) : MVCC record header
  */
-void
-or_mvcc_set_insert_id (RECDES * record, MVCCID insert_id)
+int
+or_mvcc_set_insid (OR_BUF * buf, MVCC_REC_HEADER * mvcc_rec_header)
 {
-  OR_BUF orep, *buf;
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+  if (!(mvcc_rec_header->mvcc_flag & OR_MVCC_FLAG_VALID_INSID))
+    {
+      return NO_ERROR;
+    }
 
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
-
-  OR_BUF_INIT2 (orep, record->data, record->area_size);
-  buf = &orep;
-  buf->ptr = buf->buffer + OR_MVCC_INSID_OFFSET;
-  or_put_bigint (buf, insert_id);
+  return or_put_bigint (buf, mvcc_rec_header->mvcc_ins_id);
 }
 
 /*
- * or_mvcc_delete_id () - Get delete MVCCID from record data.
+ * or_mvcc_delete_id () - Get MVCC delete id or chn
  *
- * return	   : Delete MVCCID.
- * record (in)	   : Record descriptor.
+ * return	   : MVCC delete id or chn
+ * buf (in/out)	   : or buffer
+ * mvcc_falgs(in)  : MVCC flags
+ * error(out): NO_ERROR or error code
  */
-MVCCID
-or_mvcc_get_delete_id (RECDES * record)
+union DELID_CHN
+or_mvcc_get_delid_chn (OR_BUF * buf, int mvcc_flags, int *error)
 {
-  MVCCID delete_id = 0;
+  union DELID_CHN delid_or_chn;
 
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && buf != NULL &&
+	  error != NULL);
 
-  OR_GET_MVCC_DELETE_ID (record->data, &delete_id);
-  return delete_id;
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+
+  *error = NO_ERROR;
+  if (mvcc_flags & OR_MVCC_FLAG_VALID_DELID)
+    {
+      /* MVCC DELID is active */
+      if ((buf->ptr + OR_MVCCID_SIZE) > buf->endptr)
+	{
+	  *error = or_underflow (buf);
+	  delid_or_chn.mvcc_del_id = MVCCID_NULL;
+	}
+      else
+	{
+	  OR_GET_BIGINT (buf->ptr, &(delid_or_chn.mvcc_del_id));
+	  buf->ptr += OR_MVCCID_SIZE;
+	}
+    }
+  else if ((buf->ptr + OR_INT_SIZE) > buf->endptr)
+    {
+      *error = or_underflow (buf);
+    }
+  else
+    {
+      delid_or_chn.chn = OR_GET_INT (buf->ptr);
+      buf->ptr += OR_INT_SIZE;
+
+      if (mvcc_flags & OR_MVCC_FLAG_VALID_LONG_CHN)
+	{
+	  if ((buf->ptr + OR_INT_SIZE) > buf->endptr)
+	    {
+	      *error = or_underflow (buf);
+	    }
+	  else
+	    {
+	      *error = or_advance (buf, OR_INT_SIZE);
+	    }
+	}
+    }
+
+  return delid_or_chn;
 }
 
 /*
- * or_mvcc_set_delete_id () - Set delete MVCCID to record data.
+ * or_mvcc_set_delid_chn () - Set MVCC delete id or chn
  *
- * return	  : Void.
- * record (in)	  : Record descriptor.
- * delete_id (in) : Delete MVCCID.
+ * return	      : error code 
+ * buf (in/out)	      : or buffer 
+ * mvcc_rec_header(in): MVCC record header
  */
-void
-or_mvcc_set_delete_id (RECDES * record, MVCCID delete_id)
+int
+or_mvcc_set_delid_chn (OR_BUF * buf, MVCC_REC_HEADER * mvcc_rec_header)
 {
-  OR_BUF orep, *buf;
+  int error_code = NO_ERROR;
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && buf != NULL);
 
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+  if (mvcc_rec_header->mvcc_flag & OR_MVCC_FLAG_VALID_DELID)
+    {
+      /* MVCC DELID is active */
+      return or_put_bigint (buf, mvcc_rec_header->delid_chn.mvcc_del_id);
+    }
 
-  OR_BUF_INIT2 (orep, record->data, record->area_size);
-  buf = &orep;
-  buf->ptr = buf->buffer + OR_MVCC_DELID_OFFSET;
-  or_put_bigint (buf, delete_id);
+  /* CHN is active */
+  error_code = or_put_int (buf, mvcc_rec_header->delid_chn.chn);
+  if ((error_code == NO_ERROR)
+      && (mvcc_rec_header->mvcc_flag & OR_MVCC_FLAG_VALID_LONG_CHN))
+    {
+      error_code = or_put_int (buf, 0);
+    }
+  return error_code;
 }
 
 /*
- * or_mvcc_get_next_version () - Get OID of next version from record data.
+ * or_mvcc_get_next_version () - Get MVCC next version from record data.
  *
- * return	      : OID of next version.
- * record (in)	      : Record descriptor.
+ * return	   : error code
+ * buf (in/out)	   : or buffer
+ * mvcc_falgs(in)  : MVCC flags
+ * oid(out)	   : OID of next version
  */
-OID
-or_mvcc_get_next_version (RECDES * record)
+int
+or_mvcc_get_next_version (OR_BUF * buf, int mvcc_flags, OID * oid)
 {
-  OID next_version;
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
 
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
+  if (!(mvcc_flags & OR_MVCC_FLAG_VALID_NEXT_VERSION))
+    {
+      COPY_OID (oid, &oid_Null_oid);
+      return NO_ERROR;
+    }
 
-  OR_GET_MVCC_NEXT_VERSION (record->data, &next_version);
-  return next_version;
+  return or_get_oid (buf, oid);
 }
 
 /*
- * or_mvcc_set_next_version () - Set OID of next version in record data.
+ * or_mvcc_set_next_version () - Set MVCC next version
  *
- * return	     : Void.
- * record (in)	     : Record descriptor.
- * next_version (in) : OID of next version.
+ * return	      : error code 
+ * buf (in/out)	      : or buffer
+ * mvcc_rec_header(in): MVCC record header
  */
-void
-or_mvcc_set_next_version (RECDES * record, OID next_version)
+int
+or_mvcc_set_next_version (OR_BUF * buf, MVCC_REC_HEADER * mvcc_rec_header)
 {
-  OR_BUF orep, *buf;
+  int error_code = NO_ERROR;
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && buf != NULL);
 
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+  if (!(mvcc_rec_header->mvcc_flag & OR_MVCC_FLAG_VALID_NEXT_VERSION))
+    {
+      return NO_ERROR;
+    }
 
-  OR_BUF_INIT2 (orep, record->data, record->area_size);
-  buf = &orep;
-  buf->ptr = buf->buffer + OR_MVCC_NEXT_VERSION_OFFSET;
-  or_put_oid (buf, &next_version);
+  /* MVCC DELID is active */
+  return or_put_oid (buf, &(mvcc_rec_header->next_version));
 }
 
 /*
  * or_mvcc_get_header () - Get mvcc record header from record data.
  *
- * return	     : Void.
- * record (in)	     : Record descriptor.
- * mvcc_header (out) : MVCC Record header.
+ * return		: Void.
+ * record (in)		: Record descriptor.
+ * mvcc_header (out)	: MVCC Record header.
  */
-void
+int
 or_mvcc_get_header (RECDES * record, MVCC_REC_HEADER * mvcc_header)
 {
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE && mvcc_header != NULL);
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
+  OR_BUF buf;
+  int rc = NO_ERROR;
+  int repid_and_flag_bits;
 
-  mvcc_header->mvcc_flag = or_mvcc_get_flag (record);
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
+	  && record != NULL && record->data != NULL
+	  && record->length >= OR_MVCC_REP_SIZE && mvcc_header != NULL);
 
-  mvcc_header->mvcc_ins_id = or_mvcc_get_insert_id (record);
+  or_init (&buf, record->data, record->length);
 
-  mvcc_header->mvcc_del_id = MVCCID_NULL;
-  if (mvcc_header->mvcc_flag & OR_MVCC_FLAG_VALID_DELID)
+  repid_and_flag_bits = or_mvcc_get_repid_and_flags (&buf, &rc);
+  if (rc != NO_ERROR)
     {
-      mvcc_header->mvcc_del_id = or_mvcc_get_delete_id (record);
+      goto exit_on_error;
     }
-  else
-    {
-      mvcc_header->chn = or_chn (record);
-    }
-  mvcc_header->next_version = or_mvcc_get_next_version (record);
+  mvcc_header->repid = repid_and_flag_bits & OR_MVCC_REPID_MASK;
+  mvcc_header->mvcc_flag =
+    (char) ((repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS)
+	    & OR_MVCC_FLAG_MASK);
 
-  mvcc_header->repid = or_rep_id (record);
+  mvcc_header->mvcc_ins_id =
+    or_mvcc_get_insid (&buf, mvcc_header->mvcc_flag, &rc);
+  if (rc != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  mvcc_header->delid_chn =
+    or_mvcc_get_delid_chn (&buf, mvcc_header->mvcc_flag, &rc);
+  if (rc != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  rc = or_mvcc_get_next_version (&buf, mvcc_header->mvcc_flag,
+				 &(mvcc_header->next_version));
+  if (rc != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  return NO_ERROR;
+
+exit_on_error:
+  return (rc == NO_ERROR && (rc = er_errid ()) == NO_ERROR) ? ER_FAILED : rc;
 }
 
 /*
- * or_mvcc_set_header () - Updates record header in record data.
+ * or_mvcc_set_header () - Updates record header
  *
  * return		: Void.
- * record (in)		: Record descriptor.
+ * record (in/out)	: Record descriptor. 
  * mvcc_rec_header (in) : MVCC Record header.
+ *
+ *  Note: This function assume that record area size is sufficiently large
+ *    to include additional MVCC data that may come from mvcc_rec_header. 
  */
-void
-or_mvcc_set_header (RECDES * record, MVCC_REC_HEADER mvcc_rec_header)
+int
+or_mvcc_set_header (RECDES * record, MVCC_REC_HEADER * mvcc_rec_header)
 {
   OR_BUF orep, *buf;
-  int repid_and_flags;
+  int error = NO_ERROR;
+  int mvcc_old_flag = 0;
+  int repid_and_flag_bits = 0;
+  int old_mvcc_size = 0, new_mvcc_size = 0;
+  bool is_bigone = false;
 
-  assert (record != NULL && record->data != NULL
-	  && record->length >= OR_HEADER_SIZE);
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED));
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
+	  && record != NULL && record->data != NULL && record->length != 0
+	  && record->length >= OR_MVCC_MIN_HEADER_SIZE);
+
+  repid_and_flag_bits = OR_GET_MVCC_REPID_AND_FLAG (record->data);
+
+  mvcc_old_flag =
+    (char) ((repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS)
+	    & OR_MVCC_FLAG_MASK);
+
+  old_mvcc_size = or_mvcc_header_size_from_flags (mvcc_old_flag);
+  new_mvcc_size = or_mvcc_header_size_from_flags (mvcc_rec_header->mvcc_flag);
+  if (old_mvcc_size != new_mvcc_size)
+    {
+      /* resize MVCC info inside recdes */
+      if (record->area_size <
+	  (record->length + new_mvcc_size - old_mvcc_size))
+	{
+	  /* TO DO - er_set */
+	  assert (false);
+	  goto exit_on_error;
+	}
+
+      HEAP_MOVE_INSIDE_RECORD (record, new_mvcc_size, old_mvcc_size);
+    }
 
   OR_BUF_INIT2 (orep, record->data, record->area_size);
   buf = &orep;
 
-  or_put_bigint (buf, mvcc_rec_header.mvcc_ins_id);
-
-  if (mvcc_rec_header.mvcc_flag & OR_MVCC_FLAG_VALID_DELID)
+  error = or_mvcc_set_repid_and_flags (buf, mvcc_rec_header->mvcc_flag,
+				       mvcc_rec_header->repid,
+				       repid_and_flag_bits &
+				       OR_BOUND_BIT_FLAG,
+				       //OR_GET_BOUND_BIT_FLAG (record->data),
+				       OR_GET_OFFSET_SIZE (record->data));
+  if (error != NO_ERROR)
     {
-      or_put_bigint (buf, mvcc_rec_header.mvcc_del_id);
+      goto exit_on_error;
     }
-  else
+
+  error = or_mvcc_set_insid (buf, mvcc_rec_header);
+  if (error != NO_ERROR)
     {
-      or_put_int (buf, mvcc_rec_header.chn);
-      or_put_int (buf, 0);
+      goto exit_on_error;
     }
 
-  or_put_oid (buf, &mvcc_rec_header.next_version);
-
-  /* Create repid_and_flags bits */
-  /* Add mvcc flags */
-  repid_and_flags =
-    (mvcc_rec_header.mvcc_flag & OR_MVCC_FLAG_MASK)
-    << OR_MVCC_FLAG_SHIFT_BITS;
-
-  /* Add repid */
-  repid_and_flags += mvcc_rec_header.repid;
-
-  /* Set bound bit flag -> unchanged */
-  if (OR_GET_BOUND_BIT_FLAG (record->data))
+  error = or_mvcc_set_delid_chn (buf, mvcc_rec_header);
+  if (error != NO_ERROR)
     {
-      repid_and_flags |= OR_BOUND_BIT_FLAG;
+      goto exit_on_error;
     }
-  OR_SET_VAR_OFFSET_SIZE (repid_and_flags, OR_GET_OFFSET_SIZE (record->data));
 
-  or_put_int (buf, repid_and_flags);
+  error = or_mvcc_set_next_version (buf, mvcc_rec_header);
+  if (error != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  return NO_ERROR;
+
+exit_on_error:
+  return (error == NO_ERROR && (error = er_errid ()) == NO_ERROR) ?
+    ER_FAILED : error;
+}
+
+/*
+ * or_mvcc_add_header () - Add header in record
+ *
+ * return		: Void.
+ * record (in/out)	: Record descriptor. 
+ * mvcc_rec_header (in) : MVCC Record header.
+ *
+ *  Note: This function must be called when the record is build by adding
+ *    header and then data. This function will add record header only.
+ *    Later, record data must be added. Obvious, the caller must be sure that
+ *    the record area size is sufficiently large to include header and data.
+ *	  When called, record->length must be 0. When return, record->length
+ *    will contain the header size.
+ */
+int
+or_mvcc_add_header (RECDES * record, MVCC_REC_HEADER * mvcc_rec_header,
+		    int bound_bit, int variable_offset_size)
+{
+  OR_BUF orep, *buf;
+  int error = NO_ERROR;
+  int mvcc_old_flag = 0;
+  int repid_and_flag_bits = 0;
+  int old_mvcc_size = 0, new_mvcc_size = 0;
+  bool is_bigone = false;
+
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
+	  && record != NULL && record->data != NULL && record->length == 0);
+
+  OR_BUF_INIT2 (orep, record->data, record->area_size);
+  buf = &orep;
+
+  error = or_mvcc_set_repid_and_flags (buf, mvcc_rec_header->mvcc_flag,
+				       mvcc_rec_header->repid, bound_bit,
+				       variable_offset_size);
+  if (error != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  error = or_mvcc_set_insid (buf, mvcc_rec_header);
+  if (error != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  error = or_mvcc_set_delid_chn (buf, mvcc_rec_header);
+  if (error != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  error = or_mvcc_set_next_version (buf, mvcc_rec_header);
+  if (error != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  record->length = CAST_BUFLEN (buf->ptr - buf->buffer);
+
+  return NO_ERROR;
+
+exit_on_error:
+  return (error == NO_ERROR && (error = er_errid ()) == NO_ERROR) ?
+    ER_FAILED : error;
 }
 
 #if !defined (SERVER_MODE)
@@ -7371,58 +7677,59 @@ error_return:
 /*
  * or_header_size () - Return the record header size.
  *
- * return : 
+ * return : header size
  */
 int
-or_header_size ()
+or_header_size (char *ptr)
 {
-  return record_header_size;
-}
-
-/*
- * or_rep_offset () - Return the offset to repid in object representation.
- *
- * return : 
- */
-int
-or_rep_offset ()
-{
-  return record_rep_offset;
-}
-
-/*
- * or_chn_offset () - Return the offset to chn in object representation.
- *
- * return : 
- */
-int
-or_chn_offset ()
-{
-  return record_chn_offset;
-}
-
-/*
- * or_init_header_size_and_offsets () - Initialize various dimensions of common
- *				  mvcc and non-mvcc header elements.
- *
- * return	     : Void.
- * mvcc_enabled (in) : True in MVCC is enabled.
- */
-void
-or_init_header_size_and_offsets (bool mvcc_enabled)
-{
-  if (mvcc_enabled)
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false)
     {
-      record_header_size = OR_MVCC_HEADER_SIZE;
-      record_rep_offset = OR_MVCC_REP_AND_FLAG_OFFSET;
-      record_chn_offset = OR_MVCC_CHN_OFFSET;
+      return OR_NON_MVCC_HEADER_SIZE;
     }
   else
     {
-      record_header_size = OR_NON_MVCC_HEADER_SIZE;
-      record_rep_offset = OR_REP_OFFSET;
-      record_chn_offset = OR_CHN_OFFSET;
+      return or_mvcc_header_size_from_flags (OR_GET_MVCC_FLAG (ptr));
     }
+}
+
+/*
+ * or_mvcc_header_size_from_flags () - Return the record header size from flags.
+ *
+ * mvcc_flags(in): MVCC flags 
+ * has_fixed_size(in) : true if has fixed size
+ * return : header size
+ * 
+ */
+int
+or_mvcc_header_size_from_flags (char mvcc_flags)
+{
+  int mvcc_header_size = 0;
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true);
+
+  /* skip MVCC fields */
+  mvcc_header_size = OR_MVCC_REP_SIZE;
+  if (mvcc_flags & OR_MVCC_FLAG_VALID_INSID)
+    {
+      mvcc_header_size += OR_BIGINT_SIZE;
+    }
+
+  if ((mvcc_flags & OR_MVCC_FLAG_VALID_DELID)
+      || (mvcc_flags & OR_MVCC_FLAG_VALID_LONG_CHN))
+    {
+      mvcc_header_size += OR_BIGINT_SIZE;
+    }
+  else
+    {
+      mvcc_header_size += OR_INT_SIZE;
+    }
+
+  if (mvcc_flags & OR_MVCC_FLAG_VALID_NEXT_VERSION)
+    {
+      /* skip next version */
+      mvcc_header_size += OR_OID_SIZE;
+    }
+
+  return mvcc_header_size;
 }
 
 #if defined(ENABLE_UNUSED_FUNCTION)

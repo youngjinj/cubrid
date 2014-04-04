@@ -5485,12 +5485,40 @@ sm_att_fk_constrained (MOP classop, const char *name)
 }
 
 /*
+ * sm_class_has_unique_constraint() - Returns whether the class has UNIQUE
+ *				      constraint.
+ *   return: true if has unique constraint, false otherwise.
+ *   classop(in): class object
+ *   check_subclasses(in): true if need to check all hierarchy
+ */
+bool
+sm_class_has_unique_constraint (MOP classop, bool check_subclasses)
+{
+  SM_CLASS *class_ = NULL;
+  DB_OBJLIST *subclass = NULL;
+  bool rc;
+
+  if (au_fetch_class (classop, &class_, AU_FETCH_READ, AU_SELECT) != NO_ERROR)
+    {
+      return false;
+    }
+
+  rc = classobj_has_class_unique_constraint (class_->constraints);
+  for (subclass = class_->users; !rc && subclass != NULL;
+       subclass = subclass->next)
+    {
+      rc = sm_class_has_unique_constraint (subclass->op, check_subclasses);
+    }
+
+  return rc;
+}
+
+/*
  * sm_att_unique_constrained() - Returns whether the attribute is UNIQUE constained.
  *   return: whether the attribute is UNIQUE constrained.
  *   classop(in): class object
  *   name(in): attribute
  */
-
 int
 sm_att_unique_constrained (MOP classop, const char *name)
 {
@@ -12620,13 +12648,15 @@ lockhint_subclasses (SM_TEMPLATE * temp, SM_CLASS * class_)
   const char *names[1];
   LOCK locks[1];
   int subs[1];
+  LC_PREFETCH_FLAGS flags[1];
 
   if (class_ != NULL)
     {
       names[0] = class_->header.name;
       locks[0] = locator_fetch_mode_to_lock (DB_FETCH_WRITE, LC_CLASS);
       subs[0] = 1;
-      if (locator_lockhint_classes (1, names, locks, subs, 1, NULL) ==
+      flags[0] = LC_PREF_FLAG_LOCK;
+      if (locator_lockhint_classes (1, names, locks, subs, flags, 1, NULL) ==
 	  LC_CLASSNAME_ERROR)
 	{
 	  error = er_errid ();
@@ -12637,7 +12667,8 @@ lockhint_subclasses (SM_TEMPLATE * temp, SM_CLASS * class_)
       names[0] = temp->name;
       locks[0] = locator_fetch_mode_to_lock (DB_FETCH_WRITE, LC_CLASS);
       subs[0] = 1;
-      if (locator_lockhint_classes (1, names, locks, subs, 1, NULL) ==
+      flags[0] = LC_PREF_FLAG_LOCK;
+      if (locator_lockhint_classes (1, names, locks, subs, flags, 1, NULL) ==
 	  LC_CLASSNAME_ERROR)
 	{
 	  error = er_errid ();

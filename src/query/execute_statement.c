@@ -5566,6 +5566,7 @@ do_check_for_empty_classes_in_delete (PARSER_CONTEXT * parser,
   MOP *partitions = NULL;
   HFID *hfid = NULL;
   bool has_rows = false;
+  LC_PREFETCH_FLAGS *flags = NULL;
 
   /* count the number of new DELETE statements */
   while (node != NULL)
@@ -5598,6 +5599,13 @@ do_check_for_empty_classes_in_delete (PARSER_CONTEXT * parser,
       goto cleanup;
     }
 
+  flags = db_private_alloc (NULL, num_classes * sizeof (LC_PREFETCH_FLAGS));
+  if (flags == NULL)
+    {
+      error = ER_OUT_OF_VIRTUAL_MEMORY;
+      goto cleanup;
+    }
+
   /* prepare information for locking */
   node = statement->info.delete_.del_stmt_list;
   for (idx = 0; idx < num_classes && node != NULL; idx++, node = node->next)
@@ -5622,12 +5630,13 @@ do_check_for_empty_classes_in_delete (PARSER_CONTEXT * parser,
 	{
 	  need_subclasses[idx] = false;
 	}
+      flags[idx] = LC_PREF_FLAG_LOCK;
     }
 
   /* lock splitted classes with X_LOCK */
   if (locator_lockhint_classes
       (num_classes, (const char **) classes_names, locks, need_subclasses,
-       1, NULL) != LC_CLASSNAME_EXIST)
+       flags, 1, NULL) != LC_CLASSNAME_EXIST)
     {
       error = er_errid ();
       goto cleanup;
@@ -5740,6 +5749,11 @@ cleanup:
   if (need_subclasses != NULL)
     {
       db_private_free (NULL, need_subclasses);
+    }
+
+  if (flags != NULL)
+    {
+      db_private_free (NULL, flags);
     }
 
   return error;
@@ -6899,6 +6913,7 @@ update_object_tuple (PARSER_CONTEXT * parser,
       /* handle delete only after update to give a chance to triggers */
       if (should_delete && error == NO_ERROR)
 	{
+	  object = ws_mvcc_latest_version (object);
 	  error = locator_flush_instance (object);
 	  if (error != NO_ERROR)
 	    {
@@ -8008,8 +8023,9 @@ update_check_for_constraints (PARSER_CONTEXT * parser, int *has_unique,
 {
   int error = NO_ERROR;
   PT_NODE *lhs = NULL, *att = NULL, *pointer = NULL, *spec = NULL;
-  PT_NODE *assignment;
+  PT_NODE *assignment = NULL;
   DB_OBJECT *class_obj = NULL;
+  bool mvcc_enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
 
   assignment = statement->node_type == PT_MERGE
     ? statement->info.merge.update.assignment
@@ -8063,20 +8079,36 @@ update_check_for_constraints (PARSER_CONTEXT * parser, int *has_unique,
 	      goto exit_on_error;
 	    }
 
-	  if (*has_unique == 0 && sm_att_unique_constrained (class_obj,
-							     att->info.
-							     name.original))
+	  if (mvcc_enabled)
 	    {
-	      *has_unique = 1;
-	      spec->info.spec.flag |= PT_SPEC_FLAG_HAS_UNIQUE;
+	      if (!*has_unique
+		  && sm_class_has_unique_constraint (class_obj,
+						     spec->info.spec.
+						     only_all == PT_ALL))
+		{
+		  *has_unique = 1;
+		  spec->info.spec.flag |= PT_SPEC_FLAG_HAS_UNIQUE;
+		}
 	    }
-	  if (*has_unique == 0 &&
-	      sm_att_in_unique_filter_constraint_predicate (class_obj,
-							    att->info.name.
-							    original))
+	  else
 	    {
-	      *has_unique = 1;
-	      spec->info.spec.flag |= PT_SPEC_FLAG_HAS_UNIQUE;
+	      if (*has_unique == 0 && sm_att_unique_constrained (class_obj,
+								 att->info.
+								 name.
+								 original))
+		{
+		  *has_unique = 1;
+		  spec->info.spec.flag |= PT_SPEC_FLAG_HAS_UNIQUE;
+		}
+	      if (*has_unique == 0 &&
+		  sm_att_in_unique_filter_constraint_predicate (class_obj,
+								att->info.
+								name.
+								original))
+		{
+		  *has_unique = 1;
+		  spec->info.spec.flag |= PT_SPEC_FLAG_HAS_UNIQUE;
+		}
 	    }
 	  if (sm_att_constrained (class_obj, att->info.name.original,
 				  SM_ATTFLAG_NON_NULL))

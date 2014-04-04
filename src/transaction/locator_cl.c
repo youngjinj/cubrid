@@ -4234,6 +4234,18 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 			    }
 			  else
 			    {
+			      /* Make sure that we have the new class in workspace */
+			      if (new_class_mop->object == NULL)
+				{
+				  int error = NO_ERROR;
+				  SM_CLASS *smclass = NULL;
+				  /* No need to check authorization here */
+				  error_code =
+				    au_fetch_class_force (new_class_mop,
+							  &smclass,
+							  AU_FETCH_READ);
+				}
+
 			      new_mop =
 				ws_mop (OID_ISNULL (&obj->updated_oid) ?
 					&obj->oid : &obj->updated_oid,
@@ -4694,7 +4706,7 @@ locator_mflush (MOP mop, void *mf)
   mflush = (LOCATOR_MFLUSH_CACHE *) mf;
 
   /* Flush the instance only if it is dirty */
-  if (!WS_ISDIRTY (mop))
+  if (!WS_ISDIRTY (mop) || mop->mvcc_link != NULL)
     {
       if (mflush->decache)
 	{
@@ -5063,7 +5075,14 @@ locator_mflush (MOP mop, void *mf)
    * start at alignment of sizeof(int)
    */
 
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true)
+    {
+      /* reserve enough space if need to add additional MVCC header info */
+      round_length += (OR_MVCC_MAX_HEADER_SIZE - OR_MVCC_INSERT_HEADER_SIZE);
+    }
+
   wasted_length = DB_WASTED_ALIGN (round_length, MAX_ALIGNMENT);
+
 #if !defined(NDEBUG)
   /* suppress valgrind UMW error */
   memset (mflush->recdes.data + round_length, 0,
@@ -6357,6 +6376,7 @@ locator_cache_lock_lockhint_classes (LC_LOCKHINT * lockhint)
  *   many_classnames(in): Name of the classes
  *   many_locks(in): The desired lock for each class
  *   need_subclasses(in): Wheater or not the subclasses are needed.
+ *   flags(in): array of flags associated with class names
  *   quit_on_errors(in): Wheater to continue finding the classes in case of an
  *                     error, such as a class does not exist or locks on some
  *                     of the classes may not be granted.
@@ -6365,6 +6385,7 @@ locator_cache_lock_lockhint_classes (LC_LOCKHINT * lockhint)
 LC_FIND_CLASSNAME
 locator_lockhint_classes (int num_classes, const char **many_classnames,
 			  LOCK * many_locks, int *need_subclasses,
+			  LC_PREFETCH_FLAGS * flags,
 			  int quit_on_errors, LC_LOCKHINT ** out_lockhint)
 {
   TRAN_ISOLATION isolation;	/* Client isolation level                   */
@@ -6417,9 +6438,10 @@ locator_lockhint_classes (int num_classes, const char **many_classnames,
 	    }
 
 	  /*
-	   * If the subclasses are needed, go to the server for now.
+	   * If the subclasses or count optimization are needed, go to the
+	   * server for now.
 	   */
-	  if (need_subclasses[i] > 0)
+	  if (need_subclasses[i] > 0 || (flags[i] & LC_PREF_FLAG_COUNT_OPTIM))
 	    {
 	      need_call_server = true;
 	      continue;
@@ -6579,7 +6601,7 @@ locator_lockhint_classes (int num_classes, const char **many_classnames,
 
   all_found = locator_find_lockhint_class_oids (num_classes, many_classnames,
 						many_locks, need_subclasses,
-						guessmany_class_oids,
+						flags, guessmany_class_oids,
 						guessmany_class_chns,
 						quit_on_errors, &lockhint,
 						&fetch_area);

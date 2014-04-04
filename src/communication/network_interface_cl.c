@@ -1351,6 +1351,7 @@ locator_assign_oid_batch (LC_OIDSET * oidset)
  *   many_classnames(in):
  *   many_locks(in):
  *   many_need_subclasses(in):
+ *   many_flags(in):
  *   guessed_class_oids(in):
  *   guessed_class_chns(in):
  *   quit_on_errors(in):
@@ -1364,6 +1365,7 @@ locator_find_lockhint_class_oids (int num_classes,
 				  const char **many_classnames,
 				  LOCK * many_locks,
 				  int *many_need_subclasses,
+				  LC_PREFETCH_FLAGS * many_flags,
 				  OID * guessed_class_oids,
 				  int *guessed_class_chns, int quit_on_errors,
 				  LC_LOCKHINT ** lockhint,
@@ -1390,8 +1392,9 @@ locator_find_lockhint_class_oids (int num_classes,
   request_size = OR_INT_SIZE + OR_INT_SIZE;
   for (i = 0; i < num_classes; i++)
     {
-      request_size += (length_const_string (many_classnames[i], NULL) +
-		       OR_INT_SIZE + OR_INT_SIZE + OR_OID_SIZE + OR_INT_SIZE);
+      request_size +=
+	(length_const_string (many_classnames[i], NULL) + OR_INT_SIZE +
+	 OR_INT_SIZE + OR_INT_SIZE + OR_OID_SIZE + OR_INT_SIZE);
     }
 
   request = (char *) malloc (request_size);
@@ -1409,6 +1412,7 @@ locator_find_lockhint_class_oids (int num_classes,
       ptr = pack_const_string (ptr, many_classnames[i]);
       ptr = or_pack_lock (ptr, many_locks[i]);
       ptr = or_pack_int (ptr, many_need_subclasses[i]);
+      ptr = or_pack_int (ptr, (int) many_flags[i]);
       ptr = or_pack_oid (ptr, &guessed_class_oids[i]);
       ptr = or_pack_int (ptr, guessed_class_chns[i]);
     }
@@ -1461,9 +1465,9 @@ locator_find_lockhint_class_oids (int num_classes,
   allfind =
     xlocator_find_lockhint_class_oids (NULL, num_classes, many_classnames,
 				       many_locks, many_need_subclasses,
-				       guessed_class_oids, guessed_class_chns,
-				       quit_on_errors, lockhint,
-				       fetch_copyarea);
+				       many_flags, guessed_class_oids,
+				       guessed_class_chns, quit_on_errors,
+				       lockhint, fetch_copyarea);
 
   EXIT_SERVER ();
 
