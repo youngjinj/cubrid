@@ -98,7 +98,8 @@ extern char *db_get_server_session_key (void);
 extern SESSION_ID db_get_session_id (void);
 extern void db_set_session_id (const SESSION_ID session_id);
 extern int db_end_session (void);
-extern int db_check_session (void);
+extern int db_find_or_create_session (const char *db_user,
+				      const char *program_name);
 extern int db_get_row_count_cache (void);
 extern void db_update_row_count_cache (const int row_count);
 extern int db_get_row_count (int *row_count);
@@ -430,6 +431,9 @@ extern void db_clear_delayed_hosts_count (void);
 extern void db_set_max_num_delayed_hosts_lookup (int
 						 max_num_delayed_hosts_lookup);
 extern int db_get_max_num_delayed_hosts_lookup (void);
+
+extern bool db_enable_trigger (void);
+extern bool db_disable_trigger (void);
 
 extern DB_OBJECT *db_find_class_of_index (const char *const index,
 					  const DB_CONSTRAINT_TYPE type);
@@ -855,6 +859,8 @@ extern DB_SESSION_ERROR *db_get_next_warning (DB_SESSION_WARNING *
 					      int *linenumber,
 					      int *columnnumber);
 extern void db_session_set_holdable (DB_SESSION * session, bool holdable);
+extern void db_session_set_return_generated_keys (DB_SESSION * session,
+						  bool return_generated_keys);
 extern DB_PARAMETER *db_get_parameters (DB_SESSION * session,
 					int statement_id);
 extern DB_PARAMETER *db_parameter_next (DB_PARAMETER * param);

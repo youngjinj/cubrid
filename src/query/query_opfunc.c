@@ -48,6 +48,7 @@
 
 #include "query_executor.h"
 #include "databases_file.h"
+#include "partition.h"
 
 /* this must be the last header file included!!! */
 #include "dbval.h"
@@ -6122,11 +6123,14 @@ qdata_aggregate_value_to_accumulator (THREAD_ENTRY * thread_p,
   TP_DOMAIN *double_domain = NULL;
   DB_VALUE squared;
   bool copy_operator = false;
+  int coll_id;
 
   if (DB_IS_NULL (value))
     {
       return NO_ERROR;
     }
+
+  coll_id = domain->value_dom->collation_id;
 
   /* aggregate new value */
   switch (func_type)
@@ -6134,7 +6138,7 @@ qdata_aggregate_value_to_accumulator (THREAD_ENTRY * thread_p,
     case PT_MIN:
       if (acc->curr_cnt < 1
 	  || (*(domain->value_dom->type->cmpval)) (acc->value, value, 1, 1,
-						   NULL, -1) > 0)
+						   NULL, coll_id) > 0)
 	{
 	  /* we have new minimum */
 	  copy_operator = true;
@@ -6144,7 +6148,7 @@ qdata_aggregate_value_to_accumulator (THREAD_ENTRY * thread_p,
     case PT_MAX:
       if (acc->curr_cnt < 1
 	  || (*(domain->value_dom->type->cmpval)) (acc->value, value, 1, 1,
-						   NULL, -1) < 0)
+						   NULL, coll_id) < 0)
 	{
 	  /* we have new maximum */
 	  copy_operator = true;
@@ -6323,8 +6327,9 @@ qdata_aggregate_value_to_accumulator (THREAD_ENTRY * thread_p,
 
       if (TP_DOMAIN_TYPE (domain->value_dom) != type)
 	{
-	  if (tp_value_coerce (value, acc->value, domain->value_dom) !=
-	      DOMAIN_COMPATIBLE)
+	  int coerce_error =
+	    db_value_coerce (value, acc->value, domain->value_dom);
+	  if (coerce_error != NO_ERROR)
 	    {
 	      /* set error here */
 	      return ER_FAILED;
@@ -6646,10 +6651,15 @@ qdata_evaluate_aggregate_list (THREAD_ENTRY * thread_p,
  *   return:
  *   agg_ptr(in)        :
  *   hfid(in)   :
+ *   super_oid(in): The super oid of a class. This should be used when dealing
+ *		    with a partition class. It the index is a global index,
+ *		    the min/max value from the partition in this case
+ *		    will be retrieved from the heap.
  */
 int
 qdata_evaluate_aggregate_optimize (THREAD_ENTRY * thread_p,
-				   AGGREGATE_TYPE * agg_p, HFID * hfid_p)
+				   AGGREGATE_TYPE * agg_p, HFID * hfid_p,
+				   OID * super_oid)
 {
   int oid_count = 0, null_count = 0, key_count = 0;
   int flag_btree_stat_needed = true;
@@ -6666,7 +6676,24 @@ qdata_evaluate_aggregate_optimize (THREAD_ENTRY * thread_p,
 
   if ((agg_p->function == PT_MIN) || (agg_p->function == PT_MAX))
     {
+      int is_global_index = 0;
+
       flag_btree_stat_needed = false;
+
+      if (super_oid && !OID_ISNULL (super_oid))
+	{
+	  if (partition_is_global_index (thread_p, NULL, super_oid,
+					 &agg_p->btid, NULL, &is_global_index)
+	      != NO_ERROR)
+	    {
+	      return ER_FAILED;
+	    }
+	  if (is_global_index != 0)
+	    {
+	      agg_p->flag_agg_optimize = false;
+	      return ER_FAILED;
+	    }
+	}
     }
 
   if (agg_p->function == PT_COUNT_STAR)
@@ -6764,7 +6791,7 @@ qdata_evaluate_aggregate_hierarchy (THREAD_ENTRY * thread_p,
     }
 
   /* evaluate aggregate on the root class */
-  error = qdata_evaluate_aggregate_optimize (thread_p, agg_p, root_hfid);
+  error = qdata_evaluate_aggregate_optimize (thread_p, agg_p, root_hfid, NULL);
   if (error != NO_ERROR)
     {
       return error;
@@ -6794,7 +6821,7 @@ qdata_evaluate_aggregate_hierarchy (THREAD_ENTRY * thread_p,
 	  BTID_COPY (&agg_p->btid, &helper->btids[i]);
 	}
       error = qdata_evaluate_aggregate_optimize (thread_p, agg_p,
-						 &helper->hfids[i]);
+						 &helper->hfids[i], NULL);
       if (error != NO_ERROR)
 	{
 	  goto cleanup;
@@ -7012,8 +7039,10 @@ qdata_finalize_aggregate_list (THREAD_ENTRY * thread_p,
 	  && agg_p->function != PT_MAX && agg_p->function != PT_MIN)
 	{
 	  if (agg_p->sort_list != NULL &&
-	      TP_DOMAIN_TYPE (agg_p->sort_list->pos_descr.dom) ==
-	      DB_TYPE_VARIABLE)
+	      (TP_DOMAIN_TYPE (agg_p->sort_list->pos_descr.dom) ==
+	       DB_TYPE_VARIABLE
+	       || TP_DOMAIN_COLLATION_FLAG (agg_p->sort_list->pos_descr.dom)
+	       != TP_DOMAIN_COLL_NORMAL))
 	    {
 	      /* set domain of SORT LIST same as the domain from agg list */
 	      assert (agg_p->sort_list->pos_descr.pos_no <
@@ -7256,7 +7285,11 @@ qdata_finalize_aggregate_list (THREAD_ENTRY * thread_p,
 
 				  TP_DOMAIN *domain_ptr = NOT_NULL_VALUE
 				    (tmp_domain_ptr,
-				     agg_p->domain);
+				     agg_p->accumulator_domain.value_dom);
+                  /* accumulator domain should be used instead of 
+                   * agg_p->domain for SUM/AVG evaluation
+                   * at the end cast the result to agg_p->domain
+                   */
 				  if ((agg_p->function == PT_AVG) &&
 				      (dbval.domain.general_info.type ==
 				       DB_TYPE_NUMERIC))
@@ -7437,8 +7470,26 @@ qdata_finalize_aggregate_list (THREAD_ENTRY * thread_p,
 	      pr_clone_value (&dval, agg_p->accumulator.value);
 	    }
 	}
-    }
 
+      /* Resolve the final result of aggregate function.
+       * Since the evaluation value might be changed to keep the
+       * precision during the aggregate function evaluation, for example,
+       * use DOUBLE instead FLOAT, we need to cast the result to the
+       * original domain.
+       */
+      if (agg_p->function == PT_SUM
+          && agg_p->domain != agg_p->accumulator_domain.value_dom)
+      {
+        /* cast value */
+        error = db_value_coerce (agg_p->accumulator.value,
+                                 agg_p->accumulator.value, agg_p->domain);
+        if (error != NO_ERROR)
+        {     
+          return ER_FAILED;           
+        }    
+      }
+    }
+  
 exit:
   (void) pr_clear_value (&dbval);
 
@@ -9491,30 +9542,31 @@ qdata_group_concat_first_value (THREAD_ENTRY * thread_p,
   agg_type = DB_VALUE_DOMAIN_TYPE (agg_p->accumulator.value);
   /* init the aggregate value domain */
   if (db_value_domain_init (agg_p->accumulator.value, agg_type,
-			    DB_DEFAULT_PRECISION,
-			    DB_DEFAULT_SCALE) != NO_ERROR)
+                            DB_DEFAULT_PRECISION,
+                            DB_DEFAULT_SCALE) != NO_ERROR)
     {
       pr_clear_value (dbvalue);
       return ER_FAILED;
     }
 
-  if (db_string_make_empty_typed_string
-      (thread_p, agg_p->accumulator.value, agg_type, DB_DEFAULT_PRECISION,
-       TP_DOMAIN_CODESET (agg_p->domain),
-       TP_DOMAIN_COLLATION (agg_p->domain)) != NO_ERROR)
+  if (db_string_make_empty_typed_string (thread_p, agg_p->accumulator.value,
+                                         agg_type, DB_DEFAULT_PRECISION,
+                                         TP_DOMAIN_CODESET (agg_p->domain),
+                                         TP_DOMAIN_COLLATION (agg_p->domain))
+      != NO_ERROR)
     {
       return ER_FAILED;
     }
 
   /* concat the first value */
   result_domain = ((TP_DOMAIN_TYPE (agg_p->domain) == agg_type) ?
-		   agg_p->domain : NULL);
+                   agg_p->domain : NULL);
 
   max_allowed_size = (int) prm_get_bigint_value (PRM_ID_GROUP_CONCAT_MAX_LEN);
 
-  if (qdata_concatenate_dbval
-      (thread_p, agg_p->accumulator.value, dbvalue, &tmp_val, result_domain,
-       max_allowed_size, "GROUP_CONCAT()") != NO_ERROR)
+  if (qdata_concatenate_dbval (thread_p, agg_p->accumulator.value, dbvalue,
+                               &tmp_val, result_domain, max_allowed_size,
+                               "GROUP_CONCAT()") != NO_ERROR)
     {
       pr_clear_value (dbvalue);
       return ER_FAILED;
@@ -9555,28 +9607,27 @@ qdata_group_concat_value (THREAD_ENTRY * thread_p,
   agg_type = DB_VALUE_DOMAIN_TYPE (agg_p->accumulator.value);
 
   result_domain = ((TP_DOMAIN_TYPE (agg_p->domain) == agg_type) ?
-		   agg_p->domain : NULL);
+                   agg_p->domain : NULL);
 
   max_allowed_size = (int) prm_get_bigint_value (PRM_ID_GROUP_CONCAT_MAX_LEN);
 
   /* add separator if specified (it may be the case for bit string) */
   if (!DB_IS_NULL (agg_p->accumulator.value2))
     {
-      if (qdata_concatenate_dbval
-	  (thread_p, agg_p->accumulator.value, agg_p->accumulator.value2,
-	   &tmp_val, result_domain, max_allowed_size,
-	   "GROUP_CONCAT()") != NO_ERROR)
-	{
-	  return ER_FAILED;
-	}
+      if (qdata_concatenate_dbval (thread_p, agg_p->accumulator.value,
+                                   agg_p->accumulator.value2, &tmp_val,
+                                   result_domain, max_allowed_size,
+                                   "GROUP_CONCAT()") != NO_ERROR)
+        {
+          return ER_FAILED;
+        }
 
       /* check for concat success */
       if (!DB_IS_NULL (&tmp_val))
-	{
-	  (void) pr_clear_value (agg_p->accumulator.value);
-	  pr_clone_value (&tmp_val, agg_p->accumulator.value);
-	}
-
+        {
+          (void) pr_clear_value (agg_p->accumulator.value);
+          pr_clone_value (&tmp_val, agg_p->accumulator.value);
+        }
     }
   else
     {
@@ -9585,9 +9636,9 @@ qdata_group_concat_value (THREAD_ENTRY * thread_p,
 
   pr_clear_value (&tmp_val);
 
-  if (qdata_concatenate_dbval
-      (thread_p, agg_p->accumulator.value, dbvalue, &tmp_val, result_domain,
-       max_allowed_size, "GROUP_CONCAT()") != NO_ERROR)
+  if (qdata_concatenate_dbval (thread_p, agg_p->accumulator.value, dbvalue,
+                               &tmp_val, result_domain, max_allowed_size,
+                               "GROUP_CONCAT()") != NO_ERROR)
     {
       pr_clear_value (dbvalue);
       return ER_FAILED;
@@ -9984,6 +10035,7 @@ qdata_evaluate_analytic_func (THREAD_ENTRY * thread_p,
   double ntile_bucket = 0.0;
   int error = NO_ERROR;
   TP_DOMAIN_STATUS dom_status;
+  int coll_id;
 
   DB_MAKE_NULL (&dbval);
   DB_MAKE_NULL (&sqr_val);
@@ -9996,7 +10048,9 @@ qdata_evaluate_analytic_func (THREAD_ENTRY * thread_p,
       return ER_FAILED;
     }
 
-  if (func_p->opr_dbtype == DB_TYPE_VARIABLE && !DB_IS_NULL (&dbval))
+  if ((func_p->opr_dbtype == DB_TYPE_VARIABLE
+       || TP_DOMAIN_COLLATION_FLAG (func_p->domain) != TP_DOMAIN_COLL_NORMAL)
+      && !DB_IS_NULL (&dbval))
     {
       /* set function default domain when late binding */
       switch (func_p->function)
@@ -10115,6 +10169,7 @@ qdata_evaluate_analytic_func (THREAD_ENTRY * thread_p,
     }
 
   copy_opr = false;
+  coll_id = func_p->domain->collation_id;
   switch (func_p->function)
     {
     case PT_CUME_DIST:
@@ -10192,7 +10247,7 @@ qdata_evaluate_analytic_func (THREAD_ENTRY * thread_p,
       opr_dbval_p = &dbval;
       if ((func_p->curr_cnt < 1 || DB_IS_NULL (func_p->value))
 	  || (*(func_p->domain->type->cmpval)) (func_p->value, &dbval,
-						1, 1, NULL, -1) > 0)
+						1, 1, NULL, coll_id) > 0)
 	{
 	  copy_opr = true;
 	}
@@ -10202,7 +10257,7 @@ qdata_evaluate_analytic_func (THREAD_ENTRY * thread_p,
       opr_dbval_p = &dbval;
       if ((func_p->curr_cnt < 1 || DB_IS_NULL (func_p->value))
 	  || (*(func_p->domain->type->cmpval)) (func_p->value, &dbval,
-						1, 1, NULL, -1) < 0)
+						1, 1, NULL, coll_id) < 0)
 	{
 	  copy_opr = true;
 	}
@@ -11663,7 +11718,8 @@ qdata_calculate_aggregate_cume_dist_percent_rank (THREAD_ENTRY * thread_p,
 	  /* non-NULL values comparison */
 	  pr_type_p = PR_TYPE_FROM_ID (DB_VALUE_DOMAIN_TYPE (val_node));
 	  cmp = (*(pr_type_p->cmpval))
-	    (val_node, info_p->const_array[i], 1, 0, NULL, -1);
+	    (val_node, info_p->const_array[i], 1, 0, NULL,
+	     regu_var_node->value.domain->collation_id);
 
 	  assert (cmp != DB_UNK);
 	}
@@ -12489,7 +12545,6 @@ qdata_update_agg_interpolate_func_value_and_domain (AGGREGATE_TYPE * agg_p,
 {
   int error = NO_ERROR;
   DB_TYPE dbval_type;
-  TP_DOMAIN_STATUS status;
 
   assert (dbval != NULL
 	  && agg_p != NULL
@@ -12504,7 +12559,8 @@ qdata_update_agg_interpolate_func_value_and_domain (AGGREGATE_TYPE * agg_p,
     }
 
   dbval_type = TP_DOMAIN_TYPE (agg_p->domain);
-  if (dbval_type == DB_TYPE_VARIABLE)
+  if (dbval_type == DB_TYPE_VARIABLE
+      || TP_DOMAIN_COLLATION_FLAG (agg_p->domain) != TP_DOMAIN_COLL_NORMAL)
     {
       dbval_type = DB_VALUE_DOMAIN_TYPE (dbval);
       agg_p->domain = tp_domain_resolve_default (dbval_type);

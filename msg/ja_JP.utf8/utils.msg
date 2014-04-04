@@ -67,6 +67,7 @@ $       46      genlocale
 $       47      dumplocale
 $       48      synccolldb
 $       49      tranlist
+$       50      prefetchlogdb
 
 $set 1 MSGCAT_UTIL_SET_GENERIC
 1 レングスが正しくないか、正しくない文字「%c」がデータベース名「%s」に入っています。\n
@@ -115,9 +116,10 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %sはDBMS管理道具です。\n\
-追加情報は次のサイトをご覧になってください。http://www.cubrid.com\n
+追加情報は次のサイトをご覧になってください。http://www.cubrid.org\n
 12 '%1$s'は正しくないユーティリティー名です。\n'cubrid --help'コマンドで使い方を確認してください。\n
 13 '%1$s'は正しくないコマンドです。\n'cubrid --help'コマンドで使い方を確認してください。\n
 14 設定ファイルから必要な一つ以上のアトリビュートを読み込むことができません。\n
@@ -170,9 +172,10 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %sはDBMS道具です。\n\
-追加情報は次のサイトをご覧になってください。http://www.cubrid.com\n
+追加情報は次のサイトをご覧になってください。http://www.cubrid.org\n
 24 cubridユーティリティー、バージョン %s\n\
 使い方: %s service <コマンド>\n\
 \n\
@@ -217,10 +220,12 @@ cubrid 管理者ユーティリティー、バージョン　%s\n\
 使い方: %s heartbeat <コマンド> [パラメーター]\n\
 \n\
 正しいコマンド:\n\
-    start           [データベース名]\n\
-    stop            [-i|データベース名]\n\
-    copylogdb       <start|stop> [データベース名] [ノード名]\n\
-    applylogdb      <start|stop> [データベース名] [ノード名]\n\
+    start          [データベース名]\n\
+    stop           [-i|データベース名]\n\
+    copylogdb      <start|stop> [データベース名] [ノード名]\n\
+    applylogdb     <start|stop> [データベース名] [ノード名]\n\
+    prefetchlogdb  <start|stop> [データベース名] [ノード名]\n\
+    replication    <start|stop> node-name\n\
     status\n\
     reload\n
 31 '%1$s'パラメーターが必要です。\n
@@ -583,9 +588,6 @@ cub_commdb: このユーティリティーは使わないでください。そ�
   -p, --ping-host                  list ping hosts used for CUBRID heartbeat\n\
   -D, --dereg-process=PID          対象プロセスを終了して管理リストから削除\n\
   -F, --reconfig-node-list         CUBRID heartbeatノードの設定を再適用\n\
-  -U, --deactivate-heartbeat       CUBRID heartbeatを止めてノードグルプから抜く\n\
-  -i, --immediately                Immediately kill active ones, if one of HA processes are not terminated while CUBRID heartbeat is shutting down; with -U option; default: disabled\n\
-  -T, --activate-heartbeat         CUBRID heartbeatを始める\n\
   -V, --verbose                    多様な進行情報を出力; デフォルト: 出力しない\n
 28 正しくないコマンドです。: %1$s\n
 29 ローカルホスト名が検索できません。　-　中止\n
@@ -598,7 +600,7 @@ cub_commdb: このユーティリティーは使わないでください。そ�
 36 シェル「%s」が始まりません。%s, %s 
 37 プロセスfork %s, 返還 %d, %s
 38 %1$sが実行せきません。
-39 -i(--immediately) option must be used with -U(--deactivate-heartbeat) option.\n
+39 -i(--immediately) option must be used with --deact-stop-all option.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -634,6 +636,7 @@ addvoldb: データベースボリュームファイルを追加。\n\
 $set 18 MSGCAT_UTIL_SET_CHECKDB
 20 データベースに非一貫性が発見されました。\n追加情報は「error_log_file %1$s」をご覧になってください。\n
 21 %1$s: クラスが見つからないため、スキップします。\n
+22 %1$s: Cannot find the index on class %2$s.\n
 60 \
 checkdb: データベース一貫性をチェック\n\
 使い方: %1$s checkdb [オプション] <データベース名> [class_name1 class_name2 ...]\n\
@@ -644,8 +647,16 @@ checkdb: データベース一貫性をチェック\n\
   -r, --repair                 非一貫性を発見すると復旧する\n\
   -i, --input-class-file=FILE  クラスリストが入ってあるファイル名\n\
                                デフォルト: すべてのクラスをチェック\n\
+  -I, --index-name             index name that will be checked only\n\
+                               default: check all indices\n\
       --check-prev-link        check only previous links of indices\n\
-      --repair-prev-link       repair previous links of indices\n
+      --repair-prev-link       repair previous links of indices\n\
+      --check-file-tracker     check all allocated pages of file\n\
+      --check-heap             check all pages of heap files\n\
+      --check-catalog          check catalog consistency\n\
+      --check-btree            check all btree indices\n\
+      --check-class-name       check class name consistency\n\
+      --check-btree-entries    check entries of btree consistency\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
@@ -1055,3 +1066,15 @@ tranlist: アクティブトランザクション情報をダンプします。\
   -s, --summary                トランザクション情報を要約して出力する。\n\
       --sort-key=COLUMN_NUMBER ソートされるカラム番号\n\
       --reverse                ソート結果を逆にする。\n
+
+$set 50 MSGCAT_UTIL_SET_PREFETCHLOGDB
+22 The server was not configured for HA.\n
+23 Prefetch feature is disabled.\n
+58 HA feature is not supported in this platform.\n
+59 prefetchlogdb cannot run as standalone mode.\n
+60 \
+prefetchlogdb: Prefetch log pages from the server.\n\
+usage: %1$s prefetchlogdb [OPTION] database-name\n\
+\n\
+valid options:\n\
+  -L, --log-path=PATH         directory PATH for copied log volumes\n

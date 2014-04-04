@@ -71,10 +71,10 @@ extern int xboot_backup (THREAD_ENTRY * thread_p, const char *backup_path,
 			 FILEIO_ZIP_LEVEL zip_level, int skip_activelog,
 			 int sleep_msecs);
 extern int xboot_checkdb_table (THREAD_ENTRY * thread_p, int check_flag,
-				OID * oid);
+				OID * oid, BTID * index_btid);
 extern int xboot_check_db_consistency (THREAD_ENTRY * thread_p,
 				       int check_flag, OID * oids,
-				       int num_oids);
+				       int num_oids, BTID * index_btid);
 extern VOLID xboot_add_volume_extension (THREAD_ENTRY * thread_p,
 					 DBDEF_VOL_EXT_INFO * ext_info);
 extern int xboot_find_number_permanent_volumes (THREAD_ENTRY * thread_p);
@@ -156,6 +156,10 @@ extern int xlocator_does_exist (THREAD_ENTRY * thread_p, OID * oid, int chn,
 extern int xlocator_force (THREAD_ENTRY * thread_p, LC_COPYAREA * copy_area,
 			   int num_ignore_error_list, int *ignore_error_list,
 			   int continue_on_error);
+extern int xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
+				       OID * class_oid, DB_VALUE * key_value,
+				       LC_COPYAREA_OPERATION operation,
+				       bool has_index, RECDES * recdes);
 extern bool xlocator_notify_isolation_incons (THREAD_ENTRY * thread_p,
 					      LC_COPYAREA ** synch_area);
 
@@ -171,6 +175,11 @@ extern int xlocator_check_fk_validity (THREAD_ENTRY * thread_p,
 				       int *attr_ids, OID * pk_cls_oid,
 				       BTID * pk_btid, int cache_attr_id,
 				       char *fk_name);
+extern int xlocator_prefetch_repl_insert (THREAD_ENTRY * thread_p,
+                                          OID * class_oid, RECDES *recdes);
+extern int xlocator_prefetch_repl_update_or_delete (THREAD_ENTRY * thread_p,
+                                          BTID * btid, OID * class_oid,
+                                          DB_VALUE * key_value);
 extern LOG_LSA *xrepl_log_get_append_lsa (void);
 extern int xrepl_set_info (THREAD_ENTRY * thread_p, REPL_INFO * repl_info);
 
@@ -350,7 +359,9 @@ extern QFILE_LIST_ID *xqmgr_execute_query (THREAD_ENTRY * thrd,
 					   CACHE_TIME * clt_cache_time,
 					   CACHE_TIME * srv_cache_time,
 					   int query_timeout,
-					   EXECUTION_INFO * info);
+					   XASL_CACHE_ENTRY **
+					   ret_cache_entry_p,
+					   LC_LOCKHINT * lockhint);
 extern QFILE_LIST_ID *xqmgr_prepare_and_execute_query (THREAD_ENTRY * thrd,
 						       char *xasl_stream,
 						       int xasl_stream_size,

@@ -966,8 +966,8 @@ $ LOADDB
 897 圧縮解除エラーです。
 898 複製エラーが発生しました。: 「%1$s」
 899 正しくないパーティション作業リクエストです。
-900 Javaバーチャルマシーンライブラリーが見つかりません。: %1$s. \nなので、Javaストアードプロシージャが利用できません。
-901 Javaバーチャルマシーンがスタートできません。: %1$s. \nなので、Javaストアードプロシージャが利用できません。
+900 Javaバーチャルマシーンライブラリーが見つかりません。: %1$.
+901 Javaバーチャルマシーンがスタートできません。: %1$.
 902 Javaバーチャルマシーンが作動しません。
 903 Javaバーチャルマシーンに接続できません。: %1$s
 904 正しくないストアードプロシージャ名です。
@@ -1213,6 +1213,11 @@ $ LOADDB
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 1145 To change the owner of a system class is not allowed.
 1146 volume identifier %1$d does not exist.
+1147 The size of XASL stream cache(%1$d) exceeds the max(%2$d). New entry is added although nothing is victimized bacause all cache entries are used.
+1148 The size of filter predicate stream cache(%1$d) exceeds the max(%2$d). New entry is added although nothing is victimized bacause all cache entries are used.
+1149 Cannot find the page %1$d of volume %2$d.
+1150 The page %1$d of volume %2$d is not a slotted page.
+1151 Context requires compatible collations.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 ラストエラー
@@ -1655,6 +1660,8 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 285 Expects %1$s for argument %2$s.
 286 Argument %1$s is missing.
 287 Unknown argument %1$s.
+288 Cannot remove all partitions, use DROP TABLE instead.
+289 The expression including %1$s is not allowed in this context.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 バチャールメモリーが足りません。: %1$dバイトがアロケーションできません。

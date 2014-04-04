@@ -341,6 +341,16 @@ pt_add_oid_to_select_list (PARSER_CONTEXT * parser, PT_NODE * statement,
       statement->info.query.q.union_.arg2 =
 	pt_add_oid_to_select_list (parser,
 				   statement->info.query.q.union_.arg2, how);
+
+      if (statement->info.query.q.union_.select_list != NULL)
+	{
+	  /* after adding oid, we need to get select_list again */
+	  parser_free_tree (parser,
+			    statement->info.query.q.union_.select_list);
+	  statement->info.query.q.union_.select_list = NULL;
+
+	  (void) pt_get_select_list (parser, statement);
+	}
     }
 
   return statement;
@@ -455,7 +465,8 @@ pt_compile (PARSER_CONTEXT * parser, PT_NODE * statement)
  */
 
 PT_NODE *
-pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement)
+pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement,
+		    LC_LOCKHINT ** lockhint)
 {
   PT_CLASS_LOCKS lcks;
   int error = NO_ERROR;
@@ -536,7 +547,8 @@ pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement)
   if (!pt_has_error (parser)
       && locator_lockhint_classes (lcks.num_classes,
 				   (const char **) lcks.classes, lcks.locks,
-				   lcks.only_all, true) != LC_CLASSNAME_EXIST)
+				   lcks.only_all, true,
+				   lockhint) != LC_CLASSNAME_EXIST)
     {
       PT_ERRORc (parser, statement, db_error_string (3));
     }
@@ -1524,4 +1536,39 @@ pt_exec_trigger_stmt (PARSER_CONTEXT * parser, PT_NODE * trigger_stmt,
   parser_free_tree (parser, tmp_trigger);
 
   return error;
+}
+
+/*
+ * pt_name_occurs_in_from_list() - counts the number of times a name
+ * appears as an exposed name in a list of entity_spec's
+ *   return:
+ *   parser(in):
+ *   name(in):
+ *   from_list(in):
+ */
+int
+pt_name_occurs_in_from_list (PARSER_CONTEXT * parser, const char *name,
+			     PT_NODE * from_list)
+{
+  PT_NODE *spec;
+  int i = 0;
+
+  if (!name || !from_list)
+    {
+      return i;
+    }
+
+  for (spec = from_list; spec != NULL; spec = spec->next)
+    {
+      if (spec->info.spec.range_var
+	  && spec->info.spec.range_var->info.name.original
+	  && (intl_identifier_casecmp (name,
+				       spec->info.spec.range_var->info.name.
+				       original) == 0))
+	{
+	  i++;
+	}
+    }
+
+  return i;
 }

@@ -406,6 +406,8 @@ extern int heap_get_class_partitions (THREAD_ENTRY * thread_p,
 				      const OID * class_oid,
 				      OR_PARTITION ** parts,
 				      int *parts_count);
+extern void heap_clear_partition_info (THREAD_ENTRY * thread_p,
+				       OR_PARTITION * parts, int parts_count);
 extern int heap_get_class_supers (THREAD_ENTRY * thread_p,
 				  const OID * class_oid, OID ** super_oids,
 				  int *count);
@@ -425,8 +427,11 @@ extern int heap_attrinfo_clear_dbvalues (HEAP_CACHE_ATTRINFO * attr_info);
 extern int heap_attrinfo_read_dbvalues (THREAD_ENTRY * thread_p,
 					const OID * inst_oid, RECDES * recdes,
 					HEAP_CACHE_ATTRINFO * attr_info);
-extern int heap_attrinfo_delete_lob (THREAD_ENTRY * thread_p,
-				     RECDES * recdes,
+extern int heap_attrinfo_read_dbvalues_without_oid (THREAD_ENTRY * thread_p,
+						    RECDES * recdes,
+						    HEAP_CACHE_ATTRINFO *
+						    attr_info);
+extern int heap_attrinfo_delete_lob (THREAD_ENTRY * thread_p, RECDES * recdes,
 				     HEAP_CACHE_ATTRINFO * attr_info);
 extern DB_VALUE *heap_attrinfo_access (ATTR_ID attrid,
 				       HEAP_CACHE_ATTRINFO * attr_info);
@@ -547,7 +552,8 @@ extern void heap_free_func_pred_unpack_info (THREAD_ENTRY * thread_p,
 /* auto-increment */
 extern int heap_set_autoincrement_value (THREAD_ENTRY * thread_p,
 					 HEAP_CACHE_ATTRINFO * attr_info,
-					 HEAP_SCANCACHE * scan_cache);
+					 HEAP_SCANCACHE * scan_cache,
+					 int *is_set);
 
 extern void heap_dump (THREAD_ENTRY * thread_p, FILE * fp, HFID * hfid,
 		       bool dump_records);
@@ -624,6 +630,19 @@ extern int heap_object_upgrade_domain (THREAD_ENTRY * thread_p,
 				       HEAP_SCANCACHE * upd_scancache,
 				       HEAP_CACHE_ATTRINFO * attr_info,
 				       OID * oid, const ATTR_ID att_id);
+
+extern int heap_header_capacity_start_scan (THREAD_ENTRY * thread_p,
+					    int show_type,
+					    DB_VALUE ** arg_values,
+					    int arg_cnt, void **ptr);
+extern SCAN_CODE heap_header_next_scan (THREAD_ENTRY * thread_p, int cursor,
+					DB_VALUE ** out_values, int out_cnt,
+					void *ptr);
+extern SCAN_CODE heap_capacity_next_scan (THREAD_ENTRY * thread_p, int cursor,
+					  DB_VALUE ** out_values, int out_cnt,
+					  void *ptr);
+extern int heap_header_capacity_end_scan (THREAD_ENTRY * thread_p,
+					  void **ptr);
 
 extern SCAN_CODE heap_page_prev (THREAD_ENTRY * thread_p,
 				 const OID * class_oid,

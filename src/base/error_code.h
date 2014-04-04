@@ -1460,6 +1460,14 @@
 #define ER_AU_CANT_ALTER_OWNER_OF_SYSTEM_CLASS      -1145
 #define ER_DIAG_VOLID_NOT_EXIST                     -1146
 
+#define ER_ALL_PLAN_CACHE_ENTRIES_ARE_FIXED         -1147
+#define ER_ALL_FILTER_PRED_CACHE_ENTRIES_ARE_FIXED  -1148
+
+#define ER_DIAG_PAGE_NOT_FOUND                      -1149
+#define ER_DIAG_NOT_SPAGE                           -1150
+
+#define ER_QSTR_INCOMPATIBLE_COLLATIONS		    -1151
+
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001
 

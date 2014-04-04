@@ -2250,6 +2250,22 @@ logtb_find_client_name_host_pid (int tran_index, char **client_prog_name,
   return NO_ERROR;
 }
 
+int
+logtb_get_client_ids (int tran_index, LOG_CLIENTIDS * client_info)
+{
+  LOG_TDES *tdes;
+
+  tdes = LOG_FIND_TDES (tran_index);
+  if (tdes == NULL || tdes->trid == NULL_TRANID)
+    {
+      return ER_FAILED;
+    }
+
+  *client_info = tdes->client;
+
+  return NO_ERROR;
+}
+
 /*
  * xlogtb_get_pack_tran_table - return transaction info stored on transaction table
  *
@@ -2280,9 +2296,6 @@ xlogtb_get_pack_tran_table (THREAD_ENTRY * thread_p, char **buffer_p,
   UINT64 current_msec;
   TRAN_QUERY_EXEC_INFO *query_exec_info = NULL;
   XASL_CACHE_ENTRY *ent;
-#if !defined(HAVE_ATOMIC_BUILTINS)
-  struct timeval tv;
-#endif
 #endif
 
 #if defined(SERVER_MODE)
@@ -2298,12 +2311,7 @@ xlogtb_get_pack_tran_table (THREAD_ENTRY * thread_p, char **buffer_p,
 	  goto error;
 	}
 
-#if !defined(HAVE_ATOMIC_BUILTINS)
-      gettimeofday (&tv, NULL);
-      current_msec = (tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
-#else
-      current_msec = log_Clock_msec;
-#endif /* !HAVE_ATOMIC_BUILTINS */
+      current_msec = thread_get_log_clock_msec ();
     }
 #endif
 
@@ -2389,9 +2397,8 @@ xlogtb_get_pack_tran_table (THREAD_ENTRY * thread_p, char **buffer_p,
 			  goto error;
 			}
 		    }
-
-		  (void) qexec_end_use_of_xasl_cache_ent (thread_p,
-							  &ent->xasl_id);
+		  (void) qexec_remove_my_tran_id_in_xasl_entry (thread_p,
+								ent, true);
 		}
 
 	      /* structure copy */
@@ -2832,9 +2839,9 @@ logtb_is_interrupted_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 {
   int interrupt;
   INT64 now;
-#if !defined(HAVE_ATOMIC_BUILTINS)
+#if !defined(SERVER_MODE)
   struct timeval tv;
-#endif /* !HAVE_ATOMIC_BUILTINS */
+#endif /* !SERVER_MODE */
 
   interrupt = tdes->interrupt;
   if (!LOG_ISTRAN_ACTIVE (tdes))
@@ -2872,12 +2879,12 @@ logtb_is_interrupted_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
        * set by thread_log_clock_thread instead of calling gettimeofday here
        * if the system supports atomic built-ins.
        */
-#if defined(HAVE_ATOMIC_BUILTINS)
-      now = log_Clock_msec;
-#else /* HAVE_ATOMIC_BUILTINS */
+#if defined(SERVER_MODE)
+      now = thread_get_log_clock_msec ();
+#else /* SERVER_MODE */
       gettimeofday (&tv, NULL);
       now = (tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
-#endif /* HAVE_ATOMIC_BUILTINS */
+#endif /* !SERVER_MODE */
       if (tdes->query_timeout < now)
 	{
 	  er_log_debug (ARG_FILE_LINE,
@@ -4341,90 +4348,6 @@ logtb_find_smallest_lsa (THREAD_ENTRY * thread_p, LOG_LSA * lsa)
   TR_TABLE_CS_EXIT (thread_p);
 }
 
-#if defined(ENABLE_UNUSED_FUNCTION)
-/*
- * logtb_find_largest_lsa - largest lsa address of all active transactions
- *
- * return: LOG_LSA *
- *
- * Note: Find the largest LSA address of all active transactions.
- */
-LOG_LSA *
-logtb_find_largest_lsa (THREAD_ENTRY * thread_p)
-{
-  int i;
-  LOG_TDES *tdes;		/* Transaction descriptor */
-  LOG_LSA *max_lsa = NULL;	/* The largest lsa value  */
-
-  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
-  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
-    {
-      if (i != LOG_SYSTEM_TRAN_INDEX)
-	{
-	  tdes = log_Gl.trantable.all_tdes[i];
-	  if (tdes != NULL
-	      && tdes->trid != NULL_TRANID
-	      && !LSA_ISNULL (&tdes->tail_lsa)
-	      && (max_lsa == NULL || LSA_GT (&tdes->tail_lsa, max_lsa)))
-	    {
-	      max_lsa = &tdes->tail_lsa;
-	    }
-	}
-    }
-  TR_TABLE_CS_EXIT (thread_p);
-
-  return max_lsa;
-}
-#endif /* ENABLE_UNUSED_FUNCTION */
-
-/*
- * logtb_find_smallest_and_largest_active_pages - smallest and larger active pages
- *
- * return: nothing...
- *
- *   smallest(in/out): smallest active log page
- *   largest(in/out): largest active log page
- *
- * Note: Find the smallest and larger active pages.
- */
-void
-logtb_find_smallest_and_largest_active_pages (THREAD_ENTRY * thread_p,
-					      LOG_PAGEID * smallest,
-					      LOG_PAGEID * largest)
-{
-  int i;
-  LOG_TDES *tdes;		/* Transaction descriptor */
-
-  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
-  *smallest = *largest = NULL_PAGEID;
-  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
-    {
-      if (i != LOG_SYSTEM_TRAN_INDEX)
-	{
-	  tdes = log_Gl.trantable.all_tdes[i];
-	  if (tdes != NULL && tdes->trid != NULL_TRANID
-	      && !LSA_ISNULL (&tdes->head_lsa))
-	    {
-	      if (*smallest == NULL_PAGEID
-		  || tdes->head_lsa.pageid < *smallest)
-		{
-		  *smallest = tdes->head_lsa.pageid;
-		}
-	      if (*largest == NULL_PAGEID || tdes->tail_lsa.pageid > *largest)
-		{
-		  *largest = tdes->tail_lsa.pageid;
-		}
-	      if (*largest == NULL_PAGEID
-		  || tdes->posp_nxlsa.pageid > *largest)
-		{
-		  *largest = tdes->posp_nxlsa.pageid;
-		}
-	    }
-	}
-    }
-  TR_TABLE_CS_EXIT (thread_p);
-}
-
 /*
  * logtb_allocate_mvcc_info - allocate MVCC info
  *
@@ -4677,4 +4600,88 @@ logtb_alloc_mvcc_info_block (THREAD_ENTRY * thread_p)
     }
 
   return NO_ERROR;
+}
+
+#if defined(ENABLE_UNUSED_FUNCTION)
+/*
+ * logtb_find_largest_lsa - largest lsa address of all active transactions
+ *
+ * return: LOG_LSA *
+ *
+ * Note: Find the largest LSA address of all active transactions.
+ */
+LOG_LSA *
+logtb_find_largest_lsa (THREAD_ENTRY * thread_p)
+{
+  int i;
+  LOG_TDES *tdes;		/* Transaction descriptor */
+  LOG_LSA *max_lsa = NULL;	/* The largest lsa value  */
+
+  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
+    {
+      if (i != LOG_SYSTEM_TRAN_INDEX)
+	{
+	  tdes = log_Gl.trantable.all_tdes[i];
+	  if (tdes != NULL
+	      && tdes->trid != NULL_TRANID
+	      && !LSA_ISNULL (&tdes->tail_lsa)
+	      && (max_lsa == NULL || LSA_GT (&tdes->tail_lsa, max_lsa)))
+	    {
+	      max_lsa = &tdes->tail_lsa;
+	    }
+	}
+    }
+  TR_TABLE_CS_EXIT (thread_p);
+
+  return max_lsa;
+}
+#endif /* ENABLE_UNUSED_FUNCTION */
+
+/*
+ * logtb_find_smallest_and_largest_active_pages - smallest and larger active pages
+ *
+ * return: nothing...
+ *
+ *   smallest(in/out): smallest active log page
+ *   largest(in/out): largest active log page
+ *
+ * Note: Find the smallest and larger active pages.
+ */
+void
+logtb_find_smallest_and_largest_active_pages (THREAD_ENTRY * thread_p,
+					      LOG_PAGEID * smallest,
+					      LOG_PAGEID * largest)
+{
+  int i;
+  LOG_TDES *tdes;		/* Transaction descriptor */
+
+  TR_TABLE_CS_ENTER_READ_MODE (thread_p);
+  *smallest = *largest = NULL_PAGEID;
+  for (i = 0; i < NUM_TOTAL_TRAN_INDICES; i++)
+    {
+      if (i != LOG_SYSTEM_TRAN_INDEX)
+	{
+	  tdes = log_Gl.trantable.all_tdes[i];
+	  if (tdes != NULL && tdes->trid != NULL_TRANID
+	      && !LSA_ISNULL (&tdes->head_lsa))
+	    {
+	      if (*smallest == NULL_PAGEID
+		  || tdes->head_lsa.pageid < *smallest)
+		{
+		  *smallest = tdes->head_lsa.pageid;
+		}
+	      if (*largest == NULL_PAGEID || tdes->tail_lsa.pageid > *largest)
+		{
+		  *largest = tdes->tail_lsa.pageid;
+		}
+	      if (*largest == NULL_PAGEID
+		  || tdes->posp_nxlsa.pageid > *largest)
+		{
+		  *largest = tdes->posp_nxlsa.pageid;
+		}
+	    }
+	}
+    }
+  TR_TABLE_CS_EXIT (thread_p);
 }

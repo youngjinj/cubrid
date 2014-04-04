@@ -45,6 +45,8 @@
 #include "serial.h"
 #include "system_parameter.h"
 #include "show_meta.h"
+#include "virtual_object.h"
+#include "set_object.h"
 
 #define SAFENUM(node, field)    ((node) ? (node)->field : -1)
 #define PT_MEMB_BUF_SIZE        100
@@ -1927,8 +1929,8 @@ parser_parse_string_with_escapes (PARSER_CONTEXT * parser, const char *buffer,
       parser->casecmp = intl_identifier_casecmp;
     }
 
-  parser->strings_have_no_escapes = strings_have_no_escapes;
-  parser->dont_collect_exec_stats = false;
+  parser->strings_have_no_escapes = strings_have_no_escapes ? 1 : 0;
+  parser->dont_collect_exec_stats = 0;
 
   if (prm_get_bool_value (PRM_ID_QUERY_TRACE) == true)
     {
@@ -2037,9 +2039,9 @@ parser_parse_file (PARSER_CONTEXT * parser, FILE * file)
       parser->casecmp = intl_identifier_casecmp;
     }
 
-  parser->strings_have_no_escapes = false;
-  parser->is_in_and_list = false;
-  parser->dont_collect_exec_stats = false;
+  parser->strings_have_no_escapes = 0;
+  parser->is_in_and_list = 0;
+  parser->dont_collect_exec_stats = 0;
 
   if (prm_get_bool_value (PRM_ID_QUERY_TRACE) == true)
     {
@@ -2417,6 +2419,7 @@ parser_init_node (PT_NODE * node)
       node->do_not_replace_orderby = 0;
       node->is_added_by_parser = 0;
       node->is_alias_enabled_expr = 0;
+      node->is_wrapped_res_for_coll = 0;
       /* initialize  node info field */
       memset (&(node->info), 0, sizeof (node->info));
 
@@ -2486,9 +2489,9 @@ pt_print_bytes (PARSER_CONTEXT * parser, const PT_NODE * node)
   /* avoid recursion */
   if (parser->is_in_and_list)
     {
-      parser->is_in_and_list = false;
+      parser->is_in_and_list = 0;
       result = f (parser, (PT_NODE *) node);
-      parser->is_in_and_list = true;
+      parser->is_in_and_list = 1;
       return result;
     }
   else
@@ -2615,6 +2618,179 @@ pt_print_bytes_spec_list (PARSER_CONTEXT * parser, const PT_NODE * p)
       q = pt_append_varchar (parser, q, r);
     }
   return q;
+}
+
+/*
+ * pt_print_node_value () -
+ *   return: const sql string customized
+ *   parser(in):
+ *   val(in):
+ */
+PARSER_VARCHAR *
+pt_print_node_value (PARSER_CONTEXT * parser, const PT_NODE * val)
+{
+  PARSER_VARCHAR *q = NULL;
+  DB_VALUE *db_val, new_db_val;
+  DB_TYPE db_typ;
+  int error = NO_ERROR;
+  SETOBJ *setobj;
+
+  if (!(val->node_type == PT_VALUE
+	|| val->node_type == PT_HOST_VAR
+	|| (val->node_type == PT_NAME
+	    && val->info.name.meta_class == PT_PARAMETER)))
+    {
+      return NULL;
+    }
+
+  db_val = pt_value_to_db (parser, (PT_NODE *) val);
+  if (!db_val)
+    {
+      return NULL;
+    }
+  db_typ = DB_VALUE_DOMAIN_TYPE (db_val);
+
+  if (val->type_enum == PT_TYPE_OBJECT)
+    {
+      switch (db_typ)
+	{
+	case DB_TYPE_OBJECT:
+	  vid_get_keys (db_get_object (db_val), &new_db_val);
+	  db_val = &new_db_val;
+	  break;
+	case DB_TYPE_VOBJ:
+	  /* don't want a clone of the db_value, so use lower level functions */
+	  error = set_get_setobj (db_get_set (db_val), &setobj, 0);
+	  if (error >= 0)
+	    {
+	      error = setobj_get_element_ptr (setobj, 2, &db_val);
+	    }
+	  break;
+	default:
+	  break;
+	}
+
+      if (error < 0)
+	{
+	  PT_ERRORc (parser, val, er_msg ());
+	}
+
+      if (db_val)
+	{
+	  db_typ = DB_VALUE_DOMAIN_TYPE (db_val);
+	}
+    }
+
+  q = pt_print_db_value (parser, db_val);
+
+  return q;
+}
+
+/*
+ * pt_print_db_value () -
+ *   return: const sql string customized
+ *   parser(in):
+ *   val(in):
+ */
+PARSER_VARCHAR *
+pt_print_db_value (PARSER_CONTEXT * parser, const struct db_value * val)
+{
+  PARSER_VARCHAR *temp = NULL, *result = NULL, *elem;
+  int i, size = 0;
+  DB_VALUE element;
+  int error = NO_ERROR;
+  PT_NODE foo;
+  unsigned int save_custom = parser->custom_print;
+
+  if (val == NULL)
+    {
+      return NULL;
+    }
+
+  memset (&foo, 0, sizeof (foo));
+
+  /* set custom_print here so describe_data() will know to pad bit
+   * strings to full bytes */
+  parser->custom_print = parser->custom_print | PT_PAD_BYTE;
+
+  switch (DB_VALUE_TYPE (val))
+    {
+    case DB_TYPE_SET:
+    case DB_TYPE_MULTISET:
+      temp = pt_append_nulstring (parser, NULL,
+				  pt_show_type_enum ((PT_TYPE_ENUM)
+						     pt_db_to_type_enum
+						     (DB_VALUE_TYPE (val))));
+      /* fall thru */
+    case DB_TYPE_SEQUENCE:
+      temp = pt_append_nulstring (parser, temp, "{");
+
+      size = db_set_size (db_get_set ((DB_VALUE *) val));
+      if (size > 0)
+	{
+	  error = db_set_get (db_get_set ((DB_VALUE *) val), 0, &element);
+	  elem = describe_value (parser, NULL, &element);
+	  temp = pt_append_varchar (parser, temp, elem);
+	  for (i = 1; i < size; i++)
+	    {
+	      error = db_set_get (db_get_set ((DB_VALUE *) val), i, &element);
+	      temp = pt_append_nulstring (parser, temp, ", ");
+	      elem = describe_value (parser, NULL, &element);
+	      temp = pt_append_varchar (parser, temp, elem);
+	    }
+	}
+      temp = pt_append_nulstring (parser, temp, "}");
+      result = temp;
+      break;
+
+    case DB_TYPE_OBJECT:
+      /* no printable representation!, should not get here */
+      result = pt_append_nulstring (parser, NULL, "NULL");
+      break;
+
+    case DB_TYPE_MONETARY:
+      /* This is handled explicitly because describe_value will
+         add a currency symbol, and it isn't needed here. */
+      result = pt_append_varchar (parser, NULL,
+				  describe_money
+				  (parser, NULL,
+				   DB_GET_MONETARY ((DB_VALUE *) val)));
+      break;
+
+    case DB_TYPE_BIT:
+    case DB_TYPE_VARBIT:
+      /* csql & everyone else get X'some_hex_string' */
+      result = describe_value (parser, NULL, val);
+      break;
+
+    case DB_TYPE_DATE:
+      /* csql & everyone else want DATE'mm/dd/yyyy' */
+      result = describe_value (parser, NULL, val);
+      break;
+
+    case DB_TYPE_TIME:
+      /* csql & everyone else get time 'hh:mi:ss' */
+      result = describe_value (parser, NULL, val);
+      break;
+
+    case DB_TYPE_UTIME:
+      /* everyone else gets csql's utime format */
+      result = describe_value (parser, NULL, val);
+
+      break;
+
+    case DB_TYPE_DATETIME:
+      /* everyone else gets csql's utime format */
+      result = describe_value (parser, NULL, val);
+      break;
+
+    default:
+      result = describe_value (parser, NULL, val);
+      break;
+    }
+  /* restore custom print */
+  parser->custom_print = save_custom;
+  return result;
 }
 
 /*
@@ -2753,7 +2929,7 @@ pt_print_and_list (PARSER_CONTEXT * parser, const PT_NODE * p)
       return NULL;
     }
 
-  parser->is_in_and_list = true;
+  parser->is_in_and_list = 1;
 
   for (n = p; n; n = n->next)
     {				/* print in the original order ... */
@@ -2776,7 +2952,7 @@ pt_print_and_list (PARSER_CONTEXT * parser, const PT_NODE * p)
 	}
     }
 
-  parser->is_in_and_list = false;
+  parser->is_in_and_list = 0;
 
   return q;
 }
@@ -3624,6 +3800,10 @@ pt_show_binopcode (PT_OP_TYPE n)
       return "sha1 ";
     case PT_SHA_TWO:
       return "sha2 ";
+    case PT_TO_BASE64:
+      return "to_base64 ";
+    case PT_FROM_BASE64:
+      return "from_base64 ";
     case PT_BIN:
       return "bin ";
     case PT_TRIM:
@@ -6216,6 +6396,15 @@ pt_print_alter (PARSER_CONTEXT * parser, PT_NODE * p)
   /* ALTER VCLASS XYZ ... */
   r1 = pt_print_bytes (parser, p->info.alter.entity_name);
   q = pt_append_nulstring (parser, q, "alter ");
+  if (p->info.alter.hint != PT_HINT_NONE)
+    {
+      q = pt_append_nulstring (parser, q, "/*+ ");
+      if (p->info.alter.hint == PT_HINT_SKIP_UPDATE_NULL)
+	{
+	  q = pt_append_nulstring (parser, q, "SKIP_UPDATE_NULL");
+	}
+      q = pt_append_nulstring (parser, q, " */ ");
+    }
   q = pt_append_nulstring (parser, q,
 			   pt_show_misc_type (p->info.alter.entity_type));
   q = pt_append_nulstring (parser, q, " ");
@@ -8452,6 +8641,7 @@ pt_init_datatype (PT_NODE * p)
   p->info.data_type.dec_precision = 0;
   p->info.data_type.units = (int) LANG_COERCIBLE_CODESET;
   p->info.data_type.collation_id = LANG_COERCIBLE_COLL;
+  p->info.data_type.collation_flag = 0;
   p->info.data_type.enumeration = NULL;
   return p;
 }
@@ -10278,6 +10468,18 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
       q = pt_append_varchar (parser, q, r2);
       q = pt_append_nulstring (parser, q, ")");
       break;
+    case PT_TO_BASE64:
+      r1 = pt_print_bytes (parser, p->info.expr.arg1);
+      q = pt_append_nulstring (parser, q, " to_base64(");
+      q = pt_append_varchar (parser, q, r1);
+      q = pt_append_nulstring (parser, q, ")");
+      break;
+    case PT_FROM_BASE64:
+      r1 = pt_print_bytes (parser, p->info.expr.arg1);
+      q = pt_append_nulstring (parser, q, " from_base64(");
+      q = pt_append_varchar (parser, q, r1);
+      q = pt_append_nulstring (parser, q, ")");
+      break;
     case PT_EXTRACT:
       r1 = pt_print_bytes (parser, p->info.expr.arg1);
       q = pt_append_nulstring (parser, q, " extract(");
@@ -11398,6 +11600,15 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
 	    {
 	      q = pt_append_nulstring (parser, r1, buf);
 	    }
+	}
+      else if (p->info.expr.cast_type->info.data_type.collation_flag
+	       != TP_DOMAIN_COLL_NORMAL)
+	{
+	  assert (PT_HAS_COLLATION (p->info.expr.cast_type->type_enum));
+	  assert (p->data_type == NULL
+		  || p->data_type->type_enum
+		  == p->info.expr.cast_type->type_enum);
+	  q = pt_append_varchar (parser, q, r1);
 	}
       else
 	{
@@ -14290,17 +14501,16 @@ pt_print_select (PARSER_CONTEXT * parser, PT_NODE * p)
 		}
 	    }
 
+	  if (p->info.query.q.select.hint & PT_HINT_NO_INDEX_SS)
+	    {
+	      q = pt_append_nulstring (parser, q, "NO_INDEX_SS ");
+	    }
+	  else if (p->info.query.q.select.hint & PT_HINT_INDEX_SS)
+	    {
+	      q = pt_append_nulstring (parser, q, "INDEX_SS ");
+	    }
+
 #if 0
-	  if (p->info.query.q.select.hint & PT_HINT_W)
-	    {
-	      /* -- not used */
-	      q = pt_append_nulstring (parser, q, "W ");
-	    }
-	  if (p->info.query.q.select.hint & PT_HINT_X)
-	    {
-	      /* -- not used */
-	      q = pt_append_nulstring (parser, q, "X ");
-	    }
 	  if (p->info.query.q.select.hint & PT_HINT_Y)
 	    {
 	      /* -- not used */
@@ -14406,6 +14616,19 @@ pt_print_select (PARSER_CONTEXT * parser, PT_NODE * p)
 	  if (p->info.query.q.select.hint & PT_HINT_NO_HASH_AGGREGATE)
 	    {
 	      q = pt_append_nulstring (parser, q, "NO_HASH_AGGREGATE ");
+	    }
+
+	  if (p->info.query.q.select.hint & PT_HINT_NO_INDEX_LS)
+	    {
+	      q = pt_append_nulstring (parser, q, "NO_INDEX_LS ");
+	    }
+	  else if (p->info.query.q.select.hint & PT_HINT_INDEX_LS)
+	    {
+	      if ((p->info.query.q.select.hint & PT_HINT_NO_INDEX_SS)
+		  || !(p->info.query.q.select.hint & PT_HINT_INDEX_SS))
+		{		/* skip scan is disabled */
+		  q = pt_append_nulstring (parser, q, "INDEX_LS ");
+		}
 	    }
 
 	  if (p->info.query.q.select.hint & PT_HINT_SELECT_RECORD_INFO)
@@ -17340,6 +17563,13 @@ pt_init_insert_value (PT_NODE * p)
 static PARSER_VARCHAR *
 pt_print_insert_value (PARSER_CONTEXT * parser, PT_NODE * p)
 {
+  /* The original_node is HOST_VAR type.
+   * Use custom print to avoid printing HOST_VAR. */
+  if (parser->custom_print & PT_PRINT_DB_VALUE)
+    {
+      return pt_print_db_value (parser, &p->info.insert_value.value);
+    }
+
   if (p->info.insert_value.original_node != NULL)
     {
       return pt_print_bytes_l (parser, p->info.insert_value.original_node);
@@ -17642,6 +17872,8 @@ pt_is_const_expr_node (PT_NODE * node)
 	case PT_MD5:
 	case PT_SHA_ONE:
 	case PT_REVERSE:
+	case PT_TO_BASE64:
+	case PT_FROM_BASE64:
 	  return pt_is_const_expr_node (node->info.expr.arg1);
 	case PT_TRIM:
 	case PT_LTRIM:
@@ -18223,6 +18455,8 @@ pt_is_allowed_as_function_index (const PT_NODE * expr)
     case PT_AES_DECRYPT:
     case PT_SHA_ONE:
     case PT_SHA_TWO:
+    case PT_TO_BASE64:
+    case PT_FROM_BASE64:
     case PT_LPAD:
     case PT_RPAD:
     case PT_REPLACE:

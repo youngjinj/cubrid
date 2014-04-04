@@ -1094,7 +1094,7 @@ ldr_find_class (const char *classname)
   ldr_Hint_classnames[0] = realname;
 
   find = locator_lockhint_classes (1, ldr_Hint_classnames, ldr_Hint_locks,
-				   ldr_Hint_subclasses, 1);
+				   ldr_Hint_subclasses, 1, NULL);
 
   if (find == LC_CLASSNAME_EXIST)
     {
@@ -5885,7 +5885,6 @@ ldr_init (bool verbose)
 
   context->status_count = 10;
 
-  (void) tr_set_execution_state (false);
   obt_enable_unique_checking (false);
 
   return NO_ERROR;

@@ -467,12 +467,9 @@ AS_IF([test "x$with_jdbc" = "xyes"],
 			mddir=""
 	esac
 
-	if test "x$mddir" != "xaix"
-	then  
-		AC_CHECK_FILE($JAVA_HOME/include/$mddir/jni_md.h,
-			[JAVA_INC="$JAVA_INC -I$JAVA_HOME/include/$mddir"],
-			AC_MSG_ERROR(jni_md.h is required.))
-	fi
+	AC_CHECK_FILE($JAVA_HOME/include/$mddir/jni_md.h,
+		[JAVA_INC="$JAVA_INC -I$JAVA_HOME/include/$mddir"],
+		AC_CHECK_FILE($JAVA_HOME/include/jniport.h,,AC_MSG_ERROR(jni_md.h or jniport.h is required.)))
 
 	AC_MSG_CHECKING([whether JNI programs can be compiled with $JAVA_INC])
 	CFLAGS="$CFLAGS $JAVA_INC"
@@ -1117,7 +1114,7 @@ AS_IF([test "$with_cci_only" = "yes"],
 	EXTRA_DIST_SUBDIRS=""
 	CUBRID_LOGDIR=""
 	CUBRID_TMPDIR=""],
-	[BUILD_SUBDIRS="contrib/systemtap external include cas sa cs cubrid util cci broker cas4mysql cas4oracle cm_common conf msg demo contrib locales dbgw $OPTIONAL_DIR"
+	[BUILD_SUBDIRS="contrib/systemtap external include cas sa cs cubrid util cci broker cas4mysql cas4oracle cm_common conf msg demo contrib locales dbgw tools $OPTIONAL_DIR"
 	EXTRA_DIST_SUBDIRS="debian win src"])
 
 AC_SUBST([BUILD_NUMBER])
@@ -1220,6 +1217,7 @@ AS_IF([test "$with_cci_only" = "no"],
 	locales/data/codepages/Makefile
 	locales/data/ldml/Makefile
 	dbgw/Makefile
+	tools/Makefile
 	])])
 
 AC_OUTPUT

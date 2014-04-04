@@ -54,16 +54,6 @@
 #define WS_SET_FOUND_DELETED(mop) WS_SET_DELETED(mop)
 #define MAX_FETCH_SIZE 64
 
-#define LC_INSERT_OPERATION_TYPE(p) \
-        ((p)==DB_NOT_PARTITIONED_CLASS ? LC_FLUSH_INSERT :   \
-         ((p)==DB_PARTITIONED_CLASS ? LC_FLUSH_INSERT_PRUNE :\
-				      LC_FLUSH_INSERT_PRUNE_VERIFY))
-
-#define LC_UPDATE_OPERATION_TYPE(p) \
-        ((p)==DB_NOT_PARTITIONED_CLASS ? LC_FLUSH_UPDATE :   \
-         ((p)==DB_PARTITIONED_CLASS ? LC_FLUSH_UPDATE_PRUNE :\
-				      LC_FLUSH_UPDATE_PRUNE_VERIFY))
-
 /* Mflush structures */
 typedef struct locator_mflush_temp_oid LOCATOR_MFLUSH_TEMP_OID;
 struct locator_mflush_temp_oid
@@ -1415,8 +1405,7 @@ locator_get_rest_objects_classes (LC_LOCKSET * lockset,
 	   * slocator_fetch_lockset on server. Because that loop stops when
 	   * copy_area is NULL (fetch_ptr[idx] here), this loop should stop
 	   * too or the client will be stuck in this loop waiting for an
-	   * answer that will never come. This is a temporary fix until the
-	   * impact .
+	   * answer that will never come. This is a temporary fix.
 	   * NOTE: No error is set on server, we will not set one here.
 	   */
 	  break;
@@ -6376,7 +6365,7 @@ locator_cache_lock_lockhint_classes (LC_LOCKHINT * lockhint)
 LC_FIND_CLASSNAME
 locator_lockhint_classes (int num_classes, const char **many_classnames,
 			  LOCK * many_locks, int *need_subclasses,
-			  int quit_on_errors)
+			  int quit_on_errors, LC_LOCKHINT ** out_lockhint)
 {
   TRAN_ISOLATION isolation;	/* Client isolation level                   */
   MOP class_mop = NULL;		/* The mop of a class                       */
@@ -6470,7 +6459,47 @@ locator_lockhint_classes (int num_classes, const char **many_classnames,
 
   if (!need_call_server)
     {
-      goto error;
+      if (out_lockhint)
+	{
+	  int length;
+
+	  /* In this case, we need to make out_lockhint */
+	  lockhint = locator_allocate_lockhint (num_classes, true);
+	  if (lockhint == NULL)
+	    {
+	      int length;
+	      length = sizeof (LC_LOCKHINT)
+		+ (num_classes * sizeof (LC_LOCKHINT_CLASS));
+
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_OUT_OF_VIRTUAL_MEMORY, 1, length);
+	      return LC_CLASSNAME_ERROR;
+	    }
+
+	  lockhint->num_classes = num_classes;
+
+	  for (i = 0; i < num_classes; i++)
+	    {
+	      OID *class_oid;
+
+	      class_mop = ws_find_class (many_classnames[i]);
+	      if (class_mop == NULL)
+		{
+		  assert (0);
+		  continue;
+		}
+
+	      class_oid = ws_oid (class_mop);
+	      assert (!OID_ISTEMP (class_oid));
+	      COPY_OID (&lockhint->classes[i].oid, class_oid);
+	      lockhint->classes[i].chn = 0;	/* irrelevant */
+	      lockhint->classes[i].lock = many_locks[i];
+	      lockhint->classes[i].need_subclasses = need_subclasses[i];
+	    }
+
+	  *out_lockhint = lockhint;
+	}
+      goto end;
     }
 
   guessmany_class_oids = (OID *)
@@ -6683,10 +6712,17 @@ locator_lockhint_classes (int num_classes, const char **many_classnames,
 
   if (lockhint != NULL)
     {
-      locator_free_lockhint (lockhint);
+      if (out_lockhint != NULL)
+	{
+	  *out_lockhint = lockhint;
+	}
+      else
+	{
+	  locator_free_lockhint (lockhint);
+	}
     }
 
-error:
+end:
   return all_found;
 }
 

@@ -65,7 +65,8 @@ public class UStatement {
 
 	private final static byte EXEC_FLAG_ASYNC = 0x01,
 	        EXEC_FLAG_QUERY_ALL = 0x02, EXEC_FLAG_QUERY_INFO = 0x04,
-	        EXEC_FLAG_ONLY_QUERY_PLAN = 0x08, EXEC_FLAG_HOLDABLE_RESULT = 0x20;
+	        EXEC_FLAG_ONLY_QUERY_PLAN = 0x08, EXEC_FLAG_HOLDABLE_RESULT = 0x20,
+			EXEC_FLAG_GET_GENERATED_KEYS = 0x40;
 
 	private byte statementType;
 
@@ -668,6 +669,10 @@ public class UStatement {
 			executeFlag |= EXEC_FLAG_HOLDABLE_RESULT;
 		}
 
+		if (isGeneratedKeys) {
+			executeFlag |= EXEC_FLAG_GET_GENERATED_KEYS;
+		}
+
 		this.isSensitive = isSensitive;
 		this.maxFetchSize = maxRow;
 	}
@@ -847,11 +852,9 @@ public class UStatement {
 			errorHandler.setErrorCode(UErrorCode.ER_COMMUNICATION);
 		}
 
-		if (relatedConnection.isErrorToReconnect(errorHandler
-		        .getJdbcErrorCode())) {
-			relatedConnection.clientSocketClose();
-
+		if (relatedConnection.isErrorToReconnect(errorHandler.getJdbcErrorCode())) {
 			if (!relatedConnection.isActive() || isFirstExecInTran) {
+				relatedConnection.clientSocketClose();
 				try {
 					reset();
 					executeInternal(maxRow, maxField, isScrollable,
@@ -864,8 +867,6 @@ public class UStatement {
 					relatedConnection.logException(e);
 					errorHandler.setErrorCode(UErrorCode.ER_COMMUNICATION);
 				}
-			} else {
-				relatedConnection.clientSocketClose();
 			}
 		}
 
@@ -1031,11 +1032,9 @@ public class UStatement {
 				errorHandler.setErrorCode(UErrorCode.ER_COMMUNICATION);
 		}
 
-		if (relatedConnection.isErrorToReconnect(errorHandler
-		        .getJdbcErrorCode())) {
-			relatedConnection.clientSocketClose();
-
+		if (relatedConnection.isErrorToReconnect(errorHandler.getJdbcErrorCode())) {
 			if (!relatedConnection.isActive() || isFirstExecInTran) {
+				relatedConnection.clientSocketClose();
 				try {
 					reset();
 					batchResult = executeBatchInternal(queryTimeout);
@@ -1047,8 +1046,6 @@ public class UStatement {
 					relatedConnection.logException(e);
 					errorHandler.setErrorCode(UErrorCode.ER_COMMUNICATION);
 				}
-			} else {
-				relatedConnection.clientSocketClose();
 			}
 		}
 
@@ -2101,6 +2098,9 @@ public class UStatement {
 		for (int i = 0; i < fetchedTupleNumber; i++) {
 			readATuple(i, inBuffer);
 		}
+			if (functionCode == UFunctionCode.GET_GENERATED_KEYS) {
+				isFetchCompleted = true;
+			}
 
 		if (functionCode == UFunctionCode.FETCH
 		        && relatedConnection
@@ -2149,6 +2149,7 @@ public class UStatement {
 			name = inBuffer.readString(inBuffer.readInt(),
 			        relatedConnection.getCharset());
 			columnInfo[i] = new UColumnInfo(type, scale, precision, name);
+			name = name.toLowerCase();
 			if (statementType == NORMAL) {
 				/*
 				 * read extra data here (according to broker cas_execute
@@ -2176,8 +2177,9 @@ public class UStatement {
 				columnInfo[i].setExtraData(defValue, bAI, bUK, bPK, bFK, bRI,
 				        bRU, bSh);
 			}
-
-			colNameToIndex.put(name.toLowerCase(), i);
+			if (colNameToIndex.containsKey(name) == false) {
+				colNameToIndex.put(name, i);
+			}
 		}
 	}
 

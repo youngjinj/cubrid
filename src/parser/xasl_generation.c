@@ -418,11 +418,14 @@ static int pt_ordbynum_to_key_limit_multiple_ranges (PARSER_CONTEXT * parser,
 						     XASL_NODE * xasl);
 static INDX_INFO *pt_to_index_info (PARSER_CONTEXT * parser,
 				    DB_OBJECT * class_,
+				    PRED_EXPR * where_pred,
+				    QO_PLAN * plan,
 				    QO_XASL_INDEX_INFO * qo_index_infop);
 static ACCESS_SPEC_TYPE *pt_to_class_spec_list (PARSER_CONTEXT * parser,
 						PT_NODE * spec,
 						PT_NODE * where_key_part,
 						PT_NODE * where_part,
+						QO_PLAN * plan,
 						QO_XASL_INDEX_INFO *
 						index_pred);
 static ACCESS_SPEC_TYPE *pt_to_subquery_table_spec_list (PARSER_CONTEXT *
@@ -476,12 +479,11 @@ static void pt_to_fetch_proc_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 static XASL_NODE *pt_to_scan_proc_list (PARSER_CONTEXT * parser,
 					PT_NODE * node, XASL_NODE * root);
 static XASL_NODE *pt_gen_optimized_plan (PARSER_CONTEXT * parser,
-					 XASL_NODE * xasl,
 					 PT_NODE * select_node,
-					 QO_PLAN * plan);
+					 QO_PLAN * plan, XASL_NODE * xasl);
 static XASL_NODE *pt_gen_simple_plan (PARSER_CONTEXT * parser,
-				      XASL_NODE * xasl,
-				      PT_NODE * select_node);
+				      PT_NODE * select_node,
+				      QO_PLAN * plan, XASL_NODE * xasl);
 static XASL_NODE *pt_to_buildlist_proc (PARSER_CONTEXT * parser,
 					PT_NODE * select_node,
 					QO_PLAN * qo_plan);
@@ -560,9 +562,6 @@ static REGU_VARIABLE_LIST pt_to_regu_variable_list (PARSER_CONTEXT * p,
 
 static REGU_VARIABLE *pt_attribute_to_regu (PARSER_CONTEXT * parser,
 					    PT_NODE * attr);
-
-static PARSER_VARCHAR *pt_print_db_value (PARSER_CONTEXT * parser,
-					  const struct db_value *val);
 
 static TP_DOMAIN *pt_xasl_data_type_to_domain (PARSER_CONTEXT * parser,
 					       const PT_NODE * node);
@@ -2404,7 +2403,7 @@ pt_to_pred_expr_with_arg (PARSER_CONTEXT * parser, PT_NODE * node_list,
     {
       argp = &dummy;
     }
-
+  *argp = 0;
 
   /* convert CNF list into right-linear chains of AND terms */
   cnf_pred = NULL;
@@ -2779,113 +2778,6 @@ mmddyyyyhhmissms (const DB_DATETIME * datetime, char *buf, int buflen)
 }
 #endif
 
-/*
- * pt_print_db_value () -
- *   return: const sql string customized
- *   parser(in):
- *   val(in):
- */
-static PARSER_VARCHAR *
-pt_print_db_value (PARSER_CONTEXT * parser, const struct db_value *val)
-{
-  PARSER_VARCHAR *temp = NULL, *result = NULL, *elem;
-  int i, size = 0;
-  DB_VALUE element;
-  int error = NO_ERROR;
-  PT_NODE foo;
-  unsigned int save_custom = parser->custom_print;
-
-  if (val == NULL)
-    {
-      return NULL;
-    }
-
-  memset (&foo, 0, sizeof (foo));
-
-  /* set custom_print here so describe_data() will know to pad bit
-   * strings to full bytes */
-  parser->custom_print = parser->custom_print | PT_PAD_BYTE;
-
-  switch (DB_VALUE_TYPE (val))
-    {
-    case DB_TYPE_SET:
-    case DB_TYPE_MULTISET:
-      temp = pt_append_nulstring (parser, NULL,
-				  pt_show_type_enum ((PT_TYPE_ENUM)
-						     pt_db_to_type_enum
-						     (DB_VALUE_TYPE (val))));
-      /* fall thru */
-    case DB_TYPE_SEQUENCE:
-      temp = pt_append_nulstring (parser, temp, "{");
-
-      size = db_set_size (db_get_set ((DB_VALUE *) val));
-      if (size > 0)
-	{
-	  error = db_set_get (db_get_set ((DB_VALUE *) val), 0, &element);
-	  elem = describe_value (parser, NULL, &element);
-	  temp = pt_append_varchar (parser, temp, elem);
-	  for (i = 1; i < size; i++)
-	    {
-	      error = db_set_get (db_get_set ((DB_VALUE *) val), i, &element);
-	      temp = pt_append_nulstring (parser, temp, ", ");
-	      elem = describe_value (parser, NULL, &element);
-	      temp = pt_append_varchar (parser, temp, elem);
-	    }
-	}
-      temp = pt_append_nulstring (parser, temp, "}");
-      result = temp;
-      break;
-
-    case DB_TYPE_OBJECT:
-      /* no printable representation!, should not get here */
-      result = pt_append_nulstring (parser, NULL, "NULL");
-      break;
-
-    case DB_TYPE_MONETARY:
-      /* This is handled explicitly because describe_value will
-         add a currency symbol, and it isn't needed here. */
-      result = pt_append_varchar (parser, NULL,
-				  describe_money
-				  (parser, NULL,
-				   DB_GET_MONETARY ((DB_VALUE *) val)));
-      break;
-
-    case DB_TYPE_BIT:
-    case DB_TYPE_VARBIT:
-      /* csql & everyone else get X'some_hex_string' */
-      result = describe_value (parser, NULL, val);
-      break;
-
-    case DB_TYPE_DATE:
-      /* csql & everyone else want DATE'mm/dd/yyyy' */
-      result = describe_value (parser, NULL, val);
-      break;
-
-    case DB_TYPE_TIME:
-      /* csql & everyone else get time 'hh:mi:ss' */
-      result = describe_value (parser, NULL, val);
-      break;
-
-    case DB_TYPE_UTIME:
-      /* everyone else gets csql's utime format */
-      result = describe_value (parser, NULL, val);
-
-      break;
-
-    case DB_TYPE_DATETIME:
-      /* everyone else gets csql's utime format */
-      result = describe_value (parser, NULL, val);
-      break;
-
-    default:
-      result = describe_value (parser, NULL, val);
-      break;
-    }
-  /* restore custom print */
-  parser->custom_print = save_custom;
-  return result;
-}
-
 #if defined (ENABLE_UNUSED_FUNCTION)
 /*
  * host_var_name () -  manufacture a host variable name
@@ -2898,72 +2790,6 @@ host_var_name (unsigned int custom_print)
   return (char *) "?";
 }
 #endif
-
-/*
- * pt_print_node_value () -
- *   return: const sql string customized
- *   parser(in):
- *   val(in):
- */
-PARSER_VARCHAR *
-pt_print_node_value (PARSER_CONTEXT * parser, const PT_NODE * val)
-{
-  PARSER_VARCHAR *q = NULL;
-  DB_VALUE *db_val, new_db_val;
-  DB_TYPE db_typ;
-  int error = NO_ERROR;
-  SETOBJ *setobj;
-
-  if (!(val->node_type == PT_VALUE
-	|| val->node_type == PT_HOST_VAR
-	|| (val->node_type == PT_NAME
-	    && val->info.name.meta_class == PT_PARAMETER)))
-    {
-      return NULL;
-    }
-
-  db_val = pt_value_to_db (parser, (PT_NODE *) val);
-  if (!db_val)
-    {
-      return NULL;
-    }
-  db_typ = DB_VALUE_DOMAIN_TYPE (db_val);
-
-  if (val->type_enum == PT_TYPE_OBJECT)
-    {
-      switch (db_typ)
-	{
-	case DB_TYPE_OBJECT:
-	  vid_get_keys (db_get_object (db_val), &new_db_val);
-	  db_val = &new_db_val;
-	  break;
-	case DB_TYPE_VOBJ:
-	  /* don't want a clone of the db_value, so use lower level functions */
-	  error = set_get_setobj (db_get_set (db_val), &setobj, 0);
-	  if (error >= 0)
-	    {
-	      error = setobj_get_element_ptr (setobj, 2, &db_val);
-	    }
-	  break;
-	default:
-	  break;
-	}
-
-      if (error < 0)
-	{
-	  PT_ERRORc (parser, val, er_msg ());
-	}
-
-      if (db_val)
-	{
-	  db_typ = DB_VALUE_DOMAIN_TYPE (db_val);
-	}
-    }
-
-  q = pt_print_db_value (parser, db_val);
-
-  return q;
-}
 
 /*
  * pt_table_compatible_node () - Returns compatible if node is non-subquery
@@ -5168,7 +4994,27 @@ pt_make_access_spec (TARGET_TYPE spec_type,
 {
   ACCESS_SPEC_TYPE *spec = NULL;
 
-  if (access != INDEX || indexptr)
+  /* validation check */
+  if (access == INDEX)
+    {
+      assert (indexptr != NULL);
+      if (indexptr)
+	{
+	  if (indexptr->coverage)
+	    {
+	      assert (where_pred == NULL);	/* no data-filter */
+	      if (where_pred == NULL)
+		{
+		  spec = regu_spec_alloc (spec_type);
+		}
+	    }
+	  else
+	    {
+	      spec = regu_spec_alloc (spec_type);
+	    }
+	}
+    }
+  else
     {
       spec = regu_spec_alloc (spec_type);
     }
@@ -7359,7 +7205,28 @@ pt_make_regu_numbering (PARSER_CONTEXT * parser, const PT_NODE * node)
     }
   else
     {
-      PT_INTERNAL_ERROR (parser, "generate inst_num or orderby_num");
+      if (parser && !pt_has_error (parser))
+	{
+	  switch (node->info.expr.op)
+	    {
+	    case PT_INST_NUM:
+	    case PT_ROWNUM:
+	      PT_ERRORmf (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+			  MSGCAT_SEMANTIC_INSTORDERBY_NUM_NOT_ALLOWED,
+			  "INST_NUM() or ROWNUM");
+	      break;
+
+	    case PT_ORDERBY_NUM:
+	      PT_ERRORmf (parser, node, MSGCAT_SET_PARSER_SEMANTIC,
+			  MSGCAT_SEMANTIC_INSTORDERBY_NUM_NOT_ALLOWED,
+			  "ORDERBY_NUM()");
+	      break;
+
+	    default:
+	      assert (false);
+
+	    }
+	}
     }
 
   return regu;
@@ -7437,6 +7304,14 @@ pt_make_prim_data_type (PARSER_CONTEXT * parser, PT_TYPE_ENUM e)
     }
 
   dt->type_enum = e;
+  dt->info.data_type.collation_flag = TP_DOMAIN_COLL_NORMAL;
+
+  if (PT_HAS_COLLATION (e))
+    {
+      dt->info.data_type.units = (int) LANG_COERCIBLE_CODESET;
+      dt->info.data_type.collation_id = LANG_COERCIBLE_COLL;
+    }
+
   switch (e)
     {
     case PT_TYPE_INTEGER:
@@ -7455,26 +7330,18 @@ pt_make_prim_data_type (PARSER_CONTEXT * parser, PT_TYPE_ENUM e)
 
     case PT_TYPE_CHAR:
       dt->info.data_type.precision = DB_MAX_CHAR_PRECISION;
-      dt->info.data_type.units = (int) LANG_COERCIBLE_CODESET;
-      dt->info.data_type.collation_id = LANG_COERCIBLE_COLL;
       break;
 
     case PT_TYPE_NCHAR:
       dt->info.data_type.precision = DB_MAX_NCHAR_PRECISION;
-      dt->info.data_type.units = (int) LANG_COERCIBLE_CODESET;
-      dt->info.data_type.collation_id = LANG_COERCIBLE_COLL;
       break;
 
     case PT_TYPE_VARCHAR:
       dt->info.data_type.precision = DB_MAX_VARCHAR_PRECISION;
-      dt->info.data_type.units = (int) LANG_COERCIBLE_CODESET;
-      dt->info.data_type.collation_id = LANG_COERCIBLE_COLL;
       break;
 
     case PT_TYPE_VARNCHAR:
       dt->info.data_type.precision = DB_MAX_VARNCHAR_PRECISION;
-      dt->info.data_type.units = (int) LANG_COERCIBLE_CODESET;
-      dt->info.data_type.collation_id = LANG_COERCIBLE_COLL;
       break;
 
     case PT_TYPE_BIT:
@@ -8151,7 +8018,9 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		       || node->info.expr.op == PT_INET_ATON
 		       || node->info.expr.op == PT_INET_NTOA
 		       || node->info.expr.op == PT_CHARSET
-		       || node->info.expr.op == PT_COLLATION)
+		       || node->info.expr.op == PT_COLLATION
+		       || node->info.expr.op == PT_TO_BASE64
+		       || node->info.expr.op == PT_FROM_BASE64)
 		{
 		  r1 = NULL;
 
@@ -9088,6 +8957,16 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  regu = pt_make_regu_arith (r1, r2, NULL, T_SHA_TWO, domain);
 		  break;
 
+		case PT_FROM_BASE64:
+		  regu =
+		    pt_make_regu_arith (r1, r2, NULL, T_FROM_BASE64, domain);
+		  break;
+
+		case PT_TO_BASE64:
+		  regu =
+		    pt_make_regu_arith (r1, r2, NULL, T_TO_BASE64, domain);
+		  break;
+
 		case PT_SPACE:
 		  regu = pt_make_regu_arith (r1, r2, NULL, T_SPACE, domain);
 		  break;
@@ -9384,6 +9263,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		    {
 		      data_type =
 			pt_make_prim_data_type (parser, PT_TYPE_VARCHAR);
+		      data_type->info.data_type.collation_flag =
+			TP_DOMAIN_COLL_LEAVE;
 		    }
 		  domain = pt_xasl_data_type_to_domain (parser, data_type);
 
@@ -9748,13 +9629,20 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  break;
 
 		case PT_CLOB_TO_CHAR:
-		  data_type =
-		    pt_make_prim_data_type (parser, PT_TYPE_VARCHAR);
+		  if (node->data_type == NULL)
+		    {
+		      data_type =
+			pt_make_prim_data_type (parser, PT_TYPE_VARCHAR);
+		    }
+		  else
+		    {
+		      data_type = node->data_type;
+		    }
+
 		  domain = pt_xasl_data_type_to_domain (parser, data_type);
 
 		  regu = pt_make_regu_arith (r1, r2, NULL, T_CLOB_TO_CHAR,
 					     domain);
-		  parser_free_tree (parser, data_type);
 		  break;
 
 		case PT_BLOB_LENGTH:
@@ -12273,45 +12161,95 @@ error:
  *   return:
  *   parser(in):
  *   class(in):
+ *   where_pred(in):
+ *   plan(in):
  *   qo_index_infop(in):
  */
 static INDX_INFO *
 pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
-		  QO_XASL_INDEX_INFO * qo_index_infop)
+		  PRED_EXPR * where_pred,
+		  QO_PLAN * plan, QO_XASL_INDEX_INFO * qo_index_infop)
 {
   int nterms;
   int rangelist_idx;
   PT_NODE **term_exprs;
   PT_NODE *pt_expr;
-  bool multi_col;
-  BTID *btidp;
   PT_OP_TYPE op_type;
   INDX_INFO *indx_infop;
   QO_NODE_INDEX_ENTRY *ni_entryp;
   QO_INDEX_ENTRY *index_entryp;
+#if !defined(NDEBUG)
+  QO_INDEX_ENTRY *head_idxp;
+#endif
   KEY_INFO *key_infop;
-  PT_NODE *key_limit;
   int rc;
   int i;
   bool is_prefix_index;
   SM_FUNCTION_INFO *fi_info = NULL;
 
-  assert (parser != NULL
-	  && qo_index_infop->ni_entry != NULL
+  assert (parser != NULL);
+  assert (class_ != NULL);
+  assert (plan != NULL);
+  assert (qo_index_infop->ni_entry != NULL
 	  && qo_index_infop->ni_entry->head != NULL);
+
+  if (!qo_is_interesting_order_scan (plan))
+    {
+      assert (false);
+      PT_INTERNAL_ERROR (parser, "index plan generation - invalid plan");
+      return NULL;
+    }
+
+  ni_entryp = qo_index_infop->ni_entry;
+
+  for (i = 0, index_entryp = ni_entryp->head;
+       i < ni_entryp->n; i++, index_entryp = index_entryp->next)
+    {
+      if (class_ == index_entryp->class_->mop)
+	{
+	  break;		/* found */
+	}
+    }
+  assert (index_entryp != NULL);
+
+#if !defined(NDEBUG)
+  head_idxp = ni_entryp->head;
+
+  if (index_entryp != head_idxp)
+    {
+      assert (qo_is_prefix_index (index_entryp) ==
+	      qo_is_prefix_index (head_idxp));
+      assert (index_entryp->is_iss_candidate == head_idxp->is_iss_candidate);
+      assert (index_entryp->cover_segments == head_idxp->cover_segments);
+      assert (index_entryp->use_descending == head_idxp->use_descending);
+      assert (index_entryp->orderby_skip == head_idxp->orderby_skip);
+      assert (index_entryp->groupby_skip == head_idxp->groupby_skip);
+
+      assert (QO_ENTRY_MULTI_COL (index_entryp) ==
+	      QO_ENTRY_MULTI_COL (head_idxp));
+
+      assert (index_entryp->ils_prefix_len == head_idxp->ils_prefix_len);
+      assert (index_entryp->key_limit == head_idxp->key_limit);
+
+      assert ((index_entryp->constraints->filter_predicate == NULL
+	       && head_idxp->constraints->filter_predicate == NULL)
+	      || (index_entryp->constraints->filter_predicate != NULL
+		  && head_idxp->constraints->filter_predicate != NULL));
+      assert ((index_entryp->constraints->func_index_info == NULL
+	       && head_idxp->constraints->func_index_info == NULL)
+	      || (index_entryp->constraints->func_index_info != NULL
+		  && head_idxp->constraints->func_index_info != NULL));
+    }
+#endif
 
   /* get array of term expressions and number of them which are associated
      with this index */
   nterms = qo_xasl_get_num_terms (qo_index_infop);
   term_exprs = qo_xasl_get_terms (qo_index_infop);
-  multi_col = qo_xasl_get_multi_col (class_, qo_index_infop);
-  btidp = qo_xasl_get_btid (class_, qo_index_infop);
-
-  ni_entryp = qo_index_infop->ni_entry;
-  index_entryp = ni_entryp->head;
 
   is_prefix_index = qo_is_prefix_index (index_entryp);
-  if (!class_ || nterms < 0 || !btidp)
+
+  if (class_ == NULL || nterms < 0 || index_entryp == NULL)
     {
       PT_INTERNAL_ERROR (parser, "index plan generation - invalid arg");
       return NULL;
@@ -12319,15 +12257,16 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
 
   /* fabricate the first term_expr, to complete the proper range
    * search expression */
-  if (index_entryp->is_iss_candidate)
+  if (qo_is_index_iss_scan (plan))
     {
+      assert (index_entryp->is_iss_candidate);
+
       pt_fix_first_term_expr_for_iss (parser, index_entryp, term_exprs);
     }
 
-  fi_info = index_entryp->constraints->func_index_info;
   if (nterms > 0)
     {
-      int start_column = index_entryp->is_iss_candidate ? 1 : 0;
+      int start_column = qo_is_index_iss_scan (plan) ? 1 : 0;
       rangelist_idx = -1;	/* init */
       for (i = start_column; i < nterms; i++)
 	{
@@ -12389,9 +12328,23 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
 
   /* BTID */
   indx_infop->indx_id.type = T_BTID;
-  indx_infop->indx_id.i.btid = *btidp;
-  indx_infop->coverage = (int) qo_xasl_get_coverage (class_, qo_index_infop)
-    && (is_prefix_index == false);
+  BTID_COPY (&(indx_infop->indx_id.i.btid),
+	     &(index_entryp->constraints->index_btid));
+
+  /* check for covered index scan */
+  indx_infop->coverage = 0;	/* init */
+  if (qo_is_index_covering_scan (plan))
+    {
+      assert (index_entryp->cover_segments == true);
+      assert (where_pred == NULL);	/* no data-filter */
+      assert (is_prefix_index == false);
+
+      if (index_entryp->cover_segments == true
+	  && where_pred == NULL && is_prefix_index == false)
+	{
+	  indx_infop->coverage = 1;
+	}
+    }
 
   if (indx_infop->coverage)
     {
@@ -12411,23 +12364,53 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
   indx_infop->orderby_desc = 0;
   indx_infop->groupby_desc = 0;
 
-  indx_infop->use_iss = index_entryp->is_iss_candidate;
-  indx_infop->ils_prefix_len = index_entryp->ils_prefix_len;
-  indx_infop->func_idx_col_id = fi_info ? fi_info->col_id : -1;
-  if (index_entryp->constraints->func_index_info)
+  indx_infop->use_iss = 0;	/* init */
+  if (qo_is_index_iss_scan (plan))
     {
-      SM_FUNCTION_INFO *fi = index_entryp->constraints->func_index_info;
+      assert (QO_ENTRY_MULTI_COL (index_entryp));
+      assert (!qo_is_index_loose_scan (plan));
+      assert (!qo_plan_multi_range_opt (plan));
+      assert (!qo_is_filter_index (index_entryp));
+
+      indx_infop->use_iss = 1;
+    }
+
+  /* check for loose index scan */
+  indx_infop->ils_prefix_len = 0;	/* init */
+  if (qo_is_index_loose_scan (plan))
+    {
+      assert (QO_ENTRY_MULTI_COL (index_entryp));
+      assert (qo_is_index_covering_scan (plan));
+      assert (is_prefix_index == false);
+      assert (!qo_is_index_iss_scan (plan));
+      assert (!qo_plan_multi_range_opt (plan));
+
+      assert (where_pred == NULL);	/* no data-filter */
+
+      indx_infop->ils_prefix_len = index_entryp->ils_prefix_len;
+      assert (indx_infop->ils_prefix_len > 0);
+    }
+
+  fi_info = index_entryp->constraints->func_index_info;
+  if (fi_info)
+    {
+      indx_infop->func_idx_col_id = fi_info->col_id;
+      assert (indx_infop->func_idx_col_id != -1);
+
       rc = pt_create_iss_range (indx_infop,
-				tp_domain_resolve (fi->fi_domain->type->id,
-						   class_,
-						   fi->fi_domain->precision,
-						   fi->fi_domain->scale,
+				tp_domain_resolve (fi_info->fi_domain->type->
+						   id, class_,
+						   fi_info->fi_domain->
+						   precision,
+						   fi_info->fi_domain->scale,
 						   NULL,
-						   fi->fi_domain->
+						   fi_info->fi_domain->
 						   collation_id));
     }
   else
     {
+      indx_infop->func_idx_col_id = -1;
+
       rc = pt_create_iss_range (indx_infop, index_entryp->constraints->
 				attributes[0]->domain);
     }
@@ -12440,8 +12423,8 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
 
   /* key limits */
   key_infop = &indx_infop->key_info;
-  key_limit = qo_xasl_get_key_limit (class_, qo_index_infop);
-  if (pt_to_key_limit (parser, key_limit, NULL, key_infop, false) != NO_ERROR)
+  if (pt_to_key_limit (parser, index_entryp->key_limit,
+		       NULL, key_infop, false) != NO_ERROR)
     {
       PT_INTERNAL_ERROR (parser, "index plan generation - invalid key limit");
       return NULL;
@@ -12472,7 +12455,8 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
     {
     case PT_EQ:
       rc =
-	pt_to_single_key (parser, term_exprs, nterms, multi_col, key_infop);
+	pt_to_single_key (parser, term_exprs, nterms,
+			  QO_ENTRY_MULTI_COL (index_entryp), key_infop);
       indx_infop->range_type = R_KEY;
       break;
     case PT_GT:
@@ -12480,16 +12464,19 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
     case PT_LT:
     case PT_LE:
     case PT_BETWEEN:
-      rc = pt_to_range_key (parser, term_exprs, nterms, multi_col, key_infop);
+      rc = pt_to_range_key (parser, term_exprs, nterms,
+			    QO_ENTRY_MULTI_COL (index_entryp), key_infop);
       indx_infop->range_type = R_RANGE;
       break;
     case PT_IS_IN:
     case PT_EQ_SOME:
-      rc = pt_to_list_key (parser, term_exprs, nterms, multi_col, key_infop);
+      rc = pt_to_list_key (parser, term_exprs, nterms,
+			   QO_ENTRY_MULTI_COL (index_entryp), key_infop);
       indx_infop->range_type = R_KEYLIST;
       break;
     case PT_RANGE:
-      rc = pt_to_rangelist_key (parser, term_exprs, nterms, multi_col,
+      rc = pt_to_rangelist_key (parser, term_exprs, nterms,
+				QO_ENTRY_MULTI_COL (index_entryp),
 				key_infop, rangelist_idx);
       for (i = 0; i < key_infop->key_cnt; i++)
 	{
@@ -12631,12 +12618,13 @@ pt_get_mvcc_reev_range_data (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
  *   spec(in):
  *   where_key_part(in):
  *   where_part(in):
+ *   plan(in):
  *   index_pred(in):
  */
 static ACCESS_SPEC_TYPE *
 pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 		       PT_NODE * where_key_part, PT_NODE * where_part,
-		       QO_XASL_INDEX_INFO * index_pred)
+		       QO_PLAN * plan, QO_XASL_INDEX_INFO * index_pred)
 {
   SYMBOL_INFO *symbols = NULL;
   ACCESS_SPEC_TYPE *access = NULL;
@@ -12766,7 +12754,9 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	      where = pt_to_pred_expr (parser, where_part);
 
 	      if (scan_type == TARGET_CLASS_ATTR)
-		symbols->current_class = class_;
+		{
+		  symbols->current_class = class_;
+		}
 
 	      regu_attributes_pred = pt_to_regu_variable_list (parser,
 							       pred_attrs,
@@ -12860,9 +12850,8 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 
 	      where = pt_to_pred_expr (parser, where_part);
 
-	      output_val_list = pt_make_outlist_from_vallist (parser,
-							      table_info->
-							      value_list);
+	      output_val_list =
+		pt_make_outlist_from_vallist (parser, table_info->value_list);
 
 	      regu_attributes_pred = NULL;
 	      regu_attributes_rest = NULL;
@@ -12875,21 +12864,20 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	      parser_free_tree (parser, reserved_attrs);
 	      free_and_init (reserved_offsets);
 
-	      index_info = pt_to_index_info (parser,
-					     class_->info.name.db_object,
-					     index_pred);
-	      access = pt_make_class_access_spec (parser, flat,
-						  class_->info.name.db_object,
-						  TARGET_CLASS,
-						  access_method,
-						  spec->info.spec.lock_hint,
-						  index_info, NULL, where,
-						  NULL, NULL, NULL, NULL,
-						  NULL, output_val_list, NULL,
-						  NULL, NULL, NULL, NULL,
-						  NO_SCHEMA,
-						  db_values_array_p,
-						  regu_attributes_reserved);
+	      index_info =
+		pt_to_index_info (parser, class_->info.name.db_object,
+				  where, plan, index_pred);
+	      access =
+		pt_make_class_access_spec (parser, flat,
+					   class_->info.name.db_object,
+					   TARGET_CLASS, access_method,
+					   spec->info.spec.lock_hint,
+					   index_info, NULL, where, NULL,
+					   NULL, NULL, NULL, NULL,
+					   output_val_list, NULL, NULL, NULL,
+					   NULL, NULL, NO_SCHEMA,
+					   db_values_array_p,
+					   regu_attributes_reserved);
 	    }
 	  else
 	    {
@@ -13020,9 +13008,10 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	       * NULL INDX_INFO *, so there isn't any need to check
 	       * return values here.
 	       */
-	      index_info = pt_to_index_info (parser,
-					     class_->info.name.db_object,
-					     index_pred);
+	      index_info =
+		pt_to_index_info (parser, class_->info.name.db_object,
+				  where, plan, index_pred);
+	      assert (index_info != NULL);
 	      access = pt_make_class_access_spec (parser, flat,
 						  class_->info.name.db_object,
 						  TARGET_CLASS, INDEX,
@@ -13327,12 +13316,14 @@ pt_to_cselect_table_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
  *   spec(in):
  *   where_key_part(in):
  *   where_part(in):
+ *   plan(in):
  *   index_part(in):
  *   src_derived_tbl(in):
  */
 ACCESS_SPEC_TYPE *
 pt_to_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 		 PT_NODE * where_key_part, PT_NODE * where_part,
+		 QO_PLAN * plan,
 		 QO_XASL_INDEX_INFO * index_part, PT_NODE * src_derived_tbl)
 {
   ACCESS_SPEC_TYPE *access = NULL;
@@ -13340,8 +13331,9 @@ pt_to_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
   if (spec->info.spec.flat_entity_list != NULL
       && spec->info.spec.derived_table == NULL)
     {
-      access = pt_to_class_spec_list (parser, spec,
-				      where_key_part, where_part, index_part);
+      access =
+	pt_to_class_spec_list (parser, spec, where_key_part, where_part, plan,
+			       index_part);
     }
   else
     {
@@ -14416,7 +14408,7 @@ pt_to_fetch_proc (PARSER_CONTEXT * parser, PT_NODE * spec, PT_NODE * pred)
 		}
 
 	      xasl->spec_list = pt_to_class_spec_list (parser, spec, NULL,
-						       pred, NULL);
+						       pred, NULL, NULL);
 
 	      if (xasl->spec_list == NULL)
 		{
@@ -14553,6 +14545,7 @@ pt_to_fetch_proc_list (PARSER_CONTEXT * parser, PT_NODE * spec,
  * ptqo_to_scan_proc () - Convert a spec pt_node to a SCAN_PROC
  *   return:
  *   parser(in):
+ *   plan(in):
  *   xasl(in):
  *   spec(in):
  *   where_key_part(in):
@@ -14561,6 +14554,7 @@ pt_to_fetch_proc_list (PARSER_CONTEXT * parser, PT_NODE * spec,
  */
 XASL_NODE *
 ptqo_to_scan_proc (PARSER_CONTEXT * parser,
+		   QO_PLAN * plan,
 		   XASL_NODE * xasl,
 		   PT_NODE * spec,
 		   PT_NODE * where_key_part,
@@ -14584,7 +14578,7 @@ ptqo_to_scan_proc (PARSER_CONTEXT * parser,
     {
       xasl->spec_list = pt_to_spec_list (parser, spec,
 					 where_key_part, where_part,
-					 info, NULL);
+					 plan, info, NULL);
       if (xasl->spec_list == NULL)
 	{
 	  goto exit_on_error;
@@ -14823,7 +14817,7 @@ pt_to_scan_proc_list (PARSER_CONTEXT * parser, PT_NODE * node,
 
   while (from)
     {
-      xasl = ptqo_to_scan_proc (parser, NULL, from, NULL, NULL, NULL);
+      xasl = ptqo_to_scan_proc (parser, NULL, NULL, from, NULL, NULL, NULL);
 
       pt_to_pred_terms (parser,
 			node->info.query.q.select.where,
@@ -14861,13 +14855,13 @@ pt_to_scan_proc_list (PARSER_CONTEXT * parser, PT_NODE * node,
  * pt_gen_optimized_plan () - Translate a PT_SELECT node to a XASL plan
  *   return:
  *   parser(in):
- *   xasl(in):
  *   select_node(in):
  *   plan(in):
+ *   xasl(in):
  */
 static XASL_NODE *
-pt_gen_optimized_plan (PARSER_CONTEXT * parser, XASL_NODE * xasl,
-		       PT_NODE * select_node, QO_PLAN * plan)
+pt_gen_optimized_plan (PARSER_CONTEXT * parser, PT_NODE * select_node,
+		       QO_PLAN * plan, XASL_NODE * xasl)
 {
   XASL_NODE *ret = NULL;
 
@@ -14946,12 +14940,13 @@ pt_gen_optimized_plan (PARSER_CONTEXT * parser, XASL_NODE * xasl,
  * pt_gen_simple_plan () - Translate a PT_SELECT node to a XASL plan
  *   return:
  *   parser(in):
- *   xasl(in):
  *   select_node(in):
+ *   plan(in):
+ *   xasl(in):
  */
 static XASL_NODE *
-pt_gen_simple_plan (PARSER_CONTEXT * parser, XASL_NODE * xasl,
-		    PT_NODE * select_node)
+pt_gen_simple_plan (PARSER_CONTEXT * parser, PT_NODE * select_node,
+		    QO_PLAN * plan, XASL_NODE * xasl)
 {
   PT_NODE *from, *where;
   PT_NODE *access_part, *if_part, *instnum_part;
@@ -14983,7 +14978,7 @@ pt_gen_simple_plan (PARSER_CONTEXT * parser, XASL_NODE * xasl,
 				  &access_part, &if_part, &instnum_part);
 
       xasl->spec_list = pt_to_spec_list (parser, from, NULL, access_part,
-					 NULL, NULL);
+					 NULL, NULL, NULL);
       if (xasl->spec_list == NULL)
 	{
 	  goto exit_on_error;
@@ -15026,8 +15021,8 @@ pt_gen_simple_plan (PARSER_CONTEXT * parser, XASL_NODE * xasl,
 		   lastxasl, from->info.spec.id);
 
       /* this also correctly places correlated subqueries for derived tables */
-      lastxasl->scan_ptr = pt_to_scan_proc_list (parser,
-						 select_node, lastxasl);
+      lastxasl->scan_ptr =
+	pt_to_scan_proc_list (parser, select_node, lastxasl);
 
       while (lastxasl && lastxasl->scan_ptr)
 	{
@@ -15061,12 +15056,14 @@ exit_on_error:
  * pt_gen_simple_merge_plan () - Translate a PT_SELECT node to a XASL plan
  *   return:
  *   parser(in):
- *   xasl(in):
  *   select_node(in):
+ *   plan(in):
+ *   xasl(in):
  */
 XASL_NODE *
-pt_gen_simple_merge_plan (PARSER_CONTEXT * parser, XASL_NODE * xasl,
-			  PT_NODE * select_node)
+pt_gen_simple_merge_plan (PARSER_CONTEXT * parser,
+			  PT_NODE * select_node, QO_PLAN * plan,
+			  XASL_NODE * xasl)
 {
   PT_NODE *table1, *table2;
   PT_NODE *where;
@@ -15081,14 +15078,14 @@ pt_gen_simple_merge_plan (PARSER_CONTEXT * parser, XASL_NODE * xasl,
       && !select_node->info.query.q.select.from->next->next)
     {
       xasl->spec_list = pt_to_spec_list (parser, table1, NULL,
-					 NULL, NULL, NULL);
+					 NULL, plan, NULL, NULL);
       if (xasl->spec_list == NULL)
 	{
 	  goto exit_on_error;
 	}
 
       xasl->merge_spec = pt_to_spec_list (parser, table2, NULL,
-					  NULL, NULL, table1);
+					  NULL, plan, NULL, table1);
       if (xasl->merge_spec == NULL)
 	{
 	  goto exit_on_error;
@@ -16991,7 +16988,7 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
   pt_set_aptr (parser, select_node, xasl);
 
   if (qo_plan == NULL
-      || !pt_gen_optimized_plan (parser, xasl, select_node, qo_plan))
+      || !pt_gen_optimized_plan (parser, select_node, qo_plan, xasl))
     {
       while (from)
 	{
@@ -17006,11 +17003,12 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
       if (select_node->info.query.q.select.flavor == PT_MERGE_SELECT)
 	{
-	  xasl = pt_gen_simple_merge_plan (parser, xasl, select_node);
+	  xasl =
+	    pt_gen_simple_merge_plan (parser, select_node, qo_plan, xasl);
 	}
       else
 	{
-	  xasl = pt_gen_simple_plan (parser, xasl, select_node);
+	  xasl = pt_gen_simple_plan (parser, select_node, qo_plan, xasl);
 	}
 
       if (xasl == NULL)
@@ -17414,7 +17412,7 @@ pt_to_buildvalue_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
   pt_set_aptr (parser, select_node, xasl);
 
-  if (!qo_plan || !pt_gen_optimized_plan (parser, xasl, select_node, qo_plan))
+  if (!qo_plan || !pt_gen_optimized_plan (parser, select_node, qo_plan, xasl))
     {
       PT_NODE *from;
 
@@ -17432,11 +17430,12 @@ pt_to_buildvalue_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
       if (select_node->info.query.q.select.flavor == PT_MERGE_SELECT)
 	{
-	  xasl = pt_gen_simple_merge_plan (parser, xasl, select_node);
+	  xasl =
+	    pt_gen_simple_merge_plan (parser, select_node, qo_plan, xasl);
 	}
       else
 	{
-	  xasl = pt_gen_simple_plan (parser, xasl, select_node);
+	  xasl = pt_gen_simple_plan (parser, select_node, qo_plan, xasl);
 	}
 
       if (xasl == NULL)
@@ -17878,7 +17877,7 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
     {
       size_t plan_len, sizeloc;
       char *ptr, *sql_plan = "";
-      COMPILE_CONTEXT *context = parser->context;
+      COMPILE_CONTEXT *contextp = &parser->context;
 
       FILE *fp = port_open_memstream (&ptr, &sizeloc);
       if (fp)
@@ -17914,27 +17913,27 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
 	    }
 	}
 
-      if (context && sql_plan)
+      if (sql_plan)
 	{
 	  plan_len = strlen (sql_plan);
 
-	  if (context->sql_plan_alloc_size == 0)
+	  if (contextp->sql_plan_alloc_size == 0)
 	    {
 	      int size = MAX (1024, plan_len * 2);
-	      context->sql_plan_text = parser_alloc (parser, size);
-	      if (context->sql_plan_text == NULL)
+	      contextp->sql_plan_text = parser_alloc (parser, size);
+	      if (contextp->sql_plan_text == NULL)
 		{
 		  goto error_exit;
 		}
 
-	      context->sql_plan_alloc_size = size;
-	      context->sql_plan_text[0] = '\0';
+	      contextp->sql_plan_alloc_size = size;
+	      contextp->sql_plan_text[0] = '\0';
 	    }
-	  else if ((size_t) (context->sql_plan_alloc_size) -
-		   strlen (context->sql_plan_text) < plan_len)
+	  else if (contextp->sql_plan_alloc_size -
+		   strlen (contextp->sql_plan_text) < plan_len)
 	    {
 	      char *ptr;
-	      int size = (context->sql_plan_alloc_size + plan_len) * 2;
+	      int size = (contextp->sql_plan_alloc_size + plan_len) * 2;
 
 	      ptr = parser_alloc (parser, size);
 	      if (ptr == NULL)
@@ -17943,17 +17942,18 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
 		}
 
 	      ptr[0] = '\0';
-	      strcpy (ptr, context->sql_plan_text);
+	      strcpy (ptr, contextp->sql_plan_text);
 
-	      context->sql_plan_text = ptr;
-	      context->sql_plan_alloc_size = size;
+	      contextp->sql_plan_text = ptr;
+	      contextp->sql_plan_alloc_size = size;
 	    }
 
-	  strcat (context->sql_plan_text, sql_plan);
+	  strcat (contextp->sql_plan_text, sql_plan);
 	}
     }
 
-  if (plan != NULL && xasl != NULL && parser->query_trace == true)
+  if (parser->query_trace == true && !qo_need_skip_execution ()
+      && plan != NULL && xasl != NULL)
     {
       trace_format = prm_get_integer_value (PRM_ID_QUERY_TRACE_FORMAT);
 
@@ -18996,6 +18996,10 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 
   if (xasl)
     {
+      if (parser->return_generated_keys)
+	{
+	  XASL_SET_FLAG (xasl, XASL_RETURN_GENERATED_KEYS);
+	}
       insert = &xasl->proc.insert;
       insert->class_hfid = *hfid;
       class_oid = ws_identifier (class_obj);
@@ -19480,6 +19484,18 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl)
 	}
       else
 	{
+	  if (pt_is_query (assignments_helper.rhs))
+	    {
+	      XASL_NODE *rhs_xasl = NULL;
+
+	      rhs_xasl =
+		parser_generate_xasl (parser, assignments_helper.rhs);
+	      if (rhs_xasl == NULL)
+		{
+		  error = er_errid ();
+		  goto exit_on_error;
+		}
+	    }
 	  odku->assignments[i].regu_var =
 	    pt_to_regu_variable (parser, assignments_helper.rhs,
 				 UNBOX_AS_VALUE);
@@ -25115,6 +25131,8 @@ validate_regu_key_function_index (REGU_VARIABLE * regu_var)
 	case T_SUBDATE:
 	case T_INET_ATON:
 	case T_INET_NTOA:
+	case T_TO_BASE64:
+	case T_FROM_BASE64:
 	  break;
 	default:
 	  return true;
@@ -26860,6 +26878,7 @@ pt_set_limit_optimization_flags (PARSER_CONTEXT * parser, QO_PLAN * qo_plan,
   /* Set MULTI-RANGE-OPTIMIZATION flags */
   if (qo_plan_multi_range_opt (qo_plan))
     {
+      /* qo_plan->multi_range_opt_use == PLAN_MULTI_RANGE_OPT_USE */
       /* convert ordbynum to key limit if we have iscan with multiple key
        * ranges */
       int err = pt_ordbynum_to_key_limit_multiple_ranges (parser, qo_plan,

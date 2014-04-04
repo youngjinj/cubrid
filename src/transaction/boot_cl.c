@@ -77,7 +77,6 @@
 #include "environment_variable.h"
 #include "locator.h"
 #include "transform.h"
-#include "trigger_manager.h"
 #include "jsp_cl.h"
 #include "client_support.h"
 #include "es.h"
@@ -527,14 +526,7 @@ boot_initialize_client (BOOT_CLIENT_CREDENTIAL * client_credential,
 
   if (client_credential->host_name == NULL)
     {
-      if (boot_Host_name[0] == '\0')
-	{
-	  if (GETHOSTNAME (boot_Host_name, MAXHOSTNAMELEN) != 0)
-	    {
-	      strcpy (boot_Host_name, boot_Client_id_unknown_string);
-	    }
-	}
-      client_credential->host_name = boot_Host_name;
+      client_credential->host_name = boot_get_host_name ();
     }
 
   /*
@@ -902,23 +894,9 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
     }
   if (client_credential->host_name == NULL)
     {
-      if (boot_Host_name[0] == '\0')
-	{
-	  if (GETHOSTNAME (boot_Host_name, MAXHOSTNAMELEN) != 0)
-	    {
-	      strcpy (boot_Host_name, boot_Client_id_unknown_string);
-	    }
-	  boot_Host_name[MAXHOSTNAMELEN - 1] = '\0';	/* bullet proof */
-	}
-      client_credential->host_name = boot_Host_name;
+      client_credential->host_name = boot_get_host_name ();
     }
   client_credential->process_id = getpid ();
-
-  /* disable triggers when a client is a log applier */
-  if (client_credential->client_type == DB_CLIENT_TYPE_LOG_APPLIER)
-    {
-      tr_set_execution_state (false);
-    }
 
   /*
    * Initialize the dynamic loader. Don't care about failures. If dynamic
@@ -1189,15 +1167,6 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
 				     tran_lock_wait_msecs, tran_isolation,
 				     &transtate, &boot_Server_credential);
 
-  /* free the thing get from au_user_name_dup() */
-  if (is_db_user_alloced == true)
-    {
-      assert (client_credential->db_user != NULL);
-      assert (client_credential->db_user != boot_Client_no_user_string);
-      assert (client_credential->db_user != AU_PUBLIC_USER_NAME);
-      free_and_init (client_credential->db_user);
-      is_db_user_alloced = false;
-    }
   if (tran_index == NULL_TRAN_INDEX)
     {
       error_code = er_errid ();
@@ -1232,7 +1201,6 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
       rel_set_disk_compatible (boot_Server_credential.disk_compatibility);
     }
 #endif /* CS_MODE */
-
   sysprm_init_intl_param ();
 
   /* Initialize client modules for execution */
@@ -1250,6 +1218,18 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
   if (error_code != NO_ERROR)
     {
       goto error;
+    }
+
+  (void) db_find_or_create_session (client_credential->db_user,
+				    client_credential->program_name);
+  /* free the thing get from au_user_name_dup() */
+  if (is_db_user_alloced == true)
+    {
+      assert (client_credential->db_user != NULL);
+      assert (client_credential->db_user != boot_Client_no_user_string);
+      assert (client_credential->db_user != AU_PUBLIC_USER_NAME);
+      free_and_init (client_credential->db_user);
+      is_db_user_alloced = false;
     }
 
 #if defined(CS_MODE)
@@ -5729,6 +5709,21 @@ boot_clear_host_connected (void)
 #if defined(CS_MODE)
   boot_Host_connected[0] = '\0';
 #endif
+}
+
+char *
+boot_get_host_name (void)
+{
+  if (boot_Host_name[0] == '\0')
+    {
+      if (GETHOSTNAME (boot_Host_name, MAXHOSTNAMELEN) != 0)
+	{
+	  strcpy (boot_Host_name, boot_Client_id_unknown_string);
+	}
+      boot_Host_name[MAXHOSTNAMELEN - 1] = '\0';	/* bullet proof */
+    }
+
+  return boot_Host_name;
 }
 
 #if defined(CS_MODE)

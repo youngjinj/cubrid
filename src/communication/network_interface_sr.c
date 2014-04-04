@@ -996,6 +996,52 @@ end:
     }
 }
 
+void
+slocator_force_repl_update (THREAD_ENTRY * thread_p,
+			    unsigned int rid, char *request, int reqlen)
+{
+  int error_code = NO_ERROR;
+  DB_VALUE key_value;
+  char *ptr = NULL;
+  OID class_oid;
+  BTID btid;
+  int has_index = 0;
+  int operation = 0;
+  RECDES *recdes = NULL;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+
+  ptr = or_unpack_btid (request, &btid);
+  ptr = or_unpack_oid (ptr, &class_oid);
+  ptr = or_unpack_mem_value (ptr, &key_value);
+  ptr = or_unpack_int (ptr, &has_index);
+  ptr = or_unpack_int (ptr, &operation);
+  ptr = or_unpack_recdes (ptr, &recdes);
+
+  error_code =
+    xlocator_force_repl_update (thread_p, &btid, &class_oid,
+				&key_value,
+				(LC_COPYAREA_OPERATION) operation,
+				has_index, recdes);
+
+  ptr = or_pack_int (reply, error_code);
+
+  if (error_code != NO_ERROR)
+    {
+      return_error_to_client (thread_p, rid);
+    }
+
+  css_send_data_to_client (thread_p->conn_entry, rid, reply,
+			   OR_ALIGNED_BUF_SIZE (a_reply));
+
+  if (recdes != NULL)
+    {
+      free_and_init (recdes);
+    }
+
+  pr_clear_value (&key_value);
+}
+
 /*
  * slocator_fetch_lockset -
  *
@@ -3631,11 +3677,6 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
   TRAN_STATE tran_state;
   int area_size, strlen1, strlen2, strlen3, strlen4;
   char *reply, *area, *ptr;
-  char server_session_key[SERVER_SESSION_KEY_SIZE];
-  SESSION_KEY session_key;
-  int row_count = DB_ROW_COUNT_NOT_SET;
-  SESSION_PARAM *session_params = NULL;
-  int update_parameter_values = 0;
 
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
 
@@ -3656,9 +3697,6 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_unpack_int (ptr, &client_credential.process_id);
   ptr = or_unpack_int (ptr, &client_lock_wait);
   ptr = or_unpack_int (ptr, &xint);
-  ptr = or_unpack_stream (ptr, server_session_key, SERVER_SESSION_KEY_SIZE);
-  ptr = or_unpack_int (ptr, &session_key.id);
-  ptr = sysprm_unpack_session_parameters (ptr, &session_params);
   client_isolation = (TRAN_ISOLATION) xint;
 
 #if defined(DIAG_DEVEL) && defined(SERVER_MODE)
@@ -3677,28 +3715,6 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
       return_error_to_client (thread_p, rid);
     }
 
-  if (session_key.id == DB_EMPTY_SESSION
-      || memcmp (server_session_key, server_credential.server_session_key,
-		 SERVER_SESSION_KEY_SIZE) != 0
-      || xsession_check_session (thread_p, &session_key) != NO_ERROR)
-    {
-      /* create new session */
-      if (xsession_create_new (thread_p, &session_key) != NO_ERROR)
-	{
-	  return_error_to_client (thread_p, rid);
-	}
-    }
-  session_key.fd = thread_p->conn_entry->fd;
-  xsession_set_session_key (thread_p, &session_key);
-
-  thread_p->conn_entry->session_id = session_key.id;
-  xsession_get_row_count (thread_p, &row_count);
-  if (sysprm_session_init_session_parameters
-      (&session_params, &update_parameter_values) != NO_ERROR)
-    {
-      return_error_to_client (thread_p, rid);
-    }
-
   area_size = OR_INT_SIZE	/* tran_index */
     + OR_INT_SIZE		/* tran_state */
     + or_packed_string_length (server_credential.db_full_name, &strlen1)	/* db_full_name */
@@ -3710,18 +3726,7 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
     + OR_INT_SIZE		/* page_size */
     + OR_INT_SIZE		/* log_page_size */
     + OR_FLOAT_SIZE		/* disk_compatibility */
-    + OR_INT_SIZE		/* ha_server_state */
-    + or_packed_stream_length (SERVER_SESSION_KEY_SIZE)	/* server session key */
-    + OR_INT_SIZE		/* session_id */
-    + OR_INT_SIZE;		/* row count */
-
-  area_size += OR_INT_SIZE;	/* update_parameter_values */
-  if (update_parameter_values)
-    {
-      /* session parameters will be sent back to client */
-      area_size += sysprm_packed_session_parameters_length (session_params,
-							    area_size);
-    }
+    + OR_INT_SIZE;		/* ha_server_state */
 
   area_size += OR_INT_SIZE;	/* db_charset */
   area_size += or_packed_string_length (server_credential.db_lang, &strlen4);
@@ -3749,15 +3754,6 @@ sboot_register_client (THREAD_ENTRY * thread_p, unsigned int rid,
       ptr = or_pack_int (ptr, (int) server_credential.log_page_size);
       ptr = or_pack_float (ptr, server_credential.disk_compatibility);
       ptr = or_pack_int (ptr, (int) server_credential.ha_server_state);
-      ptr = or_pack_stream (ptr, server_credential.server_session_key,
-			    SERVER_SESSION_KEY_SIZE);
-      ptr = or_pack_int (ptr, session_key.id);
-      ptr = or_pack_int (ptr, row_count);
-      ptr = or_pack_int (ptr, update_parameter_values);
-      if (update_parameter_values)
-	{
-	  ptr = sysprm_pack_session_parameters (ptr, session_params);
-	}
       ptr = or_pack_int (ptr, server_credential.db_charset);
       ptr = or_pack_string_with_length (ptr, server_credential.db_lang,
 					strlen4);
@@ -3930,10 +3926,11 @@ sboot_check_db_consistency (THREAD_ENTRY * thread_p, unsigned int rid,
   int check_flag;
   int num = 0, i;
   OID *oids = NULL;
+  BTID index_btid;
 
   if (request == NULL)
     {
-      check_flag = CHECKDB_ALL_CHECK;
+      check_flag = CHECKDB_ALL_CHECK_EXCEPT_PREV_LINK;
     }
   else
     {
@@ -3949,9 +3946,11 @@ sboot_check_db_consistency (THREAD_ENTRY * thread_p, unsigned int rid,
 	{
 	  ptr = or_unpack_oid (ptr, &oids[i]);
 	}
+      ptr = or_unpack_btid (ptr, &index_btid);
     }
 
-  success = xboot_check_db_consistency (thread_p, check_flag, oids, num);
+  success =
+    xboot_check_db_consistency (thread_p, check_flag, oids, num, &index_btid);
   success = success == NO_ERROR ? NO_ERROR : ER_FAILED;
   free_and_init (oids);
 
@@ -5786,8 +5785,10 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 		  + OR_CACHE_TIME_SIZE) a_reply;
   CACHE_TIME clt_cache_time;
   CACHE_TIME srv_cache_time;
-  int query_timeout;
-
+  int query_timeout, lock_hint_size;
+  XASL_CACHE_ENTRY *xasl_cache_entry_p = NULL;
+  LC_LOCKHINT *lockhint = NULL;
+  char *packed_lockhint = NULL;
   int response_time = 0;
 
   TSC_TICKS start_tick, end_tick;
@@ -5830,6 +5831,7 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   OR_UNPACK_XASL_ID (ptr, &xasl_id);
   ptr = or_unpack_int (ptr, &dbval_cnt);
   ptr = or_unpack_int (ptr, &data_size);
+  ptr = or_unpack_int (ptr, &lock_hint_size);
   ptr = or_unpack_int (ptr, &query_flag);
   OR_UNPACK_CACHE_TIME (ptr, &clt_cache_time);
   ptr = or_unpack_int (ptr, &query_timeout);
@@ -5854,17 +5856,65 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 	}
     }
 
+  if (lock_hint_size > 0)
+    {
+      csserror = css_receive_data_from_client (thread_p->conn_entry,
+					       rid, &packed_lockhint,
+					       &lock_hint_size);
+
+      if (csserror)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_NET_SERVER_DATA_RECEIVE, 0);
+	  css_send_abort_to_client (thread_p->conn_entry, rid);
+	  if (packed_lockhint)
+	    {
+	      free_and_init (packed_lockhint);
+	    }
+	  if (data)
+	    {
+	      free_and_init (data);
+	    }
+	  return;		/* error */
+	}
+      lockhint =
+	locator_allocate_and_unpack_lockhint (packed_lockhint, lock_hint_size,
+					      true, false);
+      free_and_init (packed_lockhint);
+
+      if (lockhint == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_NET_SERVER_DATA_RECEIVE, 0);
+	  css_send_abort_to_client (thread_p->conn_entry, rid);
+	  if (data)
+	    {
+	      free_and_init (data);
+	    }
+	  return;		/* error */
+	}
+    }
+
   CACHE_TIME_RESET (&srv_cache_time);
 
   /* call the server routine of query execute */
   list_id = xqmgr_execute_query (thread_p, &xasl_id, &query_id,
 				 dbval_cnt, data, &query_flag,
 				 &clt_cache_time, &srv_cache_time,
-				 query_timeout, &info);
+				 query_timeout, &xasl_cache_entry_p,
+				 lockhint);
 
   if (data)
     {
       free_and_init (data);
+    }
+  if (lockhint)
+    {
+      locator_free_lockhint (lockhint);
+    }
+  if (xasl_cache_entry_p)
+    {
+      info = xasl_cache_entry_p->sql_info;
     }
 
 #if 0
@@ -6002,7 +6052,11 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
       free_and_init (sql_id);
     }
 
-  (void) qexec_end_use_of_xasl_cache_ent (thread_p, &xasl_id);
+  if (xasl_cache_entry_p)
+    {
+      (void) qexec_remove_my_tran_id_in_xasl_entry (thread_p,
+						    xasl_cache_entry_p, true);
+    }
 
   ptr = or_pack_int (ptr, queryinfo_string_length);
 
@@ -9574,7 +9628,7 @@ slocator_upgrade_instances_domain (THREAD_ENTRY * thread_p, unsigned int rid,
 }
 
 /*
- * ssession_check_session -
+ * ssession_find_or_create_session -
  *
  * return: void
  *
@@ -9586,14 +9640,16 @@ slocator_upgrade_instances_domain (THREAD_ENTRY * thread_p, unsigned int rid,
  * one if needed
  */
 void
-ssession_check_session (THREAD_ENTRY * thread_p, unsigned int rid,
-			char *request, int reqlen)
+ssession_find_or_create_session (THREAD_ENTRY * thread_p, unsigned int rid,
+				 char *request, int reqlen)
 {
   SESSION_KEY key = { DB_EMPTY_SESSION, INVALID_SOCKET };
   int row_count = -1, area_size;
   OR_ALIGNED_BUF (OR_INT_SIZE + OR_INT_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
   char *ptr = NULL, *area = NULL;
+  char *db_user = NULL, *host = NULL, *program_name = NULL;
+  char db_user_upper[DB_MAX_USER_LENGTH] = { '\0' };
   char server_session_key[SERVER_SESSION_KEY_SIZE];
   SESSION_PARAM *session_params = NULL;
   int error = NO_ERROR, update_parameter_values = 0;
@@ -9601,9 +9657,13 @@ ssession_check_session (THREAD_ENTRY * thread_p, unsigned int rid,
   ptr = or_unpack_int (request, &key.id);
   ptr = or_unpack_stream (ptr, server_session_key, SERVER_SESSION_KEY_SIZE);
   ptr = sysprm_unpack_session_parameters (ptr, &session_params);
+  ptr = or_unpack_string_alloc (ptr, &db_user);
+  ptr = or_unpack_string_alloc (ptr, &host);
+  ptr = or_unpack_string_alloc (ptr, &program_name);
 
-  if (memcmp (server_session_key, xboot_get_server_session_key (),
-	      SERVER_SESSION_KEY_SIZE) != 0
+  if (key.id == DB_EMPTY_SESSION
+      || memcmp (server_session_key, xboot_get_server_session_key (),
+		 SERVER_SESSION_KEY_SIZE) != 0
       || xsession_check_session (thread_p, &key) != NO_ERROR)
     {
       /* not an error yet */
@@ -9684,6 +9744,19 @@ ssession_check_session (THREAD_ENTRY * thread_p, unsigned int rid,
 	  return_error_to_client (thread_p, rid);
 	}
     }
+
+  if (db_user != NULL)
+    {
+      assert (host != NULL);
+      assert (program_name != NULL);
+
+      intl_identifier_upper (db_user, db_user_upper);
+      css_set_user_access_status (db_user_upper, host, program_name);
+    }
+
+  free_and_init (db_user);
+  free_and_init (host);
+  free_and_init (program_name);
 
   ptr = or_pack_int (reply, area_size);
   ptr = or_pack_int (ptr, error);
@@ -10615,4 +10688,76 @@ sboot_get_locales_info (THREAD_ENTRY * thread_p, unsigned int rid,
     {
       free_and_init (data_reply);
     }
+}
+
+
+void
+slocator_prefetch_repl_insert (THREAD_ENTRY * thread_p,
+			       unsigned int rid, char *request, int reqlen)
+{
+  int error = NO_ERROR;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  char *ptr = NULL;
+  OID class_oid;
+  RECDES *recdes = NULL;
+
+  css_inc_prefetcher_thread_count (thread_p);
+
+  ptr = or_pack_int (reply, error);
+
+  error = css_send_data_to_client (thread_p->conn_entry, rid,
+				   reply, OR_ALIGNED_BUF_SIZE (a_reply));
+  if (error != NO_ERROR)
+    {
+      goto end;
+    }
+
+  ptr = or_unpack_oid (request, &class_oid);
+  ptr = or_unpack_recdes (ptr, &recdes);
+
+  xlocator_prefetch_repl_insert (thread_p, &class_oid, recdes);
+
+  if (recdes != NULL)
+    {
+      free_and_init (recdes);
+    }
+
+end:
+  css_dec_prefetcher_thread_count (thread_p);
+}
+
+void
+slocator_prefetch_repl_update_or_delete (THREAD_ENTRY * thread_p,
+					 unsigned int rid, char *request,
+					 int reqlen)
+{
+  int error = NO_ERROR;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  char *ptr = NULL;
+  OID class_oid;
+  BTID btid;
+  DB_VALUE key_value;
+
+  css_inc_prefetcher_thread_count (thread_p);
+
+  ptr = or_pack_int (reply, error);
+
+  error = css_send_data_to_client (thread_p->conn_entry, rid,
+				   reply, OR_ALIGNED_BUF_SIZE (a_reply));
+  if (error != NO_ERROR)
+    {
+      goto end;
+    }
+
+  ptr = or_unpack_btid (request, &btid);
+  ptr = or_unpack_oid (ptr, &class_oid);
+  ptr = or_unpack_mem_value (ptr, &key_value);
+
+  xlocator_prefetch_repl_update_or_delete (thread_p, &btid, &class_oid,
+					   &key_value);
+
+end:
+  css_dec_prefetcher_thread_count (thread_p);
 }

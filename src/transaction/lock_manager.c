@@ -2706,6 +2706,12 @@ lock_suspend (THREAD_ENTRY * thread_p, LK_ENTRY * entry_ptr, int wait_msecs)
   thread_wakeup_deadlock_detect_thread ();
 
   tdes = LOG_FIND_CURRENT_TDES (thread_p);
+
+#if !defined (NDEBUG) && defined (SERVER_MODE)
+  /* assert - I'm not a deadlock-victim thread */
+  assert (tdes->tran_abort_reason == TRAN_NORMAL);
+#endif
+
   if (tdes)
     {
       tdes->waiting_for_res = entry_ptr->res_head;

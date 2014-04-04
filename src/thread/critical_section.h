@@ -75,6 +75,7 @@ enum
   CSECT_TEMPFILE_CACHE,		/* Latch for temp file cache */
   CSECT_LOG_PB,			/* Latch for log_Pb */
   CSECT_LOG_ARCHIVE,		/* Latch for log_Gl.archive */
+  CSECT_ACCESS_STATUS,		/* Latch for user access status */
   CSECT_VACUUM_STATS,		/* Latch for vacuum statistics table */
   CSECT_MVCC_ACTIVE_TRANS,	/* Latch for mvcc active transaction */
   CSECT_LAST

@@ -50,6 +50,7 @@
 #include "md5.h"
 #include "porting.h"
 #include "crypt_opfunc.h"
+#include "base64.h"
 
 /* this must be the last header file included!!! */
 #include "dbval.h"
@@ -532,9 +533,19 @@ db_string_compare (const DB_VALUE * string1, const DB_VALUE * string2,
 	  assert (DB_GET_STRING_CODESET (string1)
 		  == DB_GET_STRING_CODESET (string2));
 
-	  LANG_RT_COMMON_COLL (string1->domain.char_info.collation_id,
-			       string2->domain.char_info.collation_id,
-			       coll_id);
+	  LANG_RT_COMMON_COLL (DB_GET_STRING_COLLATION (string1),
+			       DB_GET_STRING_COLLATION (string2), coll_id);
+
+	  if (coll_id == -1)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_QSTR_INCOMPATIBLE_COLLATIONS, 0);
+	      return ER_QSTR_INCOMPATIBLE_COLLATIONS;
+	    }
+
+	  coll_id = DB_GET_STRING_COLLATION (string1);
+	  assert (DB_GET_STRING_COLLATION (string1)
+		  == DB_GET_STRING_COLLATION (string2));
 
 	  cmp_result =
 	    QSTR_COMPARE (coll_id,
@@ -1358,6 +1369,12 @@ db_string_concatenate (const DB_VALUE * string1,
 	  LANG_RT_COMMON_COLL (DB_GET_STRING_COLLATION (string1),
 			       DB_GET_STRING_COLLATION (string2),
 			       common_coll);
+	  if (common_coll == -1)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_QSTR_INCOMPATIBLE_COLLATIONS, 0);
+	      return ER_QSTR_INCOMPATIBLE_COLLATIONS;
+	    }
 
 	  if (DB_GET_STRING_CODESET (string1)
 	      != DB_GET_STRING_CODESET (string2))
@@ -5043,8 +5060,13 @@ qstr_eval_like (const char *tar, int tar_length,
   bool escape_is_match_many =
     ((escape != NULL) && *escape == LIKE_WILDCARD_MATCH_MANY);
   unsigned char pad_char[2];
+
+
+  LANG_COLLATION *current_collation;
+
   int pad_char_size;
 
+  current_collation = lang_get_collation (coll_id);
   intl_pad_char (codeset, pad_char, &pad_char_size);
 
   tar_ptr = (unsigned char *) tar;
@@ -5103,7 +5125,7 @@ qstr_eval_like (const char *tar, int tar_length,
 		  if (stackp >= 0 && stackp < STACK_SIZE)
 		    {
 		      tar_ptr = tarstack[stackp];
-		      tar_ptr = intl_next_char (tar_ptr, codeset, &dummy);
+		      INTL_NEXT_CHAR (tar_ptr, tar_ptr, codeset, &dummy);
 		      expr_ptr = exprstack[stackp--];
 		    }
 		  else
@@ -5128,7 +5150,7 @@ qstr_eval_like (const char *tar, int tar_length,
 	      if (!escape_is_match_one
 		  && *expr_ptr == LIKE_WILDCARD_MATCH_ONE)
 		{
-		  tar_ptr = intl_next_char (tar_ptr, codeset, &dummy);
+		  INTL_NEXT_CHAR (tar_ptr, tar_ptr, codeset, &dummy);
 		  expr_ptr++;
 		  go_back = false;
 		}
@@ -5177,9 +5199,8 @@ qstr_eval_like (const char *tar, int tar_length,
 			{
 			  inescape = false;
 			}
-
-		      expr_seq_end = intl_next_char (expr_seq_end, codeset,
-						     &dummy);
+		      INTL_NEXT_CHAR (expr_seq_end, expr_seq_end, codeset,
+				      &dummy);
 		    }
 		  while (expr_seq_end < end_expr);
 
@@ -5187,10 +5208,14 @@ qstr_eval_like (const char *tar, int tar_length,
 		  assert (expr_seq_end - expr_ptr > 0);
 
 		  /* match using collation */
-		  cmp = QSTR_MATCH (coll_id, tar_ptr, end_tar - tar_ptr,
-				    expr_ptr, expr_seq_end - expr_ptr,
-				    match_escape, has_last_escape,
-				    &tar_matched_size);
+		  cmp =
+		    current_collation->strmatch (current_collation, true,
+						 tar_ptr, end_tar - tar_ptr,
+						 expr_ptr,
+						 expr_seq_end - expr_ptr,
+						 match_escape,
+						 has_last_escape,
+						 &tar_matched_size);
 
 		  if (cmp == 0)
 		    {
@@ -5209,7 +5234,7 @@ qstr_eval_like (const char *tar, int tar_length,
 	      if (stackp >= 0 && stackp < STACK_SIZE)
 		{
 		  tar_ptr = tarstack[stackp];
-		  tar_ptr = intl_next_char (tar_ptr, codeset, &dummy);
+		  INTL_NEXT_CHAR (tar_ptr, tar_ptr, codeset, &dummy);
 		  expr_ptr = exprstack[stackp--];
 		}
 	      else if (stackp > STACK_SIZE)
@@ -5224,8 +5249,8 @@ qstr_eval_like (const char *tar, int tar_length,
 	}
       else
 	{
-	  unsigned char *next_expr_ptr = intl_next_char (expr_ptr, codeset,
-							 &dummy);
+	  unsigned char *next_expr_ptr;
+	  INTL_NEXT_CHAR (next_expr_ptr, expr_ptr, codeset, &dummy);
 
 	  assert (status == IN_PERCENT);
 	  if ((next_expr_ptr < end_expr)
@@ -5239,7 +5264,7 @@ qstr_eval_like (const char *tar, int tar_length,
 	      tarstack[++stackp] = tar_ptr;
 	      exprstack[stackp] = expr_ptr;
 	      expr_ptr = next_expr_ptr;
-	      next_expr_ptr = intl_next_char (expr_ptr, codeset, &dummy);
+	      INTL_NEXT_CHAR (next_expr_ptr, expr_ptr, codeset, &dummy);
 
 	      if (stackp > STACK_SIZE)
 		{
@@ -5300,8 +5325,8 @@ qstr_eval_like (const char *tar, int tar_length,
 		      inescape = false;
 		    }
 
-		  expr_seq_end = intl_next_char (expr_seq_end, codeset,
-						 &dummy);
+		  INTL_NEXT_CHAR (expr_seq_end, expr_seq_end, codeset,
+				  &dummy);
 		}
 	      while (expr_seq_end < end_expr);
 
@@ -5311,11 +5336,14 @@ qstr_eval_like (const char *tar, int tar_length,
 	      do
 		{
 		  /* match using collation */
-		  cmp = QSTR_MATCH (coll_id, tar_ptr, end_tar - tar_ptr,
-				    next_expr_ptr,
-				    expr_seq_end - next_expr_ptr,
-				    match_escape, has_last_escape,
-				    &tar_matched_size);
+		  cmp =
+		    current_collation->strmatch (current_collation, true,
+						 tar_ptr, end_tar - tar_ptr,
+						 next_expr_ptr,
+						 expr_seq_end - next_expr_ptr,
+						 match_escape,
+						 has_last_escape,
+						 &tar_matched_size);
 
 		  if (cmp == 0)
 		    {
@@ -5339,7 +5367,7 @@ qstr_eval_like (const char *tar, int tar_length,
 		  else
 		    {
 		      /* check starting from next char */
-		      tar_ptr = intl_next_char (tar_ptr, codeset, &dummy);
+		      INTL_NEXT_CHAR (tar_ptr, tar_ptr, codeset, &dummy);
 		    }
 		}
 	      while (tar_ptr < end_tar);
@@ -5572,7 +5600,7 @@ qstr_replace (unsigned char *src_buf,
 	}
       else
 	{
-	  src_ptr = intl_next_char (src_ptr, codeset, &char_size);
+	  INTL_NEXT_CHAR (src_ptr, src_ptr, codeset, &char_size);
 	  *result_size += char_size;
 	  *result_len += 1;
 	}
@@ -9478,8 +9506,9 @@ qstr_position (const char *sub_string, const int sub_size,
 		{
 		  break;
 		}
-	      ptr = intl_next_char ((unsigned char *) ptr,
-				    codeset, &char_size);
+
+	      INTL_NEXT_CHAR (ptr, (unsigned char *) ptr,
+			      codeset, &char_size);
 	    }
 	  else
 	    {
@@ -12050,7 +12079,7 @@ db_sys_date_and_epoch_time (DB_VALUE * dt_dbval, DB_VALUE * ts_dbval)
 		      c_time_struct->tm_sec, tloc.millitm);
 
   DB_MAKE_DATETIME (dt_dbval, &datetime);
-  DB_MAKE_TIMESTAMP (ts_dbval, (DB_TIMESTAMP *) (&tloc.time));
+  DB_MAKE_TIMESTAMP (ts_dbval, (DB_TIMESTAMP) tloc.time);
 
   return error_status;
 }
@@ -18593,13 +18622,12 @@ get_next_format (char *sp, const INTL_CODESET codeset, DB_TYPE str_type,
       while (sp[*format_length] != '"')
 	{
 	  int char_size;
-
+	  unsigned char *ptr = (unsigned char *) sp + (*format_length);
 	  if (sp[*format_length] == '\0')
 	    {
 	      return DT_INVALID;
 	    }
-	  intl_next_char ((unsigned char *) sp + (*format_length),
-			  codeset, &char_size);
+	  INTL_NEXT_CHAR (ptr, ptr, codeset, &char_size);
 	  *format_length += char_size;
 	}
       *format_length += 1;
@@ -25925,4 +25953,198 @@ db_string_index_prefix (const DB_VALUE * string1,
 					  &key_domain);
 
   return error_status;
+}
+
+/*
+ *  db_string_to_base64 () - Using base64 to encode arbitrary input
+ *   return: int(NO_ERROR if successful, other error status if fail)
+ *   src(in):       source which holds plain-text string
+ *   result(in/out): dest which holds encoded buffer
+ *
+ *   Note: handling of special cases:
+ *         1. source string is NULL, result is NULL
+ *         2. source string is empty string, result is empty string
+ */
+int
+db_string_to_base64 (DB_VALUE const *src, DB_VALUE * result)
+{
+  int error_status, encode_len, src_len;
+  const unsigned char *src_buf = NULL;
+  unsigned char *encode_buf = NULL;
+  DB_TYPE val_type;
+
+  assert (src != (DB_VALUE *) NULL);
+  assert (result != (DB_VALUE *) NULL);
+
+  error_status = NO_ERROR;
+
+  if (DB_IS_NULL (src))
+    {
+      DB_MAKE_NULL (result);
+      return error_status;
+    }
+
+  src_buf = (const unsigned char *) DB_PULL_STRING (src);
+
+  /* length in bytes */
+  src_len = DB_GET_STRING_SIZE (src);
+
+  assert (src_len >= 0);
+
+  /* if input is empty string, output is also empty string */
+  if (src_len == 0)
+    {
+      db_string_make_empty_typed_string (NULL, result, DB_TYPE_VARCHAR, 0,
+					 DB_GET_STRING_CODESET (src),
+					 DB_GET_STRING_COLLATION (src));
+      return NO_ERROR;
+    }
+
+  val_type = DB_VALUE_DOMAIN_TYPE (src);
+  if (QSTR_IS_ANY_CHAR (val_type))
+    {
+      /* currently base64_encode always returns NO_ERROR except
+       * for memory buffer allocation fail */
+      error_status =
+	base64_encode (src_buf, src_len, &encode_buf, &encode_len);
+
+      if (error_status == NO_ERROR)
+	{
+	  qstr_make_typed_string (DB_TYPE_VARCHAR, result, encode_len,
+				  encode_buf, encode_len,
+				  DB_GET_STRING_CODESET (src),
+				  DB_GET_STRING_COLLATION (src));
+
+	  result->need_clear = true;
+
+	  return NO_ERROR;
+	}
+
+    }
+  else				/* val_type != QSTR_IS_ANY_CHAR  */
+    {
+      error_status = ER_QSTR_INVALID_DATA_TYPE;	/* reset error code */
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+    }
+
+  if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+    {
+      DB_MAKE_NULL (result);
+      return NO_ERROR;
+    }
+  else
+    {
+      return error_status;
+    }
+
+}
+
+/*
+ *  db_string_from_base64 () - Convert a buffer into plain-text by base64 decoding
+ *                             There is no assumption the input is base64 encoded,
+ *                             in this case, result is NULL
+ *   return:   int(NO_ERROR if successful, other error status if fail)
+ *   src(in):       source which holds encoded buffer
+ *   result(in/out): dest which holds plain-text string
+ *
+ *   Note: handling of special cases:
+ *         1. source string is NULL, result is NULL
+ *         2. source string is empty string, result is empty string
+ *         3. source string contains invalid base64 encoded character,
+ *            result is NULL
+ *         4. source string has insufficient length even some bytes have been
+ *            decoded, result is NULL
+ */
+int
+db_string_from_base64 (DB_VALUE const *src, DB_VALUE * result)
+{
+  int error_status, err, decode_len, src_len;
+  const unsigned char *src_buf = NULL;
+  unsigned char *decode_buf = NULL;
+  DB_TYPE val_type;
+
+  assert (src != (DB_VALUE *) NULL);
+  assert (result != (DB_VALUE *) NULL);
+
+  error_status = NO_ERROR;
+
+  /* source is NULL */
+  if (DB_IS_NULL (src))
+    {
+      DB_MAKE_NULL (result);
+      return NO_ERROR;
+    }
+
+  src_buf = (const unsigned char *) DB_PULL_STRING (src);
+
+  /* length in bytes */
+  src_len = DB_GET_STRING_SIZE (src);
+
+  assert (src_len >= 0);
+
+  /* source is empty string */
+  if (src_len == 0)
+    {
+      db_string_make_empty_typed_string (NULL, result, DB_TYPE_VARCHAR, 0,
+					 DB_GET_STRING_CODESET (src),
+					 DB_GET_STRING_COLLATION (src));
+      return NO_ERROR;
+    }
+
+  val_type = DB_VALUE_DOMAIN_TYPE (src);
+
+  if (QSTR_IS_ANY_CHAR (val_type))
+    {
+      err = base64_decode (src_buf, src_len, &decode_buf, &decode_len);
+
+      switch (err)
+	{
+
+	case BASE64_EMPTY_INPUT:
+	  db_string_make_empty_typed_string (NULL, result, DB_TYPE_VARCHAR, 0,
+					     DB_GET_STRING_CODESET (src),
+					     DB_GET_STRING_COLLATION (src));
+	  error_status = NO_ERROR;
+	  break;
+
+	case NO_ERROR:
+	  qstr_make_typed_string (DB_TYPE_VARCHAR, result, decode_len,
+				  decode_buf, decode_len,
+				  DB_GET_STRING_CODESET (src),
+				  DB_GET_STRING_COLLATION (src));
+	  result->need_clear = true;
+	  error_status = NO_ERROR;
+	  break;
+
+	case BASE64_INVALID_INPUT:
+	  error_status = ER_QSTR_INVALID_FORMAT;	/* reset error code */
+	  goto error_handling;
+
+	default:
+	  error_status = ER_FAILED;
+	  goto error_handling;
+	}
+
+    }
+  else				/* val_type != QSTR_IS_ANY_CHAR  */
+    {
+      error_status = ER_QSTR_INVALID_DATA_TYPE;	/* reset error code */
+      goto error_handling;
+    }
+
+  assert (error_status == NO_ERROR);
+  return error_status;
+
+error_handling:
+
+  if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+    {
+      DB_MAKE_NULL (result);
+      return NO_ERROR;
+    }
+  else
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+      return error_status;
+    }
 }

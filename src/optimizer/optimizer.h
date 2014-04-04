@@ -167,9 +167,11 @@ extern int qo_plan_get_cost_fn (const char *);
 extern PT_NODE *qo_plan_iscan_sort_list (QO_PLAN *);
 extern bool qo_plan_skip_orderby (QO_PLAN * plan);
 extern bool qo_plan_skip_groupby (QO_PLAN * plan);
-extern bool qo_plan_coverage_index (QO_PLAN * plan);
+extern bool qo_is_index_covering_scan (QO_PLAN * plan);
+extern bool qo_is_index_iss_scan (QO_PLAN * plan);
+extern bool qo_is_index_loose_scan (QO_PLAN * plan);
+extern bool qo_is_index_mro_scan (QO_PLAN * plan);
 extern bool qo_plan_multi_range_opt (QO_PLAN * plan);
-extern bool qo_plan_filtered_index (QO_PLAN * plan);
 extern void qo_set_cost (DB_OBJECT * target, DB_VALUE * result,
 			 DB_VALUE * plan, DB_VALUE * cost);
 
@@ -178,11 +180,6 @@ extern void qo_set_cost (DB_OBJECT * target, DB_VALUE * result,
  */
 extern int qo_xasl_get_num_terms (QO_XASL_INDEX_INFO * info);
 extern PT_NODE **qo_xasl_get_terms (QO_XASL_INDEX_INFO *);
-extern BTID *qo_xasl_get_btid (MOP classop, QO_XASL_INDEX_INFO * info);
-extern bool qo_xasl_get_multi_col (MOP class_mop, QO_XASL_INDEX_INFO * infop);
-extern PT_NODE *qo_xasl_get_key_limit (MOP class_mop,
-				       QO_XASL_INDEX_INFO * infop);
-extern bool qo_xasl_get_coverage (MOP class_mop, QO_XASL_INDEX_INFO * infop);
 extern PT_NODE *qo_check_nullable_expr (PARSER_CONTEXT * parser,
 					PT_NODE * node, void *arg,
 					int *continue_walk);

@@ -363,7 +363,7 @@ extern DISK_ISVALID btree_check_tree (THREAD_ENTRY * thread_p,
 extern DISK_ISVALID btree_check_by_btid (THREAD_ENTRY * thread_p,
 					 BTID * btid);
 extern DISK_ISVALID btree_check_by_class_oid (THREAD_ENTRY * thread_p,
-					      OID * cls_oid);
+					      OID * cls_oid, BTID * idx_btid);
 extern DISK_ISVALID btree_check_all (THREAD_ENTRY * thread_p);
 extern int btree_keyoid_checkscan_start (THREAD_ENTRY * thread_p,
 					 BTID * btid,
@@ -374,10 +374,13 @@ extern DISK_ISVALID btree_keyoid_checkscan_check (THREAD_ENTRY * thread_p,
 						  DB_VALUE * key, OID * oid);
 extern void btree_keyoid_checkscan_end (THREAD_ENTRY * thread_p,
 					BTREE_CHECKSCAN * btscan);
+#if defined(ENABLE_UNUSED_FUNCTION)
 extern int btree_estimate_total_numpages (THREAD_ENTRY * thread_p,
 					  int dis_key_cnt, int avg_key_len,
 					  int tot_val_cnt, int *blt_pgcnt_est,
 					  int *blt_wrs_pgcnt_est);
+#endif
+
 extern int btree_index_capacity (THREAD_ENTRY * thread_p, BTID * btid,
 				 BTREE_CAPACITY * cpc);
 extern DB_VALUE *btree_delete (THREAD_ENTRY * thread_p, BTID * btid,
@@ -531,11 +534,20 @@ extern BTREE_LOCKED_KEYS btree_get_locked_keys (BTID * delete_btid,
 						BTID * search_btid,
 						bool duplicate_key_locked);
 extern DISK_ISVALID btree_repair_prev_link (THREAD_ENTRY * thread_p,
-					    OID * oid, bool repair);
+					    OID * oid, BTID * btid,
+					    bool repair);
 extern int btree_ils_adjust_range (THREAD_ENTRY * thread_p,
 				   KEY_VAL_RANGE * key_range,
 				   DB_VALUE * curr_key, int prefix_len,
-				   bool use_desc_index);
+				   bool use_desc_index, bool part_key_desc);
+extern int btree_index_start_scan (THREAD_ENTRY * thread_p, int show_type,
+				   DB_VALUE ** arg_values, int arg_cnt,
+				   void **ctx);
+extern int btree_index_end_scan (THREAD_ENTRY * thread_p, void **ctx);
+extern SCAN_CODE btree_index_next_scan (THREAD_ENTRY * thread_p,
+					int cursor,
+					DB_VALUE ** out_values,
+					int out_cnt, void *ctx);
 
 extern SCAN_CODE btree_get_next_key_info (THREAD_ENTRY * thread_p,
 					  BTID * btid, BTREE_SCAN * bts,

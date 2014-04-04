@@ -36,48 +36,43 @@ namespace dbgw
       NBASE_SQL_TYPE_OTHERS
     } NBASE_SQL_TYPE;
 
-    class NBaseTManager
+    _NBaseTGlobal::_NBaseTGlobal()
     {
-    public:
-      NBaseTManager(const char *szHost, int nPort)
-      {
-        nbase_param_t param;
+      nbase_param_t param;
 
-        nbase_get_param(&param);
-        nbase_init(&param);
+      nbase_get_param(&param);
+      nbase_init(&param);
+    }
 
-        int nResult = nbase_register_cs_list(szHost, nPort);
-        if (NE_ERROR(nResult))
-          {
-            NBaseTException e =
-                NBaseTExceptionFactory::create(nResult, "fail to register cs list");
-            DBGW_LOG_ERROR(e.what());
-            throw e;
-          }
-      }
+    _NBaseTGlobal::~_NBaseTGlobal()
+    {
+      nbase_unregister_cs_list();
 
-      ~NBaseTManager()
-      {
-        nbase_finalize();
-      }
+      nbase_finalize();
+    }
 
-      static NBaseTManager *getInstance(const char *szHost, int nPort)
-      {
-        static system::_Mutex mutex;
-        static NBaseTManager *m_pInstance = NULL;
+    void _NBaseTGlobal::registerCsList(const char *szHost, int nPort)
+    {
+      int nResult = nbase_register_cs_list(szHost, nPort);
+      if (NE_ERROR(nResult) && nResult != nbase_t::NE_EXIST)
+        {
+          NBaseTException e =
+              NBaseTExceptionFactory::create(nResult, "fail to register cs list");
+          DBGW_LOG_ERROR(e.what());
+          throw e;
+        }
+    }
 
-        if (m_pInstance == NULL)
-          {
-            system::_MutexAutoLock lock(&mutex);
-            if (m_pInstance == NULL)
-              {
-                m_pInstance = new NBaseTManager(szHost, nPort);
-              }
-          }
+    trait<_NBaseTGlobal>::sp _NBaseTGlobal::getInstance()
+    {
+      static trait<_NBaseTGlobal>::sp pInstance;
+      if (pInstance == NULL)
+        {
+          pInstance = trait<_NBaseTGlobal>::sp(new _NBaseTGlobal());
+        }
 
-        return m_pInstance;
-      }
-    };
+      return pInstance;
+    }
 
     class NBaseTExecutor::Impl
     {
@@ -87,7 +82,8 @@ namespace dbgw
         m_keyspace(keyspace), m_csPort(0), m_nTimeoutMilSec(10000),
         m_bAutocommit(true), m_type(NBASE_SQL_TYPE_OTHERS)
       {
-        m_pManager = NBaseTManager::getInstance(mgmtHost.c_str(), mgmtPort);
+        m_pGlobal = _NBaseTGlobal::getInstance();
+        m_pGlobal->registerCsList(mgmtHost.c_str(), mgmtPort);
       }
 
       virtual ~Impl()
@@ -413,7 +409,7 @@ namespace dbgw
       }
 
     private:
-      NBaseTManager *m_pManager;
+      trait<_NBaseTGlobal>::sp m_pGlobal;
       std::string m_ckey;
       std::string m_csAddr;
       std::string m_keyspace;

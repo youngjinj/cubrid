@@ -2801,8 +2801,14 @@ intl_strcasecmp_utf8_one_cp (const ALPHABET_DATA * alphabet,
 int
 intl_identifier_casecmp (const char *str1, const char *str2)
 {
-  int str1_size = strlen (str1);
-  int str2_size = strlen (str2);
+  int str1_size;
+  int str2_size;
+
+  assert (str1 != NULL);
+  assert (str2 != NULL);
+
+  str1_size = strlen (str1);
+  str2_size = strlen (str2);
 
   return intl_identifier_casecmp_w_size (lang_id (), (unsigned char *) str1,
 					 (unsigned char *) str2, str1_size,
@@ -3224,7 +3230,7 @@ check_truncation:
        * char */
       for (i = 0; i < length_bytes;)
 	{
-	  name_char = intl_next_char (name_char, codeset, &char_size);
+	  INTL_NEXT_CHAR (name_char, name_char, codeset, &char_size);
 	  i += char_size;
 	}
 

@@ -82,6 +82,10 @@ extern int locator_does_exist (OID * oidp, int chn, LOCK lock,
 extern int locator_notify_isolation_incons (LC_COPYAREA ** synch_copyarea);
 extern int locator_force (LC_COPYAREA * copy_area, int num_ignore_error_list,
 			  int *ignore_error_list, int continue_on_error);
+extern int locator_force_repl_update (BTID * btid, OID * class_oid,
+				      DB_VALUE * key_value,
+				      bool has_index,
+				      int operation, RECDES * recdes);
 extern int locator_fetch_lockset (LC_LOCKSET * lockset,
 				  LC_COPYAREA ** fetch_copyarea);
 extern int locator_fetch_all_reference_lockset (OID * oid, int chn,
@@ -123,6 +127,10 @@ extern int locator_check_fk_validity (OID * cls_oid, HFID * hfid,
 				      int *attr_ids, OID * pk_cls_oid,
 				      BTID * pk_btid, int cache_attr_id,
 				      char *fk_name);
+extern int locator_prefetch_repl_insert (OID * class_oid, RECDES * recdes);
+extern int locator_prefetch_repl_update_or_delete (OID * class_oid,
+						   BTID * btid,
+						   DB_VALUE * key_value);
 extern int heap_create (HFID * hfid, const OID * class_oid, bool reuse_oid);
 #if defined(ENABLE_UNUSED_FUNCTION)
 extern int heap_destroy (const HFID * hfid);
@@ -219,7 +227,7 @@ extern int boot_backup (const char *backup_path,
 			int sleep_msecs);
 extern VOLID boot_add_volume_extension (DBDEF_VOL_EXT_INFO * ext_info);
 extern int boot_check_db_consistency (int check_flag, OID * oids,
-				      int num_oids);
+				      int num_oids, BTID * idx_btid);
 extern int boot_find_number_permanent_volumes (void);
 extern int boot_find_number_temp_volumes (void);
 extern int boot_find_last_temp (void);
@@ -308,7 +316,8 @@ extern QFILE_LIST_ID *qmgr_execute_query (const XASL_ID * xasl_id,
 					  QUERY_FLAG flag,
 					  CACHE_TIME * clt_cache_time,
 					  CACHE_TIME * srv_cache_time,
-					  int query_timeout);
+					  int query_timeout,
+					  LC_LOCKHINT * lockhint);
 extern QFILE_LIST_ID *qmgr_prepare_and_execute_query (char *xasl_stream,
 						      int xasl_stream_size,
 						      QUERY_ID * query_id,
@@ -547,8 +556,12 @@ extern int boot_get_server_locales (LANG_COLL_COMPAT ** server_collations,
 				    int *server_locales_cnt);
 
 /* session state API */
-extern int csession_check_session (SESSION_ID * session_id, int *row_count,
-				   char *server_session_key);
+extern int csession_find_or_create_session (SESSION_ID * session_id,
+					    int *row_count,
+					    char *server_session_key,
+					    const char *db_user,
+					    const char *host,
+					    const char *program_name);
 extern int csession_end_session (SESSION_ID session_id);
 extern int csession_set_row_count (int rows);
 extern int csession_get_row_count (int *rows);

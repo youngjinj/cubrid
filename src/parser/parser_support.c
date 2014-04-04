@@ -57,6 +57,7 @@
 #include "xasl_generation.h"
 #include "schema_manager.h"
 #include "object_print.h"
+#include "btree_load.h"
 #include "show_meta.h"
 
 #define DEFAULT_VAR "."
@@ -90,6 +91,8 @@ struct pt_host_vars
         (pt_is_dot_node(node) || pt_is_attr(node) || pt_is_query(node) \
          || (pt_is_expr_node(node) \
              && PT_EXPR_INFO_IS_FLAGED(node, PT_EXPR_INFO_GROUPBYNUM_NC)))
+
+#define DB_ENUM_ELEMENTS_MAX_AGG_SIZE (DB_PAGESIZE - offsetof (BTREE_ROOT_HEADER, packed_key_domain) - 1)
 
 int qp_Packing_er_code = NO_ERROR;
 
@@ -237,15 +240,15 @@ static PT_NODE *pt_process_spec_for_delete (PARSER_CONTEXT * parser,
 static PT_NODE *pt_process_spec_for_update (PARSER_CONTEXT * parser,
 					    PT_NODE * spec, PT_NODE * name);
 static bool check_arg_valid (PARSER_CONTEXT * parser,
-			     SHOWSTMT_NAMED_ARG * arg_meta, int arg_num,
+			     const SHOWSTMT_NAMED_ARG * arg_meta, int arg_num,
 			     PT_NODE * val);
 static PT_NODE *pt_resolve_showstmt_args_unnamed (PARSER_CONTEXT * parser,
-						  SHOWSTMT_NAMED_ARG *
+						  const SHOWSTMT_NAMED_ARG *
 						  arg_infos,
 						  int arg_info_count,
 						  PT_NODE * args);
 static PT_NODE *pt_resolve_showstmt_args_named (PARSER_CONTEXT * parser,
-						SHOWSTMT_NAMED_ARG *
+						const SHOWSTMT_NAMED_ARG *
 						arg_infos, int arg_info_count,
 						PT_NODE * args);
 #define NULL_ATTRID -1
@@ -3317,6 +3320,8 @@ pt_get_name (PT_NODE * nam)
 {
   if (nam && nam->node_type == PT_NAME)
     {
+      assert (nam->info.name.original != NULL);
+
       return nam->info.name.original;
     }
   else
@@ -8752,7 +8757,7 @@ pt_make_query_show_table (PARSER_CONTEXT * parser,
  *   val(in): argument value node
  */
 static bool
-check_arg_valid (PARSER_CONTEXT * parser, SHOWSTMT_NAMED_ARG * arg_meta,
+check_arg_valid (PARSER_CONTEXT * parser, const SHOWSTMT_NAMED_ARG * arg_meta,
 		 int arg_num, PT_NODE * val)
 {
   bool valid = false;
@@ -8836,7 +8841,7 @@ check_arg_valid (PARSER_CONTEXT * parser, SHOWSTMT_NAMED_ARG * arg_meta,
  */
 static PT_NODE *
 pt_resolve_showstmt_args_unnamed (PARSER_CONTEXT * parser,
-				  SHOWSTMT_NAMED_ARG * arg_infos,
+				  const SHOWSTMT_NAMED_ARG * arg_infos,
 				  int arg_info_count, PT_NODE * args)
 {
   int i;
@@ -8919,7 +8924,7 @@ error:
  */
 static PT_NODE *
 pt_resolve_showstmt_args_named (PARSER_CONTEXT * parser,
-				SHOWSTMT_NAMED_ARG * arg_infos,
+				const SHOWSTMT_NAMED_ARG * arg_infos,
 				int arg_info_count, PT_NODE * args)
 {
   int i;
@@ -9023,7 +9028,8 @@ error:
  */
 PT_NODE *
 pt_make_query_showstmt (PARSER_CONTEXT * parser, unsigned int type,
-			PT_NODE * args, PT_NODE * where_cond)
+			PT_NODE * args, int like_where_syntax,
+			PT_NODE * like_or_where_expr)
 {
   const SHOWSTMT_METADATA *meta = NULL;
   const SHOWSTMT_COLUMN_ORDERBY *orderby = NULL;
@@ -9032,6 +9038,8 @@ pt_make_query_showstmt (PARSER_CONTEXT * parser, unsigned int type,
   PT_NODE *value, *from_item, *showstmt_info;
   PT_NODE *order_by_item;
   int i, err;
+  DB_VALUE oid_val;
+  MOP classop;
 
   /* get show column info */
   meta = showstmt_get_metadata (type);
@@ -9080,6 +9088,14 @@ pt_make_query_showstmt (PARSER_CONTEXT * parser, unsigned int type,
 	}
     }
 
+  if (type == SHOWSTMT_ACCESS_STATUS)
+    {
+      classop = sm_find_class ("db_user");
+      db_make_oid (&oid_val, &classop->oid_info.oid);
+      showstmt_info->info.showstmt.show_args =
+	pt_dbval_to_value (parser, &oid_val);
+    }
+
   /* add to FROM an empty entity, the entity will be populated later */
   from_item = pt_add_table_name_to_from_list (parser,
 					      query, NULL, NULL,
@@ -9093,10 +9109,30 @@ pt_make_query_showstmt (PARSER_CONTEXT * parser, unsigned int type,
   from_item->info.spec.meta_class = 0;
   from_item->info.spec.join_type = PT_JOIN_NONE;
 
-  if (where_cond != NULL)
+  if (like_or_where_expr != NULL)
     {
+      PT_NODE *where_item = NULL;
+
+      if (like_where_syntax == 1)
+	{
+	  /* there would be least one column */
+	  assert (meta->num_cols > 0);
+	  where_item =
+	    pt_make_like_col_expr (parser, like_or_where_expr,
+				   meta->cols[0].name);
+	}
+      else
+	{
+	  assert (like_where_syntax == 2);
+	  where_item = like_or_where_expr;
+	}
+
       query->info.query.q.select.where =
-	parser_append_node (where_cond, query->info.query.q.select.where);
+	parser_append_node (where_item, query->info.query.q.select.where);
+    }
+  else
+    {
+      assert (like_where_syntax == 0);
     }
 
   for (i = 0; i < num_orderby; i++)
@@ -9740,7 +9776,7 @@ pt_make_query_show_exec_stats (PARSER_CONTEXT * parser)
       return NULL;
     }
 
-  parser->dont_collect_exec_stats = true;
+  parser->dont_collect_exec_stats = 1;
 
   show_node = pt_pop (parser);
   assert (show_node == node[0]);
@@ -9833,7 +9869,7 @@ pt_make_query_show_exec_stats_all (PARSER_CONTEXT * parser)
 
   show_node = pt_pop (parser);
   assert (show_node == node[0]);
-  parser->dont_collect_exec_stats = true;
+  parser->dont_collect_exec_stats = 1;
 
   return node[0];
 }
@@ -10613,7 +10649,7 @@ pt_make_query_show_index (PARSER_CONTEXT * parser, PT_NODE * original_cls_id)
     "Collation", "Cardinality", "Sub_part", "Packed", "Null", "Index_type",
     "Func"
   };
-  int i = 0;
+  unsigned int i = 0;
 
   assert (original_cls_id != NULL);
   assert (original_cls_id->node_type == PT_NAME);
@@ -11844,6 +11880,7 @@ pt_get_query_limit_from_limit (PARSER_CONTEXT * parser, PT_NODE * limit,
   save_set_host_var = parser->set_host_var;
   parser->set_host_var = 1;
 
+  assert (limit->node_type == PT_VALUE || limit->node_type == PT_HOST_VAR);
   pt_evaluate_tree_having_serial (parser, limit, limit_val, 1);
   if (pt_has_error (parser))
     {
@@ -11865,8 +11902,12 @@ pt_get_query_limit_from_limit (PARSER_CONTEXT * parser, PT_NODE * limit,
   if (limit->next)
     {
       DB_VALUE range;
+
       DB_MAKE_NULL (&range);
+
       /* LIMIT x,y => return x + y */
+      assert (limit->next->node_type == PT_VALUE
+	      || limit->next->node_type == PT_HOST_VAR);
       pt_evaluate_tree_having_serial (parser, limit->next, &range, 1);
       if (pt_has_error (parser))
 	{
@@ -12188,7 +12229,11 @@ pt_get_query_limit_from_orderby_for (PARSER_CONTEXT * parser,
 
   /* evaluate the rhs expression */
   DB_MAKE_NULL (&limit);
-  pt_evaluate_tree_having_serial (parser, rhs, &limit, 1);
+  if (PT_IS_CONST (rhs) || PT_IS_CAST_CONST_INPUT_HOSTVAR (rhs))
+    {
+      pt_evaluate_tree_having_serial (parser, rhs, &limit, 1);
+    }
+
   if (DB_IS_NULL (&limit)
       || tp_value_coerce (&limit, &limit,
 			  tp_domain_resolve_default (DB_TYPE_BIGINT)) !=
@@ -12605,7 +12650,7 @@ pt_make_query_show_trace (PARSER_CONTEXT * parser)
   select->info.query.q.select.list =
     parser_append_node (trace_func, select->info.query.q.select.list);
 
-  parser->dont_collect_exec_stats = true;
+  parser->dont_collect_exec_stats = 1;
   parser->query_trace = false;
 
   return select;

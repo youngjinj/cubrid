@@ -132,17 +132,11 @@ struct qo_index_entry
   /* terms constrained by the index */
   BITSET terms;
 
-  /* key filtered terms constrained by the index */
-  BITSET key_filter_terms;
-
   /* true if all unique columns are specified in equal terms */
   bool all_unique_index_columns_are_equi_terms;
 
   /* true if the index cover all segments */
   bool cover_segments;
-
-  /* true if multi range optimization should apply */
-  bool multi_range_opt;
 
   /* index of first sort column used for multi range optimization */
   int first_sort_column;
@@ -994,6 +988,7 @@ extern void qo_eqclass_fprint_wrt (QO_EQCLASS *, BITSET *, FILE *);
 extern void qo_termset_fprint (QO_ENV *, BITSET *, FILE *);
 extern int qo_seg_width (QO_SEGMENT * seg);
 extern bool qo_is_prefix_index (QO_INDEX_ENTRY *);
+extern bool qo_is_filter_index (QO_INDEX_ENTRY *);
 extern void qo_check_coll_optimization (QO_INDEX_ENTRY * ent,
 					COLL_OPT * collation_opt);
 

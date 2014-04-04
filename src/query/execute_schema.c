@@ -355,7 +355,7 @@ static int do_recreate_att_constraints (MOP class_mop,
 static int check_change_attribute (PARSER_CONTEXT * parser,
 				   DB_CTMPL * ctemplate, PT_NODE * attribute,
 				   PT_NODE * old_name_node,
-				   PT_NODE * constraints,
+				   PT_NODE ** pointer_constraints,
 				   SM_ATTR_PROP_CHG * attr_chg_prop,
 				   SM_ATTR_CHG_SOL * change_mode);
 
@@ -5091,6 +5091,13 @@ adjust_partition_size (MOP class_)
 	}
       partcnt++;
     }
+
+  error = db_lock_write (smclass->partition_of);
+  if (error != NO_ERROR)
+    {
+      goto fail_end;
+    }
+
   error = db_get (smclass->partition_of, PARTITION_ATT_PVALUES, &pattr);
   if (error != NO_ERROR)
     {
@@ -9652,7 +9659,7 @@ do_alter_clause_change_attribute (PARSER_CONTEXT * const parser,
 				  attr_def_list,
 				  alter->info.alter.alter_clause.attr_mthd.
 				  attr_old_name,
-				  alter->info.alter.constraint_list,
+				  &(alter->info.alter.constraint_list),
 				  &attr_chg_prop, &change_mode);
   if (error != NO_ERROR)
     {
@@ -9930,8 +9937,14 @@ do_alter_clause_change_attribute (PARSER_CONTEXT * const parser,
 	    {
 	      const char *att_name = *(ci->att_names);
 
-	      if (prm_get_bool_value (PRM_ID_ALTER_TABLE_CHANGE_TYPE_STRICT)
-		  == false)
+	      if (alter->info.alter.hint & PT_HINT_SKIP_UPDATE_NULL)
+		{
+		  error = db_add_constraint (class_mop, ci->constraint_type,
+					     NULL, ci->att_names, 0);
+		}
+	      else
+		if (!prm_get_bool_value
+		    (PRM_ID_ALTER_TABLE_CHANGE_TYPE_STRICT))
 		{
 		  char query[SM_MAX_IDENTIFIER_LENGTH * 4 + 36] = { 0 };
 		  const char *class_name = NULL;
@@ -9968,10 +9981,14 @@ do_alter_clause_change_attribute (PARSER_CONTEXT * const parser,
 			      ER_ALTER_CHANGE_ADD_NOT_NULL_SET_HARD_DEFAULT,
 			      0);
 		    }
+		  error = db_add_constraint (class_mop, ci->constraint_type,
+					     NULL, ci->att_names, 0);
 		}
-
-	      error = db_constrain_non_null (class_mop, *(ci->att_names), 0,
-					     1);
+	      else
+		{
+		  error = db_constrain_non_null (class_mop, *(ci->att_names),
+						 0, 1);
+		}
 	      if (error != NO_ERROR)
 		{
 		  goto exit;
@@ -10425,6 +10442,13 @@ do_change_att_schema_only (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
       /* delete current serial */
       int save;
       OID *oidp, serial_obj_id;
+      char *name = found_att->header.name;
+
+      if (is_att_prop_set (attr_chg_prop->p[P_NAME], ATT_CHG_PROPERTY_DIFF))
+	{
+	  name = old_name;
+	  assert (name != NULL);
+	}
 
       OID_SET_NULL (&serial_obj_id);
 
@@ -10436,8 +10460,7 @@ do_change_att_schema_only (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
 	  serial_class_mop = sm_find_class (CT_SERIAL_NAME);
 
 	  SET_AUTO_INCREMENT_SERIAL_NAME (auto_increment_name,
-					  ctemplate->name,
-					  found_att->header.name);
+					  ctemplate->name, name);
 	  serial_mop =
 	    do_get_serial_obj_id (&serial_obj_id, serial_class_mop,
 				  auto_increment_name);
@@ -10474,6 +10497,7 @@ do_change_att_schema_only (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
       found_att->flags &= ~(SM_ATTFLAG_AUTO_INCREMENT);
       found_att->auto_increment = NULL;
     }
+
   /* create or re-create serial with new properties */
   if (is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR], ATT_CHG_PROPERTY_DIFF)
       || is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR],
@@ -10494,13 +10518,19 @@ do_change_att_schema_only (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
 	      found_att->flags |= SM_ATTFLAG_AUTO_INCREMENT;
 	    }
 	}
+      else
+	{
+	  goto exit;
+	}
     }
 
   /* the serial property has not changed, we are only dealing with renaming */
   if (is_att_prop_set (attr_chg_prop->p[P_NAME], ATT_CHG_PROPERTY_DIFF)
       && attribute->info.attr_def.auto_increment != NULL
-      && !is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR], ATT_CHG_PROPERTY_DIFF)
-      && !is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR], ATT_CHG_PROPERTY_LOST)
+      && !is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR],
+			   ATT_CHG_PROPERTY_DIFF)
+      && !is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR],
+			   ATT_CHG_PROPERTY_LOST)
       && !is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR],
 			   ATT_CHG_PROPERTY_GAINED))
     {
@@ -10516,8 +10546,7 @@ do_change_att_schema_only (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
 	  serial_class_mop = sm_find_class (CT_SERIAL_NAME);
 
 	  SET_AUTO_INCREMENT_SERIAL_NAME (auto_increment_name,
-					  ctemplate->name,
-					  old_name);
+					  ctemplate->name, old_name);
 	  serial_mop =
 	    do_get_serial_obj_id (&serial_obj_id, serial_class_mop,
 				  auto_increment_name);
@@ -10527,11 +10556,44 @@ do_change_att_schema_only (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
       assert_release (found_att->auto_increment);
 
       error =
-	    do_update_auto_increment_serial_on_rename (found_att->auto_increment,
-						       ctemplate->name,
-						       new_name);
+	do_update_auto_increment_serial_on_rename (found_att->auto_increment,
+						   ctemplate->name, new_name);
 
       if (error != NO_ERROR)
+	{
+	  goto exit;
+	}
+    }
+
+  /* attribute type changed, and auto_increment is set to use(unchanged),
+   * update max_val in db_serial according to new type
+   */
+  if (is_att_prop_set (attr_chg_prop->p[P_AUTO_INCR],
+		       ATT_CHG_PROPERTY_PRESENT_OLD
+		       | ATT_CHG_PROPERTY_UNCHANGED)
+      && is_att_prop_set (attr_chg_prop->p[P_TYPE], ATT_CHG_PROPERTY_DIFF))
+    {
+      MOP auto_increment_obj = NULL;
+
+      assert (attribute->info.attr_def.auto_increment != NULL);
+      assert_release (found_att->auto_increment != NULL);
+
+      error =
+	do_update_maxvalue_of_auto_increment_serial (parser,
+						     &auto_increment_obj,
+						     ctemplate->name,
+						     attribute);
+
+      if (error == NO_ERROR)
+	{
+	  assert_release (auto_increment_obj != NULL);
+	  if (found_att != NULL)
+	    {
+	      found_att->auto_increment = auto_increment_obj;
+	      found_att->flags |= SM_ATTFLAG_AUTO_INCREMENT;
+	    }
+	}
+      else
 	{
 	  goto exit;
 	}
@@ -12833,7 +12895,7 @@ do_update_new_notnull_cols_without_default (PARSER_CONTEXT * parser,
   PT_NODE *copy = NULL;
 
   assert (alter->node_type == PT_ALTER);
-  assert (alter->info.alter.code = PT_ADD_ATTR_MTHD);
+  assert (alter->info.alter.code == PT_ADD_ATTR_MTHD);
 
   /* Look for attributes that: have NOT NULL, do not have a DEFAULT
    * and their type has a "hard" default.
@@ -12886,6 +12948,7 @@ do_update_new_notnull_cols_without_default (PARSER_CONTEXT * parser,
       copy = parser_copy_tree (parser, attr);
       if (copy == NULL)
 	{
+	  attr->next = save;
 	  ERROR0 (error, ER_OUT_OF_VIRTUAL_MEMORY);
 	  parser_free_tree (parser, relevant_attrs);
 	  goto end;
@@ -13051,7 +13114,7 @@ error_exit:
 static int
 check_change_attribute (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
 			PT_NODE * attribute, PT_NODE * old_name_node,
-			PT_NODE * constraints,
+			PT_NODE ** pointer_constraints,
 			SM_ATTR_PROP_CHG * attr_chg_prop,
 			SM_ATTR_CHG_SOL * change_mode)
 {
@@ -13065,6 +13128,9 @@ check_change_attribute (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
   DB_VALUE def_value;
   DB_VALUE *ptr_def = &def_value;
   PT_NODE *cnstr;
+  PT_NODE *not_null_node = NULL, *pk_node = NULL, *previous_node =
+    NULL, *tmp_node = NULL;
+  PT_NODE *constraints = *pointer_constraints;
 
   assert (attr_chg_prop != NULL);
   assert (change_mode != NULL);
@@ -13122,6 +13188,46 @@ check_change_attribute (PARSER_CONTEXT * parser, DB_CTMPL * ctemplate,
 	      goto exit;
 	    }
 	}
+    }
+
+  /* Try to find out the combined constraints definition of NOT_NULL and PK */
+  for (cnstr = constraints; cnstr != NULL;
+       tmp_node = cnstr, cnstr = cnstr->next)
+    {
+      if (cnstr->info.constraint.type == PT_CONSTRAIN_NOT_NULL)
+	{
+	  not_null_node = cnstr;
+	  previous_node = tmp_node;
+	}
+      else if (cnstr->info.constraint.type == PT_CONSTRAIN_PRIMARY_KEY)
+	{
+	  pk_node = cnstr;
+	}
+
+      if (not_null_node != NULL && pk_node != NULL)
+	{
+	  break;
+	}
+    }
+
+  /* Exclude/remove the duplicated NOT_NULL constraint which would be
+   * implicitly defined by PK.
+   */
+  if (not_null_node != NULL && pk_node != NULL)
+    {
+      if (previous_node == NULL)
+	{
+	  /* At the head of the list */
+	  constraints = not_null_node->next;
+	  *pointer_constraints = constraints;
+	}
+      else
+	{
+	  previous_node->next = not_null_node->next;
+	}
+
+      not_null_node->next = NULL;
+      parser_free_node (parser, not_null_node);
     }
 
   error =

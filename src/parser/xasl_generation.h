@@ -130,8 +130,6 @@ extern PRED_EXPR *pt_to_pred_expr (PARSER_CONTEXT * p, PT_NODE * node);
 extern PRED_EXPR *pt_to_pred_expr_with_arg (PARSER_CONTEXT * p,
 					    PT_NODE * node, int *argp);
 extern XASL_NODE *parser_generate_xasl (PARSER_CONTEXT * p, PT_NODE * node);
-extern PARSER_VARCHAR *pt_print_node_value (PARSER_CONTEXT * parser,
-					    const PT_NODE * val);
 extern REGU_VARIABLE *pt_make_regu_arith (const REGU_VARIABLE * arg1,
 					  const REGU_VARIABLE * arg2,
 					  const REGU_VARIABLE * arg3,
@@ -163,6 +161,7 @@ extern ACCESS_SPEC_TYPE *pt_to_spec_list (PARSER_CONTEXT * parser,
 					  PT_NODE * flat,
 					  PT_NODE * where_key_part,
 					  PT_NODE * where_part,
+					  QO_PLAN * plan,
 					  QO_XASL_INDEX_INFO * indx,
 					  PT_NODE * src_derived_table);
 extern XASL_NODE *pt_to_fetch_proc (PARSER_CONTEXT * parser, PT_NODE * spec,
@@ -173,6 +172,7 @@ extern SORT_LIST *pt_to_orderby (PARSER_CONTEXT * parser,
 extern XASL_NODE *pt_skeleton_buildlist_proc (PARSER_CONTEXT * parser,
 					      PT_NODE * namelist);
 extern XASL_NODE *ptqo_to_scan_proc (PARSER_CONTEXT * parser,
+				     QO_PLAN * plan,
 				     XASL_NODE * xasl,
 				     PT_NODE * spec,
 				     PT_NODE * where_key_part,
@@ -228,8 +228,8 @@ extern void pt_set_connect_by_operator_node_etc (PARSER_CONTEXT * parser,
 extern void pt_set_qprior_node_etc (PARSER_CONTEXT * parser,
 				    PT_NODE * node_list, XASL_NODE * xasl);
 extern XASL_NODE *pt_gen_simple_merge_plan (PARSER_CONTEXT * parser,
-					    XASL_NODE * xasl,
-					    PT_NODE * select_node);
+					    PT_NODE * select_node,
+					    QO_PLAN * plan, XASL_NODE * xasl);
 extern XASL_NODE *parser_generate_do_stmt_xasl (PARSER_CONTEXT * p,
 						PT_NODE * node);
 extern FUNC_PRED *pt_to_func_pred (PARSER_CONTEXT * parser,

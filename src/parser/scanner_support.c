@@ -154,11 +154,14 @@ pt_get_hint (const char *text, PT_HINT hint_table[], PT_NODE * node)
 		  node->info.update.hint |= hint_table[i].hint;
 		}
 	      break;
+	    case PT_HINT_NO_INDEX_SS:	/* disable index skip scan */
+	    case PT_HINT_INDEX_SS:	/* enable index skip scan */
+	      if (node->node_type == PT_SELECT)
+		{
+		  node->info.query.q.select.hint |= hint_table[i].hint;
+		}
+	      break;
 #if 0
-	    case PT_HINT_W:	/* not used */
-	      break;
-	    case PT_HINT_X:	/* not used */
-	      break;
 	    case PT_HINT_Y:	/* not used */
 	      break;
 #endif /* 0 */
@@ -389,6 +392,19 @@ pt_get_hint (const char *text, PT_HINT hint_table[], PT_NODE * node)
 		}
 	      break;
 	    case PT_HINT_NO_HASH_AGGREGATE:
+	      if (node->node_type == PT_SELECT)
+		{
+		  node->info.query.q.select.hint |= hint_table[i].hint;
+		}
+	      break;
+	    case PT_HINT_SKIP_UPDATE_NULL:
+	      if (node->node_type == PT_ALTER)
+		{
+		  node->info.alter.hint |= hint_table[i].hint;
+		}
+	      break;
+	    case PT_HINT_NO_INDEX_LS:	/* disable loose index scan */
+	    case PT_HINT_INDEX_LS:	/* enable loose index scan */
 	      if (node->node_type == PT_SELECT)
 		{
 		  node->info.query.q.select.hint |= hint_table[i].hint;

@@ -79,7 +79,8 @@ typedef enum
   MSGCAT_UTIL_SET_GENLOCALE = 46,
   MSGCAT_UTIL_SET_DUMPLOCALE = 47,
   MSGCAT_UTIL_SET_SYNCCOLLDB = 48,
-  MSGCAT_UTIL_SET_TRANLIST = 49
+  MSGCAT_UTIL_SET_TRANLIST = 49,
+  MSGCAT_UTIL_SET_PREFETCHLOGDB = 50
 } MSGCAT_UTIL_SET;
 
 /* Message id in the set MSGCAT_UTIL_SET_GENERIC */
@@ -225,6 +226,7 @@ typedef enum
 {
   CHECKDB_MSG_INCONSISTENT = 20,
   CHECKDB_MSG_NO_SUCH_CLASS = 21,
+  CHECKDB_MSG_NO_SUCH_INDEX = 22,
   CHECKDB_MSG_USAGE = 60
 } MSGCAT_CHECKDB_MSG;
 
@@ -618,6 +620,15 @@ typedef enum
   SYNCCOLLDB_MSG_USAGE = 60
 } MSGCAT_SYNCCOLLDB_MSG;
 
+/* Message id in the set MSGCAT_UTIL_SET_PREFETCHLOGDB */
+typedef enum
+{
+  PREFETCHLOGDB_MSG_NOT_HA_MODE = 22,
+  PREFETCHLOGDB_MSG_FEATURE_DISABLE = 23,
+  PREFETCHLOGDB_MSG_HA_NOT_SUPPORT = 58,
+  PREFETCHLOGDB_MSG_NOT_IN_STANDALONE = 59,
+  PREFETCHLOGDB_MSG_USAGE = 60
+} MSGCAT_PREFETCHLOGDB_MSG;
 
 typedef void *DSO_HANDLE;
 
@@ -656,6 +667,7 @@ typedef enum
   DUMPLOCALE,
   SYNCCOLLDB,
   TRANLIST,
+  PREFETCHLOGDB,
   LOGFILEDUMP
 } UTIL_INDEX;
 
@@ -747,6 +759,7 @@ typedef struct _ha_config
 #define UTIL_CUBRID             "cubrid" UTIL_EXE_EXT
 #define UTIL_COPYLOGDB          "copylogdb" UTIL_EXE_EXT
 #define UTIL_APPLYLOGDB         "applylogdb" UTIL_EXE_EXT
+#define UTIL_PREFETCHLOGDB      "prefetchlogdb" UTIL_EXE_EXT
 
 #define PROPERTY_ON             "on"
 #define PROPERTY_OFF            "off"
@@ -773,8 +786,10 @@ typedef struct _ha_config
 #define PRINT_CMD_ACL           "acl"
 #define PRINT_CMD_COPYLOGDB     "copylogdb"
 #define PRINT_CMD_APPLYLOGDB    "applylogdb"
+#define PRINT_CMD_PREFETCHLOGDB "prefetchlogdb"
 #define PRINT_CMD_GETID         "getid"
 #define PRINT_CMD_TEST          "test"
+#define PRINT_CMD_REPLICATION	"replication"
 
 #define PRINT_RESULT_SUCCESS    "success"
 #define PRINT_RESULT_FAIL       "fail"
@@ -794,8 +809,11 @@ typedef struct _ha_config
 #define COMMDB_HA_PROC_LIST     "-L"
 #define COMMDB_HA_PING_HOST_LIST "-p"
 #define COMMDB_HA_RELOAD        "-F"
-#define COMMDB_HA_DEACTIVATE    "-U"
-#define COMMDB_HA_ACTIVATE      "-T"
+#define COMMDB_HA_DEACT_STOP_ALL          "--deact-stop-all"
+#define COMMDB_HA_DEACT_CONFIRM_STOP_ALL  "--deact-confirm-stop-all"
+#define COMMDB_HA_DEACT_CONFIRM_NO_SERVER "--deact-confirm-no-server"
+#define COMMDB_HA_DEACTIVATE              "--deactivate-heartbeat"
+#define COMMDB_HA_ACTIVATE                "--activate-heartbeat"
 
 #define ACLDB_RELOAD            "-r"
 
@@ -842,6 +860,7 @@ typedef struct _ha_config
 #define UTIL_OPTION_GENERATE_LOCALE		"genlocale"
 #define UTIL_OPTION_DUMP_LOCALE			"dumplocale"
 #define UTIL_OPTION_SYNCCOLLDB			"synccolldb"
+#define UTIL_OPTION_PREFETCHLOGDB		"prefetchlogdb"
 
 /* createdb option list */
 #define CREATE_PAGES_S                          'p'
@@ -907,7 +926,7 @@ typedef struct _ha_config
 #define COPY_DELETE_SOURCE_S                    'd'
 #define COPY_DELETE_SOURCE_L                    "delete-source"
 #define COPY_LOB_PATH_S				'B'
-#define COPY_LOB_PATH_L				"lob-path"
+#define COPY_LOB_PATH_L				"lob-base-path"
 #define COPY_COPY_LOB_PATH_S			10308
 #define COPY_COPY_LOB_PATH_L			"copy-lob-path"
 
@@ -1028,10 +1047,24 @@ typedef struct _ha_config
 #define CHECK_REPAIR_L                          "repair"
 #define CHECK_INPUT_FILE_S                      'i'
 #define CHECK_INPUT_FILE_L                      "input-file"
-#define CHECK_CHECK_PREV_LINK_S			11501
-#define CHECK_CHECK_PREV_LINK_L			"check-prev-link"
-#define CHECK_REPAIR_PREV_LINK_S		11502
-#define CHECK_REPAIR_PREV_LINK_L		"repair-prev-link"
+#define CHECK_INDEXNAME_S                       'I'
+#define CHECK_INDEXNAME_L                       "index-name"
+#define CHECK_CHECK_PREV_LINK_S                 11501
+#define CHECK_CHECK_PREV_LINK_L                 "check-prev-link"
+#define CHECK_REPAIR_PREV_LINK_S                11502
+#define CHECK_REPAIR_PREV_LINK_L                "repair-prev-link"
+#define CHECK_FILE_TRACKER_S                    11503
+#define CHECK_FILE_TRACKER_L                    "check-file-tracker"
+#define CHECK_HEAP_ALLHEAPS_S                   11504
+#define CHECK_HEAP_ALLHEAPS_L                   "check-heap"
+#define CHECK_CAT_CONSISTENCY_S                 11505
+#define CHECK_CAT_CONSISTENCY_L                 "check-catalog"
+#define CHECK_BTREE_ALL_BTREES_S                11506
+#define CHECK_BTREE_ALL_BTREES_L                "check-btree"
+#define CHECK_LC_CLASSNAMES_S                   11507
+#define CHECK_LC_CLASSNAMES_L                   "check-class-name"
+#define CHECK_LC_ALLENTRIES_OF_ALLBTREES_S      11508
+#define CHECK_LC_ALLENTRIES_OF_ALLBTREES_L      "check-btree-entries"
 
 /* plandump option list */
 #define PLANDUMP_DROP_S			        'd'
@@ -1205,6 +1238,8 @@ typedef struct _ha_config
 #define CSQL_STRING_WIDTH_L                     "string-width"
 #define CSQL_WRITE_ON_STANDBY_S                 12015
 #define CSQL_WRITE_ON_STANDBY_L                 "write-on-standby"
+#define CSQL_NO_TRIGGER_ACTION_S                12016
+#define CSQL_NO_TRIGGER_ACTION_L                "no-trigger-action"
 
 #define COMMDB_SERVER_LIST_S                    'P'
 #define COMMDB_SERVER_LIST_L                    "server-list"
@@ -1234,9 +1269,15 @@ typedef struct _ha_config
 #define COMMDB_IS_REGISTERED_PROC_L             "is-registered-proc"
 #define COMMDB_RECONFIG_HEARTBEAT_S             'F'
 #define COMMDB_RECONFIG_HEARTBEAT_L             "reconfig-node-list"
-#define COMMDB_DEACTIVATE_HEARTBEAT_S           'U'
+#define COMMDB_DEACTIVATE_HEARTBEAT_S           12110
 #define COMMDB_DEACTIVATE_HEARTBEAT_L           "deactivate-heartbeat"
-#define COMMDB_ACTIVATE_HEARTBEAT_S             'T'
+#define COMMDB_DEACT_STOP_ALL_S                 12111
+#define COMMDB_DEACT_STOP_ALL_L                 "deact-stop-all"
+#define COMMDB_DEACT_CONFIRM_STOP_ALL_S         12112
+#define COMMDB_DEACT_CONFIRM_STOP_ALL_L         "deact-confirm-stop-all"
+#define COMMDB_DEACT_CONFIRM_NO_SERVER_S        12113
+#define COMMDB_DEACT_CONFIRM_NO_SERVER_L        "deact-confirm-no-server"
+#define COMMDB_ACTIVATE_HEARTBEAT_S             12114
 #define COMMDB_ACTIVATE_HEARTBEAT_L             "activate-heartbeat"
 #define COMMDB_VERBOSE_OUTPUT_S                 'V'
 #define COMMDB_VERBOSE_OUTPUT_L	                "verbose"
@@ -1344,6 +1385,10 @@ typedef struct _ha_config
 
 #define VERSION_S                               20000
 #define VERSION_L                               "version"
+
+/* prepatchlogdb option list */
+#define PREFETCH_LOG_PATH_S                      'L'
+#define PREFETCH_LOG_PATH_L                      "log-path"
 
 #if defined(WINDOWS)
 #define LIB_UTIL_CS_NAME                "cubridcs.dll"
@@ -1463,6 +1508,7 @@ extern int genlocale (UTIL_FUNCTION_ARG * arg_map);
 extern int dumplocale (UTIL_FUNCTION_ARG * arg_map);
 extern int synccolldb (UTIL_FUNCTION_ARG * arg_map);
 extern int synccoll_force (void);
+extern int prefetchlogdb(UTIL_FUNCTION_ARG * arg_map);
 
 extern void util_admin_usage (const char *argv0);
 extern void util_admin_version (const char *argv0);

@@ -67,6 +67,7 @@ $       46      genlocale
 $       47      dumplocale
 $       48      synccolldb
 $       49      tranlist
+$       50      prefetchlogdb
 
 $set 1 MSGCAT_UTIL_SET_GENERIC
 1 Độ dài hoặc ký tự '%c' không hợp lệ trong tên cơ sở dữ liệu '%s'\n
@@ -115,9 +116,10 @@ Các tên-tiện ích quản trị có thể dùng:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s là một công cụ cho DBMS.\n\
-Để biết thêm thông tin, truy cập http://www.cubrid.com\n
+Để biết thêm thông tin, truy cập http://www.cubrid.org\n
 12 tên-tiện ích '%1$s' không hợp lệ.\nGõ 'cubrid --help' để xem cách sử dụng.\n
 13 Lệnh '%1$s' không hợp lệ.\nGõ 'cubrid --help' để xem cách sử dụng.\n
 14 Không thể tải một hoặc nhiều thuộc tính bắt buộc trong tệp tin cấu hình.\n
@@ -170,9 +172,10 @@ Các tiện ích của quản trị viên có thể dùng:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s là một công cụ cho DBMS.\n\
-Để biết thêm thông tin, truy cập http://www.cubrid.com\n
+Để biết thêm thông tin, truy cập http://www.cubrid.org\n
 24 tiện ích cubrid, phiên bản %s\n\
 cách sử dụng: %s service <lệnh>\n\
 \n\
@@ -217,10 +220,12 @@ Lệnh có thể dùng :\n\
 cách sử dụng: %s heartbeat <lệnh> [đối số]\n\
 \n\
 Lệnh có thể dùng :\n\
-    start       [tên cơ sở dữ liệu]\n\
-    stop        [-i|tên cơ sở dữ liệu]\n\
-    copylogdb   <start|stop> <tên cơ sở dữ> <liệu tên> node\n\
-    applylogdb  <start|stop> <tên cơ sở dữ> <liệu tên> node\n\
+    start          [tên cơ sở dữ liệu]\n\
+    stop           [-i|tên cơ sở dữ liệu]\n\
+    copylogdb      <start|stop> <tên cơ sở dữ> <liệu tên> node\n\
+    applylogdb     <start|stop> <tên cơ sở dữ> <liệu tên> node\n\
+    prefetchlogdb  <start|stop> <tên cơ sở dữ> <liệu tên> node\n\
+    replication    <start|stop> node-name\n\
     status\n\
     reload\n
 31 Đối số'%1$s' không cần thiết.\n
@@ -583,9 +588,6 @@ các tùy chọn hợp lệ:\n\
   -p, --ping-host                  list ping hosts used for CUBRID heartbeat\n\
   -D, --dereg-process=PID          thoát tiến trình đích và gỡ bỏ nó từ các mục tiến trình được quản lý\n\
   -F, --reconfig-node-list         áp dụng cấu hình CUBRID heartbeat vừa được thay đổi\n\
-  -U, --deactivate-heartbeat       bỏ kích hoạt tính năng CUBRID heartbeat và gỡ bỏ nút hiện tại từ nhóm nút\n\
-  -i, --immediately                Immediately kill active ones, if one of HA processes are not terminated while CUBRID heartbeat is shutting down; with -U option; default: disabled\n\
-  -T, --activate-heartbeat         kích hoạt tính năng CUBRID heartbeat và nút hiện tại trở thành một thành viên của nhóm nút\n\
   -V, --verbose                    bật thông báo trạng thái chi tiết; mặc định: tắt\n
 28 Xin lỗi, câu lệnh không rõ: %1$s\n
 29 Không thể lấy tên máy chủ cho máy chủ cục bộ - bỏ dở\n
@@ -598,7 +600,7 @@ các tùy chọn hợp lệ:\n\
 36 không thể thực thi shell (%s) cho %s, %s
 37 xử lý fork %s, trả về %d, %s
 38 không thể thực thi %1$s
-39 -i(--immediately) option must be used with -U(--deactivate-heartbeat) option.\n
+39 -i(--immediately) option must be used with --deact-stop-all option.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -634,6 +636,7 @@ các tùy chọn hợp lệ:\n\
 $set 18 MSGCAT_UTIL_SET_CHECKDB
 20 Một vài sự không đồng nhất được phát hiện trong cơ sở dữ liệu của bạn.\n Xin vui lòng tham khảo error_log_file %1$s để biết thêm thông tin.\n
 21 %1$s: Không thể tìm thấy lớp. Nó sẽ bị bỏ qua.\n
+22 %1$s: Cannot find the index on class %2$s.\n
 60 \
 checkdb: Kiểm tra tính đồng nhất của cơ sở dữ liệu.\n\
 cách sử dụng: %1$s checkdb [TÙY CHỌN] tên-cơ sở dữ liệu [class_name1 class_name2 ...]\n\
@@ -644,8 +647,16 @@ các tùy chọn hợp lệ:\n\
   -r, --repair                 sửa chữa khi tìm thấy sự không đồng nhất\n\
   -i, --input-class-file=FILE  tệp tin đầu vào của tên lớp\n\
                                mặc định: kiểm tra tất cả các lớp\n\
+  -I, --index-name             index name that will be checked only\n\
+                               default: check all indices\n\
       --check-prev-link        check only previous links of indices\n\
-      --repair-prev-link       repair previous links of indices\n
+      --repair-prev-link       repair previous links of indices\n\
+      --check-file-tracker     check all allocated pages of file\n\
+      --check-heap             check all pages of heap files\n\
+      --check-catalog          check catalog consistency\n\
+      --check-btree            check all btree indices\n\
+      --check-class-name       check class name consistency\n\
+      --check-btree-entries    check entries of btree consistency\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
@@ -1055,3 +1066,15 @@ lựa chọn có giá trị:\n\
   -s, --summary                in các thông tin tổng hợp về giao dịch\n\
       --sort-key=COLUMN_NUMBER số cột được sắp xếp\n\
       --reverse                đảo ngược thứ hạng kết quả\n
+
+$set 50 MSGCAT_UTIL_SET_PREFETCHLOGDB
+22 The server was not configured for HA.\n
+23 Prefetch feature is disabled.\n
+58 HA feature is not supported in this platform.\n
+59 prefetchlogdb cannot run as standalone mode.\n
+60 \
+prefetchlogdb: Prefetch log pages from the server.\n\
+usage: %1$s prefetchlogdb [OPTION] database-name\n\
+\n\
+valid options:\n\
+  -L, --log-path=PATH         directory PATH for copied log volumes\n

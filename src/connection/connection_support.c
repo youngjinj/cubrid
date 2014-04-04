@@ -81,6 +81,12 @@
 #include "network_interface_cl.h"
 #endif
 
+#include "storage_common.h"
+#include "heap_file.h"
+#include "dbval.h"
+#include "db_date.h"
+#include "show_scan.h"
+
 #if !defined (SERVER_MODE)
 #define pthread_mutex_init(a, b)
 #define pthread_mutex_destroy(a)
@@ -199,6 +205,24 @@ static void css_set_net_header (NET_HEADER * header_p, int type,
 #if defined(SERVER_MODE)
 static char *css_trim_str (char *str);
 #endif
+
+#if !defined (CS_MODE)
+static int css_make_access_status_exist_user (THREAD_ENTRY * thread_p,
+					      OID * class_oid,
+					      LAST_ACCESS_STATUS **
+					      access_status_array,
+					      int num_user,
+					      SHOWSTMT_ARRAY_CONTEXT * ctx);
+
+static LAST_ACCESS_STATUS *css_get_access_status_with_name (LAST_ACCESS_STATUS
+							    **
+							    access_status_array,
+							    int num_user,
+							    char *user_name);
+static LAST_ACCESS_STATUS *css_get_unused_access_status (LAST_ACCESS_STATUS **
+							 access_status_array,
+							 int num_user);
+#endif /* !CS_MODE */
 
 #if !defined(SERVER_MODE)
 static int
@@ -2554,3 +2578,352 @@ css_check_magic (CSS_CONN_ENTRY * conn)
 
   return NO_ERRORS;
 }
+
+#if !defined (CS_MODE)
+/*
+ * css_user_access_status_start_scan () -  start scan function for show access status 
+ *   return: NO_ERROR, or ER_CODE
+ *
+ *   thread_p(in): 
+ *   show_type(in):
+ *   arg_values(in):
+ *   arg_cnt(in):
+ *   ptr(in/out):
+ */
+int
+css_user_access_status_start_scan (THREAD_ENTRY * thread_p, int type,
+				   DB_VALUE ** arg_values, int arg_cnt,
+				   void **ptr)
+{
+  int error = NO_ERROR;
+  int i, num_user = 0;
+  const int num_cols = 4;	/* user_name, last_access_time, last_access_host, program_name */
+  const int default_num_tuple = 10;
+  SCAN_CODE scan;
+  OID *class_oid;
+  SHOWSTMT_ARRAY_CONTEXT *ctx;
+  LAST_ACCESS_STATUS *access_status = NULL;
+  LAST_ACCESS_STATUS **access_status_array = NULL;
+
+  DB_VALUE *vals;
+  char *user_name = NULL;
+  DB_DATETIME access_time;
+
+  *ptr = NULL;
+
+  ctx = showstmt_alloc_array_context (thread_p, default_num_tuple, num_cols);
+  if (ctx == NULL)
+    {
+      error = er_errid ();
+      return error;
+    }
+
+#if defined(SERVER_MODE)
+  num_user = css_Num_access_user;
+
+  access_status_array =
+    (LAST_ACCESS_STATUS **) malloc (sizeof (LAST_ACCESS_STATUS *) * num_user);
+  if (access_status_array == NULL)
+    {
+      showstmt_free_array_context (thread_p, ctx);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+	      1, sizeof (LAST_ACCESS_STATUS *) * num_user);
+      return ER_FAILED;
+    }
+
+  css_get_user_access_status (num_user, access_status_array);
+#endif
+
+  assert (arg_cnt == 1);
+  class_oid = db_get_oid (arg_values[0]);	/* db_user class oid */
+
+  error =
+    css_make_access_status_exist_user (thread_p, class_oid,
+				       access_status_array, num_user, ctx);
+  if (error != NO_ERROR)
+    {
+      goto error;
+    }
+
+#if defined(SERVER_MODE)
+  while (true)
+    {
+      access_status =
+	css_get_unused_access_status (access_status_array, num_user);
+      if (access_status == NULL)
+	{
+	  break;
+	}
+
+      vals = showstmt_alloc_tuple_in_context (thread_p, ctx);
+      if (vals == NULL)
+	{
+	  error = er_errid ();
+	  goto error;
+	}
+
+      db_make_string_copy (&vals[0], access_status->db_user);
+
+      db_localdatetime (&access_status->time, &access_time);
+      db_make_datetime (&vals[1], &access_time);
+
+      db_make_string_copy (&vals[2], access_status->host);
+
+      db_make_string_copy (&vals[3], access_status->program_name);
+    }
+#endif /* SERVER_MODE */
+
+  if (access_status_array != NULL)
+    {
+      free_and_init (access_status_array);
+    }
+
+  *ptr = ctx;
+
+  return NO_ERROR;
+
+error:
+  if (ctx != NULL)
+    {
+      showstmt_free_array_context (thread_p, ctx);
+    }
+
+  if (access_status_array != NULL)
+    {
+      free_and_init (access_status_array);
+    }
+
+  return error;
+}
+
+/*
+ * css_make_access_status_exist_user () - set access status information of whom are in db_user class  
+ *   return: NO_ERROR, or ER_CODE
+ *
+ *   thread_p(in): 
+ *   class_oid(in): db_user class's class oid
+ *   access_status_array(in):
+ *   num_user(in):
+ *   ctx(in):
+ */
+static int
+css_make_access_status_exist_user (THREAD_ENTRY * thread_p, OID * class_oid,
+				   LAST_ACCESS_STATUS ** access_status_array,
+				   int num_user, SHOWSTMT_ARRAY_CONTEXT * ctx)
+{
+  int error = NO_ERROR;
+  int i, attr_idx;
+  bool attr_info_inited;
+  bool scan_cache_inited;
+  const char *rec_attr_name_p;
+  char *user_name = NULL;
+  HFID hfid;
+  OID inst_oid;
+  HEAP_CACHE_ATTRINFO attr_info;
+  HEAP_SCANCACHE scan_cache;
+  HEAP_ATTRVALUE *heap_value;
+  SCAN_CODE scan;
+  RECDES recdes;
+  DB_VALUE *vals;
+  DB_DATETIME access_time;
+  LAST_ACCESS_STATUS *access_status;
+
+  OID_SET_NULL (&inst_oid);
+
+  error = heap_attrinfo_start (thread_p, class_oid, -1, NULL, &attr_info);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+  attr_info_inited = true;
+
+  heap_scancache_quick_start (&scan_cache);
+  scan_cache_inited = true;
+
+  if (heap_get (thread_p, class_oid, &recdes, &scan_cache, PEEK,
+		NULL_CHN) != S_SUCCESS)
+    {
+      error = er_errid ();
+      goto end;
+    }
+
+  for (i = 0; i < attr_info.num_values; i++)
+    {
+      rec_attr_name_p = or_get_attrname (&recdes, i);
+      if (rec_attr_name_p == NULL)
+	{
+	  continue;
+	}
+
+      if (strcmp ("name", rec_attr_name_p) == 0)
+	{
+	  attr_idx = i;
+	  break;
+	}
+    }
+  heap_scancache_end (thread_p, &scan_cache);
+  scan_cache_inited = false;
+
+  error = heap_get_hfid_from_class_oid (thread_p, class_oid, &hfid);
+  if (error != NO_ERROR)
+    {
+      goto end;
+    }
+
+  if (HFID_IS_NULL (&hfid))
+    {
+      error = ER_FAILED;
+      goto end;
+    }
+
+  error = heap_scancache_start (thread_p, &scan_cache, &hfid,
+				NULL, true, false, LOCKHINT_NONE, NULL);
+  if (error != NO_ERROR)
+    {
+      goto end;
+    }
+  scan_cache_inited = true;
+
+  while (true)
+    {
+      scan = heap_next (thread_p, &hfid, NULL, &inst_oid,
+			&recdes, &scan_cache, PEEK);
+      if (scan == S_SUCCESS)
+	{
+	  error = heap_attrinfo_read_dbvalues (thread_p, &inst_oid,
+					       &recdes, &attr_info);
+	  if (error != NO_ERROR)
+	    {
+	      goto end;;
+	    }
+
+	  for (i = 0, heap_value = attr_info.values;
+	       i < attr_info.num_values; i++, heap_value++)
+	    {
+	      if (heap_value->attrid == attr_idx)
+		{
+		  user_name = DB_GET_STRING (&heap_value->dbvalue);
+		}
+	    }
+	}
+      else if (scan == S_END)
+	{
+	  break;
+	}
+      else
+	{
+	  error = ER_FAILED;
+	  goto end;
+	}
+
+      vals = showstmt_alloc_tuple_in_context (thread_p, ctx);
+      if (vals == NULL)
+	{
+	  error = er_errid ();
+	  goto end;
+	}
+
+      access_status = css_get_access_status_with_name (access_status_array,
+						       num_user, user_name);
+      db_make_string_copy (&vals[0], user_name);
+      if (access_status != NULL)
+	{
+	  db_localdatetime (&access_status->time, &access_time);
+	  db_make_datetime (&vals[1], &access_time);
+
+	  db_make_string_copy (&vals[2], access_status->host);
+
+	  db_make_string_copy (&vals[3], access_status->program_name);
+	}
+      else
+	{
+	  db_make_null (&vals[1]);
+	  db_make_null (&vals[2]);
+	  db_make_null (&vals[3]);
+	}
+    }
+
+end:
+  if (scan_cache_inited == true)
+    {
+      (void) heap_scancache_end (thread_p, &scan_cache);
+    }
+
+  if (attr_info_inited == true)
+    {
+      heap_attrinfo_end (thread_p, &attr_info);
+    }
+
+  return error;
+}
+
+/*
+ * css_get_access_status_with_name () - return access status which match with user_name  
+ *   return: address of found access status or NULL
+ *
+ *   access_status_array(in): 
+ *   num_user(in):
+ *   user_name(in):
+ */
+static LAST_ACCESS_STATUS *
+css_get_access_status_with_name (LAST_ACCESS_STATUS ** access_status_array,
+				 int num_user, char *user_name)
+{
+  int i = 0;
+  LAST_ACCESS_STATUS *access_status = NULL;
+
+  assert (user_name != NULL);
+
+  if (access_status_array == NULL)
+    {
+      return NULL;
+    }
+
+  for (i = 0; i < num_user; i++)
+    {
+      if (access_status_array[i] != NULL
+	  && strcmp (access_status_array[i]->db_user, user_name) == 0)
+	{
+	  access_status = access_status_array[i];
+
+	  access_status_array[i] = NULL;
+	  break;
+	}
+    }
+
+  return access_status;
+}
+
+/*
+ * css_get_unused_access_status () - return unused access status from array 
+ *   return: address of found access status or NULL
+ *
+ *   access_status_array(in): 
+ *   num_user(in):
+ */
+static LAST_ACCESS_STATUS *
+css_get_unused_access_status (LAST_ACCESS_STATUS ** access_status_array,
+			      int num_user)
+{
+  int i = 0;
+  LAST_ACCESS_STATUS *access_status = NULL;
+
+  if (access_status_array == NULL)
+    {
+      return NULL;
+    }
+
+  for (i = 0; i < num_user; i++)
+    {
+      if (access_status_array[i] != NULL)
+	{
+	  access_status = access_status_array[i];
+
+	  access_status_array[i] = NULL;
+	  break;
+	}
+    }
+
+  return access_status;
+}
+#endif /* CS_MODE */

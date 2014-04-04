@@ -138,8 +138,11 @@ struct qo_plan
       QO_SCANMETHOD scan_method;	/* SEQ_SCAN, INDEX_SCAN */
       QO_NODE *node;
       BITSET terms;
-      bool equi;
       BITSET kf_terms;
+      bool index_equi;
+      bool index_cover;		/* covered index scan flag */
+      bool index_iss;		/* index skip scan flag */
+      bool index_loose;		/* loose index scan flag */
       QO_NODE_INDEX_ENTRY *index;
     } scan;
 
@@ -386,6 +389,5 @@ extern bool qo_is_iscan_from_groupby (QO_PLAN *);
 extern bool qo_is_iscan_from_orderby (QO_PLAN *);
 extern bool qo_is_interesting_order_scan (QO_PLAN *);
 extern bool qo_is_all_unique_index_columns_are_equi_terms (QO_PLAN * plan);
-extern bool qo_is_iscan_with_multi_range_opt (QO_PLAN * plan);
 extern bool qo_has_sort_limit_subplan (QO_PLAN * plan);
 #endif /* _QUERY_PLANNER_H_ */

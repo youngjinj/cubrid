@@ -61,10 +61,10 @@
 #define HB_INFO_STR_MAX         8192
 #define SERVER_DEREG_MAX_POLL_COUNT 10
 
-typedef struct hb_server_deactivate_info HB_SERVER_DEACTIVATE_INFO;
-struct hb_server_deactivate_info
+typedef struct hb_deactivate_info HB_DEACTIVATE_INFO;
+struct hb_deactivate_info
 {
-  int *pid_list;
+  int *server_pid_list;
   int server_count;
   bool info_started;
 };
@@ -152,6 +152,8 @@ static void hb_resource_job_confirm_dereg (HB_JOB_ARG * arg);
 static void hb_resource_job_change_mode (HB_JOB_ARG * arg);
 static void hb_resource_job_demote_start_shutdown (HB_JOB_ARG * arg);
 static void hb_resource_job_demote_confirm_shutdown (HB_JOB_ARG * arg);
+static void hb_resource_job_cleanup_all (HB_JOB_ARG * arg);
+static void hb_resource_job_confirm_cleanup_all (HB_JOB_ARG * arg);
 
 static void hb_resource_demote_start_shutdown_server_proc (void);
 static bool hb_resource_demote_confirm_shutdown_server_proc (void);
@@ -177,7 +179,9 @@ static HB_PROC_ENTRY *hb_return_proc_by_pid (int pid);
 static HB_PROC_ENTRY *hb_return_proc_by_fd (int sfd);
 static void hb_proc_make_arg (char **arg, char *argv);
 static HB_JOB_ARG *hb_deregister_process (HB_PROC_ENTRY * proc);
+#if defined (ENABLE_UNUSED_FUNCTION)
 static void hb_deregister_nodes (char *node_to_dereg);
+#endif /* ENABLE_UNUSED_FUNCTION */
 
 /* resource process connection */
 static int hb_resource_send_changemode (HB_PROC_ENTRY * proc);
@@ -203,6 +207,7 @@ static int hb_thread_initialize (void);
 
 /* terminator */
 static void hb_resource_cleanup (void);
+static void hb_resource_shutdown_all_ha_procs (void);
 static void hb_cluster_cleanup (void);
 static void hb_kill_process (pid_t * pids, int count);
 
@@ -225,8 +230,7 @@ HB_JOB *cluster_Jobs = NULL;
 HB_JOB *resource_Jobs = NULL;
 bool hb_Deactivate_immediately = false;
 
-static HB_SERVER_DEACTIVATE_INFO hb_Server_deactivate_info =
-  { NULL, 0, false };
+static HB_DEACTIVATE_INFO hb_Deactivate_info = { NULL, 0, false };
 
 static bool hb_Is_activated = true;
 
@@ -252,6 +256,8 @@ static HB_JOB_FUNC hb_resource_jobs[] = {
   hb_resource_job_change_mode,
   hb_resource_job_demote_start_shutdown,
   hb_resource_job_demote_confirm_shutdown,
+  hb_resource_job_cleanup_all,
+  hb_resource_job_confirm_cleanup_all,
   NULL
 };
 
@@ -272,6 +278,8 @@ static HB_JOB_FUNC hb_resource_jobs[] = {
 	"   Copylogdb %s (pid %d, state %s)\n"
 #define HA_APPLYLOG_PROCESS_FORMAT_STRING        \
 	"   Applylogdb %s (pid %d, state %s)\n"
+#define HA_PREFETCHLOG_PROCESS_FORMAT_STRING        \
+        "   Prefetchlogdb %s (pid %d, state %s)\n"
 #define HA_PROCESS_EXEC_PATH_FORMAT_STRING       \
         "    - exec-path [%s] \n"
 #define HA_PROCESS_ARGV_FORMAT_STRING            \
@@ -2316,6 +2324,194 @@ hb_cluster_load_group_and_node_list (char *ha_node_list,
  */
 
 /*
+ * hb_resource_job_confirm_cleanup_all () - confirm that all HA processes are shutdown
+ *   for deactivating heartbeat
+ *   return: none
+ *
+ *   arg(in):
+ */
+static void
+hb_resource_job_confirm_cleanup_all (HB_JOB_ARG * arg)
+{
+  int rv, error;
+  HB_RESOURCE_JOB_ARG *resource_job_arg;
+  HB_PROC_ENTRY *proc, *proc_next;
+  char error_string[LINE_MAX] = "";
+
+  resource_job_arg = (arg) ? &(arg->resource_job_arg) : NULL;
+
+  if (arg == NULL || resource_job_arg == NULL)
+    {
+      MASTER_ER_LOG_DEBUG (ARG_FILE_LINE,
+			   "invalid arg or resource_job_arg. (arg:%p, resource_job_arg:%p). \n",
+			   arg, resource_job_arg);
+      return;
+    }
+
+  rv = pthread_mutex_lock (&hb_Resource->lock);
+
+  if (++(resource_job_arg->retries) > resource_job_arg->max_retries
+      || hb_Deactivate_immediately == true)
+    {
+      for (proc = hb_Resource->procs; proc; proc = proc_next)
+	{
+	  assert (proc->state == HB_PSTATE_DEREGISTERED);
+	  proc_next = proc->next;
+
+	  if (!(kill (proc->pid, 0) && errno == ESRCH))
+	    {
+	      snprintf (error_string, LINE_MAX, "(pid: %d, args:%s)",
+			proc->pid, proc->args);
+	      if (hb_Deactivate_immediately == true)
+		{
+		  MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				 ER_HB_PROCESS_EVENT, 2,
+				 "Immediate shutdown requested. Process killed",
+				 error_string);
+		}
+	      else
+		{
+		  MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+				 ER_HB_PROCESS_EVENT, 2,
+				 "No response to shutdown request. Process killed",
+				 error_string);
+		}
+
+	      kill (proc->pid, SIGKILL);
+
+	      hb_Resource->num_procs--;
+	      hb_remove_proc (proc);
+	      proc = NULL;
+	    }
+	}
+
+      goto end_confirm_cleanup;
+    }
+
+  for (proc = hb_Resource->procs; proc; proc = proc_next)
+    {
+      assert (proc->state == HB_PSTATE_DEREGISTERED);
+      proc_next = proc->next;
+
+      if (kill (proc->pid, 0) && errno == ESRCH)
+	{
+	  hb_Resource->num_procs--;
+	  hb_remove_proc (proc);
+	  proc = NULL;
+	}
+    }
+
+  if (hb_Resource->num_procs == 0)
+    {
+      goto end_confirm_cleanup;
+    }
+
+  pthread_mutex_unlock (&hb_Resource->lock);
+
+  error = hb_resource_job_queue (HB_RJOB_CONFIRM_CLEANUP_ALL, arg,
+				 prm_get_integer_value
+				 (PRM_ID_HA_PROCESS_DEREG_CONFIRM_INTERVAL_IN_MSECS));
+
+  if (error != NO_ERROR)
+    {
+      assert (false);
+      free_and_init (arg);
+    }
+
+  return;
+
+end_confirm_cleanup:
+  hb_Resource->state = HB_NSTATE_UNKNOWN;
+  hb_Resource->shutdown = true;
+
+  pthread_mutex_unlock (&hb_Resource->lock);
+
+  if (arg != NULL)
+    {
+      free_and_init (arg);
+    }
+
+  MASTER_ER_SET (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE, ER_HB_PROCESS_EVENT,
+		 2, "All HA processes have been terminated", "");
+  return;
+}
+
+/*
+ * hb_resource_job_cleanup_all () - shutdown all HA processes including cub_server
+ *   for deactivating heartbeat
+ *   return: none
+ *
+ *   arg(in):
+ */
+static void
+hb_resource_job_cleanup_all (HB_JOB_ARG * arg)
+{
+  int rv, i, error;
+  HB_PROC_ENTRY *proc, *proc_next;
+  SOCKET_QUEUE_ENTRY *sock_ent, *next;
+  HB_JOB_ARG *job_arg;
+  HB_RESOURCE_JOB_ARG *resource_job_arg;
+  char buffer[MASTER_TO_SRV_MSG_SIZE];
+
+  rv = pthread_mutex_lock (&css_Master_socket_anchor_lock);
+  rv = pthread_mutex_lock (&hb_Resource->lock);
+
+  if (hb_Deactivate_immediately == false)
+    {
+      /* register CUBRID server pid */
+      hb_Deactivate_info.server_pid_list =
+	(int *) calloc (hb_Resource->num_procs, sizeof (int));
+
+      for (i = 0, proc = hb_Resource->procs; proc; proc = proc->next)
+	{
+	  if (proc->conn && proc->type == HB_PTYPE_SERVER)
+	    {
+	      hb_Deactivate_info.server_pid_list[i] = proc->pid;
+	      i++;
+	    }
+	}
+
+      hb_Deactivate_info.server_count = i;
+
+      assert (hb_Resource->num_procs >= i);
+    }
+
+  hb_resource_shutdown_all_ha_procs ();
+
+  job_arg = (HB_JOB_ARG *) malloc (sizeof (HB_JOB_ARG));
+  if (job_arg == NULL)
+    {
+      pthread_mutex_unlock (&hb_Resource->lock);
+      pthread_mutex_unlock (&css_Master_socket_anchor_lock);
+
+      MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		     ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (HB_JOB_ARG));
+
+      return;
+    }
+
+  resource_job_arg = &(job_arg->resource_job_arg);
+  resource_job_arg->retries = 0;
+  resource_job_arg->max_retries =
+    prm_get_integer_value (PRM_ID_HA_MAX_PROCESS_DEREG_CONFIRM);
+  gettimeofday (&resource_job_arg->ftime, NULL);
+
+  pthread_mutex_unlock (&hb_Resource->lock);
+  pthread_mutex_unlock (&css_Master_socket_anchor_lock);
+
+  error = hb_resource_job_queue (HB_RJOB_CONFIRM_CLEANUP_ALL, job_arg,
+				 HB_JOB_TIMER_WAIT_A_SECOND);
+
+  if (error != NO_ERROR)
+    {
+      assert (false);
+      free_and_init (job_arg);
+    }
+
+  return;
+}
+
+/*
  * hb_resource_job_proc_start () -
  *   return: none
  *
@@ -3783,10 +3979,8 @@ hb_resource_receive_changemode (CSS_CONN_ENTRY * conn)
   rv = pthread_mutex_lock (&hb_Cluster->lock);
   rv = pthread_mutex_lock (&hb_Resource->lock);
   proc = hb_return_proc_by_fd (sfd);
-  if (proc == NULL)
+  if (proc == NULL || proc->state == HB_PSTATE_DEREGISTERED)
     {
-      MASTER_ER_LOG_DEBUG (ARG_FILE_LINE, "cannot find process. (fd:%d). \n",
-			   sfd);
       pthread_mutex_unlock (&hb_Resource->lock);
       pthread_mutex_unlock (&hb_Cluster->lock);
       return;
@@ -4097,6 +4291,8 @@ hb_cluster_initialize (const char *nodes, const char *replicas)
   hb_Cluster->myself = NULL;
   hb_Cluster->nodes = NULL;
 
+  hb_Cluster->ping_hosts = NULL;
+
   hb_Cluster->num_nodes =
     hb_cluster_load_group_and_node_list ((char *) nodes, (char *) replicas);
   if (hb_Cluster->num_nodes < 1)
@@ -4109,6 +4305,16 @@ hb_cluster_initialize (const char *nodes, const char *replicas)
       MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_PRM_BAD_VALUE, 1,
 		     prm_get_name (PRM_ID_HA_NODE_LIST));
       return ER_PRM_BAD_VALUE;
+    }
+
+  hb_Cluster->num_ping_hosts =
+    hb_cluster_load_ping_host_list (prm_get_string_value
+				    (PRM_ID_HA_PING_HOSTS));
+
+  if (hb_cluster_check_valid_ping_server () == false)
+    {
+      pthread_mutex_unlock (&hb_Cluster->lock);
+      return ER_FAILED;
     }
 
 #if defined (HB_VERBOSE_DEBUG)
@@ -4137,17 +4343,6 @@ hb_cluster_initialize (const char *nodes, const char *replicas)
 				  ERR_CSS_TCP_DATAGRAM_BIND, 0);
       pthread_mutex_unlock (&hb_Cluster->lock);
       return ERR_CSS_TCP_DATAGRAM_BIND;
-    }
-
-  hb_Cluster->ping_hosts = NULL;
-  hb_Cluster->num_ping_hosts =
-    hb_cluster_load_ping_host_list (prm_get_string_value
-				    (PRM_ID_HA_PING_HOSTS));
-
-  if (hb_cluster_check_valid_ping_server () == false)
-    {
-      pthread_mutex_unlock (&hb_Cluster->lock);
-      return ER_FAILED;
     }
 
   pthread_mutex_unlock (&hb_Cluster->lock);
@@ -4443,45 +4638,21 @@ error_return:
   return error;
 }
 
-
 /*
  * terminator
  */
 
 /*
- * hb_resource_cleanup() -
+ * hb_resource_shutdown_all_ha_procs() -
  *   return:
  *
  */
 static void
-hb_resource_cleanup (void)
+hb_resource_shutdown_all_ha_procs (void)
 {
-  int rv, loop_count, num_active_process, i, rc;
   HB_PROC_ENTRY *proc;
   SOCKET_QUEUE_ENTRY *sock_ent, *next;
   char buffer[MASTER_TO_SRV_MSG_SIZE];
-
-  rv = pthread_mutex_lock (&hb_Resource->lock);
-
-  if (hb_Server_deactivate_info.info_started && !hb_Deactivate_immediately)
-    {
-      /* register CUBRID server pid */
-      hb_Server_deactivate_info.pid_list =
-	(int *) calloc (hb_Resource->num_procs, sizeof (int));
-
-      for (i = 0, proc = hb_Resource->procs; proc; proc = proc->next)
-	{
-	  if (proc->conn && proc->type == HB_PTYPE_SERVER)
-	    {
-	      hb_Server_deactivate_info.pid_list[i] = proc->pid;
-	      i++;
-	    }
-	}
-
-      hb_Server_deactivate_info.server_count = i;
-
-      assert (hb_Resource->num_procs >= i);
-    }
 
   /* set process state to deregister and close connection  */
   for (proc = hb_Resource->procs; proc; proc = proc->next)
@@ -4532,6 +4703,24 @@ hb_resource_cleanup (void)
 
       proc->state = HB_PSTATE_DEREGISTERED;
     }
+
+  return;
+}
+
+/*
+ * hb_resource_cleanup() -
+ *   return:
+ *
+ */
+static void
+hb_resource_cleanup (void)
+{
+  int rv, loop_count, num_active_process, i, rc;
+  HB_PROC_ENTRY *proc;
+
+  rv = pthread_mutex_lock (&hb_Resource->lock);
+
+  hb_resource_shutdown_all_ha_procs ();
 
   /* check whether HA server processes are terminated */
   for (loop_count = 0; loop_count
@@ -4624,7 +4813,7 @@ hb_resource_cleanup (void)
 	    }
 	}
 
-      if (hb_Deactivate_immediately == true || server_count == 0)
+      if (server_count == 0)
 	{
 	  break;
 	}
@@ -4864,7 +5053,6 @@ hb_reload_config (void)
   HB_NODE_ENTRY *old_nodes;
   HB_NODE_ENTRY *old_node, *old_myself, *old_master, *new_node;
   HB_PING_HOST_ENTRY *old_ping_hosts;
-  char node_to_dereg[MAXHOSTNAMELEN * 16], *p, *last;
 
   if (hb_Cluster == NULL)
     {
@@ -4961,23 +5149,6 @@ hb_reload_config (void)
 	}
     }
 
-  /* find node to deregister */
-  node_to_dereg[0] = '\0';
-  p = node_to_dereg;
-  last = (char *) (p + sizeof (node_to_dereg));
-  for (old_node = old_nodes; old_node; old_node = old_node->next)
-    {
-      if (old_node->state != HB_NSTATE_REPLICA
-	  && old_node->host_name[0] != '\0')
-	{
-	  if (p != node_to_dereg)
-	    {
-	      p += snprintf (p, (last - p), ":");
-	    }
-	  p += snprintf (p, (last - p), "%s", old_node->host_name);
-	}
-    }
-
   hb_cluster_job_set_expire_and_reorder (HB_CJOB_CHECK_VALID_PING_SERVER,
 					 HB_JOB_TIMER_IMMEDIATELY);
 
@@ -4993,9 +5164,6 @@ hb_reload_config (void)
       hb_cluster_remove_all_nodes (old_nodes);
     }
   pthread_mutex_unlock (&hb_Cluster->lock);
-
-  /* deregister copylogdb/applylogdb if exists */
-  hb_deregister_nodes (node_to_dereg);
 
   return NO_ERROR;
 
@@ -5027,6 +5195,7 @@ reconfig_error:
   return error;
 }
 
+#if defined (ENABLE_UNUSED_FUNCTION)
 static void
 hb_deregister_nodes (char *node_to_dereg)
 {
@@ -5078,6 +5247,7 @@ hb_deregister_nodes (char *node_to_dereg)
 
   return;
 }
+#endif /* ENABLE_UNUSED_FUNCTION */
 
 /*
  * hb_get_ping_host_info_string -
@@ -5360,6 +5530,12 @@ hb_get_process_info_string (char **str, bool verbose_yn)
 			 sock_entq->name + 1, proc->pid,
 			 hb_process_state_string (proc->type, proc->state));
 	  break;
+	case HB_PTYPE_PREFETCHLOGDB:
+	  p += snprintf (p, MAX ((last - p), 0),
+			 HA_PREFETCHLOG_PROCESS_FORMAT_STRING,
+			 sock_entq->name + 1, proc->pid,
+			 hb_process_state_string (proc->type, proc->state));
+	  break;
 	default:
 	  break;
 	}
@@ -5473,7 +5649,8 @@ hb_kill_all_heartbeat_process (char **str)
   for (proc = hb_Resource->procs; proc; proc = proc->next)
     {
       if (proc->type == HB_PTYPE_APPLYLOGDB ||
-	  proc->type == HB_PTYPE_COPYLOGDB)
+	  proc->type == HB_PTYPE_COPYLOGDB ||
+	  proc->type == HB_PTYPE_PREFETCHLOGDB)
 	{
 	  size = sizeof (pid_t) * (count + 1);
 	  pids = (pid_t *) realloc (pids, size);
@@ -5700,41 +5877,69 @@ hb_reconfig_heartbeat (char **str)
 }
 
 /*
- * hb_deactivate_heartbeat -
- *   return: none
+ * hb_prepare_deactivate_heartbeat - shutdown all HA processes
+ *      to deactivate heartbeat
+ *   return:
  *
- *   str(out):
  */
-void
-hb_deactivate_heartbeat (char **str)
+int
+hb_prepare_deactivate_heartbeat (void)
 {
-  int rv, error;
+  int rv, error = NO_ERROR;
   char error_string[LINE_MAX] = "";
-  int required_size = 0;
-  char *p, *last;
-  HB_NODE_ENTRY *node;
+
+  if (hb_Cluster == NULL || hb_Resource == NULL)
+    {
+      return ER_FAILED;
+    }
+
+  rv = pthread_mutex_lock (&hb_Resource->lock);
+  if (hb_Resource->shutdown == true)
+    {
+      /* resources have already been cleaned up */
+      pthread_mutex_unlock (&hb_Resource->lock);
+
+      return NO_ERROR;
+    }
+
+  hb_Resource->shutdown = true;
+  pthread_mutex_unlock (&hb_Resource->lock);
+
+  error =
+    hb_resource_job_queue (HB_RJOB_CLEANUP_ALL, NULL,
+			   HB_JOB_TIMER_IMMEDIATELY);
+
+  if (error != NO_ERROR)
+    {
+      assert (false);
+    }
+  else
+    {
+      snprintf (error_string, LINE_MAX,
+		"CUBRID heartbeat starts to shutdown all HA processes.");
+      MASTER_ER_SET (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
+		     ER_HB_COMMAND_EXECUTION, 2, HB_CMD_DEACTIVATE_STR,
+		     error_string);
+    }
+
+  return error;
+}
+
+/*
+ * hb_deactivate_heartbeat -
+ *   return:
+ *
+ */
+int
+hb_deactivate_heartbeat (void)
+{
+  int rv;
+  char error_string[LINE_MAX] = "";
 
   if (hb_Cluster == NULL)
     {
-      return;
+      return ER_FAILED;
     }
-
-  if (*str)
-    {
-      **str = 0;
-      return;
-    }
-
-  required_size = 2;
-  *str = (char *) malloc (required_size * sizeof (char));
-  if (NULL == *str)
-    {
-      MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		     ER_OUT_OF_VIRTUAL_MEMORY, 1,
-		     required_size * sizeof (char));
-      return;
-    }
-  **str = '\0';
 
   if (hb_Is_activated == false)
     {
@@ -5745,15 +5950,32 @@ hb_deactivate_heartbeat (char **str)
 		     ER_HB_COMMAND_EXECUTION, 2, HB_CMD_DEACTIVATE_STR,
 		     error_string);
 
-      return;
+      return NO_ERROR;
     }
 
-  if (hb_Resource && resource_Jobs)
+  rv = pthread_mutex_lock (&hb_Resource->lock);
+  if (hb_Resource->shutdown == false || hb_Resource->num_procs > 0)
     {
-      hb_resource_shutdown_and_cleanup ();
+      pthread_mutex_unlock (&hb_Resource->lock);
+
+      /* resource must be cleaned up before deactivation is requested */
+      snprintf (error_string, LINE_MAX,
+		"%s. (CUBRID heartbeat resources must be cleaned up first)",
+		HB_RESULT_FAILURE_STR);
+      MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		     ER_HB_COMMAND_EXECUTION, 2, HB_CMD_DEACTIVATE_STR,
+		     error_string);
+
+      return ER_FAILED;
+    }
+  pthread_mutex_unlock (&hb_Resource->lock);
+
+  if (resource_Jobs != NULL)
+    {
+      hb_resource_job_shutdown ();
     }
 
-  if (hb_Cluster && cluster_Jobs)
+  if (hb_Cluster != NULL && cluster_Jobs != NULL)
     {
       hb_cluster_shutdown_and_cleanup ();
     }
@@ -5764,7 +5986,7 @@ hb_deactivate_heartbeat (char **str)
   MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HB_COMMAND_EXECUTION, 2,
 		 HB_CMD_DEACTIVATE_STR, error_string);
 
-  return;
+  return NO_ERROR;
 }
 
 /*
@@ -5781,6 +6003,18 @@ hb_activate_heartbeat (void)
 
   if (hb_Cluster == NULL)
     {
+      return ER_FAILED;
+    }
+
+  /* unfinished job of deactivation exists */
+  if (hb_Deactivate_info.info_started == true)
+    {
+      snprintf (error_string, LINE_MAX,
+		"%s. (CUBRID heartbeat feature is being deactivated)",
+		HB_RESULT_FAILURE_STR);
+      MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		     ER_HB_COMMAND_EXECUTION, 2, HB_CMD_ACTIVATE_STR,
+		     error_string);
       return ER_FAILED;
     }
 
@@ -6096,15 +6330,37 @@ hb_help_sprint_jobs_info (HB_JOB * jobs, char *buffer, int max_length)
 void
 hb_start_deactivate_server_info (void)
 {
-  assert (hb_Server_deactivate_info.info_started == false);
+  assert (hb_Deactivate_info.info_started == false);
 
-  if (hb_Server_deactivate_info.pid_list != NULL)
+  if (hb_Deactivate_info.server_pid_list != NULL)
     {
-      free_and_init (hb_Server_deactivate_info.pid_list);
+      free_and_init (hb_Deactivate_info.server_pid_list);
     }
 
-  hb_Server_deactivate_info.server_count = 0;
-  hb_Server_deactivate_info.info_started = true;
+  hb_Deactivate_info.server_count = 0;
+  hb_Deactivate_info.info_started = true;
+}
+
+bool
+hb_is_deactivation_started (void)
+{
+  return hb_Deactivate_info.info_started;
+}
+
+bool
+hb_is_deactivation_ready (void)
+{
+  int rv;
+  bool is_ready = false;
+
+  rv = pthread_mutex_lock (&hb_Resource->lock);
+  if (hb_Resource->num_procs == 0 && hb_Resource->shutdown == true)
+    {
+      is_ready = true;
+    }
+  pthread_mutex_unlock (&hb_Resource->lock);
+
+  return is_ready;
 }
 
 
@@ -6116,22 +6372,19 @@ hb_start_deactivate_server_info (void)
 int
 hb_get_deactivating_server_count (void)
 {
-  int i, server_count, num_active_server = 0;
+  int i, num_active_server = 0;
 
-  if (hb_Server_deactivate_info.info_started == true)
+  if (hb_Deactivate_info.info_started == true)
     {
-      server_count = hb_Server_deactivate_info.server_count;
-
-      for (i = 0; i < server_count; i++)
+      for (i = 0; i < hb_Deactivate_info.server_count; i++)
 	{
-	  if (hb_Server_deactivate_info.pid_list[i] > 0)
+	  if (hb_Deactivate_info.server_pid_list[i] > 0)
 	    {
-	      if (kill (hb_Server_deactivate_info.pid_list[i], 0)
+	      if (kill (hb_Deactivate_info.server_pid_list[i], 0)
 		  && errno == ESRCH)
 		{
 		  /* server was terminated */
-		  hb_Server_deactivate_info.pid_list[i] = 0;
-		  hb_Server_deactivate_info.server_count--;
+		  hb_Deactivate_info.server_pid_list[i] = 0;
 		}
 	      else
 		{
@@ -6142,8 +6395,6 @@ hb_get_deactivating_server_count (void)
 
       return num_active_server;
     }
-
-  assert (0);
 
   return 0;
 }
@@ -6158,12 +6409,11 @@ hb_get_deactivating_server_count (void)
 void
 hb_finish_deactivate_server_info (void)
 {
-  assert (hb_Server_deactivate_info.info_started == true);
-
-  if (hb_Server_deactivate_info.pid_list != NULL)
+  if (hb_Deactivate_info.server_pid_list != NULL)
     {
-      free_and_init (hb_Server_deactivate_info.pid_list);
+      free_and_init (hb_Deactivate_info.server_pid_list);
     }
-  hb_Server_deactivate_info.server_count = 0;
-  hb_Server_deactivate_info.info_started = false;
+
+  hb_Deactivate_info.server_count = 0;
+  hb_Deactivate_info.info_started = false;
 }

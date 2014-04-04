@@ -90,6 +90,7 @@
 #endif /* WINDOWS */
 #include "db.h"			/* for db_Connect_status */
 #include "log_compress.h"
+#include "event_log.h"
 
 #if !defined(SERVER_MODE)
 #define pthread_mutex_init(a, b)
@@ -4762,6 +4763,10 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
     LOG_SMALLER_LOGREC_TYPE	/* type */
   };				/* Save last record */
 
+  INT64 flush_start_time = 0;
+  INT64 flush_completed_time = 0;
+  INT64 all_writer_thr_end_time = 0;
+
 #if defined(SERVER_MODE)
   int rv;
   LOGWR_ENTRY *entry;
@@ -4926,6 +4931,18 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
 
       rv = pthread_mutex_lock (&writer_info->flush_start_mutex);
       rv = pthread_mutex_lock (&writer_info->wr_list_mutex);
+
+      if (thread_p != NULL && thread_p->event_stats.trace_log_flush_time > 0)
+	{
+	  flush_start_time = thread_get_log_clock_msec ();
+
+	  memset (&writer_info->last_writer_client_info, 0,
+		  sizeof (LOG_CLIENTIDS));
+
+	  writer_info->trace_last_writer = true;
+	  writer_info->last_writer_elapsed_time = 0;
+	  writer_info->last_writer_client_info.client_type = -1;
+	}
 
       entry = writer_info->writer_list;
       while (entry)
@@ -5292,6 +5309,11 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
       /* it sends signal to LWT to notify that flush is completed */
       rv = pthread_mutex_lock (&writer_info->flush_wait_mutex);
 
+      if (thread_p != NULL && thread_p->event_stats.trace_log_flush_time > 0)
+	{
+	  flush_completed_time = thread_get_log_clock_msec ();
+	}
+
       writer_info->flush_completed = true;
       rv = pthread_cond_broadcast (&writer_info->flush_wait_cond);
 
@@ -5315,6 +5337,30 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
 	  rv = pthread_cond_wait (&writer_info->flush_end_cond,
 				  &writer_info->flush_end_mutex);
 	}
+
+      rv = pthread_mutex_lock (&writer_info->wr_list_mutex);
+      writer_info->trace_last_writer = false;
+
+      if (thread_p != NULL && thread_p->event_stats.trace_log_flush_time > 0)
+	{
+	  all_writer_thr_end_time = thread_get_log_clock_msec ();
+
+	  if (all_writer_thr_end_time - flush_start_time >
+	      thread_p->event_stats.trace_log_flush_time)
+	    {
+	      event_log_log_flush_thr_wait (thread_p, flush_page_count,
+					    &writer_info->
+					    last_writer_client_info,
+					    all_writer_thr_end_time -
+					    flush_start_time,
+					    all_writer_thr_end_time -
+					    flush_completed_time,
+					    writer_info->
+					    last_writer_elapsed_time);
+	    }
+	}
+
+      pthread_mutex_unlock (&writer_info->wr_list_mutex);
 
       pthread_mutex_unlock (&writer_info->flush_end_mutex);
       assert (hold_flush_mutex == false);
@@ -5409,7 +5455,7 @@ logpb_flush_pages (THREAD_ENTRY * thread_p, LOG_LSA * flush_lsa)
     }
   assert (!LOG_CS_OWN_WRITE_MODE (thread_p));
 
-  if (thread_Log_flush_thread.is_valid == false)
+  if (thread_Log_flush_thread.is_available == false)
     {
       LOG_CS_ENTER (thread_p);
       logpb_flush_pages_direct (thread_p);
@@ -6528,11 +6574,12 @@ logpb_scan_volume_info (THREAD_ENTRY * thread_p, const char *db_fullname,
 
       if (volid != ignore_volid)
 	{
-	  num_vols++;
 	  if (((*fun) (thread_p, volid, vol_fullname, args)) != NO_ERROR)
 	    {
 	      break;
 	    }
+
+	  num_vols++;
 	}
     }
 
@@ -6641,8 +6688,11 @@ logpb_get_archive_number (THREAD_ENTRY * thread_p, LOG_PAGEID pageid)
 {
   int arv_num = 0;
 
-  (void) logpb_fetch_from_archive (thread_p, pageid, NULL,
-				   &arv_num, NULL, true);
+  if (logpb_fetch_from_archive (thread_p, pageid, NULL, &arv_num, NULL,
+				false) == NULL)
+    {
+      return -1;
+    }
 
   if (arv_num < 0)
     {
@@ -7092,16 +7142,23 @@ logpb_fetch_from_archive (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
 					  false, false)) == NULL_VOLDES)
 	    {
 	      char line_buf[PATH_MAX * 2];
+	      bool is_in_crash_recovery;
+
+	      is_in_crash_recovery = log_is_in_crash_recovery ();
 
 	      /*
 	       * The archive is not online.
 	       */
-	      fprintf (stdout, "%s\n", er_msg ());
+	      if (is_in_crash_recovery == true)
+		{
+		  fprintf (stdout, "%s\n", er_msg ());
+		}
+
 	    retry_prompt:
 	      if (log_default_input_for_archive_log_location >= 0)
 		{
 		  retry = log_default_input_for_archive_log_location;
-		  if (retry == 1)
+		  if (retry == 1 && is_in_crash_recovery == true)
 		    {
 		      fprintf (stdout,
 			       "Continue without present archive. (Partial recovery).\n");
@@ -7676,7 +7733,12 @@ logpb_remove_archive_logs_exceed_limit (THREAD_ENTRY * thread_p,
 	{
 	  min_copied_arv_num =
 	    logpb_get_archive_number (thread_p, min_copied_pageid);
-	  if (min_copied_arv_num > 1)
+	  if (min_copied_arv_num == -1)
+	    {
+	      LOG_CS_EXIT (thread_p);
+	      return deleted_count;
+	    }
+	  else if (min_copied_arv_num > 1)
 	    {
 	      min_copied_arv_num--;
 	    }
@@ -10198,10 +10260,13 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 	    {
 	      success = ER_FAILED;
 	    }
+
+	  assert (try_level != r_args->level);
 	}
 
       error_code = fileio_get_backup_volume (thread_p, db_fullname, logpath,
-					     r_args, from_volbackup);
+					     r_args->backuppath, try_level,
+					     from_volbackup);
       if (error_code == ER_LOG_CANNOT_ACCESS_BACKUP)
 	{
 	  error_expected = true;
@@ -13179,4 +13244,60 @@ logpb_need_wal (const LOG_LSA * lsa)
     {
       return false;
     }
+}
+
+/*
+ * logpb_backup_level_info_to_string () - format LOG_HDR_BKUP_LEVEL_INFO as string
+ *
+ *   return: the buffer passed to first argument
+ *
+ *   buf(out):
+ *   buf_size(in):
+ *   info(in):
+ */
+char *
+logpb_backup_level_info_to_string (char *buf, int buf_size,
+				   const LOG_HDR_BKUP_LEVEL_INFO * info)
+{
+  char time_str[64];
+
+  if (info->bkup_attime == 0)
+    {
+      snprintf (buf, buf_size, "time: N/A");
+      buf[buf_size - 1] = 0;
+    }
+  else
+    {
+      ctime_r (&info->bkup_attime, time_str);
+      /* ctime_r() will padding one '\n' character to buffer, we need truncate it */
+      time_str[strlen (time_str) - 1] = 0;
+      snprintf (buf, buf_size, "time: %s", time_str);
+      buf[buf_size - 1] = 0;
+    }
+
+  return buf;
+}
+
+/*
+ * logpb_perm_status_to_string() - return the string alias of enum value
+ *
+ *   return: constant string
+ *
+ *   val(in): the enum value
+ */
+const char *
+logpb_perm_status_to_string (enum LOG_PSTATUS val)
+{
+  switch (val)
+    {
+    case LOG_PSTAT_CLEAR:
+      return "LOG_PSTAT_CLEAR";
+    case LOG_PSTAT_BACKUP_INPROGRESS:
+      return "LOG_PSTAT_BACKUP_INPROGRESS";
+    case LOG_PSTAT_RESTORE_INPROGRESS:
+      return "LOG_PSTAT_RESTORE_INPROGRESS";
+    case LOG_PSTAT_HDRFLUSH_INPPROCESS:
+      return "LOG_PSTAT_HDRFLUSH_INPPROCESS";
+    }
+  return "UNKNOWN_LOG_PSTATUS";
 }

@@ -382,8 +382,9 @@ struct fetch_proc_node
 
 typedef enum
 {
-  HS_ACCEPT_ALL = 0,		/* accept tuples in hash table */
-  HS_REJECT_ALL,		/* reject tuples, use normal sort-based aggregation */
+  HS_NONE = 0,			/* no hash aggregation */
+  HS_ACCEPT_ALL,		/* accept tuples in hash table */
+  HS_REJECT_ALL			/* reject tuples, use normal sort-based aggregation */
 } AGGREGATE_HASH_STATE;
 
 typedef struct aggregate_hash_context AGGREGATE_HASH_CONTEXT;
@@ -823,6 +824,7 @@ struct groupby_stat
   UINT64 groupby_pages;
   UINT64 groupby_ioreads;
   int rows;
+  AGGREGATE_HASH_STATE groupby_hash;
   bool run_groupby;
   bool groupby_sort;
 };
@@ -982,7 +984,8 @@ struct func_pred
 #define XASL_IS_MERGE_QUERY	      2048	/* query belongs to a merge statement */
 #define XASL_USES_MRO	      4096	/* query uses multi range optimization */
 #define XASL_KEEP_DBVAL	      8192	/* do not clear db_value */
-#define XASL_SELECT_MVCC_LOCK_NEEDED      16384	/* lock returned rows */
+#define XASL_RETURN_GENERATED_KEYS	     16384	/* return generated keys */
+#define XASL_SELECT_MVCC_LOCK_NEEDED      32768	/* lock returned rows */
 
 #define XASL_IS_FLAGED(x, f)        ((x)->flag & (int) (f))
 #define XASL_SET_FLAG(x, f)         (x)->flag |= (int) (f)
@@ -1028,6 +1031,13 @@ struct xasl_state
  * xasl head node information
  */
 
+typedef struct xasl_qstr_ht_key XASL_QSTR_HT_KEY;
+struct xasl_qstr_ht_key
+{
+  const char *query_string;
+  OID creator_oid;		/* OID of the user who created this XASL */
+};
+
 /* XASL cache entry type definition */
 typedef struct xasl_cache_ent XASL_CACHE_ENTRY;
 struct xasl_cache_ent
@@ -1037,11 +1047,11 @@ struct xasl_cache_ent
   XASL_ID xasl_id;		/* XASL file identifier */
   int xasl_header_flag;		/* XASL header info */
 #if defined(SERVER_MODE)
-  int *tran_index_array;	/* array of TID(tran index)s that are currently
-				   using this XASL; size is MAX_NTRANS */
-  size_t last_ta_idx;		/* index of the last element in TIDs array */
+  char *tran_fix_count_array;	/* fix count of each transaction;
+				 * size is MAX_NTRANS */
+  int num_fixed_tran;		/* number of transactions
+				 * fixed this entry */
 #endif
-  OID creator_oid;		/* OID of the user who created this XASL */
   const OID *class_oid_list;	/* list of class/serial OIDs referenced
 				 * in the XASL */
   const int *tcard_list;	/* list of #pages of the class OIDs */
@@ -1056,6 +1066,7 @@ struct xasl_cache_ent
 				   the result */
   struct xasl_cache_clo *clo_list;	/* list of cache clones for this XASL */
   bool deletion_marker;		/* this entry will be deleted if marker set */
+  XASL_QSTR_HT_KEY qstr_ht_key;	/* The key of query string hash table */
 };
 
 /* XASL cache clone type definition */
@@ -1136,8 +1147,16 @@ extern XASL_CACHE_ENTRY *qexec_update_filter_pred_cache_ent (THREAD_ENTRY *
 							     const int
 							     *tcards,
 							     int dbval_cnt);
-extern int qexec_end_use_of_xasl_cache_ent (THREAD_ENTRY * thread_p,
-					    const XASL_ID * xasl_id);
+
+extern int qexec_remove_my_tran_id_in_filter_pred_xasl_entry (THREAD_ENTRY *
+							      thread_p,
+							      XASL_CACHE_ENTRY
+							      * ent,
+							      bool unfix_all);
+extern int qexec_remove_my_tran_id_in_xasl_entry (THREAD_ENTRY * thread_p,
+						  XASL_CACHE_ENTRY * ent,
+						  bool unfix_all);
+
 extern int qexec_end_use_of_filter_pred_cache_ent (THREAD_ENTRY * thread_p,
 						   const XASL_ID * xasl_id,
 						   bool marker);
@@ -1162,8 +1181,7 @@ extern int qexec_free_filter_pred_cache_clo (THREAD_ENTRY * thread_p,
 					     XASL_CACHE_CLONE * clo);
 extern int xasl_id_hash_cmpeq (const void *key1, const void *key2);
 extern int qexec_remove_xasl_cache_ent_by_class (THREAD_ENTRY * thread_p,
-						 const OID * class_oid,
-						 int force_remove);
+						 const OID * oid);
 extern int qexec_remove_filter_pred_cache_ent_by_class (THREAD_ENTRY *
 							thread_p,
 							const OID *

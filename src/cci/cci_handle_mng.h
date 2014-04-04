@@ -223,7 +223,7 @@ extern "C"
     int cas_id;
     T_CCI_SESSION_ID session_id;
     T_CCI_DATASOURCE *datasource;
-    MHT_TABLE *stmt_pool;
+    CCI_MHT_TABLE *stmt_pool;
 
     /* HA */
     int alter_host_count;
@@ -360,6 +360,8 @@ extern "C"
 
   extern bool hm_is_empty_session (T_CCI_SESSION_ID * id);
   extern void hm_make_empty_session (T_CCI_SESSION_ID * id);
+
+  extern void hm_force_close_connection (T_CON_HANDLE * con_handle);
 /************************************************************************
  * PUBLIC VARIABLES							*
  ************************************************************************/

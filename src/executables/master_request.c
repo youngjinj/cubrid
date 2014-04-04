@@ -121,13 +121,20 @@ static void css_process_ha_deregister_by_args (CSS_CONN_ENTRY * conn,
 					       char *args);
 static void css_process_reconfig_heartbeat (CSS_CONN_ENTRY * conn,
 					    unsigned short request_id);
+static void css_process_deact_stop_all (CSS_CONN_ENTRY * conn,
+					unsigned short request_id,
+					char *deact_immediately);
+static void css_process_deact_confirm_stop_all (CSS_CONN_ENTRY * conn,
+						unsigned short request_id);
 static void css_process_deactivate_heartbeat (CSS_CONN_ENTRY * conn,
-					      unsigned short request_id,
-					      char *deact_immediately);
+					      unsigned short request_id);
+static void css_process_deact_confirm_no_server (CSS_CONN_ENTRY * conn,
+						 unsigned short request_id);
 static void css_process_activate_heartbeat (CSS_CONN_ENTRY * conn,
 					    unsigned short request_id);
 
 static void css_process_register_ha_process (CSS_CONN_ENTRY * conn);
+static void css_process_deregister_ha_process (CSS_CONN_ENTRY * conn);
 static void css_process_change_ha_mode (CSS_CONN_ENTRY * conn);
 static void css_process_ha_ping_host_info (CSS_CONN_ENTRY * conn,
 					   unsigned short request_id);
@@ -273,7 +280,8 @@ css_process_server_count_info (CSS_CONN_ENTRY * conn,
 	  temp->name &&
 	  !IS_MASTER_CONN_NAME_DRIVER (temp->name) &&
 	  !IS_MASTER_CONN_NAME_HA_COPYLOG (temp->name) &&
-	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name))
+	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name) &&
+	  !IS_MASTER_CONN_NAME_HA_PREFETCHLOG (temp->name))
 	{
 	  count++;
 	}
@@ -336,7 +344,8 @@ css_process_server_list_info (CSS_CONN_ENTRY * conn,
 	  temp->name != NULL &&
 	  !IS_MASTER_CONN_NAME_DRIVER (temp->name) &&
 	  !IS_MASTER_CONN_NAME_HA_COPYLOG (temp->name) &&
-	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name))
+	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name) &&
+	  !IS_MASTER_CONN_NAME_HA_PREFETCHLOG (temp->name))
 	{
 	  required_size = 0;
 
@@ -649,7 +658,8 @@ css_process_kill_immediate (CSS_CONN_ENTRY * conn, unsigned short request_id,
       if ((temp->name != NULL) && (strcmp (temp->name, server_name) == 0) &&
 	  !IS_MASTER_CONN_NAME_HA_SERVER (temp->name) &&
 	  !IS_MASTER_CONN_NAME_HA_COPYLOG (temp->name) &&
-	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name))
+	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name) &&
+	  !IS_MASTER_CONN_NAME_HA_PREFETCHLOG (temp->name))
 	{
 	  css_send_command_to_server (temp, SERVER_SHUTDOWN_IMMEDIATE);
 
@@ -802,7 +812,8 @@ css_process_shutdown (char *time_buffer)
 	  !IS_MASTER_CONN_NAME_DRIVER (temp->name) &&
 	  !IS_MASTER_CONN_NAME_HA_SERVER (temp->name) &&
 	  !IS_MASTER_CONN_NAME_HA_COPYLOG (temp->name) &&
-	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name))
+	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name) &&
+	  !IS_MASTER_CONN_NAME_HA_PREFETCHLOG (temp->name))
 	{
 	  css_process_start_shutdown (temp, timeout * 60, buffer);
 
@@ -858,7 +869,8 @@ css_process_stop_shutdown (void)
 	  !IS_MASTER_CONN_NAME_DRIVER (temp->name) &&
 	  !IS_MASTER_CONN_NAME_HA_SERVER (temp->name) &&
 	  !IS_MASTER_CONN_NAME_HA_COPYLOG (temp->name) &&
-	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name))
+	  !IS_MASTER_CONN_NAME_HA_APPLYLOG (temp->name) &&
+	  !IS_MASTER_CONN_NAME_HA_PREFETCHLOG (temp->name))
 	{
 	  css_send_command_to_server (temp, SERVER_STOP_SHUTDOWN);
 	}
@@ -957,6 +969,35 @@ css_process_register_ha_process (CSS_CONN_ENTRY * conn)
 #if !defined(WINDOWS)
   hb_register_new_process (conn);
 #endif
+}
+
+/*
+ * css_process_deregister_ha_process()
+ *   return: none
+ *   conn(in):
+ *
+ *   NOTE: this deregistration is requested directly by HA process itself
+ *   , not by commdb
+ */
+static void
+css_process_deregister_ha_process (CSS_CONN_ENTRY * conn)
+{
+#if !defined(WINDOWS)
+  int rv, pid;
+
+  rv = css_receive_heartbeat_data (conn, (char *) &pid, sizeof (pid));
+  if (rv != NO_ERRORS)
+    {
+      return;
+    }
+
+  pid = ntohl (pid);
+  hb_deregister_by_pid (pid);
+
+  /* deregister will clean up this connection */
+#else /* !WINDOWS */
+  css_cleanup_info_connection (conn);
+#endif /* WINDOWS */
 }
 
 /*
@@ -1427,11 +1468,10 @@ error_return:
  */
 static void
 css_process_deactivate_heartbeat (CSS_CONN_ENTRY * conn,
-				  unsigned short request_id,
-				  char *deact_immediately)
+				  unsigned short request_id)
 {
 #if !defined(WINDOWS)
-  char *buffer = NULL;
+  int error = NO_ERROR;
   char *message;
 
   if (prm_get_integer_value (PRM_ID_HA_MODE) == HA_MODE_OFF)
@@ -1439,67 +1479,40 @@ css_process_deactivate_heartbeat (CSS_CONN_ENTRY * conn,
       goto error_return;
     }
 
-  if (deact_immediately != NULL && *((bool *) deact_immediately) == true)
-    {
-      hb_Deactivate_immediately = true;
-    }
-  else
-    {
-      hb_Deactivate_immediately = false;
-    }
+  error = hb_deactivate_heartbeat ();
 
-  hb_start_deactivate_server_info ();
-
-  hb_deactivate_heartbeat (&buffer);
-
-  if (buffer == NULL)
+  if (error != NO_ERROR)
     {
       goto error_return;
     }
 
   if (hb_get_deactivating_server_count () > 0)
     {
-      /* cub_server was remained,
-       * commdb must wait until all server processes are terminated
-       */
       message = msgcat_message (MSGCAT_CATALOG_UTILS,
 				MSGCAT_UTIL_SET_MASTER,
 				MASTER_MSG_FAILOVER_FINISHED);
 
       if (css_send_data (conn, request_id, message,
-			 strlen (message) + 1) == NO_ERRORS)
-	{
-	  /* wait until cub_server processes are terminated */
-	  while (hb_get_deactivating_server_count () > 0)
-	    {
-	      sleep (1);
-	    }
-
-	  if (css_send_data (conn, request_id, buffer, strlen (buffer) + 1) !=
-	      NO_ERRORS)
-	    {
-	      css_cleanup_info_connection (conn);
-	    }
-	}
-      else
+			 strlen (message) + 1) != NO_ERRORS)
 	{
 	  css_cleanup_info_connection (conn);
+	  return;
 	}
     }
   else
     {
-      if (css_send_data (conn, request_id, buffer, strlen (buffer) + 1) !=
-	  NO_ERRORS)
+      if (css_send_data (conn, request_id, "\0", 1) != NO_ERRORS)
 	{
 	  css_cleanup_info_connection (conn);
+	  return;
 	}
     }
 
-  hb_finish_deactivate_server_info ();
-
-  if (buffer != NULL)
+  if (css_send_data
+      (conn, request_id, HA_REQUEST_SUCCESS,
+       HA_REQUEST_RESULT_SIZE) != NO_ERRORS)
     {
-      free_and_init (buffer);
+      css_cleanup_info_connection (conn);
     }
 
   return;
@@ -1508,12 +1521,161 @@ error_return:
   if (css_send_data (conn, request_id, "\0", 1) != NO_ERRORS)
     {
       css_cleanup_info_connection (conn);
+      return;
     }
 
-  if (buffer != NULL)
+  if (css_send_data
+      (conn, request_id, HA_REQUEST_FAILURE,
+       HA_REQUEST_RESULT_SIZE) != NO_ERRORS)
     {
-      free_and_init (buffer);
+      css_cleanup_info_connection (conn);
     }
+
+  return;
+
+#else
+  char buffer[MASTER_TO_SRV_MSG_SIZE];
+  snprintf (buffer, MASTER_TO_SRV_MSG_SIZE,
+	    msgcat_message (MSGCAT_CATALOG_UTILS, MSGCAT_UTIL_SET_MASTER,
+			    MASTER_MSG_PROCESS_ERROR));
+  if (css_send_data (conn, request_id, buffer, strlen (buffer) + 1) !=
+      NO_ERRORS)
+    {
+      css_cleanup_info_connection (conn);
+    }
+#endif
+}
+
+static void
+css_process_deact_confirm_no_server (CSS_CONN_ENTRY * conn,
+				     unsigned short request_id)
+{
+#if !defined(WINDOWS)
+  int error;
+
+  if (hb_get_deactivating_server_count () == 0)
+    {
+      error =
+	css_send_data (conn, request_id, HA_REQUEST_SUCCESS,
+		       HA_REQUEST_RESULT_SIZE);
+
+      hb_finish_deactivate_server_info ();
+    }
+  else
+    {
+      error =
+	css_send_data (conn, request_id, HA_REQUEST_FAILURE,
+		       HA_REQUEST_RESULT_SIZE);
+    }
+
+  if (error != NO_ERRORS)
+    {
+      css_cleanup_info_connection (conn);
+    }
+
+  return;
+#else
+  char buffer[MASTER_TO_SRV_MSG_SIZE];
+  snprintf (buffer, MASTER_TO_SRV_MSG_SIZE,
+	    msgcat_message (MSGCAT_CATALOG_UTILS, MSGCAT_UTIL_SET_MASTER,
+			    MASTER_MSG_PROCESS_ERROR));
+  if (css_send_data (conn, request_id, buffer, strlen (buffer) + 1) !=
+      NO_ERRORS)
+    {
+      css_cleanup_info_connection (conn);
+    }
+#endif
+}
+
+static void
+css_process_deact_confirm_stop_all (CSS_CONN_ENTRY * conn,
+				    unsigned short request_id)
+{
+#if !defined(WINDOWS)
+  int error;
+
+  if (hb_is_deactivation_ready () == true)
+    {
+      error =
+	css_send_data (conn, request_id, HA_REQUEST_SUCCESS,
+		       HA_REQUEST_RESULT_SIZE);
+    }
+  else
+    {
+      error =
+	css_send_data (conn, request_id, HA_REQUEST_FAILURE,
+		       HA_REQUEST_RESULT_SIZE);
+    }
+
+  if (error != NO_ERRORS)
+    {
+      css_cleanup_info_connection (conn);
+    }
+
+  return;
+#else
+  char buffer[MASTER_TO_SRV_MSG_SIZE];
+  snprintf (buffer, MASTER_TO_SRV_MSG_SIZE,
+	    msgcat_message (MSGCAT_CATALOG_UTILS, MSGCAT_UTIL_SET_MASTER,
+			    MASTER_MSG_PROCESS_ERROR));
+  if (css_send_data (conn, request_id, buffer, strlen (buffer) + 1) !=
+      NO_ERRORS)
+    {
+      css_cleanup_info_connection (conn);
+    }
+#endif
+}
+
+static void
+css_process_deact_stop_all (CSS_CONN_ENTRY * conn,
+			    unsigned short request_id,
+			    char *deact_immediately)
+{
+#if !defined(WINDOWS)
+  int result;
+
+  if (prm_get_integer_value (PRM_ID_HA_MODE) == HA_MODE_OFF)
+    {
+      goto error_return;
+    }
+
+  if (hb_is_deactivation_started () == false)
+    {
+      hb_start_deactivate_server_info ();
+
+      if (deact_immediately != NULL && *((bool *) deact_immediately) == true)
+	{
+	  hb_Deactivate_immediately = true;
+	}
+      else
+	{
+	  hb_Deactivate_immediately = false;
+	}
+
+      result = hb_prepare_deactivate_heartbeat ();
+      if (result != NO_ERROR)
+	{
+	  goto error_return;
+	}
+    }
+
+  if (css_send_data
+      (conn, request_id, HA_REQUEST_SUCCESS,
+       HA_REQUEST_RESULT_SIZE) != NO_ERRORS)
+    {
+      css_cleanup_info_connection (conn);
+    }
+
+  return;
+
+error_return:
+  if (css_send_data
+      (conn, request_id, HA_REQUEST_FAILURE,
+       HA_REQUEST_RESULT_SIZE) != NO_ERRORS)
+    {
+      css_cleanup_info_connection (conn);
+    }
+
   return;
 #else
   char buffer[MASTER_TO_SRV_MSG_SIZE];
@@ -1696,7 +1858,16 @@ css_process_info_request (CSS_CONN_ENTRY * conn)
 	  css_process_reconfig_heartbeat (conn, request_id);
 	  break;
 	case DEACTIVATE_HEARTBEAT:
-	  css_process_deactivate_heartbeat (conn, request_id, buffer);
+	  css_process_deactivate_heartbeat (conn, request_id);
+	  break;
+	case DEACT_STOP_ALL:
+	  css_process_deact_stop_all (conn, request_id, buffer);
+	  break;
+	case DEACT_CONFIRM_STOP_ALL:
+	  css_process_deact_confirm_stop_all (conn, request_id);
+	  break;
+	case DEACT_CONFIRM_NO_SERVER:
+	  css_process_deact_confirm_no_server (conn, request_id);
 	  break;
 	case ACTIVATE_HEARTBEAT:
 	  css_process_activate_heartbeat (conn, request_id);
@@ -1740,6 +1911,9 @@ css_process_heartbeat_request (CSS_CONN_ENTRY * conn)
 	{
 	case SERVER_REGISTER_HA_PROCESS:
 	  css_process_register_ha_process (conn);
+	  break;
+	case SERVER_DEREGISTER_HA_PROCESS:
+	  css_process_deregister_ha_process (conn);
 	  break;
 	case SERVER_CHANGE_HA_MODE:
 	  css_process_change_ha_mode (conn);

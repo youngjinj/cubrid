@@ -234,6 +234,9 @@ static QFILE_LIST_ID *qmgr_process_async_select (THREAD_ENTRY * thread_p,
 						 cache_clone_p,
 						 QMGR_QUERY_ENTRY * query_p);
 static void qmgr_reset_query_exec_info (int tran_index);
+static void qmgr_set_query_exec_info_to_tdes (int tran_index,
+					      int query_timeout,
+					      const XASL_ID * xasl_id);
 #endif
 
 static void qmgr_initialize_temp_file_list (QMGR_TEMP_FILE_LIST *
@@ -245,9 +248,7 @@ static void qmgr_finalize_temp_file_list (QMGR_TEMP_FILE_LIST *
 static QMGR_TEMP_FILE *qmgr_get_temp_file_from_list (QMGR_TEMP_FILE_LIST *
 						     temp_file_list_p);
 static void qmgr_put_temp_file_into_list (QMGR_TEMP_FILE * temp_file_p);
-static void qmgr_set_query_exec_info_to_tdes (int tran_index,
-					      int query_timeout,
-					      const XASL_ID * xasl_id);
+
 static int copy_bind_value_to_tdes (THREAD_ENTRY * thread_p,
 				    int num_bind_vals, DB_VALUE * bind_vals);
 
@@ -1213,32 +1214,29 @@ xqmgr_prepare_query (THREAD_ENTRY * thread_p,
 
   if (stream->xasl_stream == NULL)
     {
+      XASL_ID_SET_NULL (stream->xasl_id);
+
       /* lookup the XASL cache with the query string as the key */
       cache_entry_p =
 	qexec_lookup_xasl_cache_ent (thread_p, context->sql_hash_text,
 				     user_oid_p);
 
-      /* check recompilation threshold */
-      if (cache_entry_p
-	  && qexec_RT_xasl_cache_ent (thread_p, cache_entry_p) == NO_ERROR)
-	{
-	  XASL_ID_COPY (stream->xasl_id, &(cache_entry_p->xasl_id));
-	  if (stream->xasl_header)
-	    {
-	      /* also xasl header was requested */
-	      qfile_load_xasl_node_header (thread_p, stream->xasl_id,
-					   stream->xasl_header);
-	    }
-	}
-      else
-	{
-	  XASL_ID_SET_NULL (stream->xasl_id);
-	}
-
       if (cache_entry_p)
 	{
-	  (void) qexec_end_use_of_xasl_cache_ent (thread_p,
-						  &cache_entry_p->xasl_id);
+	  /* check recompilation threshold */
+	  if (qexec_RT_xasl_cache_ent (thread_p, cache_entry_p) == NO_ERROR)
+	    {
+	      XASL_ID_COPY (stream->xasl_id, &(cache_entry_p->xasl_id));
+	      if (stream->xasl_header)
+		{
+		  /* also xasl header was requested */
+		  qfile_load_xasl_node_header (thread_p, stream->xasl_id,
+					       stream->xasl_header);
+		}
+	    }
+
+	  (void) qexec_remove_my_tran_id_in_xasl_entry (thread_p,
+							cache_entry_p, true);
 	}
 
       return stream->xasl_id;
@@ -1262,9 +1260,13 @@ xqmgr_prepare_query (THREAD_ENTRY * thread_p,
 		    "qstmt %s\n", context->sql_hash_text);
       XASL_ID_COPY (stream->xasl_id, &(cache_entry_p->xasl_id));
 
-      (void) qexec_end_use_of_xasl_cache_ent (thread_p,
-					      &cache_entry_p->xasl_id);
-
+#if defined (SERVER_MODE)
+      if (cache_entry_p)
+	{
+	  (void) qexec_remove_my_tran_id_in_xasl_entry (thread_p,
+							cache_entry_p, true);
+	}
+#endif
       goto exit_on_end;
     }
 
@@ -1730,6 +1732,10 @@ qmgr_process_query (THREAD_ENTRY * thread_p,
     }
 #endif
 
+  if (flag & RETURN_GENERATED_KEYS)
+    {
+      XASL_SET_FLAG (xasl_p, XASL_RETURN_GENERATED_KEYS);
+    }
   /* execute the query with the value list, if any */
   query_p->list_id = qexec_execute_query (thread_p, xasl_p,
 					  dbval_count, dbvals_p,
@@ -1815,7 +1821,8 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 		     QUERY_FLAG * flag_p,
 		     CACHE_TIME * client_cache_time_p,
 		     CACHE_TIME * server_cache_time_p,
-		     int query_timeout, EXECUTION_INFO * info)
+		     int query_timeout, XASL_CACHE_ENTRY ** ret_cache_entry_p,
+		     LC_LOCKHINT * lockhint)
 {
   XASL_CACHE_ENTRY *xasl_cache_entry_p;
   QFILE_LIST_CACHE_ENTRY *list_cache_entry_p;
@@ -1832,7 +1839,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   int tran_index = -1;
   QMGR_TRAN_ENTRY *tran_entry_p;
   QFILE_LIST_ID *list_id_p, *tmp_list_id_p;
-  XASL_CACHE_CLONE *cache_clone_p;
+  XASL_CACHE_CLONE *cache_clone_p = NULL;
   bool cached_result;
   bool saved_is_stats_on;
   bool xasl_trace;
@@ -1887,9 +1894,16 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
       session_set_trigger_state (thread_p, true);
     }
 
+  if (lockhint)
+    {
+      if (lock_classes_lock_hint (thread_p, lockhint) != LK_GRANTED)
+	{
+	  goto exit_on_error;
+	}
+    }
+
   /* Check the existance of the given XASL. If someone marked it
      to be deleted, then remove it if possible. */
-  cache_clone_p = NULL;		/* mark as pop */
   xasl_cache_entry_p = qexec_check_xasl_cache_ent_by_xasl (thread_p,
 							   xasl_id_p,
 							   dbval_count,
@@ -1909,9 +1923,9 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
       return NULL;
     }
 
-  if (info)
+  if (ret_cache_entry_p)
     {
-      *info = xasl_cache_entry_p->sql_info;
+      *ret_cache_entry_p = xasl_cache_entry_p;
     }
 
 #if defined (SERVER_MODE)
@@ -2290,15 +2304,18 @@ end:
       xmnt_server_start_stats (thread_p, false);
     }
 
+#if defined (SERVER_MODE)
+  if (tran_index >= 0)
+    {
+      qmgr_reset_query_exec_info (tran_index);
+    }
+#endif
+
   if (mvcc_Enabled)
     {
       /* If error_flag is true, the command is canceled */
       logtb_update_transaction_inserted_deleted (thread_p, error_flag);
     }
-
-#if defined (SERVER_MODE)
-  qmgr_reset_query_exec_info (tran_index);
-#endif
 
   return list_id_p;
 
@@ -2696,6 +2713,7 @@ end:
   return list_id_p;
 
 exit_on_error:
+
   error_flag = true;
 
   /*
@@ -5405,6 +5423,7 @@ qmgr_get_temp_file_membuf_pages (QMGR_TEMP_FILE * temp_file_p)
   return temp_file_p->membuf_npages;
 }
 
+#if defined (SERVER_MODE)
 /*
  * qmgr_set_query_exec_info_to_tdes () - calculate timeout and set to transaction
  *                                     descriptor
@@ -5417,9 +5436,6 @@ qmgr_set_query_exec_info_to_tdes (int tran_index, int query_timeout,
 				  const XASL_ID * xasl_id)
 {
   LOG_TDES *tdes_p;
-#if !defined(HAVE_ATOMIC_BUILTINS)
-  struct timeval tv;
-#endif /* !HAVE_ATOMIC_BUILTINS */
 
   tdes_p = LOG_FIND_TDES (tran_index);
   assert (tdes_p != NULL);
@@ -5428,13 +5444,7 @@ qmgr_set_query_exec_info_to_tdes (int tran_index, int query_timeout,
       /* We use log_Clock_msec instead of calling gettimeofday
        * if the system supports atomic built-ins.
        */
-
-#if defined(HAVE_ATOMIC_BUILTINS)
-      tdes_p->query_start_time = log_Clock_msec;
-#else /* HAVE_ATOMIC_BUILTINS */
-      gettimeofday (&tv, NULL);
-      tdes_p->query_start_time = (tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
-#endif /* HAVE_ATOMIC_BUILTINS */
+      tdes_p->query_start_time = thread_get_log_clock_msec ();
 
       if (query_timeout > 0)
 	{
@@ -5470,7 +5480,6 @@ qmgr_set_query_exec_info_to_tdes (int tran_index, int query_timeout,
     }
 }
 
-#if defined (SERVER_MODE)
 /*
  * qmgr_reset_query_exec_info () - reset query_start_time and xasl_id of tdes
  *   return: void

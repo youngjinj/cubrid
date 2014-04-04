@@ -136,24 +136,6 @@ typedef struct xasl_node XASL_NODE;
 typedef struct pred_expr_with_context PRED_EXPR_WITH_CONTEXT;
 
 
-/*
- * COMPILE_CONTEXT cover from user input query string to gnerated xasl
- */
-typedef struct compile_context COMPILE_CONTEXT;
-struct compile_context
-{
-  XASL_NODE *xasl;
-
-  char *sql_user_text;		/* original query statement that user input */
-  int sql_user_text_len;	/* length of sql_user_text */
-
-  char *sql_hash_text;		/* rewrited query string which is used as hash key */
-
-  char *sql_plan_text;		/* plans for this query */
-  int sql_plan_alloc_size;	/* query_plan alloc size */
-};
-
-
 typedef struct xasl_stream XASL_STREAM;
 struct xasl_stream
 {
@@ -259,7 +241,8 @@ extern int qdata_evaluate_aggregate_list (THREAD_ENTRY * thread_p,
 					  alt_acc_list);
 extern int qdata_evaluate_aggregate_optimize (THREAD_ENTRY * thread_p,
 					      AGGREGATE_TYPE * agg_ptr,
-					      HFID * hfid);
+					      HFID * hfid,
+					      OID * partition_cls_oid);
 extern int qdata_evaluate_aggregate_hierarchy (THREAD_ENTRY * thread_p,
 					       AGGREGATE_TYPE * agg_ptr,
 					       HFID * root_hfid,
@@ -300,7 +283,8 @@ extern int execute_query (const XASL_ID * xasl_id, QUERY_ID * query_idp,
 			  int var_cnt, const DB_VALUE * varptr,
 			  QFILE_LIST_ID ** list_idp, QUERY_FLAG flag,
 			  CACHE_TIME * clt_cache_time,
-			  CACHE_TIME * srv_cache_time);
+			  CACHE_TIME * srv_cache_time,
+			  LC_LOCKHINT * lockhint);
 extern int prepare_and_execute_query (char *stream,
 				      int stream_size,
 				      QUERY_ID * query_id,

@@ -741,6 +741,7 @@ reset_template (OBJ_TEMPLATE * template_ptr)
   template_ptr->force_check_not_null = 0;
   template_ptr->function_key_modified = 0;
   template_ptr->bulk_flush = 0;
+  template_ptr->is_autoincrement_set = 0;
 }
 
 /*
@@ -895,6 +896,7 @@ make_template (MOP object, MOP classobj)
       template_ptr->force_check_not_null = 0;
       template_ptr->force_flush = 0;
       template_ptr->bulk_flush = 0;
+      template_ptr->is_autoincrement_set = 0;
       template_ptr->pruning_type = DB_NOT_PARTITIONED_CLASS;
       /*
        * Don't do this until we've initialized the other stuff;
@@ -1252,6 +1254,10 @@ populate_auto_increment (OBJ_TEMPLATE * template_ptr)
       if (data_status != NO_ERROR)
 	{
 	  goto auto_increment_error;
+	}
+      else
+	{
+	  template_ptr->is_autoincrement_set = 1;
 	}
     }
 
@@ -2626,6 +2632,8 @@ obt_apply_assignments (OBJ_TEMPLATE * template_ptr, int check_uniques,
 	      DB_VALUE old;
 	      DB_TYPE value_type;
 
+	      db_value_domain_init (&old, a->att->type->id,
+				    DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
 	      error = obj_get_value (object, a->att, mem, NULL, &old);
 	      if (error == NO_ERROR && !db_value_is_null (&old))
 		{

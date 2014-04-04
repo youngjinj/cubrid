@@ -170,7 +170,7 @@ public class UConnection {
 	private boolean needReconnection;
 	private UTimedDataInputStream input;
 	private DataOutputStream output;
-	public String CASIp;
+	public String CASIp = "";
 	public int CASPort;
 	public int processId;
 	public int casId;
@@ -181,7 +181,10 @@ public class UConnection {
 	private int lastIsolationLevel;
 	private int lastLockTimeout = LOCK_TIMEOUT_NOT_USED;
 	private boolean lastAutoCommit = true;
-	String dbname, user, passwd, url;
+	String dbname = "";
+	String user = "";
+	String passwd = "";
+	String url = null;
 	private ArrayList<String> altHosts = null;
 	private int connectedHostId = 0;
 	// jci 3.0
@@ -190,8 +193,7 @@ public class UConnection {
 	private int brokerVersion = 0;
 
 	private boolean isServerSideJdbc = false;
-	boolean skip_checkcas;
-	boolean need_checkcas;
+	boolean skip_checkcas = false;
 	Vector<UStatement> pooled_ustmts;
 	Vector<Integer> deferred_close_handle;
 	Object curThread;
@@ -230,11 +232,19 @@ public class UConnection {
 
 	UConnection(String ip, int port, String dbname, String user, String passwd,
 			String url) throws CUBRIDException {
-		CASIp = ip;
+		if (ip != null) {
+			CASIp = ip;
+		}
 		CASPort = port;
-		this.dbname = dbname;
-		this.user = user;
-		this.passwd = passwd;
+		if (dbname != null) {
+			this.dbname = dbname;
+		}
+		if (user != null) {
+			this.user = user;
+		}
+		if (passwd != null) {
+			this.passwd = passwd;
+		}
 		this.url = url;
 		update_executed = false;
 
@@ -245,9 +255,15 @@ public class UConnection {
 	UConnection(ArrayList<String> altHostList, String dbname, String user,
 			String passwd, String url) throws CUBRIDException {
 		setAltHosts(altHostList);
-		this.dbname = dbname;
-		this.user = user;
-		this.passwd = passwd;
+		if (dbname != null) {
+			this.dbname = dbname;
+		}
+		if (user != null) {
+			this.user = user;
+		}
+		if (passwd != null) {
+			this.passwd = passwd;
+		}
 		this.url = url;
 		update_executed = false;
 
@@ -303,21 +319,26 @@ public class UConnection {
 	}
 
 	public void tryConnect() throws CUBRIDException {
-	    	try {
-	    	    	setBeginTime();
-	    	    	checkReconnect();
-	    	    	endTransaction(true);
-		} catch (UJciException e) {
-		    	clientSocketClose();
-	    	    	e.toUError(errorHandler);
-	    	    	throw new CUBRIDException(errorHandler, e);
-		} catch (IOException e) {
-		    	clientSocketClose();
-		    	if (e instanceof SocketTimeoutException) {
-		    	    	throw new CUBRIDException(CUBRIDJDBCErrorCode.request_timeout, e);
-		    	}
-		    	throw new CUBRIDException(CUBRIDJDBCErrorCode.ioexception_in_stream, e);
+	    initLogger();
+	    try {
+		if (connectionProperties.getUseLazyConnection()) {
+		    needReconnection = true;
+		    return;
 		}
+		setBeginTime();
+		checkReconnect();
+		endTransaction(true);
+	    } catch (UJciException e) {
+		clientSocketClose();
+		e.toUError(errorHandler);
+		throw new CUBRIDException(errorHandler, e);
+	    } catch (IOException e) {
+		clientSocketClose();
+		if (e instanceof SocketTimeoutException) {
+		    throw new CUBRIDException(CUBRIDJDBCErrorCode.request_timeout, e);
+		}
+		throw new CUBRIDException(CUBRIDJDBCErrorCode.ioexception_in_stream, e);
+	    }
 	}
 
 	public void setAltHosts(ArrayList<String> altHostList)
@@ -371,7 +392,7 @@ public class UConnection {
 	}
 
 	public boolean getLogSlowQuery() {
-	    	return connectionProperties.getLogSlowQueris();
+	    	return connectionProperties.getLogSlowQueries();
 	}
 
 	synchronized public void addElementToSet(CUBRIDOID oid,
@@ -970,7 +991,6 @@ public class UConnection {
 	boolean isFirstPrepareInTran = !isActive();
 
 	skip_checkcas = true;
-	need_checkcas = false;
 
 	// first
 	try {
@@ -984,12 +1004,11 @@ public class UConnection {
 	    logException(e);
 	    errorHandler.setErrorCode(UErrorCode.ER_COMMUNICATION);
 	    errorHandler.setStackTrace(e.getStackTrace());
+	} finally {
+	    skip_checkcas = false;
 	}
 
 	if (isActive() && !isFirstPrepareInTran) {
-	    if (isErrorToReconnect(errorHandler.getJdbcErrorCode())) {
-		clientSocketClose();
-	    }
 	    return null;
 	}
 
@@ -1410,7 +1429,6 @@ public class UConnection {
 			return true;
 
 		if (skip_checkcas) {
-			need_checkcas = true;
 			return true;
 		}
 
@@ -1716,6 +1734,9 @@ public class UConnection {
 	}
 
 	UInputBuffer send_recv_msg() throws UJciException, IOException {
+		if (client == null) {
+			createJciException(UErrorCode.ER_COMMUNICATION);
+		}
 		return send_recv_msg(true);
 	}
 
@@ -2005,8 +2026,7 @@ public class UConnection {
 			*/
 			String id = "0";
 			UJCIUtil.copy_bytes(dbInfo, 608, 20, id);
-		}
-		else if (protoVersionIsAbove(PROTOCOL_V3)) {
+		} else if (protoVersionIsAbove(PROTOCOL_V3)) {
 			System.arraycopy(sessionId, 0, dbInfo, 608, 20);
 		} else {
 		    	UJCIUtil.copy_bytes(dbInfo, 608, 20, new Integer(oldSessionId).toString());
@@ -2015,7 +2035,6 @@ public class UConnection {
 		if (outBuffer == null) {
 			outBuffer = new UOutputBuffer(this);
 		}
-
 
 		if (pooled_ustmts == null) {
 			pooled_ustmts = new Vector<UStatement>();
@@ -2116,6 +2135,12 @@ public class UConnection {
 		return log;
     }
 
+    private void initLogger() {
+           if (connectionProperties.getLogOnException() || connectionProperties.getLogSlowQueries()) {
+               log = getLogger();
+           }
+    }
+
     public UJciException createJciException(int err) {
 		UJciException e = new UJciException(err);
 		if (connectionProperties == null || !connectionProperties.getLogOnException()) {
@@ -2154,7 +2179,7 @@ public class UConnection {
 
     private SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
     public void logSlowQuery(long begin, long end, String sql, UBindParameter p) {
-	if (connectionProperties == null || connectionProperties.getLogSlowQueris() != true) {
+	if (connectionProperties == null || connectionProperties.getLogSlowQueries() != true) {
 	    return;
 	}
 

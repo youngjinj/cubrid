@@ -966,8 +966,8 @@ $ LOADDB
 897 Décompression a échoué.
 898 Erreur de réplication: "%1$s"
 899 Demandes de partition non valides.
-900 Bibliothèque Java VM est introuvable:: %1$s. \nEn conséquence, appelant une procédure stockée java est interdit.
-901 Machine virtuelle Java ne peut pas être démarré: %1$s. \nEn conséquence, appelant une procédure stockée java est interdit.
+900 Bibliothèque Java VM est introuvable:: %1$s.
+901 Machine virtuelle Java ne peut pas être démarré: %1$s.
 902 Machine virtuelle Java ne fonctionne pas.
 903 Impossible de connecter Java VM: %1$s
 904 Nom incorrect du procédure stockée.
@@ -1213,6 +1213,11 @@ $ LOADDB
 1144 Timed out attempting to connect to %1$s. (timeout: %2$d sec(s))
 1145 To change the owner of a system class is not allowed.
 1146 volume identifier %1$d does not exist.
+1147 The size of XASL stream cache(%1$d) exceeds the max(%2$d). New entry is added although nothing is victimized bacause all cache entries are used.
+1148 The size of filter predicate stream cache(%1$d) exceeds the max(%2$d). New entry is added although nothing is victimized bacause all cache entries are used.
+1149 Cannot find the page %1$d of volume %2$d.
+1150 The page %1$d of volume %2$d is not a slotted page.
+1151 Context requires compatible collations.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Dernière erreur
@@ -1655,6 +1660,8 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 285 Expects %1$s for argument %2$s.
 286 Argument %1$s is missing.
 287 Unknown argument %1$s.
+288 Cannot remove all partitions, use DROP TABLE instead.
+289 The expression including %1$s is not allowed in this context.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Mémoire virtuelle épuisée: impossible d'allouer %1$d octets.

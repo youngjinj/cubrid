@@ -112,9 +112,6 @@ static int pruningset_to_spec_list (PRUNING_CONTEXT * pinfo,
 				    const PRUNING_BITSET * pruned);
 
 /* pruning operations */
-static int partition_find_root_class_oid (THREAD_ENTRY * thread_p,
-					  const OID * class_oid,
-					  OID * super_oid);
 static int partition_free_cache_entry (const void *key, void *data,
 				       void *args);
 static int partition_cache_pruning_context (PRUNING_CONTEXT * pinfo);
@@ -2297,7 +2294,7 @@ partition_init_pruning_context (PRUNING_CONTEXT * pinfo)
  *			one of the partitions
  * super_oid (in/out) : OID of the partitioned class
  */
-static int
+int
 partition_find_root_class_oid (THREAD_ENTRY * thread_p, const OID * class_oid,
 			       OID * super_oid)
 {
@@ -2487,16 +2484,8 @@ partition_clear_pruning_context (PRUNING_CONTEXT * pinfo)
     {
       if (pinfo->partitions != NULL)
 	{
-	  int i;
-
-	  for (i = 0; i < pinfo->count; i++)
-	    {
-	      if (pinfo->partitions[i].values != NULL)
-		{
-		  db_seq_free (pinfo->partitions[i].values);
-		}
-	    }
-	  db_private_free (pinfo->thread_p, pinfo->partitions);
+	  heap_clear_partition_info (pinfo->thread_p, pinfo->partitions,
+				     pinfo->count);
 	}
     }
 
@@ -2903,7 +2892,7 @@ partition_prune_index_scan (PRUNING_CONTEXT * pinfo)
       else if (pinfo->spec->indexptr->func_idx_col_id != -1)
 	{
 	  /* We are dealing with a function index, so all partitions qualify for
-           * the search.
+	   * the search.
 	   */
 	  pruningset_set_all (&pruned);
 	  status = MATCH_OK;
@@ -2911,9 +2900,10 @@ partition_prune_index_scan (PRUNING_CONTEXT * pinfo)
       else
 	{
 	  status = partition_match_index_key (pinfo,
-					      &pinfo->spec->indexptr->key_info,
-					      pinfo->spec->indexptr->range_type,
-					      &pruned);
+					      &pinfo->spec->indexptr->
+					      key_info,
+					      pinfo->spec->indexptr->
+					      range_type, &pruned);
 	}
     }
   if (status == MATCH_NOT_FOUND)
@@ -3847,7 +3837,7 @@ partition_load_aggregate_helper (PRUNING_CONTEXT * pcontext,
     }
 
   error = partition_is_global_index (pcontext->thread_p, pcontext,
-				     &pcontext->root_oid, root_btid, 
+				     &pcontext->root_oid, root_btid,
 				     &btree_type, &is_global_index);
   if (error != NO_ERROR)
     {

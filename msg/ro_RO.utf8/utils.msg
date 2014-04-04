@@ -67,6 +67,7 @@ $       46      genlocale
 $       47      dumplocale
 $       48      synccolldb
 $       49      tranlist
+$       50      prefetchlogdb
 
 $set 1 MSGCAT_UTIL_SET_GENERIC
 1 Lungime sau caracter invalid '%c' în numele bazei de date '%s'\n
@@ -115,9 +116,10 @@ Nume de utilitare de administrare disponibile:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s este un utilitar pentru SGDB.\n\
-Pentru informaţii suplimentare, accesaţi http://www.cubrid.com\n
+Pentru informaţii suplimentare, accesaţi http://www.cubrid.org\n
 12 Numele de utilitar '%1$s' este invalid.\nTastaţi 'cubrid --help' pentru informaţii despre utilizare.\n
 13 comanda '%1$s' este invalidă.\nTastaţi 'cubrid --help' pentru informaţii despre utilizare.\n
 14 Una sau mai multe proprietăţi obligatorii din fişierele de configurare nu au putut fi încarcate.\n
@@ -170,9 +172,10 @@ Utilitare de administrare disponibile:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s este un utilitar pentru SGBD.\n\
-Pentru informaţii suplimentare, accesaţi http://www.cubrid.com\n
+Pentru informaţii suplimentare, accesaţi http://www.cubrid.org\n
 24 utilitar CUBRID, versiunea %s\n\
 utilizare: %s service <comanda>\n\
 \n\
@@ -217,10 +220,12 @@ Comenzi disponibile:\n\
 utilizare: %s heartbeat <command> [args]\n\
 \n\
 Comenzi disponibile:\n\
-    start       [nume-baza-de-date]\n\
-    stop        [-i|nume-baza-de-date]\n\
-    copylogdb   <start|stop> nume-baza-de-date nume-nod\n\
-    applylogdb  <start|stop> nume-baza-de-date nume-nod\n\
+    start          [database-name]\n\
+    stop           [-i|database-name]\n\
+    copylogdb      <start|stop> database-name node-name\n\
+    applylogdb     <start|stop> database-name node-name\n\
+    prefetchlogdb  <start|stop> database-name node-name\n\
+    replication    <start|stop> node-name\n\
     status\n\
     reload\n
 31 Argumentul '%1$s' nu este necesar.\n
@@ -602,9 +607,6 @@ opţiuni valide:\n\
   -p, --ping-host                  list ping hosts used for CUBRID heartbeat\n\
   -D, --dereg-process=PID          încheie procesul ţintă şi îl elimină din lista de procese gestionate\n\
   -F, --reconfig-node-list         aplică configuraţia recent modificată pentru CUBRID heartbeat\n\
-  -U, --deactivate-heartbeat       dezactivează CUBRID heartbeat şi elimină nodul curent din grup\n\
-  -i, --immediately                Immediately kill active ones, if one of HA processes are not terminated while CUBRID heartbeat is shutting down; with -U option; default: disabled\n\
-  -T, --activate-heartbeat         activează CUBRID heartbeat şi nodul curent devine un membru al grupului de noduri\n\
   -V, --verbose                    activează emsaje de stare detaliate; implicit: dezactivate\n
 28 Regretăm, comandă necunoscută: %1$s\n
 29 Numele de gazdă pentru maşina locală nu a putut fi recuperat - abandon\n
@@ -617,7 +619,7 @@ opţiuni valide:\n\
 36 nu se poate executa shell-ul (%s) pentru %s, %s
 37 creare de proces (fork) %s, a întors %d, %s
 38 nu se poate executa %1$s
-39 -i(--immediately) option must be used with -U(--deactivate-heartbeat) option.\n
+39 -i(--immediately) option must be used with --deact-stop-all option.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -655,6 +657,7 @@ $set 18 MSGCAT_UTIL_SET_CHECKDB
 20 Au fost detectate unele inconsistenţe în baza de date.\n Vă rugăm accesaţi jurnalul de erori din \n\
 fişierul %1$s pentru informaţii suplimentare.\n
 21 %1$s: Clasa nu poate fi găsită. Va fi omisă.\n
+22 %1$s: Cannot find the index on class %2$s.\n
 60 \
 checkdb: Efectuează o verificare a consistenţei bazei de date.\n\
 utilizare: %1$s checkdb [OPŢIUNI] nume-bază-de-date [nume_clasă1 nume_clasă2 ...]\n\
@@ -665,8 +668,16 @@ opţiuni valide:\n\
   -r, --repair                   repară inconsistenţele detectate\n\
   -i, --input-class-file=FIŞIER  fişier de intrare cu numele claselor\n\
                                  implicit: se verifică toate clasele\n\
+  -I, --index-name             index name that will be checked only\n\
+                               default: check all indices\n\
       --check-prev-link        check only previous links of indices\n\
-      --repair-prev-link       repair previous links of indices\n
+      --repair-prev-link       repair previous links of indices\n\
+      --check-file-tracker     check all allocated pages of file\n\
+      --check-heap             check all pages of heap files\n\
+      --check-catalog          check catalog consistency\n\
+      --check-btree            check all btree indices\n\
+      --check-class-name       check class name consistency\n\
+      --check-btree-entries    check entries of btree consistency\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
@@ -1080,3 +1091,15 @@ opţiuni valide:\n\
   -s, --summary                afişează informaţii sumare despre tranzacţii\n\
       --sort-key=COLUMN_NUMBER numărul coloanei de sortare\n\
       --reverse                inversează rezultatul sortării\n
+
+$set 50 MSGCAT_UTIL_SET_PREFETCHLOGDB
+22 The server was not configured for HA.\n
+23 Prefetch feature is disabled.\n
+58 HA feature is not supported in this platform.\n
+59 prefetchlogdb cannot run as standalone mode.\n
+60 \
+prefetchlogdb: Prefetch log pages from the server.\n\
+usage: %1$s prefetchlogdb [OPTION] database-name\n\
+\n\
+valid options:\n\
+  -L, --log-path=PATH         directory PATH for copied log volumes\n

@@ -644,6 +644,17 @@ namespace dbgw
   {
   }
 
+  InvalidPropertyValueException::InvalidPropertyValueException(
+      const char *szFileName, long lValue,
+      const char *szCorrectValueSet) throw() :
+    Exception(
+        ExceptionFactory::create(
+            DBGW_ER_XML_INVALID_PROPERTY_VALUE,
+            (boost::format("The value of property %d have to be [%s] (%s).")
+                % lValue % szCorrectValueSet % szFileName).str()))
+  {
+  }
+
   InvalidXMLSyntaxException::InvalidXMLSyntaxException(
       const char *szXmlErrorMessage, const char *szFileName, int nLine,
       int nCol) throw() :
@@ -849,6 +860,14 @@ namespace dbgw
         ExceptionFactory::create(DBGW_ER_EXTERNAL_JSON_MISMATCH_TYPE,
             (boost::format("Failed to decode json, (%s) is not %s") %
                 szKey % szType).str()))
+  {
+  }
+
+  MaxWaitTimeoutException::MaxWaitTimeoutException(
+      unsigned long ulMaxWaitTimeout) throw() :
+    Exception(ExceptionFactory::create(DBGW_ER_CLIENT_MAX_WAIT_TIMEOUT,
+        (boost::format("Connection wait timeout occurred. (%lu msec)")
+            % ulMaxWaitTimeout).str()))
   {
   }
 

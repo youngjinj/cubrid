@@ -71,6 +71,14 @@ typedef enum
   RANGE_MAX = 1
 } RANGE_MIN_MAX_ENUM;
 
+typedef enum
+{
+  STATEMENT_SET_FOLD_NOTHING = 0,
+  STATEMENT_SET_FOLD_AS_NULL,
+  STATEMENT_SET_FOLD_AS_ARG1,
+  STATEMENT_SET_FOLD_AS_ARG2
+} STATEMENT_SET_FOLD;
+
 typedef struct PT_VALUE_LINKS
 {
   PT_NODE *vallink;
@@ -2625,13 +2633,6 @@ pt_is_compatible_without_cast (PARSER_CONTEXT * parser,
 	}
     }
 
-  if (dest_sci->type_enum == PT_TYPE_ENUMERATION
-      || src->type_enum == PT_TYPE_ENUMERATION)
-    {
-      /* enumerations might not have the same domain */
-      return false;
-    }
-
   if (PT_IS_STRING_TYPE (dest_sci->type_enum))
     {
       assert_release (dest_sci->prec != 0);
@@ -2658,6 +2659,16 @@ pt_is_compatible_without_cast (PARSER_CONTEXT * parser,
 	{
 	  return false;
 	}
+    }
+  else if (dest_sci->type_enum == PT_TYPE_ENUMERATION)
+    {
+      /* enumerations might not have the same domain */
+      return false;
+    }
+  else if (PT_IS_COLLECTION_TYPE (dest_sci->type_enum))
+    {
+      /* collections might not have the same domain */
+      return false;
     }
 
   return true;			/* is compatible, no need to cast */
@@ -5656,6 +5667,8 @@ pt_find_partition_column_count (PT_NODE * expr, PT_NODE ** name_node)
     case PT_CONV:
     case PT_BIN:
     case PT_MD5:
+    case PT_TO_BASE64:
+    case PT_FROM_BASE64:
     case PT_TRIM:
     case PT_LTRIM:
     case PT_RTRIM:
@@ -6340,8 +6353,7 @@ pt_check_partitions (PARSER_CONTEXT * parser, PT_NODE * stmt, MOP dbobj)
 	  || hashsize_nodep->info.value.data_value.i < 1
 	  || hashsize_nodep->info.value.data_value.i > MAX_PARTITIONS)
 	{
-	  PT_ERRORm (parser, stmt,
-		     MSGCAT_SET_PARSER_SEMANTIC,
+	  PT_ERRORm (parser, stmt, MSGCAT_SET_PARSER_SEMANTIC,
 		     MSGCAT_SEMANTIC_INVALID_PARTITION_SIZE);
 	}
     }
@@ -7270,13 +7282,21 @@ pt_check_alter_partition (PARSER_CONTEXT * parser, PT_NODE * stmt, MOP dbobj)
   if (psize == NULL)
     {				/* RANGE or LIST */
       orig_cnt = orig_cnt - name_cnt + parts_cnt;
-      if ((orig_cnt < 1 || orig_cnt > MAX_PARTITIONS)
-	  && cmd != PT_PROMOTE_PARTITION)
+      if (cmd != PT_PROMOTE_PARTITION)
 	{
-	  PT_ERRORmf (parser, stmt,
-		      MSGCAT_SET_PARSER_SEMANTIC,
-		      MSGCAT_SEMANTIC_INVALID_PARTITION_SIZE, class_name);
-	  goto check_end;
+	  if (orig_cnt < 1 && cmd == PT_DROP_PARTITION)
+	    {
+	      PT_ERRORm (parser, stmt, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_CANNOT_DROP_ALL_PARTITIONS);
+	      goto check_end;
+	    }
+
+	  if (orig_cnt < 1 || orig_cnt > MAX_PARTITIONS)
+	    {
+	      PT_ERRORm (parser, stmt, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_INVALID_PARTITION_SIZE);
+	      goto check_end;
+	    }
 	}
 
       if (ptype.data.i == PT_PARTITION_RANGE)
@@ -7407,9 +7427,8 @@ pt_check_alter_partition (PARSER_CONTEXT * parser, PT_NODE * stmt, MOP dbobj)
 
       if (orig_cnt < 1 || psize->data.i < 1 || orig_cnt > MAX_PARTITIONS)
 	{
-	  PT_ERRORmf (parser, stmt,
-		      MSGCAT_SET_PARSER_SEMANTIC,
-		      MSGCAT_SEMANTIC_INVALID_PARTITION_SIZE, class_name);
+	  PT_ERRORm (parser, stmt, MSGCAT_SET_PARSER_SEMANTIC,
+		     MSGCAT_SEMANTIC_INVALID_PARTITION_SIZE);
 	  goto check_end;
 	}
     }
@@ -9947,6 +9966,10 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
   PT_NODE *entity, *derived_table;
   PT_ASSIGNMENTS_HELPER ea;
   PT_NODE *sort_spec = NULL;
+  bool arg1_is_null, arg2_is_null;
+  STATEMENT_SET_FOLD fold_as;
+  PT_NODE *arg1, *arg2;
+  PT_NODE *union_orderby, *union_orderby_for, *union_limit;
 
   assert (parser != NULL);
 
@@ -10189,6 +10212,135 @@ pt_semantic_check_local (PARSER_CONTEXT * parser, PT_NODE * node,
       if (pt_has_error (parser))
 	{
 	  break;
+	}
+
+      arg1 = node->info.query.q.union_.arg1;
+      arg2 = node->info.query.q.union_.arg2;
+
+      arg1_is_null = arg2_is_null = false;
+      if (arg1->node_type == PT_VALUE && arg1->type_enum == PT_TYPE_NULL)
+	{
+	  arg1_is_null = true;
+	}
+      if (arg2->node_type == PT_VALUE && arg2->type_enum == PT_TYPE_NULL)
+	{
+	  arg2_is_null = true;
+	}
+
+      if (!arg1_is_null && !arg2_is_null)
+	{
+	  /* nothing to fold at this moment. */
+	  fold_as = STATEMENT_SET_FOLD_NOTHING;
+	}
+      else if (arg1_is_null && arg2_is_null)
+	{
+	  /* fold the entire node as null */
+	  fold_as = STATEMENT_SET_FOLD_AS_NULL;
+	}
+      else if (arg1_is_null && !arg2_is_null)
+	{
+	  if (node->node_type == PT_UNION)
+	    {
+	      fold_as = STATEMENT_SET_FOLD_AS_ARG2;
+	    }
+	  else if (node->node_type == PT_INTERSECTION
+		   || node->node_type == PT_DIFFERENCE)
+	    {
+	      fold_as = STATEMENT_SET_FOLD_AS_NULL;
+	    }
+	}
+      else
+	{
+	  assert (!arg1_is_null && arg2_is_null);
+
+	  if (node->node_type == PT_UNION || node->node_type == PT_DIFFERENCE)
+	    {
+	      fold_as = STATEMENT_SET_FOLD_AS_ARG1;
+	    }
+	  else if (node->node_type == PT_INTERSECTION)
+	    {
+	      fold_as = STATEMENT_SET_FOLD_AS_NULL;
+	    }
+	}
+
+      if (fold_as == STATEMENT_SET_FOLD_AS_NULL)
+	{
+	  /* fold the statement set as null, we don't need to fold 
+	   * orderby clause clause because we return null.
+	   */
+	  if (arg1_is_null)
+	    {
+	      node->info.query.q.union_.arg1 = NULL;	/* to save arg1 to fold */
+	      parser_free_tree (parser, node);
+
+	      node = arg1;	/* to fold the query with null */
+	    }
+	  else
+	    {
+	      node->info.query.q.union_.arg2 = NULL;	/* to save arg2 to fold */
+	      parser_free_tree (parser, node);
+
+	      node = arg2;	/* to fold the query with null */
+	    }
+
+	  /* don't need do the following steps */
+	  break;
+	}
+      else if (fold_as == STATEMENT_SET_FOLD_AS_ARG1
+	       || fold_as == STATEMENT_SET_FOLD_AS_ARG2)
+	{
+	  /* to save union's orderby or limit clause to arg1 or arg2 */
+	  union_orderby = node->info.query.order_by;
+	  union_orderby_for = node->info.query.orderby_for;
+	  union_limit = node->info.query.limit;
+
+	  node->info.query.order_by = NULL;
+	  node->info.query.orderby_for = NULL;
+	  node->info.query.limit = NULL;
+
+	  if (fold_as == STATEMENT_SET_FOLD_AS_ARG1)
+	    {
+	      node->info.query.q.union_.arg1 = NULL;	/* to save arg1 to fold */
+	    }
+	  else
+	    {
+	      node->info.query.q.union_.arg2 = NULL;	/* to save arg2 to fold */
+	    }
+
+	  parser_free_tree (parser, node);
+
+	  /* to fold the query with remaining parts */
+	  if (fold_as == STATEMENT_SET_FOLD_AS_ARG1)
+	    {
+	      node = arg1;
+	    }
+	  else
+	    {
+	      node = arg2;
+	    }
+
+	  if (union_orderby != NULL)
+	    {
+	      node->info.query.order_by = union_orderby;
+	      node->info.query.orderby_for = union_orderby_for;
+	    }
+
+	  if (union_limit != NULL)
+	    {
+	      node->info.query.limit = union_limit;
+	    }
+
+	  /* check the union's orderby or limit clause if present */
+	  pt_check_order_by (parser, node);
+
+	  /* don't need do the following steps */
+	  break;
+	}
+      else
+	{
+	  assert (fold_as == STATEMENT_SET_FOLD_NOTHING);
+
+	  /* do nothing */
 	}
 
       pt_check_into_clause (parser, node);
@@ -11296,6 +11448,11 @@ pt_check_and_replace_hostvar (PARSER_CONTEXT * parser, PT_NODE * node,
 	  value = pt_dbval_to_value (parser, dbval);
 	  if (value)
 	    {
+	      if (PT_HAS_COLLATION (value->type_enum))
+		{
+		  value->info.value.print_charset = true;
+		  value->info.value.print_collation = true;
+		}
 	      PT_NODE_MOVE_NUMBER_OUTERLINK (value, node);
 	      parser_free_tree (parser, node);
 	      node = value;
@@ -12504,6 +12661,7 @@ void
 pt_no_double_insert_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 {
   PT_NODE *attr = NULL, *spec = NULL;
+  PT_NODE *entity_name;
 
   if (stmt == NULL || stmt->node_type != PT_INSERT)
     {
@@ -12511,10 +12669,20 @@ pt_no_double_insert_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
     }
 
   spec = stmt->info.insert.spec;
-  if (spec->info.spec.entity_name->info.name.original == NULL)
+  entity_name = spec->info.spec.entity_name;
+  if (entity_name == NULL)
     {
       assert (false);
-      PT_ERROR (parser, spec->info.spec.entity_name, er_msg ());
+      PT_ERROR (parser, stmt,
+		"The parse tree of the insert statement is incorrect."
+		" entity_name of spec must be set.");
+      return;
+    }
+
+  if (entity_name->info.name.original == NULL)
+    {
+      assert (false);
+      PT_ERROR (parser, entity_name, er_msg ());
       return;
     }
 
@@ -12528,7 +12696,7 @@ pt_no_double_insert_assignments (PARSER_CONTEXT * parser, PT_NODE * stmt)
 	    {
 	      PT_ERRORmf2 (parser, attr2, MSGCAT_SET_PARSER_SEMANTIC,
 			   MSGCAT_SEMANTIC_GT_1_ASSIGNMENT_TO,
-			   spec->info.spec.entity_name->info.name.original,
+			   entity_name->info.name.original,
 			   attr2->info.name.original);
 	      return;
 	    }
@@ -13270,14 +13438,6 @@ pt_check_order_by (PARSER_CONTEXT * parser, PT_NODE * query)
   bool ordbynum_flag;
   char *r_str = NULL;
   int error;
-  /* check for non-null RANGE term */
-  PT_NODE *from, *spec, *entity_name;
-  const char *cls_name;
-  DB_OBJECT *cls_obj;
-  DB_ATTRIBUTE *attr;
-  DB_DOMAIN *dp;
-  DB_VALUE value;
-  PT_NODE *llim, *expr, *rnge;
   bool skip_orderby_num = false;
 
   /* initinalize local variables */
@@ -13606,78 +13766,14 @@ pt_check_order_by (PARSER_CONTEXT * parser, PT_NODE * query)
 	}
 
       /* at here, query->node_type == PT_SELECT
-         set order_by domain info */
+       * set order_by domain info
+       */
       if (col->type_enum != PT_TYPE_NONE && col->type_enum != PT_TYPE_MAYBE)
 	{			/* is resolved */
 	  order->info.sort_spec.pos_descr.dom =
 	    pt_xasl_node_to_domain (parser, col);
 	}
-
-      /* check for adding col's indexable(i.e., non-null full RANGE) term */
-      col = pt_get_end_path_node (col);
-
-      if (col->node_type == PT_NAME
-	  && col->info.name.original
-	  && (from = query->info.query.q.select.from)
-	  && (spec = pt_find_spec (parser, from, col))
-	  && (entity_name = spec->info.spec.entity_name)
-	  && (cls_name = entity_name->info.name.original))
-	{
-	  /* get class mop */
-	  cls_obj = entity_name->info.name.db_object;
-	  if (cls_obj == NULL)
-	    {
-	      cls_obj = entity_name->info.name.db_object =
-		db_find_class (cls_name);
-	    }
-
-	  /* get attribute */
-	  attr = db_get_attribute (cls_obj, col->info.name.original);
-
-	  /* check for non-null constraint */
-	  if (cls_obj && attr && db_attribute_is_non_null (attr))
-	    {
-	      /* check for indexable order by col */
-	      if (db_attribute_is_unique (attr)
-		  || db_attribute_is_reverse_unique (attr)
-		  || db_attribute_is_indexed (attr))
-		{
-		  if ((dp = db_attribute_domain (attr))
-		      && (db_value_domain_min (&value,
-					       TP_DOMAIN_TYPE (dp),
-					       dp->precision,
-					       dp->scale,
-					       dp->codeset,
-					       dp->collation_id,
-					       &dp->enumeration) == NO_ERROR)
-		      && (llim = pt_dbval_to_value (parser, &value))
-		      && (temp = parser_copy_tree (parser, col))
-		      && (expr = parser_new_node (parser, PT_EXPR))
-		      && (rnge = parser_new_node (parser, PT_EXPR)))
-		    {
-		      /* add range term; 'attr range ( min_val ge_inf )' */
-		      expr->type_enum = PT_TYPE_LOGICAL;
-		      expr->info.expr.op = PT_RANGE;
-		      expr->info.expr.arg1 = temp;
-		      expr->info.expr.arg2 = rnge;
-		      expr->info.expr.location = spec->info.spec.location;
-		      rnge->type_enum = PT_TYPE_LOGICAL;
-		      rnge->info.expr.op = PT_BETWEEN_GE_INF;
-		      rnge->info.expr.arg1 = llim;
-		      rnge->info.expr.arg2 = NULL;
-		      rnge->info.expr.location = 0;
-		      pr_clear_value (&value);
-
-		      /* mark as non-null RANGE term for index scan */
-		      PT_EXPR_INFO_SET_FLAG (expr, PT_EXPR_INFO_FULL_RANGE);
-		      query->info.query.q.select.where =
-			parser_append_node (expr,
-					    query->info.query.q.select.where);
-		    }
-		}
-	    }
-	}
-    }
+    }				/* for (order = order_by; ...) */
 
   /* now check for duplicate entries.
    *  - If they match on ascending/descending, remove the second.

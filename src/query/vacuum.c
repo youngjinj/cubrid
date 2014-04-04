@@ -463,6 +463,10 @@ static int
 vacuum_indexes (THREAD_ENTRY * thread_p, OR_CLASSREP * class_rep, HFID * hfid,
 		OID * remove_oids, int n_remove_oids)
 {
+#if 0
+/* This code is disabled to resolve compile errors caused by merge.
+ * It will be removed with new vacuum implementation.
+ */
   int i;
   int error_code = NO_ERROR;
 
@@ -491,6 +495,9 @@ vacuum_indexes (THREAD_ENTRY * thread_p, OR_CLASSREP * class_rep, HFID * hfid,
   /* Now mark the objects in heap file accordingly */
   return vacuum_remove_oids_from_heap (thread_p, hfid, remove_oids,
 				       n_remove_oids);
+#else /* !0 */
+  return NO_ERROR;
+#endif
 }
 
 /*

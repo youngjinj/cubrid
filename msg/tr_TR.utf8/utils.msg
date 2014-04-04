@@ -67,6 +67,7 @@ $       46      genlocale
 $       47      dumplocale
 $       48      synccolldb
 $       49      tranlist
+$       50      prefetchlogdb
 
 $set 1 MSGCAT_UTIL_SET_GENERIC
 1 Geçersiz uzunluk veya karakter '%c' veritabanı adı '%s' \n
@@ -115,9 +116,10 @@ Mevcut yönetici yardımcı programı-adı:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s DBMS için bir araçtır.\n\
-Daha fazla bilgi için bkz:http://www.cubrid.com\n
+Daha fazla bilgi için bkz:http://www.cubrid.org\n
 12 '%1$s' yardımcı programı-adı geçersiz.\nTür 'cubrid --help' kullanıma bak.\n
 13 '%1$s' komutu geçersiz.\nTür 'cubrid --help' kullanıma bak.\n
 14 Yapılandırma dosyaları bir veya daha fazla zorunlu özellikleri yüklenemedi.\n
@@ -170,9 +172,10 @@ Mevcut yönetici programları:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s DBMS için bir araçtır.\n\
-Daha fazla bilgi için bkz: http://www.cubrid.com\n
+Daha fazla bilgi için bkz: http://www.cubrid.org\n
 24 cubrid yardımcı programı, sürüm %s\n\
 kullanım: %s service <komut>\n\
 \n\
@@ -217,10 +220,12 @@ Mevcut komut:\n\
 kullanım: %s heartbeat <komut> [args]\n\
 \n\
 Mevcut komut:\n\
-    start       [database-name]\n\
-    stop        [-i|database-name]\n\
-    copylogdb   <start|stop> database-name node-name\n\
-    applylogdb  <start|stop> database-name node-name\n\
+    start          [database-name]\n\
+    stop           [-i|database-name]\n\
+    copylogdb      <start|stop> database-name node-name\n\
+    applylogdb     <start|stop> database-name node-name\n\
+    prefetchlogdb  <start|stop> database-name node-name\n\
+    replication    <start|stop> node-name\n\
     status\n\
     reload\n
 31 '%1$s' argümanı gerekli değildir.\n
@@ -583,9 +588,6 @@ geçerli seçenekler:\n\
   -p, --ping-host                  list ping hosts used for CUBRID heartbeat\n\
   -D, --dereg-process=PID          hedef işlemi çıkmak ve yönetilen süreç girdileri kaldırmak\n\
   -F, --reconfig-node-list         yakın zamanda değişenleri CUBRID sinyal yapılandırmayı uygulamak\n\
-  -U, --deactivate-heartbeat       CUBRID sinyal özelliği devre dışı bırakmak ve düğüm grubundan geçerli düğüm kaldırmak\n\
-  -i, --immediately                Immediately kill active ones, if one of HA processes are not terminated while CUBRID heartbeat is shutting down; with -U option; default: disabled\n\
-  -T, --activate-heartbeat         etkinleştirme CUBRID sinyal özelliği ve geçerli düğüm düğümün grubunun bir üyesi olur\n\
   -V, --verbose                    Ayrıntılı durum Mesajını sağlamak; varsayılan: Devre Dışı\n
 28 Üzgünüz, bilinmeyen komut: %1$s\n
 29 Yerel bilgisayar için ana bilgisayar adı alınamadı - durduruluyor\n
@@ -598,7 +600,7 @@ geçerli seçenekler:\n\
 36 %s kabuk çalıştırma (%s), %s yapamam
 37 süreç çatalı %s,%d,%s döndürülen
 38 %1$s yürütemez
-39 -i(--immediately) option must be used with -U(--deactivate-heartbeat) option.\n
+39 -i(--immediately) option must be used with --deact-stop-all option.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -634,6 +636,7 @@ geçerli seçenekler:\n\
 $set 18 MSGCAT_UTIL_SET_CHECKDB
 20 Bazı tutarsızlıklar veritabanı tespit edildi.\n ek bilgi için error_log_file %1$s başvurun.\n
 21 %1$s: Sınıf bulamıyor. Bu dahil edilmeyecektir.\n
+22 %1$s: Cannot find the index on class %2$s.\n
 60 \
 checkdb:Veritabanının tutarlılığını denetleyin.\n\
 kullanım: %1$s checkdb [SEÇENEK] database-name [class_name1 class_name2 ...]\n\
@@ -644,8 +647,16 @@ geçerli seçenekler:\n\
   -r, --repair                 tutarsızlık bulunduğu zaman onar\n\
   -i, --input-class-file=FILE  sınıf adları girişi FILE\n\
                                varsayılan: tüm sınıfları kontrol edin\n\
+  -I, --index-name             index name that will be checked only\n\
+                               default: check all indices\n\
       --check-prev-link        check only previous links of indices\n\
-      --repair-prev-link       repair previous links of indices\n
+      --repair-prev-link       repair previous links of indices\n\
+      --check-file-tracker     check all allocated pages of file\n\
+      --check-heap             check all pages of heap files\n\
+      --check-catalog          check catalog consistency\n\
+      --check-btree            check all btree indices\n\
+      --check-class-name       check class name consistency\n\
+      --check-btree-entries    check entries of btree consistency\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
@@ -1055,3 +1066,15 @@ geçerli seçenekler:\n\
   -s, --summary                geçişin sonuçlandırılmış bilgisini yazdır\n\
       --sort-key=COLUMN_NUMBER Sıralanacak sütun numarası\n\
       --reverse                Sıralama sonucu ters\n
+
+$set 50 MSGCAT_UTIL_SET_PREFETCHLOGDB
+22 The server was not configured for HA.\n
+23 Prefetch feature is disabled.\n
+58 HA feature is not supported in this platform.\n
+59 prefetchlogdb cannot run as standalone mode.\n
+60 \
+prefetchlogdb: Prefetch log pages from the server.\n\
+usage: %1$s prefetchlogdb [OPTION] database-name\n\
+\n\
+valid options:\n\
+  -L, --log-path=PATH         directory PATH for copied log volumes\n

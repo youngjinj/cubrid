@@ -93,6 +93,7 @@ extern int str_identifier = '\0';
 
 
 [aA][bB][sS][oO][lL][uU][tT][eE]					{ begin_token(yytext);   return ABSOLUTE_; }
+[aA][cC][cC][eE][sS][sS]						{ begin_token(yytext);   return ACCESS; }
 [aA][cC][tT][iI][oO][nN]						{ begin_token(yytext);   return ACTION; }
 [aA][cC][tT][iI][vV][eE]						{ begin_token(yytext);  
 										csql_yylval.cptr = pt_makename(yytext);
@@ -111,6 +112,9 @@ extern int str_identifier = '\0';
 										return ANALYZE; }
 [aA][nN][dD]								{ begin_token(yytext);   return AND; }
 [aA][nN][yY]								{ begin_token(yytext);   return ANY; }
+[aA][rR][cC][hH][iI][vV][eE]						{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return ARCHIVE; }
 [aA][rR][eE]								{ begin_token(yytext);   return ARE; }
 [aA][sS]								{ begin_token(yytext);   return AS; }
 [aA][sS][cC]								{ begin_token(yytext);   return ASC; }
@@ -144,9 +148,12 @@ extern int str_identifier = '\0';
 [bB][rR][eE][aA][dD][tT][hH]						{ begin_token(yytext);   return BREADTH; }
 [bB][yY]								{ begin_token(yytext);   return BY; }
 [cC][aA][lL][lL]							{ begin_token(yytext);   return CALL; }
-[cC][aA][cC][hH][eE]							{ begin_token(yytext);   
+[cC][aA][cC][hH][eE]							{ begin_token(yytext);
 										csql_yylval.cptr = pt_makename(yytext);
 										return CACHE; }
+[cC][aA][pP][aA][cC][iI][tT][yY]					{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return CAPACITY; }
 [cC][aA][sS][cC][aA][dD][eE]						{ begin_token(yytext);   return CASCADE; }
 [cC][aA][sS][cC][aA][dD][eE][dD]					{ begin_token(yytext);   return CASCADED; }
 [cC][aA][sS][eE]							{ begin_token(yytext);   return CASE; }
@@ -338,6 +345,9 @@ extern int str_identifier = '\0';
 [hH][eE][aA][dD][eE][rR]						{ begin_token(yytext);
 										csql_yylval.cptr = pt_makename(yytext);
 										return HEADER; }
+[hH][eE][aA][pP]							{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return HEAP; }
 [hH][oO][uU][rR]							{ begin_token(yytext);   return HOUR_; }
 [hH][oO][uU][rR]_[mM][iI][lL][lL][iI][sS][eE][cC][oO][nN][dD]		{ begin_token(yytext);   return HOUR_MILLISECOND; }
 [hH][oO][uU][rR]_[sS][eE][cC][oO][nN][dD]				{ begin_token(yytext);   return HOUR_SECOND; }
@@ -435,6 +445,9 @@ extern int str_identifier = '\0';
 [lL][oO][cC][kK]							{ begin_token(yytext);   
 										csql_yylval.cptr = pt_makename(yytext);
 										return LOCK_; }
+[lL][oO][gG]								{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return LOG; }
 [lL][oO][oO][pP]							{ begin_token(yytext);   return LOOP; }
 [lL][oO][wW][eE][rR]							{ begin_token(yytext);   return LOWER; }
 [mM][aA][tT][cC][hH]							{ begin_token(yytext);   return MATCH; }
@@ -528,6 +541,9 @@ extern int str_identifier = '\0';
 [oO][wW][nN][eE][rR]							{ begin_token(yytext);   
 																		csql_yylval.cptr = pt_makename(yytext);
 																		return OWNER; }
+[pP][aA][gG][eE]							{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return PAGE; }
 [pP][aA][rR][aA][mM][eE][tT][eE][rR][sS]				{ begin_token(yytext);   return PARAMETERS; }
 [pP][aA][rR][tT][iI][aA][lL]						{ begin_token(yytext);   return PARTIAL; }
 [pP][aA][rR][tT][iI][tT][iI][oO][nN]					{ begin_token(yytext);   
@@ -655,6 +671,13 @@ extern int str_identifier = '\0';
 [sS][hH][oO][rR][tT]							{ begin_token(yytext);   return SmallInt; }
 [sS][iI][mM][iI][lL][aA][rR]						{ begin_token(yytext);   return SIMILAR; }
 [sS][iI][zZ][eE]							{ begin_token(yytext);   return SIZE_; }
+[sS][lL][oO][tT][sS]							{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return SLOTS; }
+[sS][lL][oO][tT][tT][eE][dD]						{ begin_token(yytext);
+										csql_yylval.cptr = pt_makename(yytext);
+										return SLOTTED; }
+
 [sS][oO][mM][eE]							{ begin_token(yytext);   return SOME; }
 [sS][qQ][lL]								{ begin_token(yytext);   return SQL; }
 [sS][qQ][lL][cC][oO][dD][eE]						{ begin_token(yytext);   return SQLCODE; }
@@ -917,7 +940,26 @@ _[uU][tT][fF]8[']		{
 								      
 								    for (i = 1; i < len - 1 && IS_BLANK_CHAR (yytext[i]); i++)
 								    ;
+
 								    csql_yylval.cptr = pt_makename(&yytext[i]);
+
+								    /* Distinguish some special words/tokens from normal identifiers (IdName). 
+								     * Because these special words (companioned with DOT/RIGHT_ARROW) are 
+								     * reserved for special use purpose in some clauses' context.
+								     */
+								    if (strcasecmp (csql_yylval.cptr, "NONE") == 0)
+								      {
+								        return NONE;
+								      }
+								    else if (strcasecmp (csql_yylval.cptr, "IDENTITY") == 0)
+								      {
+								        return IDENTITY;
+								      }
+								    else if (strcasecmp (csql_yylval.cptr, "OBJECT") == 0)
+								      {
+								        return OBJECT;
+								      }
+
 								    return IdName;
 								  }
 								}
@@ -944,7 +986,26 @@ _[uU][tT][fF]8[']		{
 								    
 								    for (i = 2; i < len - 1 && IS_BLANK_CHAR (yytext[i]); i++)
 								    ;
+								    
 								    csql_yylval.cptr = pt_makename(&yytext[i]);
+
+								    /* Distinguish some special words/tokens from normal identifiers (IdName). 
+								     * Because these special words (companioned with DOT/RIGHT_ARROW) are 
+								     * reserved for special use purpose in some clauses' context.
+								     */
+								    if (strcasecmp (csql_yylval.cptr, "NONE") == 0)
+								      {
+								        return NONE;
+								      }
+								    else if (strcasecmp (csql_yylval.cptr, "IDENTITY") == 0)
+								      {
+								        return IDENTITY;
+								      }
+								    else if (strcasecmp (csql_yylval.cptr, "OBJECT") == 0)
+								      {
+								        return OBJECT;
+								      }
+
 								    return IdName;
 								  }
 								}

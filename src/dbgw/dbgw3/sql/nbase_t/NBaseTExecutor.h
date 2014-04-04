@@ -26,6 +26,18 @@ namespace dbgw
   namespace sql
   {
 
+    class _NBaseTGlobal
+    {
+    public:
+      virtual ~_NBaseTGlobal();
+
+      void registerCsList(const char *szHost, int nPort);
+      static trait<_NBaseTGlobal>::sp getInstance();
+
+    private:
+      _NBaseTGlobal();
+    };
+
     class NBaseTExecutor
     {
     public:

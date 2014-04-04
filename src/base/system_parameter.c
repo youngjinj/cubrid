@@ -92,18 +92,6 @@ static const char sysprm_error_log_file[] = "cub_client.err";
 static const char sysprm_conf_file_name[] = "cubrid.conf";
 static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
-#define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
-#define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
-
-#define PRM_NAME_AUTO_VACUUM_ENABLED "auto_vacuum_enabled"
-#define PRM_NAME_AUTO_VACUUM_INTERVAL "auto_vacuum_interval_in_secs"
-#define PRM_NAME_AUTO_VACUUM_THRESHOLD "auto_vacuum_default_threshold"
-#define PRM_NAME_AUTO_VACUUM_RATIO "auto_vacuum_default_ratio"
-
-#define PRM_NAME_OBJECT_PRINT_FORMAT_OID "print_object_as_oid"
-
-#define PRM_NAME_SCAN_HEAP_PAGE_VACUUM_ENABLED "scan_heap_page_vacuum_enabled"
-
 /*
  * System variable names
  */
@@ -521,6 +509,8 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 
 #define PRM_NAME_SQL_TRACE_SLOW "sql_trace_slow"
 
+#define PRM_NAME_LOG_TRACE_FLUSH_TIME "log_trace_flush_time"
+
 #define PRM_NAME_INTL_COLLATION "intl_collation"
 
 #define PRM_NAME_GENERIC_VOL_PREALLOC_SIZE "generic_vol_prealloc_size"
@@ -546,6 +536,49 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_USE_BTREE_FENCE_KEY "use_btree_fence_key"
 
 #define PRM_NAME_QA_BTREE_RANDOM_EXIT "qa_btree_random_exit"
+
+#define PRM_NAME_OPTIMIZER_ENABLE_MERGE_JOIN "optimizer_enable_merge_join"
+#define PRM_NAME_OPTIMIZER_RESERVE_01 "optimizer_reserve_01"
+#define PRM_NAME_OPTIMIZER_RESERVE_02 "optimizer_reserve_02"
+#define PRM_NAME_OPTIMIZER_RESERVE_03 "optimizer_reserve_03"
+#define PRM_NAME_OPTIMIZER_RESERVE_04 "optimizer_reserve_04"
+#define PRM_NAME_OPTIMIZER_RESERVE_05 "optimizer_reserve_05"
+#define PRM_NAME_OPTIMIZER_RESERVE_06 "optimizer_reserve_06"
+#define PRM_NAME_OPTIMIZER_RESERVE_07 "optimizer_reserve_07"
+#define PRM_NAME_OPTIMIZER_RESERVE_08 "optimizer_reserve_08"
+#define PRM_NAME_OPTIMIZER_RESERVE_09 "optimizer_reserve_09"
+#define PRM_NAME_OPTIMIZER_RESERVE_10 "optimizer_reserve_10"
+#define PRM_NAME_OPTIMIZER_RESERVE_11 "optimizer_reserve_11"
+#define PRM_NAME_OPTIMIZER_RESERVE_12 "optimizer_reserve_12"
+#define PRM_NAME_OPTIMIZER_RESERVE_13 "optimizer_reserve_13"
+#define PRM_NAME_OPTIMIZER_RESERVE_14 "optimizer_reserve_14"
+#define PRM_NAME_OPTIMIZER_RESERVE_15 "optimizer_reserve_15"
+#define PRM_NAME_OPTIMIZER_RESERVE_16 "optimizer_reserve_16"
+#define PRM_NAME_OPTIMIZER_RESERVE_17 "optimizer_reserve_17"
+#define PRM_NAME_OPTIMIZER_RESERVE_18 "optimizer_reserve_18"
+#define PRM_NAME_OPTIMIZER_RESERVE_19 "optimizer_reserve_19"
+#define PRM_NAME_OPTIMIZER_RESERVE_20 "optimizer_reserve_20"
+
+#define PRM_NAME_HA_REPL_ENABLE_SERVER_SIDE_UPDATE "ha_repl_enable_server_side_update"
+#define PRM_NAME_PB_LRU_HOT_RATIO "lru_hot_ratio"
+
+#define PRM_NAME_HA_PREFETCHLOGDB_ENABLE "ha_prefetchlogdb_enable"
+#define PRM_NAME_HA_PREFETCHLOGDB_MAX_THREAD_COUNT "ha_prefetchlogdb_max_thread_count"
+#define PRM_NAME_HA_PREFETCHLOGDB_PAGE_DISTANCE "ha_prefetchlogdb_page_distance"
+#define PRM_NAME_HA_PREFETCHLOGDB_MAX_PAGE_COUNT "ha_prefetchlogdb_max_page_count"
+
+#define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
+#define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
+
+#define PRM_NAME_AUTO_VACUUM_ENABLED "auto_vacuum_enabled"
+#define PRM_NAME_AUTO_VACUUM_INTERVAL "auto_vacuum_interval_in_secs"
+#define PRM_NAME_AUTO_VACUUM_THRESHOLD "auto_vacuum_default_threshold"
+#define PRM_NAME_AUTO_VACUUM_RATIO "auto_vacuum_default_ratio"
+
+#define PRM_NAME_OBJECT_PRINT_FORMAT_OID "print_object_as_oid"
+
+#define PRM_NAME_SCAN_HEAP_PAGE_VACUUM_ENABLED "scan_heap_page_vacuum_enabled"
+
 /*
  * Note about ERROR_LIST and INTEGER_LIST type
  * ERROR_LIST type is an array of bool type with the size of -(ER_LAST_ERROR)
@@ -1659,6 +1692,11 @@ bool PRM_SQL_TRACE_EXECUTION_PLAN = false;
 static bool prm_sql_trace_execution_plan_default = false;
 static unsigned int prm_sql_trace_execution_plan_flag = 0;
 
+int PRM_LOG_TRACE_FLUSH_TIME_MSECS = 0;
+static int prm_log_trace_flush_time_msecs_default = 0;
+static int prm_log_trace_flush_time_msecs_lower = 0;
+static unsigned int prm_log_trace_flush_time_msecs_flag = 0;
+
 char *PRM_INTL_COLLATION = NULL;
 static char *prm_intl_collation_default = NULL;
 static unsigned int prm_intl_collation_flag = 0;
@@ -1722,6 +1760,121 @@ static float prm_pb_aout_ratio_upper = 3.0;
 static float prm_pb_aout_ratio_lower = 0;
 static unsigned int prm_pb_aout_ratio_flag = 0;
 
+bool PRM_OPTIMIZER_ENABLE_MERGE_JOIN = false;
+static bool prm_optimizer_enable_merge_join_default = false;
+static unsigned int prm_optimizer_enable_merge_join_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_01 = false;
+static bool prm_optimizer_reserve_01_default = false;
+static unsigned int prm_optimizer_reserve_01_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_02 = false;
+static bool prm_optimizer_reserve_02_default = false;
+static unsigned int prm_optimizer_reserve_02_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_03 = false;
+static bool prm_optimizer_reserve_03_default = false;
+static unsigned int prm_optimizer_reserve_03_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_04 = false;
+static bool prm_optimizer_reserve_04_default = false;
+static unsigned int prm_optimizer_reserve_04_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_05 = false;
+static bool prm_optimizer_reserve_05_default = false;
+static unsigned int prm_optimizer_reserve_05_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_06 = false;
+static bool prm_optimizer_reserve_06_default = false;
+static unsigned int prm_optimizer_reserve_06_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_07 = false;
+static bool prm_optimizer_reserve_07_default = false;
+static unsigned int prm_optimizer_reserve_07_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_08 = false;
+static bool prm_optimizer_reserve_08_default = false;
+static unsigned int prm_optimizer_reserve_08_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_09 = false;
+static bool prm_optimizer_reserve_09_default = false;
+static unsigned int prm_optimizer_reserve_09_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_10 = false;
+static bool prm_optimizer_reserve_10_default = false;
+static unsigned int prm_optimizer_reserve_10_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_11 = false;
+static bool prm_optimizer_reserve_11_default = false;
+static unsigned int prm_optimizer_reserve_11_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_12 = false;
+static bool prm_optimizer_reserve_12_default = false;
+static unsigned int prm_optimizer_reserve_12_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_13 = false;
+static bool prm_optimizer_reserve_13_default = false;
+static unsigned int prm_optimizer_reserve_13_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_14 = false;
+static bool prm_optimizer_reserve_14_default = false;
+static unsigned int prm_optimizer_reserve_14_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_15 = false;
+static bool prm_optimizer_reserve_15_default = false;
+static unsigned int prm_optimizer_reserve_15_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_16 = false;
+static bool prm_optimizer_reserve_16_default = false;
+static unsigned int prm_optimizer_reserve_16_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_17 = false;
+static bool prm_optimizer_reserve_17_default = false;
+static unsigned int prm_optimizer_reserve_17_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_18 = false;
+static bool prm_optimizer_reserve_18_default = false;
+static unsigned int prm_optimizer_reserve_18_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_19 = false;
+static bool prm_optimizer_reserve_19_default = false;
+static unsigned int prm_optimizer_reserve_19_flag = 0;
+
+bool PRM_OPTIMIZER_RESERVE_20 = false;
+static bool prm_optimizer_reserve_20_default = false;
+static unsigned int prm_optimizer_reserve_20_flag = 0;
+
+bool PRM_HA_REPL_ENABLE_SERVER_SIDE_UPDATE = true;
+static bool prm_ha_repl_enable_server_side_update_default = true;
+static bool prm_ha_repl_enable_server_side_update_flag = 0;
+
+float PRM_PB_LRU_HOT_RATIO = 0.4f;
+static float prm_pb_lru_hot_ratio_default = 0.4f;
+static float prm_pb_lru_hot_ratio_upper = 0.95f;
+static float prm_pb_lru_hot_ratio_lower = 0.05f;
+static unsigned int prm_pb_lru_hot_ratio_flag = 0;
+
+bool PRM_HA_PREFETCHLOGDB_ENABLE = false;
+static unsigned int prm_ha_prefetchlogdb_enable_flag = 0;
+static unsigned int prm_ha_prefetchlogdb_enable_default = false;
+
+unsigned int PRM_HA_PREFETCHLOGDB_MAX_THREAD_COUNT = 4;
+static unsigned int prm_ha_prefetchlogdb_max_thread_count_flag = 0;
+static unsigned int prm_ha_prefetchlogdb_max_thread_count_default = 4;
+static unsigned int prm_ha_prefetchlogdb_max_thread_count_lower = 1;
+static unsigned int prm_ha_prefetchlogdb_max_thread_count_upper = INT_MAX;
+
+unsigned int PRM_HA_PREFETCHLOGDB_PAGE_DISTANCE = 500;
+static unsigned int prm_ha_prefetchlogdb_page_distance_flag = 0;
+static unsigned int prm_ha_prefetchlogdb_page_distance_default = 500;
+static unsigned int prm_ha_prefetchlogdb_page_distance_lower = 50;
+static unsigned int prm_ha_prefetchlogdb_page_distance_upper = INT_MAX;
+
+unsigned int PRM_HA_PREFETCHLOGDB_MAX_PAGE_COUNT = 1000;
+static unsigned int prm_ha_prefetchlogdb_max_page_count_flag = 0;
+static unsigned int prm_ha_prefetchlogdb_max_page_count_default = 1000;
+static unsigned int prm_ha_prefetchlogdb_max_page_count_lower = 0;
+static unsigned int prm_ha_prefetchlogdb_max_page_count_upper = INT_MAX;
 
 bool PRM_MVCC_ENABLED = false;
 static bool prm_mvcc_enabled_default = false;
@@ -3936,6 +4089,17 @@ static SYSPRM_PARAM prm_Def[] = {
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_LOG_TRACE_FLUSH_TIME,
+   (PRM_USER_CHANGE | PRM_FOR_SERVER | PRM_TIME_UNIT),
+   PRM_INTEGER,
+   (void *) &prm_log_trace_flush_time_msecs_flag,
+   (void *) &prm_log_trace_flush_time_msecs_default,
+   (void *) &PRM_LOG_TRACE_FLUSH_TIME_MSECS,
+   (void *) NULL,
+   (void *) &prm_log_trace_flush_time_msecs_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
   {PRM_NAME_INTL_COLLATION,
    (PRM_FOR_CLIENT | PRM_FOR_SESSION | PRM_USER_CHANGE | PRM_FOR_HA_CONTEXT),
    PRM_STRING,
@@ -4085,6 +4249,282 @@ static SYSPRM_PARAM prm_Def[] = {
    (void *) &PRM_QA_BTREE_RANDOM_EXIT,
    (void *) NULL,
    (void *) NULL,
+   (void *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_ENABLE_MERGE_JOIN,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_enable_merge_join_flag,
+   (void *) &prm_optimizer_enable_merge_join_default,
+   (void *) &PRM_OPTIMIZER_ENABLE_MERGE_JOIN,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_01,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_01_flag,
+   (void *) &prm_optimizer_reserve_01_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_01,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_02,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_02_flag,
+   (void *) &prm_optimizer_reserve_02_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_02,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_03,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_03_flag,
+   (void *) &prm_optimizer_reserve_03_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_03,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_04,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_04_flag,
+   (void *) &prm_optimizer_reserve_04_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_04,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_05,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_05_flag,
+   (void *) &prm_optimizer_reserve_05_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_05,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_06,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_06_flag,
+   (void *) &prm_optimizer_reserve_06_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_06,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_07,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_07_flag,
+   (void *) &prm_optimizer_reserve_07_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_07,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_08,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_08_flag,
+   (void *) &prm_optimizer_reserve_08_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_08,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_09,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_09_flag,
+   (void *) &prm_optimizer_reserve_09_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_09,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_10,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_10_flag,
+   (void *) &prm_optimizer_reserve_10_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_10,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_11,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_11_flag,
+   (void *) &prm_optimizer_reserve_11_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_11,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_12,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_12_flag,
+   (void *) &prm_optimizer_reserve_12_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_12,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_13,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_13_flag,
+   (void *) &prm_optimizer_reserve_13_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_13,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_14,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_14_flag,
+   (void *) &prm_optimizer_reserve_14_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_14,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_15,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_15_flag,
+   (void *) &prm_optimizer_reserve_15_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_15,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_16,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_16_flag,
+   (void *) &prm_optimizer_reserve_16_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_16,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_17,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_17_flag,
+   (void *) &prm_optimizer_reserve_17_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_17,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_18,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_18_flag,
+   (void *) &prm_optimizer_reserve_18_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_18,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_19,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_19_flag,
+   (void *) &prm_optimizer_reserve_19_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_19,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_OPTIMIZER_RESERVE_20,
+   (PRM_FOR_CLIENT | PRM_USER_CHANGE | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_optimizer_reserve_20_flag,
+   (void *) &prm_optimizer_reserve_20_default,
+   (void *) &PRM_OPTIMIZER_RESERVE_20,
+   (void *) NULL, (void *) NULL,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_REPL_ENABLE_SERVER_SIDE_UPDATE,
+   (PRM_FOR_HA | PRM_HIDDEN),
+   PRM_BOOLEAN,
+   (void *) &prm_ha_repl_enable_server_side_update_flag,
+   (void *) &prm_ha_repl_enable_server_side_update_default,
+   (void *) &PRM_HA_REPL_ENABLE_SERVER_SIDE_UPDATE,
+   (void *) NULL,
+   (void *) NULL,
+   (void *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_PB_LRU_HOT_RATIO,
+   (PRM_FOR_SERVER | PRM_RELOADABLE),
+   PRM_FLOAT,
+   (void *) &prm_pb_lru_hot_ratio_flag,
+   (void *) &prm_pb_lru_hot_ratio_default,
+   (void *) &PRM_PB_LRU_HOT_RATIO,
+   (void *) &prm_pb_lru_hot_ratio_upper,
+   (void *) &prm_pb_lru_hot_ratio_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_PREFETCHLOGDB_ENABLE,
+   (PRM_FOR_HA | PRM_FOR_CLIENT),
+   PRM_BOOLEAN,
+   (void *) &prm_ha_prefetchlogdb_enable_flag,
+   (void *) &prm_ha_prefetchlogdb_enable_default,
+   (void *) &PRM_HA_PREFETCHLOGDB_ENABLE,
+   (void *) NULL,
+   (void *) NULL,
+   (void *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_PREFETCHLOGDB_MAX_THREAD_COUNT,
+   (PRM_FOR_HA | PRM_FOR_SERVER),
+   PRM_INTEGER,
+   (void *) &prm_ha_prefetchlogdb_max_thread_count_flag,
+   (void *) &prm_ha_prefetchlogdb_max_thread_count_default,
+   (void *) &PRM_HA_PREFETCHLOGDB_MAX_THREAD_COUNT,
+   (void *) &prm_ha_prefetchlogdb_max_thread_count_upper,
+   (void *) &prm_ha_prefetchlogdb_max_thread_count_lower,
+   (void *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_PREFETCHLOGDB_PAGE_DISTANCE,
+   (PRM_FOR_HA | PRM_FOR_CLIENT | PRM_HIDDEN),
+   PRM_INTEGER,
+   (void *) &prm_ha_prefetchlogdb_page_distance_flag,
+   (void *) &prm_ha_prefetchlogdb_page_distance_default,
+   (void *) &PRM_HA_PREFETCHLOGDB_PAGE_DISTANCE,
+   (void *) &prm_ha_prefetchlogdb_page_distance_upper,
+   (void *) &prm_ha_prefetchlogdb_page_distance_lower,
+   (void *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_HA_PREFETCHLOGDB_MAX_PAGE_COUNT,
+   (PRM_FOR_HA | PRM_FOR_CLIENT),
+   PRM_INTEGER,
+   (void *) &prm_ha_prefetchlogdb_max_page_count_flag,
+   (void *) &prm_ha_prefetchlogdb_max_page_count_default,
+   (void *) &PRM_HA_PREFETCHLOGDB_MAX_PAGE_COUNT,
+   (void *) &prm_ha_prefetchlogdb_max_page_count_upper,
+   (void *) &prm_ha_prefetchlogdb_max_page_count_lower,
    (void *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},

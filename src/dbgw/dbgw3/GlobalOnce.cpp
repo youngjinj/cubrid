@@ -18,10 +18,21 @@
  */
 
 #include "dbgw3/Common.h"
+#include "dbgw3/Logger.h"
 #include "dbgw3/system/Mutex.h"
 #include "dbgw3/GlobalOnce.h"
 #if defined(USE_NCLAVIS)
 #include "dbgw3/NClavisClient.h"
+#endif /* defined(USE_NCLAVIS) */
+#ifdef DBGW_MYSQL
+#include "dbgw3/sql/mysql/MySQLCommon.h"
+#include "dbgw3/sql/mysql/MySQLConnection.h"
+#elif DBGW_NBASE_T
+#include "dbgw3/sql/nbase_t/NBaseTCommon.h"
+#include "dbgw3/sql/nbase_t/NBaseTExecutor.h"
+#elif DBGW_ALL
+#include "dbgw3/sql/mysql/MySQLCommon.h"
+#include "dbgw3/sql/mysql/MySQLConnection.h"
 #endif
 
 namespace dbgw
@@ -44,6 +55,14 @@ namespace dbgw
 
 #if defined(USE_NCLAVIS)
     _NClavisGlobal::getInstance();
+#endif /* defined(USE_NCLAVIS) */
+
+#ifdef DBGW_MYSQL
+    sql::_MySQLGlobal::getInstance();
+#elif DBGW_NBASE_T
+    sql::_NBaseTGlobal::getInstance();
+#elif DBGW_ALL
+    sql::_MySQLGlobal::getInstance();
 #endif
   }
 

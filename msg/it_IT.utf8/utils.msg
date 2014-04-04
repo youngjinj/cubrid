@@ -67,6 +67,7 @@ $       46      genlocale
 $       47      dumplocale
 $       48      synccolldb
 $       49      tranlist
+$       50      prefetchlogdb
 
 $set 1 MSGCAT_UTIL_SET_GENERIC
 1 Lunghezza non valida o un carattere '%c' non valido nel nome del database '%s'\n
@@ -115,9 +116,10 @@ Utilità admin disponibile:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s è un tool per DBMS.\n\
-Per ulteriori informazioni, vedere http://www.cubrid.com\n
+Per ulteriori informazioni, vedere http://www.cubrid.org\n
 12 '%1$s' nome-utilità non è valido.\nDigitare 'cubrid --help' per aiuto.\n
 13 '%1$s' comando non valido.\nDigitare 'cubrid --help' per aiuto.\n
 14 Impossibile caricare una o più proprietà obbligatorie nei file di configurazione.\n
@@ -170,9 +172,10 @@ Utilità amministrazione disponibili:\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s è un tool per DBMS.\n\
-Per ulteriori informazioni, vedere http://www.cubrid.com\n
+Per ulteriori informazioni, vedere http://www.cubrid.org\n
 24 utilità cubrid, versione %s\n\
 uso: %s service <commando>\n\
 \n\
@@ -217,10 +220,12 @@ Commandi disponibili:\n\
 uso: %s heartbeat <commando> [args]\n\
 \n\
 Commandi disponibili:\n\
-    start       [database-name]\n\
-    stop        [-i|database-name]\n\
-    copylogdb   <start|stop> database-name node-name\n\
-    applylogdb  <start|stop> database-name node-name\n\
+    start          [database-name]\n\
+    stop           [-i|database-name]\n\
+    copylogdb      <start|stop> database-name node-name\n\
+    applylogdb     <start|stop> database-name node-name\n\
+    prefetchlogdb  <start|stop> database-name node-name\n\
+    replication    <start|stop> node-name\n\
     status\n\
     reload\n
 31 argomento '%1$s' non è necessaria.\n
@@ -583,9 +588,6 @@ opzioni valide:\n\
   -p, --ping-host                  list ping hosts used for CUBRID heartbeat\n\
   -D, --dereg-process=PID          uscire dal processo di destinazione e rimuoverlo dalle voci del processi managed\n\
   -F, --reconfig-node-list         applicare la configurazione CUBRID heartbeat recentemente cambiato\n\
-  -U, --deactivate-heartbeat       disattivare CUBRID heartbeat e rimuovere il nodo corrente dal gruppo di nodi\n\
-  -i, --immediately                Immediately kill active ones, if one of HA processes are not terminated while CUBRID heartbeat is shutting down; with -U option; default: disabled\n\
-  -T, --activate-heartbeat         attivare CUBRID heartbeat e nodo corrente diventa un membro del gruppo di nodi\n\
   -V, --verbose                    attivare i messaggi dettagliati di stato; predefinito: non attivo\n
 28 Siamo spiacente, comando sconosciuto: %1$s\n
 29 Non puo ottenere il nome host per local host - annullare\n
@@ -598,7 +600,7 @@ opzioni valide:\n\
 36 non può eseguire shell (%s) per %s, %s
 37 process fork %s, ritorno %d, %s
 38 non può eseguire %1$s
-39 -i(--immediately) option must be used with -U(--deactivate-heartbeat) option.\n
+39 -i(--immediately) option must be used with --deact-stop-all option.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -634,6 +636,7 @@ opzioni valide:\n\
 $set 18 MSGCAT_UTIL_SET_CHECKDB
 20 Nel database sono state rilevate alcune incongruenze.\n Si prega di consultare error_log_file %1$s per ulteriori informazioni.\n
 21 %1$s: Impossibile trovare la classe. Verranno omesse.\n
+22 %1$s: Cannot find the index on class %2$s.\n
 60 \
 checkdb: Verificare la coerenza del database.\n\
 uso: %1$s checkdb [OPZIONE] nome-database [class_name1 class_name2 ...]\n\
@@ -644,8 +647,16 @@ opzioni valide:\n\
   -r, --repair                 riparare quando incoerenza si trova\n\
   -i, --input-class-file=FILE  FILE di input di nomi di classe\n\
                                predefinito: verificare tutte le classi\n\
+  -I, --index-name             index name that will be checked only\n\
+                               default: check all indices\n\
       --check-prev-link        check only previous links of indices\n\
-      --repair-prev-link       repair previous links of indices\n
+      --repair-prev-link       repair previous links of indices\n\
+      --check-file-tracker     check all allocated pages of file\n\
+      --check-heap             check all pages of heap files\n\
+      --check-catalog          check catalog consistency\n\
+      --check-btree            check all btree indices\n\
+      --check-class-name       check class name consistency\n\
+      --check-btree-entries    check entries of btree consistency\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
@@ -1055,3 +1066,15 @@ opzioni valide:\n\
   -s, --summary                stampa informazioni riepilogative della transazione\n\
       --sort-key=COLUMN_NUMBER numero di colonna da ordinare\n\
       --reverse                invertire l'ordinamento\n
+
+$set 50 MSGCAT_UTIL_SET_PREFETCHLOGDB
+22 The server was not configured for HA.\n
+23 Prefetch feature is disabled.\n
+58 HA feature is not supported in this platform.\n
+59 prefetchlogdb cannot run as standalone mode.\n
+60 \
+prefetchlogdb: Prefetch log pages from the server.\n\
+usage: %1$s prefetchlogdb [OPTION] database-name\n\
+\n\
+valid options:\n\
+  -L, --log-path=PATH         directory PATH for copied log volumes\n

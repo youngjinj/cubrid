@@ -893,10 +893,8 @@ logwr_flush_header_page (void)
   er_log_debug (ARG_FILE_LINE,
 		"logwr_flush_header_page, ha_server_state=%s, ha_file_status=%s\n",
 		css_ha_server_state_string (logwr_Gl.hdr.ha_server_state),
-		logwr_Gl.hdr.ha_file_status ==
-		LOG_HA_FILESTAT_SYNCHRONIZED ? "sync" :
-		logwr_Gl.hdr.ha_file_status ==
-		LOG_HA_FILESTAT_ARCHIVED ? "archived" : "clear");
+		logwr_log_ha_filestat_to_string (logwr_Gl.
+						 hdr.ha_file_status));
 }
 
 /*
@@ -1341,6 +1339,17 @@ logwr_copy_log_file (const char *db_name, const char *log_path, int mode)
       if ((error = logwr_get_log_pages (&ctx)) != NO_ERROR)
 	{
 	  ctx.last_error = error;
+
+	  if (error == ER_HA_LW_FAILED_GET_LOG_PAGE)
+	    {
+#if !defined(WINDOWS)
+	      hb_deregister_from_master ();
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HB_PROCESS_EVENT,
+		      2,
+		      "Encountered an unrecoverable error "
+		      "and will shut itself down", "");
+#endif /* !WINDOWS */
+	    }
 	}
       else
 	{
@@ -1395,6 +1404,29 @@ logwr_copy_log_file (const char *db_name, const char *log_path, int mode)
 }
 #endif /* !CS_MODE */
 
+/*
+ * logwr_log_ha_filestat_to_string() - return the string alias of enum value
+ *
+ * return: constant string
+ *
+ *   val(in):
+ */
+const char *
+logwr_log_ha_filestat_to_string (enum LOG_HA_FILESTAT val)
+{
+  switch (val)
+    {
+    case LOG_HA_FILESTAT_CLEAR:
+      return "CLEAR";
+    case LOG_HA_FILESTAT_ARCHIVED:
+      return "ARCHIVED";
+    case LOG_HA_FILESTAT_SYNCHRONIZED:
+      return "SYNCHRONIZED";
+    default:
+      return "UNKNOWN";
+    }
+}
+
 #if defined(SERVER_MODE)
 static int logwr_register_writer_entry (LOGWR_ENTRY ** wr_entry_p,
 					THREAD_ENTRY * thread_p,
@@ -1405,8 +1437,9 @@ static int logwr_pack_log_pages (THREAD_ENTRY * thread_p, char *logpg_area,
 				 int *logpg_used_size, int *status,
 				 LOGWR_ENTRY * entry, bool copy_from_file);
 static void logwr_cs_exit (THREAD_ENTRY * thread_p, bool * check_cs_own);
-static void logwr_write_end (LOGWR_INFO * writer_info,
-			     LOGWR_ENTRY * entry, int status);
+static void logwr_write_end (THREAD_ENTRY * thread_p,
+			     LOGWR_INFO * writer_info, LOGWR_ENTRY * entry,
+			     int status);
 static bool logwr_is_delayed (LOGWR_ENTRY * entry);
 static void logwr_update_last_eof_lsa (LOGWR_ENTRY * entry);
 
@@ -1458,6 +1491,8 @@ logwr_register_writer_entry (LOGWR_ENTRY ** wr_entry_p,
       entry->thread_p = thread_p;
       entry->fpageid = fpageid;
       entry->mode = mode;
+      entry->start_copy_time = 0;
+
       entry->status = LOGWR_STATUS_DELAY;
       LSA_SET_NULL (&entry->tmp_last_eof_lsa);
       LSA_SET_NULL (&entry->last_eof_lsa);
@@ -1472,6 +1507,7 @@ logwr_register_writer_entry (LOGWR_ENTRY ** wr_entry_p,
       if (entry->status != LOGWR_STATUS_DELAY)
 	{
 	  entry->status = LOGWR_STATUS_WAIT;
+	  entry->start_copy_time = 0;
 	}
     }
 
@@ -1722,12 +1758,32 @@ logwr_cs_exit (THREAD_ENTRY * thread_p, bool * check_cs_own)
 }
 
 static void
-logwr_write_end (LOGWR_INFO * writer_info, LOGWR_ENTRY * entry, int status)
+logwr_write_end (THREAD_ENTRY * thread_p, LOGWR_INFO * writer_info,
+		 LOGWR_ENTRY * entry, int status)
 {
   int rv;
+  int tran_index;
+  int prev_status;
+  INT64 saved_start_time;
+
   rv = pthread_mutex_lock (&writer_info->flush_end_mutex);
+
+  prev_status = entry->status;
+  saved_start_time = entry->start_copy_time;
+
   if (entry != NULL && logwr_unregister_writer_entry (entry, status))
     {
+      if (prev_status == LOGWR_STATUS_FETCH
+	  && writer_info->trace_last_writer == true)
+	{
+	  assert (saved_start_time > 0);
+	  writer_info->last_writer_elapsed_time =
+	    thread_get_log_clock_msec () - saved_start_time;
+
+	  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+	  logtb_get_client_ids (tran_index,
+				&writer_info->last_writer_client_info);
+	}
       pthread_cond_signal (&writer_info->flush_end_cond);
     }
   pthread_mutex_unlock (&writer_info->flush_end_mutex);
@@ -1883,7 +1939,8 @@ xlogwr_get_log_pages (THREAD_ENTRY * thread_p, LOG_PAGEID first_pageid,
 	      if (logwr_is_delayed (entry))
 		{
 		  is_interrupted = true;
-		  logwr_write_end (writer_info, entry, LOGWR_STATUS_DELAY);
+		  logwr_write_end (thread_p, writer_info, entry,
+				   LOGWR_STATUS_DELAY);
 		  continue;
 		}
 
@@ -1935,11 +1992,16 @@ xlogwr_get_log_pages (THREAD_ENTRY * thread_p, LOG_PAGEID first_pageid,
 	  rv =
 	    pthread_cond_wait (&writer_info->flush_wait_cond,
 			       &writer_info->flush_wait_mutex);
+	  assert_release (writer_info->flush_completed == true);
 	}
-      assert_release (writer_info->flush_completed == true);
-
       rv = pthread_mutex_unlock (&writer_info->flush_wait_mutex);
 
+      if (entry->status == LOGWR_STATUS_FETCH)
+	{
+	  rv = pthread_mutex_lock (&writer_info->wr_list_mutex);
+	  entry->start_copy_time = thread_get_log_clock_msec ();
+	  pthread_mutex_unlock (&writer_info->wr_list_mutex);
+	}
 
       /* In case of async mode, unregister the writer and wakeup LFT to finish */
       /*
@@ -1959,7 +2021,7 @@ xlogwr_get_log_pages (THREAD_ENTRY * thread_p, LOG_PAGEID first_pageid,
 	       || status != LOGWR_STATUS_DONE)))
 	{
 	  logwr_cs_exit (thread_p, &check_cs_own);
-	  logwr_write_end (writer_info, entry, status);
+	  logwr_write_end (thread_p, writer_info, entry, status);
 	  need_cs_exit_after_send = false;
 	}
 
@@ -1986,7 +2048,7 @@ xlogwr_get_log_pages (THREAD_ENTRY * thread_p, LOG_PAGEID first_pageid,
       if (need_cs_exit_after_send)
 	{
 	  logwr_cs_exit (thread_p, &check_cs_own);
-	  logwr_write_end (writer_info, entry, status);
+	  logwr_write_end (thread_p, writer_info, entry, status);
 	}
 
       /* Reset the arguments for the next request */
@@ -2006,7 +2068,7 @@ error:
 		thread_p->tid, error_code);
 
   logwr_cs_exit (thread_p, &check_cs_own);
-  logwr_write_end (writer_info, entry, status);
+  logwr_write_end (thread_p, writer_info, entry, status);
 
   db_private_free_and_init (thread_p, logpg_area);
 
@@ -2051,4 +2113,5 @@ logwr_get_min_copied_fpageid (void)
 
   return (min_fpageid);
 }
+
 #endif /* SERVER_MODE */

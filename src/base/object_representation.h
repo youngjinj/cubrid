@@ -1141,6 +1141,7 @@ struct or_buf
 extern int or_rep_id (RECDES * record);
 extern int or_set_rep_id (RECDES * record, int repid);
 extern int or_chn (RECDES * record);
+extern int or_set_chn (RECDES * record, int chn);
 extern char *or_class_name (RECDES * record);
 extern void or_mvcc_get_header (RECDES * record,
 				MVCC_REC_HEADER * mvcc_header);
@@ -1191,6 +1192,7 @@ extern char *or_pack_loid (char *ptr, LOID * loid);
 extern char *or_pack_hfid (const char *ptr, const HFID * hfid);
 extern char *or_pack_btid (char *buf, BTID * btid);
 extern char *or_pack_ehid (char *buf, EHID * btid);
+extern char *or_pack_recdes (char *buf, RECDES * recdes);
 extern char *or_pack_log_lsa (const char *ptr, const LOG_LSA * lsa);
 extern char *or_unpack_log_lsa (char *ptr, LOG_LSA * lsa);
 extern char *or_unpack_set (char *ptr, SETOBJ ** set,
@@ -1244,6 +1246,7 @@ extern char *or_unpack_hfid (char *ptr, HFID * hfid);
 extern char *or_unpack_hfid_array (char *ptr, int n, HFID ** hfids);
 extern char *or_unpack_btid (char *buf, BTID * btid);
 extern char *or_unpack_ehid (char *buf, EHID * btid);
+extern char *or_unpack_recdes (char *buf, RECDES ** recdes);
 extern char *or_unpack_listid (char *ptr, void *listid_ptr);
 extern char *or_unpack_unbound_listid (char *ptr, void **listid_ptr);
 extern char *or_unpack_lock (char *ptr, LOCK * lock);
@@ -1277,6 +1280,7 @@ extern int or_packed_varbit_length (int bitlen);
 extern int or_varbit_length (int bitlen);
 extern int or_packed_varchar_length (int charlen);
 extern int or_varchar_length (int charlen);
+extern int or_packed_recdesc_length (int length);
 
 /*
  * to avoid circular dependencies, don't require the definition of QFILE_LIST_ID in

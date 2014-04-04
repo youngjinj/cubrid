@@ -26,6 +26,19 @@
 
 #ident "$Id$"
 
+#define LA_RETRY_ON_ERROR(error) \
+  ((error == ER_LK_UNILATERALLY_ABORTED)              || \
+   (error == ER_LK_OBJECT_TIMEOUT_SIMPLE_MSG)         || \
+   (error == ER_LK_OBJECT_TIMEOUT_CLASS_MSG)          || \
+   (error == ER_LK_OBJECT_TIMEOUT_CLASSOF_MSG)        || \
+   (error == ER_LK_PAGE_TIMEOUT)                      || \
+   (error == ER_PAGE_LATCH_TIMEDOUT)                  || \
+   (error == ER_PAGE_LATCH_ABORTED)                   || \
+   (error == ER_LK_OBJECT_DL_TIMEOUT_SIMPLE_MSG)      || \
+   (error == ER_LK_OBJECT_DL_TIMEOUT_CLASS_MSG)       || \
+   (error == ER_LK_OBJECT_DL_TIMEOUT_CLASSOF_MSG)     || \
+   (error == ER_LK_DEADLOCK_CYCLE_DETECTED))
+
 #if defined (CS_MODE)
 int
 la_log_page_check (const char *database_name, const char *log_path,
@@ -42,6 +55,8 @@ void la_print_log_arv_header (const char *database_name,
 void la_print_delay_info (LOG_LSA working_lsa, LOG_LSA target_lsa,
 			  float process_rate);
 
+extern int lp_prefetch_log_file (const char *database_name,
+				 const char *log_path);
 #endif /* CS_MODE */
 
 #endif /* _LOG_APPLIER_HEADER_ */

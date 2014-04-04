@@ -1460,6 +1460,12 @@
 #define ER_AU_CANT_ALTER_OWNER_OF_SYSTEM_CLASS      -1145
 #define ER_DIAG_VOLID_NOT_EXIST                     -1146
 
+#define ER_ALL_PLAN_CACHE_ENTRIES_ARE_FIXED         -1147
+#define ER_ALL_FILTER_PRED_CACHE_ENTRIES_ARE_FIXED  -1148
+
+#define ER_DIAG_PAGE_NOT_FOUND                      -1149
+#define ER_DIAG_NOT_SPAGE                           -1150
+
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001
 
@@ -3121,7 +3127,8 @@ extern int db_restart_ex (const char *program, const char *db_name,
 extern SESSION_ID db_get_session_id (void);
 extern void db_set_session_id (const SESSION_ID session_id);
 extern int db_end_session (void);
-extern int db_check_session (void);
+extern int db_find_or_create_session (const char *db_user,
+				      const char *program_name);
 extern int db_get_row_count_cache (void);
 extern void db_update_row_count_cache (const int row_count);
 extern int db_get_row_count (int *row_count);
@@ -4041,6 +4048,9 @@ extern int db_get_ha_server_state (char *buffer, int maxlen);
 
 extern void db_clear_host_connected (void);
 extern char *db_get_database_version (void);
+
+extern bool db_enable_trigger (void);
+extern bool db_disable_trigger (void);
 
 extern void db_clear_host_status (void);
 extern void db_set_host_status (char *hostname, int status);

@@ -185,6 +185,7 @@ db_open_local (void)
   session->is_subsession_for_prepared = false;
   session->next = NULL;
   session->ddl_stmts_for_replication = NULL;
+  session->lock_hint_classes = NULL;
 
   return session;
 }
@@ -521,6 +522,9 @@ db_compile_statement_local (DB_SESSION * session)
   int cmd_type;
   int err;
   static long seed = 0;
+  LC_LOCKHINT **lockhint = NULL;
+  LC_LOCKHINT **lockhint_after_view_transformed = NULL;
+  LC_LOCKHINT *tmp_lockhint = NULL;
 
   /* obvious error checking - invalid parameter */
   if (!session || !session->parser)
@@ -585,6 +589,30 @@ db_compile_statement_local (DB_SESSION * session)
       return stmt_ndx + 1;
     }
 
+  if (prm_get_integer_value (PRM_ID_XASL_MAX_PLAN_CACHE_ENTRIES) > 0)
+    {
+      if (session->lock_hint_classes == NULL)
+	{
+	  size_t size = sizeof (LC_LOCKHINT *) * session->dimension;
+	  session->lock_hint_classes = (LC_LOCKHINT **) calloc (1, size);
+	  if (session->lock_hint_classes == NULL)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
+	      return ER_OUT_OF_VIRTUAL_MEMORY;
+	    }
+	}
+
+      if (session->lock_hint_classes[stmt_ndx] != NULL)
+	{
+	  locator_free_lockhint (session->lock_hint_classes[stmt_ndx]);
+	  session->lock_hint_classes[stmt_ndx] = NULL;
+	}
+
+      lockhint = &session->lock_hint_classes[stmt_ndx];
+      lockhint_after_view_transformed = &tmp_lockhint;
+    }
+
   /* forget about any previous parsing errors, if any */
   pt_reset_error (parser);
 
@@ -608,7 +636,7 @@ db_compile_statement_local (DB_SESSION * session)
 	}
     }
   /* prefetch and lock classes to avoid deadlock */
-  (void) pt_class_pre_fetch (parser, statement);
+  (void) pt_class_pre_fetch (parser, statement, lockhint);
   if (pt_has_error (parser))
     {
       pt_report_to_ersys_with_statement (parser, PT_SYNTAX, statement);
@@ -700,11 +728,84 @@ db_compile_statement_local (DB_SESSION * session)
   statement = statement_result;
 
   /* prefetch and lock translated real classes to avoid deadlock */
-  (void) pt_class_pre_fetch (parser, statement);
+  (void) pt_class_pre_fetch (parser, statement,
+			     lockhint_after_view_transformed);
+
   if (pt_has_error (parser))
     {
       pt_report_to_ersys_with_statement (parser, PT_SYNTAX, statement);
+      if (lockhint_after_view_transformed != NULL
+	  && *lockhint_after_view_transformed != NULL)
+	{
+	  locator_free_lockhint (*lockhint_after_view_transformed);
+	}
       return er_errid ();
+    }
+
+  /* we should merge lockhint_after_view_transformed into lockhint
+   * and free lockhint_after_view_transformed
+   */
+  if (lockhint && *lockhint && *lockhint_after_view_transformed)
+    {
+      int i, j;
+      int base_num_class, result_total_class;
+      bool skip;
+      LC_LOCKHINT *base = *lockhint;
+      LC_LOCKHINT *new = *lockhint_after_view_transformed;
+
+      base_num_class = base->num_classes;
+      result_total_class = base_num_class + new->num_classes;
+
+      for (i = 0; i < new->num_classes; i++)
+	{
+	  skip = false;
+	  for (j = 0; j < base_num_class; j++)
+	    {
+	      if (OID_EQ (&base->classes[j].oid, &new->classes[i].oid))
+		{
+		  assert (base->classes[j].lock == new->classes[i].lock);
+		  skip = true;
+		  break;
+		}
+	    }
+
+	  if (skip)
+	    {
+	      continue;
+	    }
+
+	  /* merge this info into base */
+	  if (base->max_classes <= base->num_classes)
+	    {
+	      base = locator_reallocate_lockhint (base, result_total_class);
+	      if (base == NULL)
+		{
+		  int size =
+		    sizeof (LC_LOCKHINT) +
+		    (result_total_class * sizeof (LC_LOCKHINT_CLASS));
+
+		  locator_free_lockhint (*lockhint_after_view_transformed);
+
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			  ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
+		  return ER_OUT_OF_VIRTUAL_MEMORY;
+		}
+
+	      *lockhint = base;
+	    }
+
+	  /* structure copy */
+	  base->classes[base->num_classes] = new->classes[i];
+	  base->num_classes++;
+
+	  assert (base->max_classes >= base->num_classes);
+	}
+    }
+
+  if (lockhint_after_view_transformed != NULL
+      && *lockhint_after_view_transformed != NULL)
+    {
+      locator_free_lockhint (*lockhint_after_view_transformed);
     }
 
   /* validate include_oid setting in the session */
@@ -1088,7 +1189,25 @@ db_session_set_holdable (DB_SESSION * session, bool holdable)
     {
       return;
     }
-  session->parser->is_holdable = holdable;
+  session->parser->is_holdable = holdable ? 1 : 0;
+}
+
+/*
+ * db_session_set_return_generated_keys () - return generated keys for insert
+ *					  statements
+ * return : void
+ * session (in) :
+ * return_generated_keys (in) :
+ */
+void
+db_session_set_return_generated_keys (DB_SESSION * session,
+				      bool return_generated_keys)
+{
+  if (session->parser == NULL)
+    {
+      return;
+    }
+  session->parser->return_generated_keys = return_generated_keys ? 1 : 0;
 }
 
 /*
@@ -1787,6 +1906,10 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
   /* now, we have a statement to execute */
   parser = session->parser;
   statement = session->statements[stmt_ndx];
+  if (prm_get_integer_value (PRM_ID_XASL_MAX_PLAN_CACHE_ENTRIES) > 0)
+    {
+      parser->lockhint = session->lock_hint_classes[stmt_ndx];
+    }
 
   /* if the statement was not compiled and prepared, do it */
   if (session->stage[stmt_ndx] < StatementPreparedStage)
@@ -2007,11 +2130,7 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
 	  err = er_errid ();
 	}
       /* free the allocated list_id area before leaving */
-      if (pt_node_to_cmd_type (statement) == CUBRID_STMT_SELECT ||
-	  pt_node_to_cmd_type (statement) == CUBRID_STMT_DO)
-	{
-	  pt_free_query_etc_area (statement);
-	}
+      pt_free_query_etc_area (parser, statement);
     }
 
   /* so now, the statement is executed */
@@ -2056,7 +2175,7 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
 	      break;
 
 	    case CUBRID_STMT_DO:
-	      pt_free_query_etc_area (statement);
+	      pt_free_query_etc_area (parser, statement);
 	      break;
 
 	    case CUBRID_STMT_GET_ISO_LVL:
@@ -2070,7 +2189,41 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
 	      /* csql (in csql.c) may throw away any non-null *result,
 	         but we create a DB_QUERY_RESULT structure anyway for other
 	         callers of db_execute that use the *result like esql_cli.c  */
-	      val = (DB_VALUE *) pt_node_etc (statement);
+	      if (pt_is_server_insert_with_generated_keys (parser, statement))
+		{
+		  qres = pt_new_query_result_descriptor (parser, statement);
+		  if (qres)
+		    {
+		      /* get number of rows as result */
+		      qres->query_type =
+			db_cp_query_type (session->type_list[stmt_ndx],
+					  false);
+		      qres->res.s.stmt_id = stmt_ndx;
+		    }
+		  else
+		    {
+		      err = er_errid ();
+		    }
+		  break;
+		}
+
+	      if (stmt_type == CUBRID_STMT_INSERT
+		  && (statement->info.insert.server_allowed ==
+		      SERVER_INSERT_IS_ALLOWED))
+		{
+		  val = db_value_create ();
+		  if (val == NULL)
+		    {
+		      err = er_errid ();
+		      break;
+		    }
+		  db_make_object (val, NULL);
+		}
+	      else
+		{
+		  val = (DB_VALUE *) pt_node_etc (statement);
+		}
+
 	      if (val)
 		{
 		  /* got a result, so use it */
@@ -2085,11 +2238,12 @@ db_execute_and_keep_statement_local (DB_SESSION * session, int stmt_ndx,
 		         but we might have done a delete before.
 		         For this case, if err>row_count we will not change
 		         the row count */
-		      if (pt_node_to_cmd_type (statement)
-			  == CUBRID_STMT_INSERT)
+		      if (stmt_type == CUBRID_STMT_INSERT)
 			{
-			  if (statement->info.insert.do_replace &&
-			      row_count > err)
+			  if ((DB_VALUE_DOMAIN_TYPE (val) == DB_TYPE_OBJECT
+			       && DB_IS_NULL (val))
+			      || (statement->info.insert.do_replace
+				  && row_count > err))
 			    {
 			      err = row_count;
 			    }
@@ -3402,6 +3556,19 @@ db_close_session_local (DB_SESSION * session)
       db_close_session_local (prepared);
       prepared = next;
     }
+
+  if (session->lock_hint_classes)
+    {
+      for (i = 0; i < session->dimension; i++)
+	{
+	  if (session->lock_hint_classes[i])
+	    {
+	      locator_free_lockhint (session->lock_hint_classes[i]);
+	    }
+	}
+      free_and_init (session->lock_hint_classes);
+    }
+
   parser = session->parser;
   for (i = 0; i < session->dimension; i++)
     {

@@ -124,6 +124,9 @@ CSS_CONN_ENTRY *css_Conn_array = NULL;
 CSS_CONN_ENTRY *css_Active_conn_anchor = NULL;
 static int css_Num_active_conn = 0;
 
+static LAST_ACCESS_STATUS *css_Access_status_anchor = NULL;
+int css_Num_access_user = 0;
+
 /* This will handle new connections */
 int (*css_Connect_handler) (CSS_CONN_ENTRY *) = NULL;
 
@@ -177,7 +180,7 @@ static void css_process_abort_packet (CSS_CONN_ENTRY * conn,
 				      unsigned short request_id);
 static bool css_is_request_aborted (CSS_CONN_ENTRY * conn,
 				    unsigned short request_id);
-static void clear_wait_queue_entry_and_free_buffer (THREAD_ENTRY *thrdp,
+static void clear_wait_queue_entry_and_free_buffer (THREAD_ENTRY * thrdp,
 						    CSS_CONN_ENTRY * conn,
 						    unsigned short rid,
 						    char **bufferp);
@@ -296,6 +299,10 @@ css_initialize_conn (CSS_CONN_ENTRY * conn, SOCKET fd)
   conn->ignore_repl_delay = false;
   conn->stop_phase = THREAD_STOP_WORKERS_EXCEPT_LOGWR;
   conn->version_string = NULL;
+  conn->prefetcher_thread_count = 0;
+  /* ignore connection handler thread */
+  conn->prefetchlogdb_max_thread_count =
+    prm_get_integer_value (PRM_ID_HA_PREFETCHLOGDB_MAX_THREAD_COUNT) + 1;
   conn->free_queue_list = NULL;
   conn->free_queue_count = 0;
   conn->free_wait_queue_list = NULL;
@@ -894,6 +901,36 @@ css_free_conn (CSS_CONN_ENTRY * conn)
   css_decrement_num_conn (conn->client_type);
 
   csect_exit (NULL, CSECT_CONN_ACTIVE);
+}
+
+void
+css_inc_prefetcher_thread_count (THREAD_ENTRY * thread_entry)
+{
+  CSS_CONN_ENTRY *conn = thread_entry->conn_entry;
+  assert (conn);
+  assert (conn->client_type == BOOT_CLIENT_LOG_PREFETCHER);
+
+  csect_enter_critical_section (thread_entry, &conn->csect, INF_WAIT);
+  conn->prefetcher_thread_count++;
+  assert (conn->prefetcher_thread_count <=
+	  conn->prefetchlogdb_max_thread_count);
+  csect_exit_critical_section (thread_entry, &conn->csect);
+}
+
+void
+css_dec_prefetcher_thread_count (THREAD_ENTRY * thread_entry)
+{
+  CSS_CONN_ENTRY *conn = thread_entry->conn_entry;
+  assert (conn);
+  assert (conn->client_type == BOOT_CLIENT_LOG_PREFETCHER);
+
+  csect_enter_critical_section (thread_entry, &conn->csect, INF_WAIT);
+  conn->prefetcher_thread_count--;
+  if (conn->prefetcher_thread_count < 0)
+    {
+      conn->prefetcher_thread_count = 0;
+    }
+  csect_exit_critical_section (thread_entry, &conn->csect);
 }
 
 /*
@@ -1676,7 +1713,10 @@ css_free_queue_entry (CSS_CONN_ENTRY * conn, CSS_QUEUE_ENTRY * entry)
 {
   if (entry != NULL)
     {
-      free_and_init (entry->buffer);
+      if (entry->buffer)
+	{
+	  free_and_init (entry->buffer);
+	}
 
       entry->next = conn->free_queue_list;
       conn->free_queue_list = entry;
@@ -2362,7 +2402,7 @@ css_return_queued_request (CSS_CONN_ENTRY * conn, unsigned short *rid,
  *   bufferp(in): data buffer
  */
 static void
-clear_wait_queue_entry_and_free_buffer (THREAD_ENTRY *thrdp,
+clear_wait_queue_entry_and_free_buffer (THREAD_ENTRY * thrdp,
 					CSS_CONN_ENTRY * conn,
 					unsigned short rid, char **bufferp)
 {
@@ -2377,7 +2417,7 @@ clear_wait_queue_entry_and_free_buffer (THREAD_ENTRY *thrdp,
   /* data_wait might be always not NULL except the actual connection close */
   if (data_wait)
     {
-      assert (data_wait->thrd_entry == thrdp); /* it must be me */
+      assert (data_wait->thrd_entry == thrdp);	/* it must be me */
       data_wait->thrd_entry = NULL;
       css_free_wait_queue_entry (conn, data_wait);
     }
@@ -2580,7 +2620,8 @@ css_return_queued_data_timeout (CSS_CONN_ENTRY * conn, unsigned short rid,
 		  assert (conn->csect.name == css_Csect_name_conn);
 #endif
 
-		  clear_wait_queue_entry_and_free_buffer (thrd, conn, rid, buffer);
+		  clear_wait_queue_entry_and_free_buffer (thrd, conn, rid,
+							  buffer);
 		}
 
 	      return NO_ERRORS;
@@ -2842,4 +2883,113 @@ css_remove_all_unexpected_packets (CSS_CONN_ENTRY * conn)
 #endif
 
   csect_exit_critical_section (NULL, &conn->csect);
+}
+
+/*
+ * css_set_user_access_status() - set user access status information
+ *   return: void
+ *   db_user(in): 
+ *   host(in): 
+ *   program_name(in):
+ */
+void
+css_set_user_access_status (const char *db_user, const char *host,
+			    const char *program_name)
+{
+  LAST_ACCESS_STATUS *access = NULL;
+
+  assert (db_user != NULL);
+  assert (host != NULL);
+  assert (program_name != NULL);
+
+  csect_enter (NULL, CSECT_ACCESS_STATUS, INF_WAIT);
+
+  for (access = css_Access_status_anchor; access != NULL;
+       access = access->next)
+    {
+      if (strcmp (access->db_user, db_user) == 0)
+	{
+	  break;
+	}
+    }
+
+  if (access == NULL)
+    {
+      access = (LAST_ACCESS_STATUS *) malloc (sizeof (LAST_ACCESS_STATUS));
+      if (access == NULL)
+	{
+	  /* if memory allocation fail, just ignore and return */
+	  csect_exit (NULL, CSECT_ACCESS_STATUS);
+	  return;
+	}
+      css_Num_access_user++;
+
+      memset (access, 0, sizeof (LAST_ACCESS_STATUS));
+
+      access->next = css_Access_status_anchor;
+      css_Access_status_anchor = access;
+
+      strncpy (access->db_user, db_user, sizeof (access->db_user) - 1);
+    }
+
+  csect_exit (NULL, CSECT_ACCESS_STATUS);
+
+  access->time = time (NULL);
+  strncpy (access->host, host, sizeof (access->host) - 1);
+  strncpy (access->program_name, program_name,
+	   sizeof (access->program_name) - 1);
+
+  return;
+}
+
+/*
+ * css_get_user_access_status() - get user access status informations
+ *   return: void
+ *   num_user(in): 
+ *   access_status_array(out):
+ */
+void
+css_get_user_access_status (int num_user,
+			    LAST_ACCESS_STATUS ** access_status_array)
+{
+  int i = 0;
+  LAST_ACCESS_STATUS *access = NULL;
+
+  csect_enter_as_reader (NULL, CSECT_ACCESS_STATUS, INF_WAIT);
+
+  for (access = css_Access_status_anchor; (access != NULL && i < num_user);
+       access = access->next, i++)
+    {
+      access_status_array[i] = access;
+    }
+
+  csect_exit (NULL, CSECT_ACCESS_STATUS);
+
+  return;
+}
+
+/*
+ * css_free_user_access_status() - free all user access status information
+ *   return: void
+ */
+void
+css_free_user_access_status (void)
+{
+  LAST_ACCESS_STATUS *access = NULL;
+
+  csect_enter (NULL, CSECT_ACCESS_STATUS, INF_WAIT);
+
+  while (css_Access_status_anchor != NULL)
+    {
+      access = css_Access_status_anchor;
+      css_Access_status_anchor = access->next;
+
+      free_and_init (access);
+    }
+
+  css_Num_access_user = 0;
+
+  csect_exit (NULL, CSECT_ACCESS_STATUS);
+
+  return;
 }

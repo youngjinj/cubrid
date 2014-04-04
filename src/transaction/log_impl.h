@@ -395,6 +395,18 @@ enum LOG_PRIOR_LSA_LOCK
   LOG_PRIOR_LSA_WITH_LOCK = 1
 };
 
+typedef struct log_clientids LOG_CLIENTIDS;
+struct log_clientids		/* see BOOT_CLIENT_CREDENTIAL */
+{
+  int client_type;
+  char client_info[DB_MAX_IDENTIFIER_LENGTH + 1];
+  char db_user[LOG_USERNAME_MAX];
+  char program_name[PATH_MAX + 1];
+  char login_name[L_cuserid + 1];
+  char host_name[MAXHOSTNAMELEN + 1];
+  int process_id;
+};
+
 /*
  * LOG PAGE
  */
@@ -490,6 +502,7 @@ struct logwr_entry
   LOGWR_STATUS status;
   LOG_LSA last_eof_lsa;
   LOG_LSA tmp_last_eof_lsa;
+  INT64 start_copy_time;
   LOGWR_ENTRY *next;
 };
 
@@ -506,6 +519,11 @@ struct logwr_info
   pthread_mutex_t flush_end_mutex;
   bool skip_flush;
   bool flush_completed;
+
+  /* to measure the time spent by the last LWT delaying LFT */
+  bool trace_last_writer;
+  LOG_CLIENTIDS last_writer_client_info;
+  INT64 last_writer_elapsed_time;
 };
 
 #define LOGWR_INFO_INITIALIZER                                 \
@@ -514,7 +532,9 @@ struct logwr_info
     PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,       \
     PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,       \
     PTHREAD_MUTEX_INITIALIZER,                                 \
-    false, false}
+    false, false, false,                                       \
+    {-1, }, 0                                                  \
+   }
 
 typedef struct log_append_info LOG_APPEND_INFO;
 struct log_append_info
@@ -629,18 +649,6 @@ struct log_topops_stack
 					 */
 };
 
-typedef struct log_clientids LOG_CLIENTIDS;
-struct log_clientids		/* see BOOT_CLIENT_CREDENTIAL */
-{
-  int client_type;
-  char client_info[DB_MAX_IDENTIFIER_LENGTH + 1];
-  char db_user[LOG_USERNAME_MAX];
-  char program_name[PATH_MAX + 1];
-  char login_name[L_cuserid + 1];
-  char host_name[MAXHOSTNAMELEN + 1];
-  int process_id;
-};
-
 typedef struct modified_class_entry MODIFIED_CLASS_ENTRY;
 struct modified_class_entry
 {
@@ -698,7 +706,6 @@ typedef struct lob_locator_entry LOB_LOCATOR_ENTRY;
   };
  */
 RB_HEAD (lob_rb_root, lob_locator_entry);
-
 
 typedef enum tran_abort_reason TRAN_ABORT_REASON;
 enum tran_abort_reason
@@ -2142,6 +2149,7 @@ extern int logtb_find_client_name_host_pid (int tran_index,
 					    char **client_user_name,
 					    char **client_host_name,
 					    int *client_pid);
+extern int logtb_get_client_ids (int tran_index, LOG_CLIENTIDS * client_info);
 
 extern int logtb_find_current_client_type (THREAD_ENTRY * thread_p);
 extern char *logtb_find_current_client_name (THREAD_ENTRY * thread_p);
@@ -2186,7 +2194,11 @@ extern int logtb_is_tran_modification_disabled (THREAD_ENTRY * thread_p);
 extern void xlogtb_dump_trantable (THREAD_ENTRY * thread_p, FILE * out_fp);
 
 extern bool logpb_need_wal (const LOG_LSA * lsa);
+extern char *logpb_backup_level_info_to_string (char *buf, int buf_size,
+						const LOG_HDR_BKUP_LEVEL_INFO
+						* info);
 extern void logpb_get_nxio_lsa (LOG_LSA * lsa_p);
+extern const char *logpb_perm_status_to_string (enum LOG_PSTATUS val);
 
 extern MVCCID logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p);
 

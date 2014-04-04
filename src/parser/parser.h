@@ -165,6 +165,10 @@ extern "C"
 					    const PT_NODE * node);
   extern PARSER_VARCHAR *pt_print_bytes_alias (PARSER_CONTEXT * parser,
 					       const PT_NODE * node);
+  extern PARSER_VARCHAR *pt_print_node_value (PARSER_CONTEXT * parser,
+					      const PT_NODE * val);
+  extern PARSER_VARCHAR *pt_print_db_value (PARSER_CONTEXT * parser,
+					    const struct db_value *val);
 
   extern char *pt_print_query_spec_no_list (PARSER_CONTEXT * parser,
 					    const PT_NODE * node);
@@ -235,7 +239,8 @@ extern "C"
 					    int server_op);
 
   extern PT_NODE *pt_class_pre_fetch (PARSER_CONTEXT * parser,
-				      PT_NODE * statement);
+				      PT_NODE * statement,
+				      LC_LOCKHINT ** lockhint);
 
   extern PT_NODE *pt_compile_trigger_stmt (PARSER_CONTEXT * parser,
 					   const char *trigger_stmt,
@@ -527,7 +532,8 @@ extern "C"
 					     const int include_oid,
 					     bool want_spec_entity_name,
 					     bool fixup_columns_type);
-  extern void pt_free_query_etc_area (PT_NODE * query);
+  extern void pt_free_query_etc_area (PARSER_CONTEXT * parser,
+				      PT_NODE * query);
   DB_OBJECT *pt_find_users_class (PARSER_CONTEXT * parser, PT_NODE * name);
   DB_ATTRIBUTE *db_get_attribute_force (DB_OBJECT * obj, const char *name);
   DB_ATTRIBUTE *db_get_attributes_force (DB_OBJECT * obj);
@@ -809,6 +815,7 @@ extern "C"
 					    PT_NODE * like_or_where_expr);
   extern PT_NODE *pt_make_query_showstmt (PARSER_CONTEXT * parser,
 					  unsigned int type, PT_NODE * args,
+					  int like_where_syntax,
 					  PT_NODE * where_cond);
   extern PT_NODE *pt_make_query_show_columns (PARSER_CONTEXT * parser,
 					      PT_NODE * original_cls_id,
@@ -929,6 +936,11 @@ extern "C"
   extern void insert_rewrite_names_in_value_clauses (PARSER_CONTEXT * parser,
 						     PT_NODE *
 						     insert_statement);
+  extern int pt_name_occurs_in_from_list (PARSER_CONTEXT * parser,
+					  const char *name,
+					  PT_NODE * from_list);
+  extern int pt_is_server_insert_with_generated_keys (PARSER_CONTEXT * parser,
+						      PT_NODE * statement);
 #ifdef __cplusplus
 }
 #endif

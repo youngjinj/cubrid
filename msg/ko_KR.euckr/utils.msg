@@ -67,6 +67,7 @@ $       46      genlocale
 $       47      dumplocale
 $       48      synccolldb
 $       49      tranlist
+$       50      prefetchlogdb
 
 $set 1 MSGCAT_UTIL_SET_GENERIC
 1 크기가 잘못되었거나, 잘못된 문자 '%1$c'이(가) 데이터베이스 이름 '%2$s'에 포함되어 있습니다\n
@@ -115,9 +116,10 @@ cubrid 관리자 유틸리티, 버전 %1$s\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %4$s (은)는 DBMS 관리 도구입니다.\n\
-추가적인 정보는 다음 사이트를 참조하세요. http://www.cubrid.com\n
+추가적인 정보는 다음 사이트를 참조하세요. http://www.cubrid.org\n
 12 '%1$s' 는 없는 유틸리티 이름입니다.\n'cubrid --help' 명령어로 사용법을 알아보세요.\n
 13 '%1$s' 는 잘못된 명령어입니다.\n'cubrid --help' 명령어로 사용법을 알아보세요.\n
 14 설정 파일에서 하나 이상의 필요한 속성을 읽어 들일 수 없습니다.\n
@@ -170,9 +172,10 @@ cubrid 관리자 유틸리티, 버전 %1$s\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %4$s (은)는 DBMS  도구입니다.\n\
-추가적인 정보는 다음 사이트를 참조하세요. http://www.cubrid.com\n
+추가적인 정보는 다음 사이트를 참조하세요. http://www.cubrid.org\n
 24 cubrid 유틸리티, 버전 %1$s\n\
 사용법: %2$s service <명령어>\n\
 \n\
@@ -217,10 +220,12 @@ cubrid 관리자 유틸리티, 버전 %1$s\n\
 사용법: %2$s heartbeat <명령어> [인자]\n\
 \n\
 가용한 명령어:\n\
-    start       [데이터베이스 이름]\n\
-    stop        [-i|데이터베이스 이름]\n\
-    copylogdb   <start|stop> <데이터베이스 이름> <노드 이름>\n\
-    applylogdb  <start|stop> <데이터베이스 이름> <노드 이름>\n\
+    start          [데이터베이스 이름]\n\
+    stop           [-i|데이터베이스 이름]\n\
+    copylogdb      <start|stop> <데이터베이스 이름> <노드 이름>\n\
+    applylogdb     <start|stop> <데이터베이스 이름> <노드 이름>\n\
+    prefetchlogdb  <start|stop> <데이터베이스 이름> <노드 이름>\n\
+    replication    <start|stop> <노드 이름>\n\
     status\n\
     reload\n
 31 '%1$s' 인자가 필요 없습니다.\n
@@ -584,9 +589,6 @@ cub_commdb: 이 유틸리티는 더 이상 사용하지 않습니다. 'cubrid' 명령을 사용하십시�
   -c, --ping-host                  CUBRID heartbeat를 위한 ping 호스트 정보 조회\n\
   -D, --dereg-process=PID          대상 프로세스를 종료하고 관리 대상 목록에서 제거\n\
   -F, --reconfig-node-list         CUBRID heartbeat 노드 설정 정보를 재 적용\n\
-  -U, --deactivate-heartbeat       CUBRID heartbeat 기능을 비활성화하고 노드 그룹에서 탈퇴\n\
-  -i, --immediately                비활성화 과정에서, 로컬 프로세스들이 즉시 종료되지 않으면 강제로 종료함;-U 가 지정 되야 함;기본값: 강제종료하지 않음\n\
-  -T, --activate-heartbeat         CUBRID heartbeat 기능을 활성화\n\
   -V, --verbose                    많은 상태 메시지 출력; 기본값: 출력하지 않음\n
 28 알 수 없는 명령입니다: %1$s\n
 29 호스트 이름을 찾을 수 없습니다-중지\n
@@ -599,7 +601,7 @@ cub_commdb: 이 유틸리티는 더 이상 사용하지 않습니다. 'cubrid' 명령을 사용하십시�
 36 쉘 (%1$s) 를 수행할 수 없습니다. %2$s, %3$s 
 37 프로세스 fork %1$s, 반환 %2$d, %3$s
 38 %1$s을(를) 수행할 수 없습니다
-39 -i(--immediately)옵션은 -U(--deactivate-heartbeat)옵션이 지정되어야합니다.\n
+39 -i(--immediately)옵션은 --deact-stop-all 옵션이 지정되어야합니다.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -635,6 +637,7 @@ addvoldb: 데이터베이스 볼륨 파일을 추가\n\
 $set 18 MSGCAT_UTIL_SET_CHECKDB
 20 데이터베이스에서 비일관성이 발견되었습니다.\n추가적인 정보는 error_log_file %1$s 을(를) 참고 하십시오\n
 21 %1$s: 클래스를 찾을 수 없어 무시합니다.\n
+22 %1$s: Cannot find the index on class %2$s.\n
 60 \
 checkdb: 데이터베이스 일관성 검사.\n\
 사용법: %1$s checkdb [옵션] <데이터베이스 이름> [class_name1 class_name2 ...]\n\
@@ -645,8 +648,16 @@ checkdb: 데이터베이스 일관성 검사.\n\
   -r, --repair                 비 일관성 발견 시 복구\n\
   -i, --input-class-file=FILE  클래스 이름이 나열된 입력 파일 명시\n\
                                기본값: 모든 클래스를 검사\n\
+  -I, --index-name             index name that will be checked only\n\
+                               default: check all indices\n\
       --check-prev-link        인덱스 링크의 오류를 검사\n\
-      --repair-prev-link       인덱스 링크가 잘못된 경우 복구 수행\n
+      --repair-prev-link       인덱스 링크가 잘못된 경우 복구 수행\n\
+      --check-file-tracker     check all allocated pages of file\n\
+      --check-heap             check all pages of heap files\n\
+      --check-catalog          check catalog consistency\n\
+      --check-btree            check all btree indices\n\
+      --check-class-name       check class name consistency\n\
+      --check-btree-entries    check entries of btree consistency\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
@@ -1053,3 +1064,15 @@ valid options:\n\
   -s, --summary                질의정보 및 락 정보 생략\n\
       --sort-key=COLUMN_NUMBER 정렬할 컬럼번호; 기본값 : 1\n\
       --reverse                내림차순 정렬수행; 기본값 : 오름차순 정렬\n
+
+$set 50 MSGCAT_UTIL_SET_PREFETCHLOGDB
+22 서버가 HA 모드로 설정되지 않았습니다.\n
+23 Prefetch 기능을 활성화 시키지 않았습니다.\n
+58 HA 기능이 지원되지 않는 플랫폼입니다.\n
+59 prefetchlogdb는 독립 모드에서 실행할 수 없습니다.\n
+60 \
+prefetchlogdb: 복사된 로그를 서버에 반영하기 위해 필요한 데이터를 prefetch\n\
+사용법: %1$s prefetchlogdb [옵션] <데이터베이스 이름>\n\
+\n\
+valid options:\n\
+  -L, --log-path=PATH         복사된 로그 볼륨의 디렉터리 PATH\n

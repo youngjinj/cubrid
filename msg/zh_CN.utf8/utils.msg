@@ -67,6 +67,7 @@ $       46      genlocale
 $       47      dumplocale
 $       48      synccolldb
 $       49      tranlist
+$       50      prefetchlogdb
 
 $set 1 MSGCAT_UTIL_SET_GENERIC
 1 无效的长度或字符 '%c' 在数据库名 '%s' 中\n
@@ -115,9 +116,10 @@ cubrid 管理工具，版本 %s\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s 是一个 DBMS 工具.\n\
-要寻找额外的信息, 可浏览 http://www.cubrid.com\n
+要寻找额外的信息, 可浏览 http://www.cubrid.org\n
 12 '%1$s' 应用工具名是无效的.\n输入 'cubrid --help' 查询帮助.\n
 13 '%1$s' 命令无效.\n输入 'cubrid --help' 查询帮助.\n
 14 无法读取从配置文件中读取一个或多个强制属性.\n
@@ -170,9 +172,10 @@ cubrid 管理工具，版本 %s\n\
     genlocale\n\
     dumplocale\n\
     synccolldb\n\
+    prefetchlogdb\n\
 \n\
 %s 是一个 DBMS 工具.\n\
-要寻找额外的信息, 可浏览 http://www.cubrid.com\n
+要寻找额外的信息, 可浏览 http://www.cubrid.org\n
 24 cubrid 应用工具, 版本 %s\n\
 用法: %s service <命令>\n\
 \n\
@@ -217,10 +220,12 @@ cubrid 管理工具，版本 %s\n\
 用法: %s heartbeat <命令> [参数]\n\
 \n\
 可用命令:\n\
-    start       [数据库名]\n\
-    stop        [-i|数据库名]\n\
-    copylogdb   <start|stop> 数据库名 节点名\n\
-    applylogdb  <start|stop> 数据库名 节点名\n\
+    start          [数据库名]\n\
+    stop           [-i|数据库名]\n\
+    copylogdb      <start|stop> 数据库名 节点名\n\
+    applylogdb     <start|stop> 数据库名 节点名\n\
+    prefetchlogdb  <start|stop> 数据库名 节点名\n\
+    replication    <start|stop> node-name\n\
     status\n\
     reload\n
 31 不需要参数 '%1$s' .\n
@@ -583,9 +588,6 @@ usage: cub_commdb [选项]\n\
   -p, --ping-host                  list ping hosts used for CUBRID heartbeat\n\
   -D, --dereg-process=PID          退出目标进程并从被管理的进程条目中将其移除\n\
   -F, --reconfig-node-list         应用最近改变的 CUBRID heartbeat 配置\n\
-  -U, --deactivate-heartbeat       撤销 CUBRID heartbeat 特征并从节点组中移除当前节点\n\
-  -i, --immediately                Immediately kill active ones, if one of HA processes are not terminated while CUBRID heartbeat is shutting down; with -U option; default: disabled\n\
-  -T, --activate-heartbeat         激活CUBRID heartbeat 特征并将当前节点加入到节点组中\n\
   -V, --verbose                    开启详细状态信息; 默认: 不可用\n
 28 对不起，未知的命令: %1$s\n
 29 无法得到主机名或本地主机 - 终止\n
@@ -598,7 +600,7 @@ usage: cub_commdb [选项]\n\
 36 无法执行 shell (%s) 关于 %s, %s
 37 进程 fork %s, 返回 %d, %s
 38 无法执行 %1$s
-39 -i(--immediately) option must be used with -U(--deactivate-heartbeat) option.\n
+39 -i(--immediately) option must be used with --deact-stop-all option.\n
 
 $set 16 MSGCAT_UTIL_SET_PATCHDB
 60 \
@@ -634,6 +636,7 @@ usage: %1$s addvoldb [选项] 数据库名\n\
 $set 18 MSGCAT_UTIL_SET_CHECKDB
 20 一些不一致性在你的数据库中被检测出来.\n 请在错误日志文件 %1$s 中查阅额外的信息.\n
 21 %1$s: 无法找到该表. 它将被忽略.\n
+22 %1$s: Cannot find the index on class %2$s.\n
 60 \
 checkdb: 监测数据库一致性.\n\
 用法: %1$s checkdb [选项] 数据库名 [class_name1 class_name2 ...]\n\
@@ -644,8 +647,16 @@ checkdb: 监测数据库一致性.\n\
   -r, --repair                 修复找到的不一致性\n\
   -i, --input-class-file=FILE  输入包含表名的FILE\n\
                                默认: 检查所有表\n\
+  -I, --index-name             index name that will be checked only\n\
+                               default: check all indices\n\
       --check-prev-link        check only previous links of indices\n\
-      --repair-prev-link       repair previous links of indices\n
+      --repair-prev-link       repair previous links of indices\n\
+      --check-file-tracker     check all allocated pages of file\n\
+      --check-heap             check all pages of heap files\n\
+      --check-catalog          check catalog consistency\n\
+      --check-btree            check all btree indices\n\
+      --check-class-name       check class name consistency\n\
+      --check-btree-entries    check entries of btree consistency\n
 
 
 $set 19 MSGCAT_UTIL_SET_SPACEDB
@@ -1055,3 +1066,15 @@ usage: %1$s tranlist [OPTION] 数据库名\n\
   -s, --summary                打印事务的汇总信息\n\
       --sort-key=COLUMN_NUMBER 列序号将被排序\n\
       --reverse                反转排序结果\n
+
+$set 50 MSGCAT_UTIL_SET_PREFETCHLOGDB
+22 The server was not configured for HA.\n
+23 Prefetch feature is disabled.\n
+58 HA feature is not supported in this platform.\n
+59 prefetchlogdb cannot run as standalone mode.\n
+60 \
+prefetchlogdb: Prefetch log pages from the server.\n\
+usage: %1$s prefetchlogdb [OPTION] database-name\n\
+\n\
+valid options:\n\
+  -L, --log-path=PATH         directory PATH for copied log volumes\n

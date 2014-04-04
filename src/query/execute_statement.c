@@ -189,6 +189,7 @@ static int do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
 			       PT_NODE * statement,
 			       const char **savepoint_name,
 			       int *row_count_ptr);
+static void init_compile_context (PARSER_CONTEXT * parser);
 
 /*
  * initialize_serial_invariant() - initialize a serial invariant
@@ -1864,6 +1865,212 @@ end:
 }
 
 /*
+ * do_update_maxvalue_of_auto_increment_serial()
+ *   usage: update max_val of serial object
+ *   return: Error code
+ *   parser(in): Parser context
+ *   serial_object(out):
+ *   class_name(in):
+ *   att(in):
+ *
+ * Note:
+ */
+int
+do_update_maxvalue_of_auto_increment_serial (PARSER_CONTEXT * parser,
+					     MOP * serial_object,
+					     const char *class_name,
+					     PT_NODE * att)
+{
+  MOP serial_class, serial_mop;
+  DB_OTMPL *obj_tmpl = NULL;
+  DB_IDENTIFIER serial_obj_id;
+  DB_DATA_STATUS data_stat;
+  int error = NO_ERROR;
+  PT_NODE *dtyp;
+  char *att_name = NULL, *serial_name = NULL;
+  DB_VALUE e38, current_val, max_val, value;
+  int i, compare_result, save;
+  char *p, num[DB_MAX_NUMERIC_PRECISION + 1];
+  char att_downcase_name[SM_MAX_IDENTIFIER_LENGTH];
+  size_t name_len;
+  bool au_disable_flag = false;
+
+  db_make_null (&e38);
+  db_make_null (&value);
+  db_make_null (&current_val);
+  db_make_null (&max_val);
+  OID_SET_NULL (&serial_obj_id);
+
+  numeric_coerce_string_to_num ("99999999999999999999999999999999999999",
+				DB_MAX_NUMERIC_PRECISION,
+				INTL_CODESET_ISO88591, &e38);
+
+  assert_release (att->info.attr_def.auto_increment != NULL);
+  assert (serial_object != NULL);
+
+  /* find db_serial */
+  serial_class = sm_find_class (CT_SERIAL_NAME);
+  if (serial_class == NULL)
+    {
+      error = ER_QPROC_DB_SERIAL_NOT_FOUND;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
+      goto end;
+    }
+
+  att_name = (char *) (att->info.attr_def.attr_name->alias_print
+		       ? att->info.attr_def.attr_name->alias_print
+		       : att->info.attr_def.attr_name->info.name.original);
+
+  sm_downcase_name (att_name, att_downcase_name, SM_MAX_IDENTIFIER_LENGTH);
+  att_name = att_downcase_name;
+
+  /* serial_name : <class_name>_ai_<att_name> */
+  name_len = (strlen (class_name) + strlen (att_name)
+	      + AUTO_INCREMENT_SERIAL_NAME_EXTRA_LENGTH + 1);
+  serial_name = (char *) malloc (name_len);
+  if (serial_name == NULL)
+    {
+      error = ER_OUT_OF_VIRTUAL_MEMORY;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, name_len);
+      goto end;
+    }
+
+  SET_AUTO_INCREMENT_SERIAL_NAME (serial_name, class_name, att_name);
+
+  /* get serial mop by serial name */
+  serial_mop = do_get_serial_obj_id (&serial_obj_id, serial_class,
+				     serial_name);
+  if (serial_mop == NULL)
+    {
+      error = ER_QPROC_SERIAL_NOT_FOUND;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, serial_name);
+      goto end;
+    }
+
+  /*
+   * after serial.next_value, the currect value maybe changed, but cub_cas
+   * still hold the old value. To get the new value. we need decache it
+   * then refetch it from server again.
+   */
+  assert (WS_ISDIRTY (serial_mop) == false);
+
+  ws_decache (serial_mop);
+
+  error = au_fetch_instance_force (serial_mop, NULL, DB_FETCH_WRITE);
+  if (error != NO_ERROR)
+    {
+      goto end;
+    }
+
+  /* get current value */
+  error = db_get (serial_mop, SERIAL_ATTR_CURRENT_VAL, &current_val);
+  if (error < 0)
+    {
+      goto end;
+    }
+
+  /* max value - depends on att's domain */
+  db_value_domain_init (&max_val,
+			DB_TYPE_NUMERIC, DB_MAX_NUMERIC_PRECISION, 0);
+
+  dtyp = att->data_type;
+  switch (att->type_enum)
+    {
+    case PT_TYPE_INTEGER:
+      db_make_int (&value, DB_INT32_MAX);
+      break;
+    case PT_TYPE_BIGINT:
+      db_make_bigint (&value, DB_BIGINT_MAX);
+      break;
+    case PT_TYPE_SMALLINT:
+      db_make_int (&value, DB_INT16_MAX);
+      break;
+    case PT_TYPE_NUMERIC:
+      memset (num, '\0', DB_MAX_NUMERIC_PRECISION + 1);
+      for (i = 0, p = num; i < dtyp->info.data_type.precision; i++, p++)
+	{
+	  *p = '9';
+	}
+
+      *p = '\0';
+
+      (void) numeric_coerce_string_to_num (num,
+					   dtyp->info.data_type.precision,
+					   INTL_CODESET_ISO88591, &value);
+      break;
+    default:
+      /* max numeric */
+      db_value_clone (&e38, &value);
+    }
+
+  error = numeric_db_value_coerce_to_num (&value, &max_val, &data_stat);
+  if (error != NO_ERROR)
+    {
+      goto end;
+    }
+
+  /* check (current_val <= max_val) */
+  compare_result = tp_value_compare (&current_val, &max_val, 1, 0);
+  if (compare_result != DB_LT && compare_result != DB_EQ)
+    {
+      error = ER_AUTO_INCREMENT_STARTVAL_MUST_LT_MAXVAL;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
+      goto end;
+    }
+
+  /* update serial object in db_serial */
+  AU_DISABLE (save);
+  au_disable_flag = true;
+
+  obj_tmpl = dbt_edit_object (serial_mop);
+  if (obj_tmpl == NULL)
+    {
+      error = er_errid ();
+      goto end;
+    }
+
+  error = dbt_put_internal (obj_tmpl, SERIAL_ATTR_MAX_VAL, &max_val);
+  if (error < 0)
+    {
+      goto end;
+    }
+
+  serial_mop = dbt_finish_object (obj_tmpl);
+  if (serial_mop == NULL)
+    {
+      error = er_errid ();
+      goto end;
+    }
+  else
+    {
+      *serial_object = serial_mop;
+    }
+
+end:
+  if (!OID_ISNULL (&serial_obj_id))
+    {
+      (void) serial_decache ((OID *) (&serial_obj_id));
+    }
+
+  if (au_disable_flag == true)
+    {
+      AU_ENABLE (save);
+    }
+
+  pr_clear_value (&e38);
+  pr_clear_value (&value);
+  pr_clear_value (&current_val);
+  pr_clear_value (&max_val);
+
+  if (serial_name != NULL)
+    {
+      free_and_init (serial_name);
+    }
+
+  return error;
+}
+
+/*
  * do_alter_serial() -
  *   return: Error code
  *   parser(in): Parser context
@@ -1929,6 +2136,7 @@ do_alter_serial (PARSER_CONTEXT * parser, PT_NODE * statement)
   db_make_null (&class_name_val);
   db_make_null (&abs_inc_val);
   db_make_null (&range_val);
+  OID_SET_NULL (&serial_obj_id);
 
 
   /*
@@ -2448,22 +2656,17 @@ do_alter_serial (PARSER_CONTEXT * parser, PT_NODE * statement)
     }
 
   serial_object = dbt_finish_object (obj_tmpl);
-
-  AU_ENABLE (save);
-  au_disable_flag = false;
-
   if (serial_object == NULL)
     {
       error = er_errid ();
       goto end;
     }
 
-  (void) serial_decache ((OID *) (&serial_obj_id));
-
-  return NO_ERROR;
-
 end:
-  (void) serial_decache ((OID *) (&serial_obj_id));
+  if (!OID_ISNULL (&serial_obj_id))
+    {
+      (void) serial_decache ((OID *) (&serial_obj_id));
+    }
 
   if (au_disable_flag == true)
     {
@@ -2559,20 +2762,17 @@ do_drop_serial (PARSER_CONTEXT * parser, PT_NODE * statement)
       goto end;
     }
 
-  AU_ENABLE (save);
-  au_disable_flag = false;
-
-  (void) serial_decache (&serial_obj_id);
-
-  return NO_ERROR;
-
 end:
-  (void) serial_decache (&serial_obj_id);
+  if (!OID_ISNULL (&serial_obj_id))
+    {
+      (void) serial_decache (&serial_obj_id);
+    }
 
   if (au_disable_flag == true)
     {
       AU_ENABLE (save);
     }
+
   return error;
 }
 
@@ -2967,6 +3167,8 @@ int
 do_prepare_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
   int err = NO_ERROR;
+
+  init_compile_context (parser);
 
   switch (statement->node_type)
     {
@@ -5425,7 +5627,7 @@ do_check_for_empty_classes_in_delete (PARSER_CONTEXT * parser,
   /* lock splitted classes with X_LOCK */
   if (locator_lockhint_classes
       (num_classes, (const char **) classes_names, locks, need_subclasses,
-       1) != LC_CLASSNAME_EXIST)
+       1, NULL) != LC_CLASSNAME_EXIST)
     {
       error = er_errid ();
       goto cleanup;
@@ -7629,22 +7831,15 @@ statement_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 }
 
 /*
- * init_compile_context() - init COMPILE_CONTEXT and set parser's current
- * 			    context to this
+ * init_compile_context() -
  *
- *   parser (out): set parser->context to context
- *   context (in): initialized parameter
+ *   parser (in/out):
  *
  */
 static void
-init_compile_context (PARSER_CONTEXT * parser, COMPILE_CONTEXT * context)
+init_compile_context (PARSER_CONTEXT * parser)
 {
-  memset (context, 0x00, sizeof (COMPILE_CONTEXT));
-
-  if (parser != NULL)
-    {
-      parser->context = context;
-    }
+  memset (&parser->context, 0x00, sizeof (COMPILE_CONTEXT));
 }
 
 /*
@@ -7700,10 +7895,8 @@ update_at_server (PARSER_CONTEXT * parser, PT_NODE * from,
   QFILE_LIST_ID *list_id = NULL;
   PT_NODE *cl_name_node = NULL, *spec = NULL;
 
-  COMPILE_CONTEXT context;
   XASL_STREAM stream;
 
-  init_compile_context (parser, &context);
   init_xasl_stream (&stream);
 
   /* mark the beginning of another level of xasl packing */
@@ -8420,14 +8613,15 @@ do_prepare_update (PARSER_CONTEXT * parser, PT_NODE * statement)
   for (err = NO_ERROR; statement && (err >= NO_ERROR); statement
        = statement->next)
     {
-      COMPILE_CONTEXT context;
+      COMPILE_CONTEXT *contextp;
       XASL_STREAM stream;
 
-      init_compile_context (parser, &context);
+      contextp = &parser->context;
+
       init_xasl_stream (&stream);
 
-      context.sql_user_text = statement->sql_user_text;
-      context.sql_user_text_len = statement->sql_user_text_len;
+      contextp->sql_user_text = statement->sql_user_text;
+      contextp->sql_user_text_len = statement->sql_user_text_len;
 
       /* there can be no results, this is a compile time false where clause */
       if (pt_false_where (parser, statement))
@@ -8546,7 +8740,7 @@ do_prepare_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  parser->print_type_ambiguity = 0;
 	  PT_NODE_PRINT_TO_ALIAS (parser, statement,
 				  (PT_CONVERT_RANGE | PT_PRINT_QUOTES));
-	  context.sql_hash_text = (char *) statement->alias_print;
+	  contextp->sql_hash_text = (char *) statement->alias_print;
 	  parser->dont_prt_long_string = 0;
 	  if (parser->long_string_skipped || parser->print_type_ambiguity)
 	    {
@@ -8567,7 +8761,7 @@ do_prepare_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 	     and get XASL file id (XASL_ID) returned if found */
 	  if (statement->recompile == 0)
 	    {
-	      err = prepare_query (&context, &stream);
+	      err = prepare_query (contextp, &stream);
 
 	      if (err != NO_ERROR)
 		{
@@ -8576,7 +8770,7 @@ do_prepare_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    }
 	  else
 	    {
-	      err = qmgr_drop_query_plan (context.sql_hash_text,
+	      err = qmgr_drop_query_plan (contextp->sql_hash_text,
 					  ws_identifier (db_get_user ()),
 					  NULL);
 	    }
@@ -8594,18 +8788,18 @@ do_prepare_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 	      AU_SAVE_AND_DISABLE (au_save);
 
 	      /* pt_to_update_xasl() will build XASL tree from parse tree */
-	      context.xasl =
-		pt_to_update_xasl (parser, statement, &not_nulls);
+	      contextp->xasl = pt_to_update_xasl (parser, statement,
+						  &not_nulls);
 	      AU_RESTORE (au_save);
 
-	      if (context.xasl && (err >= NO_ERROR))
+	      if (contextp->xasl && (err >= NO_ERROR))
 		{
 		  int i;
-		  UPDATE_PROC_NODE *update = &context.xasl->proc.update;
+		  UPDATE_PROC_NODE *update = &contextp->xasl->proc.update;
 
 		  /* convert the created XASL tree to the byte stream for
 		     transmission to the server */
-		  err = xts_map_xasl_to_stream (context.xasl, &stream);
+		  err = xts_map_xasl_to_stream (contextp->xasl, &stream);
 		  if (err != NO_ERROR)
 		    {
 		      PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
@@ -8632,7 +8826,7 @@ do_prepare_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 	         and get XASL file id returned */
 	      if (stream.xasl_stream && (err >= NO_ERROR))
 		{
-		  err = prepare_query (&context, &stream);
+		  err = prepare_query (contextp, &stream);
 
 		  if (err != NO_ERROR)
 		    {
@@ -8905,7 +9099,7 @@ do_execute_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 			       parser->host_var_count +
 			       parser->auto_param_count,
 			       parser->host_variables, &list_id, query_flag,
-			       NULL, NULL);
+			       NULL, NULL, parser->lockhint);
 	  AU_RESTORE (au_save);
 	  if (err != NO_ERROR)
 	    {
@@ -9409,10 +9603,8 @@ build_xasl_for_server_delete (PARSER_CONTEXT * parser, PT_NODE * statement)
   QFILE_LIST_ID *list_id = NULL;
   const PT_NODE *node;
 
-  COMPILE_CONTEXT context;
   XASL_STREAM stream;
 
-  init_compile_context (parser, &context);
   init_xasl_stream (&stream);
 
   /* mark the beginning of another level of xasl packing */
@@ -9764,14 +9956,15 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
   for (err = NO_ERROR; statement && (err >= NO_ERROR);
        statement = statement->next)
     {
-      COMPILE_CONTEXT context;
+      COMPILE_CONTEXT *contextp;
       XASL_STREAM stream;
 
-      init_compile_context (parser, &context);
+      contextp = &parser->context;
+
       init_xasl_stream (&stream);
 
-      context.sql_user_text = statement->sql_user_text;
-      context.sql_user_text_len = statement->sql_user_text_len;
+      contextp->sql_user_text = statement->sql_user_text;
+      contextp->sql_user_text_len = statement->sql_user_text_len;
 
       /* there can be no results, this is a compile time false where clause */
       if (pt_false_where (parser, statement))
@@ -9862,7 +10055,7 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  parser->print_type_ambiguity = 0;
 	  PT_NODE_PRINT_TO_ALIAS (parser, statement,
 				  (PT_CONVERT_RANGE | PT_PRINT_QUOTES));
-	  context.sql_hash_text = (char *) statement->alias_print;
+	  contextp->sql_hash_text = (char *) statement->alias_print;
 	  parser->dont_prt_long_string = 0;
 	  if (parser->long_string_skipped || parser->print_type_ambiguity)
 	    {
@@ -9875,7 +10068,7 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
 	     and get XASL file id (XASL_ID) returned if found */
 	  if (statement->recompile == 0)
 	    {
-	      err = prepare_query (&context, &stream);
+	      err = prepare_query (contextp, &stream);
 	      if (err != NO_ERROR)
 		{
 		  err = er_errid ();
@@ -9883,7 +10076,7 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
 	    }
 	  else
 	    {
-	      err = qmgr_drop_query_plan (context.sql_hash_text,
+	      err = qmgr_drop_query_plan (contextp->sql_hash_text,
 					  ws_identifier (db_get_user ()),
 					  NULL);
 	    }
@@ -9900,14 +10093,14 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
 	      AU_SAVE_AND_DISABLE (au_save);
 
 	      /* pt_to_delete_xasl() will build XASL tree from parse tree */
-	      context.xasl = pt_to_delete_xasl (parser, statement);
+	      contextp->xasl = pt_to_delete_xasl (parser, statement);
 	      AU_RESTORE (au_save);
 
-	      if (context.xasl && (err >= NO_ERROR))
+	      if (contextp->xasl && (err >= NO_ERROR))
 		{
 		  /* convert the created XASL tree to the byte stream for
 		     transmission to the server */
-		  err = xts_map_xasl_to_stream (context.xasl, &stream);
+		  err = xts_map_xasl_to_stream (contextp->xasl, &stream);
 		  if (err != NO_ERROR)
 		    {
 		      PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
@@ -9927,7 +10120,7 @@ do_prepare_delete (PARSER_CONTEXT * parser, PT_NODE * statement,
 	         and get XASL file id returned */
 	      if (stream.xasl_stream && (err >= NO_ERROR))
 		{
-		  err = prepare_query (&context, &stream);
+		  err = prepare_query (contextp, &stream);
 		  if (err != NO_ERROR)
 		    {
 		      err = er_errid ();
@@ -10151,7 +10344,7 @@ do_execute_delete (PARSER_CONTEXT * parser, PT_NODE * statement)
 			   parser->host_var_count +
 			   parser->auto_param_count,
 			   parser->host_variables, &list_id, query_flag,
-			   NULL, NULL);
+			   NULL, NULL, parser->lockhint);
       AU_RESTORE (au_save);
 
       /* in the case of OID list deletion, now delete the selected OIDs */
@@ -10472,10 +10665,11 @@ do_prepare_insert_internal (PARSER_CONTEXT * parser, PT_NODE * statement)
   PT_NODE *val = NULL, *head = NULL, *prev = NULL;
   PT_NODE *value_list = NULL;
 
-  COMPILE_CONTEXT context;
+  COMPILE_CONTEXT *contextp;
   XASL_STREAM stream;
 
-  init_compile_context (parser, &context);
+  contextp = &parser->context;
+
   init_xasl_stream (&stream);
 
   if (!parser || !statement || statement->node_type != PT_INSERT)
@@ -10487,8 +10681,8 @@ do_prepare_insert_internal (PARSER_CONTEXT * parser, PT_NODE * statement)
   assert (statement->info.insert.do_replace == false);
   assert (statement->info.insert.odku_assignments == NULL);
 
-  context.sql_user_text = statement->sql_user_text;
-  context.sql_user_text_len = statement->sql_user_text_len;
+  contextp->sql_user_text = statement->sql_user_text;
+  contextp->sql_user_text_len = statement->sql_user_text_len;
 
   /* insert value auto parameterize */
   for (value_list = statement->info.insert.value_clauses; value_list != NULL;
@@ -10529,7 +10723,7 @@ do_prepare_insert_internal (PARSER_CONTEXT * parser, PT_NODE * statement)
   parser->print_type_ambiguity = 0;
   PT_NODE_PRINT_TO_ALIAS (parser, statement,
 			  (PT_CONVERT_RANGE | PT_PRINT_QUOTES));
-  context.sql_hash_text = (char *) statement->alias_print;
+  contextp->sql_hash_text = (char *) statement->alias_print;
   parser->dont_prt_long_string = 0;
   if (parser->long_string_skipped || parser->print_type_ambiguity)
     {
@@ -10541,7 +10735,7 @@ do_prepare_insert_internal (PARSER_CONTEXT * parser, PT_NODE * statement)
      and get XASL file id (XASL_ID) returned if found */
   if (statement->recompile == 0)
     {
-      error = prepare_query (&context, &stream);
+      error = prepare_query (contextp, &stream);
       if (error != NO_ERROR)
 	{
 	  error = er_errid ();
@@ -10549,7 +10743,7 @@ do_prepare_insert_internal (PARSER_CONTEXT * parser, PT_NODE * statement)
     }
   else
     {
-      error = qmgr_drop_query_plan (context.sql_hash_text,
+      error = qmgr_drop_query_plan (contextp->sql_hash_text,
 				    ws_identifier (db_get_user ()), NULL);
     }
 
@@ -10557,17 +10751,17 @@ do_prepare_insert_internal (PARSER_CONTEXT * parser, PT_NODE * statement)
     {
       /* mark the beginning of another level of xasl packing */
       pt_enter_packing_buf ();
-      context.xasl = pt_to_insert_xasl (parser, statement);
+      contextp->xasl = pt_to_insert_xasl (parser, statement);
 
-      if (context.xasl)
+      if (contextp->xasl)
 	{
-	  INSERT_PROC_NODE *insert = &context.xasl->proc.insert;
+	  INSERT_PROC_NODE *insert = &(contextp->xasl->proc.insert);
 
-	  assert (context.xasl->dptr_list == NULL);
+	  assert (contextp->xasl->dptr_list == NULL);
 
 	  if (error == NO_ERROR)
 	    {
-	      error = xts_map_xasl_to_stream (context.xasl, &stream);
+	      error = xts_map_xasl_to_stream (contextp->xasl, &stream);
 	      if (error != NO_ERROR)
 		{
 		  PT_ERRORm (parser, statement,
@@ -10583,7 +10777,7 @@ do_prepare_insert_internal (PARSER_CONTEXT * parser, PT_NODE * statement)
 
       if (stream.xasl_stream && (error >= NO_ERROR))
 	{
-	  error = prepare_query (&context, &stream);
+	  error = prepare_query (contextp, &stream);
 	  if (error != NO_ERROR)
 	    {
 	      error = er_errid ();
@@ -10656,10 +10850,8 @@ do_insert_at_server (PARSER_CONTEXT * parser, PT_NODE * statement)
   int j = 0, k = 0;
   PT_NODE *odku_assignments = NULL;
 
-  COMPILE_CONTEXT context;
   XASL_STREAM stream;
 
-  init_compile_context (parser, &context);
   init_xasl_stream (&stream);
 
   if (parser == NULL || statement == NULL
@@ -10739,7 +10931,14 @@ do_insert_at_server (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  error = sm_flush_and_decache_objects (class_obj, true);
 	}
 
-      regu_free_listid (list_id);
+      if (parser->return_generated_keys)
+	{
+	  statement->etc = (void *) list_id;
+	}
+      else
+	{
+	  regu_free_listid (list_id);
+	}
     }
 
   pt_end_query (parser);
@@ -11302,13 +11501,16 @@ do_create_midxkey_for_constraint (DB_OTMPL * tmpl,
 	    }
 	}
 
-      if (attr_dom->type->index_lengthval == NULL || val == NULL)
+      if (val != NULL)
 	{
-	  buf_size += attr_dom->type->disksize;
-	}
-      else
-	{
-	  buf_size += (*(attr_dom->type->index_lengthval)) (val);
+	  if (attr_dom->type->index_lengthval == NULL)
+	    {
+	      buf_size += attr_dom->type->disksize;
+	    }
+	  else
+	    {
+	      buf_size += (*(attr_dom->type->index_lengthval)) (val);
+	    }
 	}
 
       if (setdomain == NULL)
@@ -11352,10 +11554,19 @@ do_create_midxkey_for_constraint (DB_OTMPL * tmpl,
 	{
 	  continue;
 	}
+
       dom = (*attr)->domain;
       val = tmpl->assignments[(*attr)->order]->variable;
-      OR_ENABLE_BOUND_BIT (bound_bits, i);
-      (*((dom->type)->index_writeval)) (&buf, val);
+
+      if (DB_IS_NULL (val))
+	{
+	  OR_CLEAR_BOUND_BIT (bound_bits, i);
+	}
+      else
+	{
+	  (*((dom->type)->index_writeval)) (&buf, val);
+	  OR_ENABLE_BOUND_BIT (bound_bits, i);
+	}
     }
 
   midxkey.size = buf_size;
@@ -11834,6 +12045,10 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
   PT_NODE *value_clauses = statement->info.insert.value_clauses;
   PT_NODE *value_list = NULL;
   DB_OBJECT *obj = NULL, *vobj = NULL;
+  unsigned int save_custom;
+  DB_VALUE *value = NULL;
+  DB_SEQ *seq = NULL;
+  int obj_count = 0;
 
   assert (otemplate != NULL);
   if (otemplate == NULL)
@@ -12007,6 +12222,16 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
 	  goto cleanup;
 	}
 
+      if (parser->return_generated_keys)
+	{
+	  seq = set_create_sequence (0);
+	  if (seq == NULL)
+	    {
+	      error = ER_FAILED;
+	      goto cleanup;
+	    }
+	}
+
       error = do_evaluate_insert_values (parser, statement);
       if (error != NO_ERROR)
 	{
@@ -12050,7 +12275,7 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
 	  degree = pt_length_of_list (attr);
 
 	  /* allocate attribute descriptors */
-	  if (attr)
+	  if (attr != NULL && attr_descs == NULL)
 	    {
 	      attr_descs =
 		(DB_ATTDESC **) calloc (degree, sizeof (DB_ATTDESC *));
@@ -12097,8 +12322,9 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
 		}
 
 	      /* don't get descriptors for shared attrs of views */
-	      if (!attr->info.name.db_object
-		  || !db_is_vclass (attr->info.name.db_object))
+	      if (attr_descs[i] == NULL
+		  && (!attr->info.name.db_object
+		      || !db_is_vclass (attr->info.name.db_object)))
 		{
 		  error =
 		    db_get_attribute_descriptor (class_->info.name.db_object,
@@ -12117,6 +12343,10 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
 		{
 		  if (error < NO_ERROR)
 		    {
+		      save_custom = parser->custom_print;
+		      parser->custom_print =
+			parser->custom_print | PT_PRINT_DB_VALUE;
+
 		      PT_ERRORmf3 (parser, vc, MSGCAT_SET_PARSER_RUNTIME,
 				   MSGCAT_RUNTIME_DBT_PUT_ERROR,
 				   pt_short_print (parser, vc),
@@ -12124,6 +12354,9 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
 				   pt_chop_trailing_dots (parser,
 							  db_error_string
 							  (3)));
+
+		      parser->custom_print = save_custom;
+
 		      goto cleanup;
 		    }
 		}
@@ -12223,6 +12456,20 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
 		  dbt_abort_object (*otemplate);
 		  *otemplate = NULL;
 		}
+	      else
+		{
+		  if (parser->return_generated_keys
+		      && (*otemplate)->is_autoincrement_set > 0)
+		    {
+		      db_make_object (&db_value, obj);
+		      error = set_put_element (seq, obj_count, &db_value);
+		      if (error != NO_ERROR)
+			{
+			  goto cleanup;
+			}
+		      obj_count++;
+		    }
+		}
 
 	      if (error >= NO_ERROR)
 		{
@@ -12260,6 +12507,46 @@ do_insert_template (PARSER_CONTEXT * parser, DB_OTMPL ** otemplate,
   if (error < NO_ERROR)
     {
       goto cleanup;
+    }
+
+  if (*otemplate != NULL && parser->return_generated_keys)
+    {
+      /* a client side insert with template, with requested generated keys */
+      value = db_value_create ();
+      if (value == NULL)
+	{
+	  error = er_errid ();
+	  goto cleanup;
+	}
+      error = db_make_sequence (value, seq);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+      statement->etc = (void *) value;
+
+      goto cleanup;
+    }
+  else
+    {
+      if (!parser->return_generated_keys
+	  && (*otemplate == NULL || value_clauses->next != NULL))
+	{
+	  /* a client side insert with subquery and no template, a client side
+	   * insert with multiple insert values or a server side insert
+	   * for which the generated keys have not been requested 
+	   */
+	  value = db_value_create ();
+	  if (value == NULL)
+	    {
+	      error = er_errid ();
+	      goto cleanup;
+	    }
+	  db_make_object (value, NULL);
+	  statement->etc = (void *) value;
+
+	  goto cleanup;
+	}
     }
 
   if (*otemplate != NULL && value_clauses->next == NULL)
@@ -12328,6 +12615,11 @@ cleanup:
       *otemplate = NULL;
     }
 
+  if (seq != NULL && error != NO_ERROR)
+    {
+      set_free (seq);
+    }
+
   if (row_count_ptr != NULL)
     {
       *row_count_ptr = row_count;
@@ -12370,6 +12662,10 @@ insert_subquery_results (PARSER_CONTEXT * parser,
   DB_ATTDESC **attr_descs = NULL;
   ODKU_TUPLE_VALUE_ARG odku_arg;
   int pruning_type = DB_NOT_PARTITIONED_CLASS;
+  int obj_count = 0;
+  DB_SEQ *seq = NULL;
+  DB_VALUE db_value;
+  DB_VALUE *value = NULL;
 
   if (values_list == NULL || values_list->node_type != PT_NODE_LIST
       || values_list->info.node_list.list_type != PT_IS_SUBQUERY
@@ -12394,6 +12690,16 @@ insert_subquery_results (PARSER_CONTEXT * parser,
     }
 
   cnt = 0;
+
+  if (parser->return_generated_keys)
+    {
+      seq = set_create_sequence (0);
+      if (seq == NULL)
+	{
+	  error = ER_GENERIC_ERROR;
+	  return error;
+	}
+    }
 
   switch (qry->node_type)
     {
@@ -12622,6 +12928,19 @@ insert_subquery_results (PARSER_CONTEXT * parser,
 		      /* apply the object template */
 		      obj = dbt_finish_object (otemplate);
 
+		      if (obj && parser->return_generated_keys
+			  && otemplate->is_autoincrement_set > 0)
+			{
+			  db_make_object (&db_value, obj);
+			  error = set_put_element (seq, obj_count, &db_value);
+			  if (error != NO_ERROR)
+			    {
+			      cnt = error;
+			      goto cleanup;
+			    }
+			  obj_count++;
+			}
+
 		      if (obj && error >= NO_ERROR)
 			{
 			  if (statement->node_type == PT_INSERT)
@@ -12670,6 +12989,22 @@ insert_subquery_results (PARSER_CONTEXT * parser,
 	}
     }
 
+  if (parser->return_generated_keys && seq != NULL)
+    {
+      value = db_value_create ();
+      if (value == NULL)
+	{
+	  error = er_errid ();
+	  goto cleanup;
+	}
+      error = db_make_sequence (value, seq);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+      statement->etc = (void *) value;
+    }
+
 cleanup:
   if (update != NULL)
     {
@@ -12702,6 +13037,11 @@ cleanup:
 	    }
 	}
       free_and_init (attr_descs);
+    }
+
+  if (cnt < 0 && seq != NULL)
+    {
+      set_free (seq);
     }
 
   regu_free_listid ((QFILE_LIST_ID *) qry->etc);
@@ -13285,6 +13625,10 @@ do_execute_insert (PARSER_CONTEXT * parser, PT_NODE * statement)
 
   query_flag |= NOT_FROM_RESULT_CACHE;
   query_flag |= RESULT_CACHE_INHIBITED;
+  if (parser->return_generated_keys)
+    {
+      query_flag |= RETURN_GENERATED_KEYS;
+    }
 
   if (prm_get_bool_value (PRM_ID_QUERY_TRACE) == true
       && parser->query_trace == true)
@@ -13300,14 +13644,21 @@ do_execute_insert (PARSER_CONTEXT * parser, PT_NODE * statement)
 		       parser->host_var_count +
 		       parser->auto_param_count,
 		       parser->host_variables, &list_id, query_flag,
-		       NULL, NULL);
+		       NULL, NULL, parser->lockhint);
 
   /* free returned QFILE_LIST_ID */
   if (list_id)
     {
       /* set as result */
       err = list_id->tuple_cnt;
-      regu_free_listid (list_id);
+      if (parser->return_generated_keys)
+	{
+	  statement->etc = (void *) list_id;
+	}
+      else
+	{
+	  regu_free_listid (list_id);
+	}
     }
 
   /* end the query; reset query_id and call qmgr_end_query() */
@@ -13652,11 +14003,9 @@ do_select (PARSER_CONTEXT * parser, PT_NODE * statement)
   int save;
   QUERY_ID query_id = NULL_QUERY_ID;
   QUERY_FLAG query_flag;
-  COMPILE_CONTEXT context;
   XASL_STREAM stream;
   bool query_trace = false;
 
-  init_compile_context (parser, &context);
   init_xasl_stream (&stream);
 
   error = NO_ERROR;
@@ -13695,7 +14044,7 @@ do_select (PARSER_CONTEXT * parser, PT_NODE * statement)
       query_flag = SYNC_EXEC | ASYNC_UNEXECUTABLE;
     }
 
-  if (parser->dont_collect_exec_stats == true)
+  if (parser->dont_collect_exec_stats)
     {
       query_flag |= DONT_COLLECT_EXEC_STATS;
     }
@@ -13837,10 +14186,11 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
   int err = NO_ERROR;
   int au_save;
 
-  COMPILE_CONTEXT context;
+  COMPILE_CONTEXT *contextp;
   XASL_STREAM stream;
 
-  init_compile_context (parser, &context);
+  contextp = &parser->context;
+
   init_xasl_stream (&stream);
 
   if (parser == NULL || statement == NULL)
@@ -13850,8 +14200,8 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
       return ER_OBJ_INVALID_ARGUMENTS;
     }
 
-  context.sql_user_text = statement->sql_user_text;
-  context.sql_user_text_len = statement->sql_user_text_len;
+  contextp->sql_user_text = statement->sql_user_text;
+  contextp->sql_user_text_len = statement->sql_user_text_len;
 
   /* click counter check */
   if (statement->is_click_counter)
@@ -13880,7 +14230,7 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
   PT_NODE_PRINT_TO_ALIAS (parser, statement,
 			  (PT_CONVERT_RANGE | PT_PRINT_QUOTES
 			   | PT_PRINT_DIFFERENT_SYSTEM_PARAMETERS));
-  context.sql_hash_text = (char *) statement->alias_print;
+  contextp->sql_hash_text = (char *) statement->alias_print;
   parser->dont_prt_long_string = 0;
   if (parser->long_string_skipped || parser->print_type_ambiguity)
     {
@@ -13895,7 +14245,7 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
       XASL_NODE_HEADER xasl_header;
       stream.xasl_header = &xasl_header;
 
-      err = prepare_query (&context, &stream);
+      err = prepare_query (contextp, &stream);
       if (err != NO_ERROR)
 	{
 	  err = er_errid ();
@@ -13907,7 +14257,7 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
 						    stream.xasl_header->
 						    xasl_flag))
 	    {
-	      err = qmgr_drop_query_plan (context.sql_hash_text,
+	      err = qmgr_drop_query_plan (contextp->sql_hash_text,
 					  ws_identifier (db_get_user ()),
 					  NULL);
 	      stream.xasl_id = NULL;
@@ -13917,7 +14267,7 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
   else
     {
       err =
-	qmgr_drop_query_plan (context.sql_hash_text,
+	qmgr_drop_query_plan (contextp->sql_hash_text,
 			      ws_identifier (db_get_user ()), NULL);
     }
   if (stream.xasl_id == NULL && err == NO_ERROR)
@@ -13932,14 +14282,14 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
       AU_SAVE_AND_DISABLE (au_save);	/* this prevents authorization
 					   checking during generating XASL */
       /* parser_generate_xasl() will build XASL tree from parse tree */
-      context.xasl = parser_generate_xasl (parser, statement);
+      contextp->xasl = parser_generate_xasl (parser, statement);
       AU_RESTORE (au_save);
 
-      if (context.xasl && (err == NO_ERROR) && !pt_has_error (parser))
+      if (contextp->xasl && (err == NO_ERROR) && !pt_has_error (parser))
 	{
 	  /* convert the created XASL tree to the byte stream for transmission
 	     to the server */
-	  err = xts_map_xasl_to_stream (context.xasl, &stream);
+	  err = xts_map_xasl_to_stream (contextp->xasl, &stream);
 	  if (err != NO_ERROR)
 	    {
 	      PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
@@ -13960,7 +14310,7 @@ do_prepare_select (PARSER_CONTEXT * parser, PT_NODE * statement)
          and get XASL file id returned */
       if (stream.xasl_stream && (err == NO_ERROR))
 	{
-	  err = prepare_query (&context, &stream);
+	  err = prepare_query (contextp, &stream);
 	  if (err != NO_ERROR)
 	    {
 	      err = er_errid ();
@@ -14118,7 +14468,8 @@ do_execute_session_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
 		       parser->host_var_count + parser->auto_param_count,
 		       parser->host_variables,
 		       &list_id,
-		       query_flag, &clt_cache_time, &statement->cache_time);
+		       query_flag, &clt_cache_time, &statement->cache_time,
+		       parser->lockhint);
 
   AU_RESTORE (au_save);
 
@@ -14259,7 +14610,7 @@ do_execute_select (PARSER_CONTEXT * parser, PT_NODE * statement)
       query_flag |= RESULT_HOLDABLE;
     }
 
-  if (parser->dont_collect_exec_stats == true)
+  if (parser->dont_collect_exec_stats)
     {
       query_flag |= DONT_COLLECT_EXEC_STATS;
     }
@@ -14308,7 +14659,8 @@ do_execute_select (PARSER_CONTEXT * parser, PT_NODE * statement)
 		       parser->host_var_count + parser->auto_param_count,
 		       parser->host_variables,
 		       &list_id,
-		       query_flag, &clt_cache_time, &statement->cache_time);
+		       query_flag, &clt_cache_time, &statement->cache_time,
+		       parser->lockhint);
 
   AU_RESTORE (au_save);
 
@@ -14652,10 +15004,8 @@ do_execute_do (PARSER_CONTEXT * parser, PT_NODE * statement)
   QUERY_ID query_id = NULL_QUERY_ID;
   QUERY_FLAG query_flag;
 
-  COMPILE_CONTEXT context;
   XASL_STREAM stream;
 
-  init_compile_context (parser, &context);
   init_xasl_stream (&stream);
 
   AU_DISABLE (save);
@@ -15493,10 +15843,11 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
 
   int no_vals, no_consts;
 
-  COMPILE_CONTEXT context;
+  COMPILE_CONTEXT *contextp;
   XASL_STREAM stream;
 
-  init_compile_context (parser, &context);
+  contextp = &parser->context;
+
   init_xasl_stream (&stream);
 
   if (parser == NULL || statement == NULL)
@@ -15506,8 +15857,8 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
       return ER_OBJ_INVALID_ARGUMENTS;
     }
 
-  context.sql_user_text = statement->sql_user_text;
-  context.sql_user_text_len = statement->sql_user_text_len;
+  contextp->sql_user_text = statement->sql_user_text;
+  contextp->sql_user_text_len = statement->sql_user_text_len;
 
   if (pt_false_where (parser, statement))
     {
@@ -15693,7 +16044,7 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
       parser->print_type_ambiguity = 0;
       PT_NODE_PRINT_TO_ALIAS (parser, statement,
 			      (PT_CONVERT_RANGE | PT_PRINT_QUOTES));
-      context.sql_hash_text = (char *) statement->alias_print;
+      contextp->sql_hash_text = (char *) statement->alias_print;
       parser->dont_prt_long_string = 0;
       if (parser->long_string_skipped || parser->print_type_ambiguity)
 	{
@@ -15704,7 +16055,7 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
       /* lookup in XASL cache */
       if (statement->recompile == 0)
 	{
-	  err = prepare_query (&context, &stream);
+	  err = prepare_query (contextp, &stream);
 	  if (err != NO_ERROR)
 	    {
 	      err = er_errid ();
@@ -15713,7 +16064,7 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
       else
 	{
 	  err =
-	    qmgr_drop_query_plan (context.sql_hash_text,
+	    qmgr_drop_query_plan (contextp->sql_hash_text,
 				  ws_identifier (db_get_user ()), NULL);
 	}
 
@@ -15738,15 +16089,16 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  pt_enter_packing_buf ();
 
 	  /* generate MERGE XASL */
-	  context.xasl = pt_to_merge_xasl (parser, statement, &non_nulls_upd,
-					   &non_nulls_ins,
-					   default_expr_attrs);
+	  contextp->xasl = pt_to_merge_xasl (parser, statement,
+					     &non_nulls_upd,
+					     &non_nulls_ins,
+					     default_expr_attrs);
 
 	  stream.xasl_stream = NULL;
 
-	  if (context.xasl && (err >= NO_ERROR))
+	  if (contextp->xasl && (err >= NO_ERROR))
 	    {
-	      err = xts_map_xasl_to_stream (context.xasl, &stream);
+	      err = xts_map_xasl_to_stream (contextp->xasl, &stream);
 	      if (err != NO_ERROR)
 		{
 		  PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
@@ -15754,11 +16106,12 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
 		}
 
 	      /* clear constant values */
-	      if (context.xasl->proc.merge.update_xasl)
+	      if (contextp->xasl->proc.merge.update_xasl)
 		{
 		  int i;
 		  UPDATE_PROC_NODE *update =
-		    &context.xasl->proc.merge.update_xasl->proc.update;
+		    &contextp->xasl->proc.merge.update_xasl->proc.update;
+
 		  for (i = update->no_assigns - 1; i >= 0; i--)
 		    {
 		      if (update->assigns[i].constant)
@@ -15782,7 +16135,7 @@ do_prepare_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  /* cache the XASL */
 	  if (stream.xasl_stream && (err >= NO_ERROR))
 	    {
-	      err = prepare_query (&context, &stream);
+	      err = prepare_query (contextp, &stream);
 	      if (err != NO_ERROR)
 		{
 		  err = er_errid ();
@@ -15991,7 +16344,7 @@ do_execute_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
       err = execute_query (statement->xasl_id, &parser->query_id,
 			   parser->host_var_count + parser->auto_param_count,
 			   parser->host_variables, &list_id, query_flag,
-			   NULL, NULL);
+			   NULL, NULL, parser->lockhint);
       AU_RESTORE (au_save);
       if (err != NO_ERROR)
 	{
@@ -16042,7 +16395,7 @@ do_execute_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    execute_query (statement->xasl_id, &parser->query_id,
 			   parser->host_var_count + parser->auto_param_count,
 			   parser->host_variables, &list_id, query_flag,
-			   NULL, NULL);
+			   NULL, NULL, parser->lockhint);
 	  AU_RESTORE (au_save);
 	  if (err != NO_ERROR)
 	    {
@@ -16629,8 +16982,12 @@ do_evaluate_insert_values (PARSER_CONTEXT * parser,
 	    }
 	  result->info.insert_value.replace_names = eval.replace_names;
 
+	  result->line_number = val->line_number;
+	  result->column_number = val->column_number;
+
 	  /* replace val */
 	  result->next = save_next;
+
 	  if (prev == NULL)
 	    {
 	      eval.value_list = value_list->info.node_list.list = result;
@@ -16725,7 +17082,7 @@ insert_rewrite_names_in_value_clauses (PARSER_CONTEXT * parser,
 				       PT_NODE * insert_statement)
 {
   PT_NODE *attr_list = NULL, *value_clauses = NULL, *value_list = NULL;
-  PT_NODE *value = NULL, *save_next = NULL, *prev = NULL;
+  PT_NODE *value = NULL, *value_tmp = NULL, *save_next = NULL, *prev = NULL;
 
   EVAL_INSERT_VALUE eval;
   if (insert_statement == NULL || insert_statement->node_type != PT_INSERT)
@@ -16769,7 +17126,17 @@ insert_rewrite_names_in_value_clauses (PARSER_CONTEXT * parser,
 			      NULL, NULL);
 	  if (!pt_has_error (parser))
 	    {
-	      value = pt_semantic_type (parser, value, NULL);
+	      value_tmp = pt_semantic_type (parser, value, NULL);
+	      if (value_tmp == NULL)
+		{
+		  /* In this case, pt_has_error (parser) is true,
+		   * we need recovery the link list firstly, then return. */
+		  ;
+		}
+	      else
+		{
+		  value = value_tmp;
+		}
 	    }
 	  value->next = save_next;
 	  if (prev == NULL)
@@ -17148,7 +17515,7 @@ do_send_plan_trace_to_session (PARSER_CONTEXT * parser)
       return;
     }
 
-  format = prm_get_integer_value (PRM_ID_QUERY_TRACE_FORMAT);
+  format = parser->plan_trace[0].format;
 
   if (format == QUERY_TRACE_TEXT)
     {
@@ -17160,8 +17527,9 @@ do_send_plan_trace_to_session (PARSER_CONTEXT * parser)
 	    {
 	      for (i = 0; i < parser->num_plan_trace; i++)
 		{
-		  fprintf (fp, "%s\n", parser->plan_trace[i].text_plan);
-		  free_and_init (parser->plan_trace[i].text_plan);
+		  assert (parser->plan_trace[i].format == format);
+		  fprintf (fp, "%s\n", parser->plan_trace[i].trace.text_plan);
+		  free_and_init (parser->plan_trace[i].trace.text_plan);
 		}
 
 	      port_close_memstream (fp, &plan_str, &sizeloc);
@@ -17169,7 +17537,8 @@ do_send_plan_trace_to_session (PARSER_CONTEXT * parser)
 	}
       else
 	{
-	  plan_str = parser->plan_trace[0].text_plan;
+	  plan_str = parser->plan_trace[0].trace.text_plan;
+	  parser->plan_trace[0].trace.text_plan = NULL;
 	}
     }
   else if (format == QUERY_TRACE_JSON)
@@ -17182,12 +17551,16 @@ do_send_plan_trace_to_session (PARSER_CONTEXT * parser)
 
 	  for (i = 0; i < parser->num_plan_trace; i++)
 	    {
-	      json_array_append_new (jplan, parser->plan_trace[i].json_plan);
+	      assert (parser->plan_trace[i].format == format);
+	      json_array_append_new (jplan,
+				     parser->plan_trace[i].trace.json_plan);
+	      parser->plan_trace[i].trace.json_plan = NULL;
 	    }
 	}
       else
 	{
-	  jplan = parser->plan_trace[0].json_plan;
+	  jplan = parser->plan_trace[0].trace.json_plan;
+	  parser->plan_trace[0].trace.json_plan = NULL;
 	}
 
       plan_str = json_dumps (jplan, JSON_INDENT (2) | JSON_PRESERVE_ORDER);

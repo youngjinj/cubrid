@@ -153,6 +153,8 @@ extern "C"
 #define CCI_EXEC_QUERY_INFO		0x04
 #define CCI_EXEC_ONLY_QUERY_PLAN        0x08
 #define CCI_EXEC_THREAD			0x10
+#define CCI_EXEC_NOT_USED		0x20	/* not currently used */
+#define CCI_EXEC_RETURN_GENERATED_KEYS	0x40
 
 #define CCI_FETCH_SENSITIVE		1
 
@@ -166,6 +168,9 @@ extern "C"
 
 #define CCI_LOCK_TIMEOUT_INFINITE	-1
 #define CCI_LOCK_TIMEOUT_DEFAULT	-2
+
+#define CCI_LOGIN_TIMEOUT_INFINITE      (0)
+#define CCI_LOGIN_TIMEOUT_DEFAULT       (30000)
 
 #define CCI_CLOSE_CURRENT_RESULT	0
 #define CCI_KEEP_CURRENT_RESULT		1
@@ -344,6 +349,11 @@ extern "C"
     CCI_A_TYTP_LAST = CCI_A_TYPE_LAST	/* typo but backward compatibility */
   } T_CCI_A_TYPE;
 
+  enum
+  {
+    UNMEASURED_LENGTH = -1
+  };
+
   typedef enum
   {
     CCI_PARAM_FIRST = 1,
@@ -423,7 +433,10 @@ extern "C"
     CCI_ER_INVALID_LOB_HANDLE = -20032,
 
     CCI_ER_NO_PROPERTY = -20033,
+
     CCI_ER_PROPERTY_TYPE = -20034,
+    CCI_ER_INVALID_PROPERTY_VALUE = CCI_ER_PROPERTY_TYPE,
+
     CCI_ER_INVALID_DATASOURCE = -20035,
     CCI_ER_DATASOURCE_TIMEOUT = -20036,
     CCI_ER_DATASOURCE_TIMEDWAIT = -20037,
@@ -738,10 +751,11 @@ extern "C"
   extern T_CCI_COL_INFO *cci_get_result_info (int req_handle,
 					      T_CCI_CUBRID_STMT * cmd_type,
 					      int *num);
-  extern int cci_bind_param (int req_handle,
-			     int index,
-			     T_CCI_A_TYPE a_type,
+  extern int cci_bind_param (int req_handle, int index, T_CCI_A_TYPE a_type,
 			     void *value, T_CCI_U_TYPE u_type, char flag);
+  extern int cci_bind_param_ex (int mapped_stmt_id, int index,
+				T_CCI_A_TYPE a_type, void *value, int length,
+				T_CCI_U_TYPE u_type, char flag);
   extern int cci_execute (int req_handle,
 			  char flag, int max_col_size, T_CCI_ERROR * err_buf);
   extern int cci_prepare_and_execute (int con_handle, char *sql_stmt,

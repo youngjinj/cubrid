@@ -65,7 +65,8 @@
 #define DEFAULT_SQL_LOG_MODE		"ALL"
 #define DEFAULT_KEEP_CONNECTION         "AUTO"
 #define DEFAULT_JDBC_CACHE_LIFE_TIME    1000
-#define DEFAULT_MAX_PREPARED_STMT_COUNT 10000
+#define DEFAULT_PROXY_MAX_PREPARED_STMT_COUNT 10000
+#define DEFAULT_CAS_MAX_PREPARED_STMT_COUNT 2000
 #define DEFAULT_MONITOR_HANG_INTERVAL   60
 #define DEFAULT_HANG_TIMEOUT            60
 #define DEFAULT_RECONNECT_TIME          "600s"
@@ -535,7 +536,7 @@ broker_config_read_internal (const char *conf_file,
 
       br_info[num_brs].max_prepared_stmt_count =
 	ini_getint (ini, sec_name, "MAX_PREPARED_STMT_COUNT",
-		    DEFAULT_MAX_PREPARED_STMT_COUNT, &lineno);
+		    DEFAULT_CAS_MAX_PREPARED_STMT_COUNT, &lineno);
       if (br_info[num_brs].max_prepared_stmt_count < 1)
 	{
 	  errcode = PARAM_BAD_VALUE;
@@ -881,6 +882,16 @@ broker_config_read_internal (const char *conf_file,
 	  br_info[num_brs].hang_timeout = DEFAULT_HANG_TIMEOUT;
 	}
 
+      br_info[num_brs].trigger_action_flag =
+	conf_get_value_table_on_off (ini_getstr
+				     (ini, sec_name, "TRIGGER_ACTION", "ON",
+				      &lineno));
+      if (br_info[num_brs].trigger_action_flag < 0)
+	{
+	  errcode = PARAM_BAD_VALUE;
+	  goto conf_error;
+	}
+
       br_info[num_brs].shard_flag =
 	conf_get_value_table_on_off (ini_getstr (ini, sec_name,
 						 "SHARD", "OFF", &lineno));
@@ -1010,7 +1021,7 @@ broker_config_read_internal (const char *conf_file,
 
       br_info[num_brs].proxy_max_prepared_stmt_count =
 	ini_getint (ini, sec_name, "SHARD_MAX_PREPARED_STMT_COUNT",
-		    DEFAULT_MAX_PREPARED_STMT_COUNT, &lineno);
+		    DEFAULT_PROXY_MAX_PREPARED_STMT_COUNT, &lineno);
       if (br_info[num_brs].proxy_max_prepared_stmt_count < 1)
 	{
 	  errcode = PARAM_BAD_VALUE;
@@ -1438,6 +1449,12 @@ broker_config_dump (FILE * fp, const T_BROKER_INFO * br_info,
       if (tmp_str)
 	{
 	  fprintf (fp, "REPLICA_ONLY\t\t=%s\n", tmp_str);
+	}
+
+      tmp_str = get_conf_string (br_info[i].trigger_action_flag, tbl_on_off);
+      if (tmp_str)
+	{
+	  fprintf (fp, "TRIGGER_ACTION\t\t=%s\n", tmp_str);
 	}
 
       fprintf (fp, "MAX_QUERY_TIMEOUT\t=%d\n", br_info[i].query_timeout);

@@ -57,6 +57,7 @@
 #include "execute_statement.h"
 #include "network_interface_cl.h"
 #include "connection_support.h"
+#include "trigger_manager.h"
 #if !defined(CS_MODE)
 #include "session.h"
 #endif
@@ -527,6 +528,30 @@ void
 db_clear_delayed_hosts_count (void)
 {
   db_Delayed_hosts_count = 0;
+}
+
+/*
+ * db_enable_trigger() - enable all trigger actions
+ *   return : previous state
+ *
+ *   NOTE: recommend to be called after db_restart is called
+ */
+bool
+db_enable_trigger (void)
+{
+  return tr_set_execution_state (true);
+}
+
+/*
+ * db_disable_trigger() - disable all trigger actions
+ *   return :previous state
+ *
+ *   NOTE: recommend to be called after db_restart is called
+ */
+bool
+db_disable_trigger (void)
+{
+  return tr_set_execution_state (false);
 }
 
 /*
@@ -2883,23 +2908,29 @@ db_set_session_id (const SESSION_ID session_id)
 }
 
 /*
- * db_check_session - check if current session is still active
+ * db_find_or_create_session - check if current session is still active
+ *                               if not, create a new session
  * return error code or NO_ERROR
- *
+ * db_user(in)  : 
+ * program_name(in)  :
  * Note: This function will check if the current session is active and will
- *	 create a new one if needed
+ *	 create a new one if needed and save user access status in server
  */
 int
-db_check_session (void)
+db_find_or_create_session (const char *db_user, const char *program_name)
 {
   int err = NO_ERROR;
   SESSION_ID sess_id = db_get_session_id ();
   int row_count = DB_ROW_COUNT_NOT_SET;
   char *server_session_key;
+  const char *host_name = boot_get_host_name ();
 
   server_session_key = db_get_server_session_key ();
   /* server_session_key is in/out parameter, it is replaced new key */
-  err = csession_check_session (&sess_id, &row_count, server_session_key);
+  err =
+    csession_find_or_create_session (&sess_id, &row_count,
+				     server_session_key, db_user, host_name,
+				     program_name);
   if (err != NO_ERROR)
     {
       db_set_session_id (DB_EMPTY_SESSION);

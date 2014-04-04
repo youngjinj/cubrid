@@ -37,6 +37,7 @@
 #include "string_opfunc.h"
 #include "message_catalog.h"
 #include "authenticate.h"
+#include "system_parameter.h"
 
 #define MAX_PRINT_ERROR_CONTEXT_LENGTH 64
 
@@ -732,36 +733,50 @@ enum
 
 enum pt_custom_print
 {
-  PT_SUPPRESS_RESOLVED = 0x2,
-  PT_SUPPRESS_META_ATTR_CLASS = 0x4,
-  PT_SUPPRESS_INTO = 0x8,
-  PT_SUPPRESS_SELECTOR = 0x40,
-  PT_SUPPRESS_SELECT_LIST = 0x80,
-  PT_SUPPRESS_QUOTES = 0x200,
-  PT_PRINT_ALIAS = 0x400,
-  PT_PAD_BYTE = 0x8000,
-  PT_CONVERT_RANGE = 0x10000,
-  PT_INTERNAL_PRINT = 0x40000,
-  PT_SUPPRESS_INDEX = 0x80000,
-  PT_SUPPRESS_ORDERING = 0x100000,
-  PT_PRINT_QUOTES = 0x200000,
-  PT_FORCE_ORIGINAL_TABLE_NAME = 0x400000,	/* this is for PT_NAME nodes.
-						 * prints original table name
-						 * instead of printing resolved
-						 * NOTE: spec_id must point to
-						 * original table
-						 */
-  PT_SUPPRESS_CHARSET_PRINT = 0x800000,
-  PT_PRINT_DIFFERENT_SYSTEM_PARAMETERS = 0x1000000,	/* print session
-							 * parameters
-							 */
-  PT_SHORT_PRINT = 0x2000000,	/* PT_NODE_PRINT_TO_ALIAS
-				 * calls pt_short_print
-				 * instead pt_print_tree
-				 */
-  PT_SUPPRESS_BIGINT_CAST = 0x4000000,
-  PT_CHARSET_COLLATE_FULL = 0x8000000,
-  PT_CHARSET_COLLATE_USER_ONLY = 0x10000000
+  PT_SUPPRESS_RESOLVED = 0x1,
+
+  PT_SUPPRESS_META_ATTR_CLASS = (0x1 << 1),
+
+  PT_SUPPRESS_INTO = (0x1 << 2),
+
+  PT_SUPPRESS_SELECTOR = (0x1 << 3),
+
+  PT_SUPPRESS_SELECT_LIST = (0x1 << 4),
+
+  PT_SUPPRESS_QUOTES = (0x1 << 5),
+
+  PT_PRINT_ALIAS = (0x1 << 6),
+
+  PT_PAD_BYTE = (0x1 << 7),
+
+  PT_CONVERT_RANGE = (0x1 << 8),
+
+  PT_PRINT_DB_VALUE = (0x1 << 9),
+
+  PT_SUPPRESS_INDEX = (0x1 << 10),
+
+  PT_SUPPRESS_ORDERING = (0x1 << 11),
+
+  PT_PRINT_QUOTES = (0x1 << 12),
+
+  /* PT_FORCE_ORIGINAL_TABLE_NAME is for PT_NAME nodes.  prints original table name instead of printing resolved
+   * NOTE: spec_id must point to original table
+   */
+  PT_FORCE_ORIGINAL_TABLE_NAME = (0x1 << 13),
+
+  PT_SUPPRESS_CHARSET_PRINT = (0x1 << 14),
+
+  /* PT_PRINT_DIFFERENT_SYSTEM_PARAMETERS print session parameters */
+  PT_PRINT_DIFFERENT_SYSTEM_PARAMETERS = (0x1 << 15),
+
+  /* PT_NODE_PRINT_TO_ALIAS calls pt_short_print instead pt_print_tree */
+  PT_SHORT_PRINT = (0x1 << 16),
+
+  PT_SUPPRESS_BIGINT_CAST = (0x1 << 17),
+
+  PT_CHARSET_COLLATE_FULL = (0x1 << 18),
+
+  PT_CHARSET_COLLATE_USER_ONLY = (0x1 << 19)
 };
 
 /* all statement node types should be assigned their API statement enumeration */
@@ -1135,8 +1150,8 @@ typedef enum
 {
   PT_HINT_NONE = 0x00,		/* 0000 0000 *//* no hint */
   PT_HINT_ORDERED = 0x01,	/* 0000 0001 *//* force join left-to-right */
-  PT_HINT_W = 0x02,		/* 0000 0010 -- not used */
-  PT_HINT_X = 0x04,		/* 0000 0100 -- not used */
+  PT_HINT_NO_INDEX_SS = 0x02,	/* 0000 0010 *//* disable index skip scan */
+  PT_HINT_INDEX_SS = 0x04,	/* 0000 0100 *//* enable index skip scan */
   PT_HINT_Y = 0x08,		/* 0000 1000 -- not used */
   PT_HINT_USE_NL = 0x10,	/* 0001 0000 *//* force nl-join */
   PT_HINT_USE_IDX = 0x20,	/* 0010 0000 *//* force idx-join */
@@ -1165,13 +1180,16 @@ typedef enum
   PT_HINT_NO_SORT_LIMIT = 0x800000,	/* 1000 0000 0000 0000 0000 0000 */
   PT_HINT_NO_HASH_AGGREGATE = 0x1000000,	/* 0001 0000 0000 0000 0000 0000 0000 */
   /* no hash aggregate evaluation */
-  PT_HINT_SELECT_RECORD_INFO = 0x2000000,	/* 0010 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SKIP_UPDATE_NULL = 0x2000000,	/* 0010 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_NO_INDEX_LS = 0x4000000,	/* 0100 0000 0000 0000 0000 0000 0000 *//* enable loose index scan */
+  PT_HINT_INDEX_LS = 0x8000000,	/* 1000 0000 0000 0000 0000 0000 0000 *//* disable loose index scan */
+  PT_HINT_SELECT_RECORD_INFO = 0x10000000,	/* 0001 0000 0000 0000 0000 0000 0000 0000 */
   /* SELECT record info from tuple header instead of data */
-  PT_HINT_SELECT_PAGE_INFO = 0x4000000,	/* 0100 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_PAGE_INFO = 0x20000000,	/* 0010 0000 0000 0000 0000 0000 0000 0000 */
   /* SELECT page header information from heap file instead of record data */
-  PT_HINT_SELECT_KEY_INFO = 0x8000000,	/* 1000 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_KEY_INFO = 0x40000000,	/* 0100 0000 0000 0000 0000 0000 0000 0000 */
   /* SELECT key information from index b-tree instead of table record data */
-  PT_HINT_SELECT_BTREE_NODE_INFO = 0x10000000	/* 0001 0000 0000 0000 0000 0000 0000 */
+  PT_HINT_SELECT_BTREE_NODE_INFO = 0x80000000	/* 1000 0000 0000 0000 0000 0000 0000 */
     /* SELECT b-tree node information */
 } PT_HINT_ENUM;
 
@@ -1425,6 +1443,8 @@ typedef enum
   PT_AES_DECRYPT,
   PT_SHA_ONE,
   PT_SHA_TWO,
+  PT_TO_BASE64,
+  PT_FROM_BASE64,
 
   /* This is the last entry. Please add a new one before it. */
   PT_LAST_OPCODE
@@ -1784,6 +1804,7 @@ struct pt_alter_info
   PT_NODE *constraint_list;	/* constraints from ADD and CHANGE clauses */
   PT_NODE *create_index;	/* PT_CREATE_INDEX from ALTER ADD INDEX */
   PT_NODE *internal_stmts;	/* internally created statements to handle TEXT */
+  PT_HINT_ENUM hint;
 };
 
 /* ALTER USER INFO */
@@ -1983,6 +2004,8 @@ struct pt_data_type_info
   int dec_precision;		/* decimal precision for float */
   int units;			/* for money (or string's codeset) */
   int collation_id;		/* collation identifier (strings) */
+  /* how the collation should be taken into account */
+  TP_DOMAIN_COLL_ACTION collation_flag;
   bool has_coll_spec;		/* this is used only when defining collatable
 				 * types: true if collation was explicitly
 				 * set, false otherwise (collation defaulted
@@ -2165,7 +2188,9 @@ struct pt_expr_info
 					 * the derived subquery ?
 					 * is removed at the last rewrite stage
 					 * of query optimizer */
+#if 1				/* unused anymore - DO NOT DELETE ME */
 #define PT_EXPR_INFO_FULL_RANGE  1024	/* non-null full RANGE term ? */
+#endif
 #define	PT_EXPR_INFO_CAST_NOFAIL 2048	/* flag for non failing cast operation;
 					 * at runtime will return null DB_VALUE
 					 * instead of failing */
@@ -3029,7 +3054,7 @@ struct pt_value_info
   bool print_collation;
   bool has_cs_introducer;	/* 1 if charset introducer is used for string
 				 * node e.g. _utf8'a'; 0 otherwise. */
-  bool is_collate_allowed;	/* 1 if this is a PT_VALUE allowed to have 
+  bool is_collate_allowed;	/* 1 if this is a PT_VALUE allowed to have
 				 * the COLLATE modifier (the grammar context
 				 * in which is created allows it) */
   int coll_modifier;		/* collation modifier = collation + 1 */
@@ -3417,6 +3442,7 @@ struct parser_node
 					   view, do not replace order by */
   unsigned is_added_by_parser:1;	/* is added by parser during parsing */
   unsigned is_alias_enabled_expr:1;	/* node allowed to have alias */
+  unsigned is_wrapped_res_for_coll:1;	/* is a result node wrapped with CAST by collation inference */
   PT_STATEMENT_INFO info;	/* depends on 'node_type' field */
 };
 
@@ -3445,18 +3471,35 @@ struct keyword_record
   short unreserved;		/* keyword can be used as an identifier, 0 means it is reserved and cannot be used as an identifier, nonzero means it can be  */
 };
 
-typedef union pt_plan_trace_info
+typedef struct pt_plan_trace_info
 {
-  char *text_plan;
-  json_t *json_plan;
+  QUERY_TRACE_FORMAT format;
+  union
+  {
+    char *text_plan;
+    json_t *json_plan;
+  } trace;
 } PT_PLAN_TRACE_INFO;
 
 typedef int (*PT_CASECMP_FUN) (const char *s1, const char *s2);
 typedef int (*PT_INT_FUNCTION) (PARSER_CONTEXT * c);
 
+/*
+ * COMPILE_CONTEXT cover from user input query string to gnerated xasl
+ */
+typedef struct compile_context COMPILE_CONTEXT;
+struct compile_context
+{
+  struct xasl_node *xasl;
 
+  char *sql_user_text;		/* original query statement that user input */
+  int sql_user_text_len;	/* length of sql_user_text */
 
-struct compile_context;
+  char *sql_hash_text;		/* rewrited query string which is used as hash key */
+
+  char *sql_plan_text;		/* plans for this query */
+  int sql_plan_alloc_size;	/* query_plan alloc size */
+};
 
 struct parser_context
 {
@@ -3527,6 +3570,16 @@ struct parser_context
   long int lrand;		/* integer random value used by rand() */
   double drand;			/* floating-point random value used by drand() */
 
+  char *ddl_stmt_for_replication;
+
+  COMPILE_CONTEXT context;
+
+  bool query_trace;
+  int num_plan_trace;
+  PT_PLAN_TRACE_INFO plan_trace[MAX_NUM_PLAN_TRACE];
+
+  LC_LOCKHINT *lockhint;
+
   unsigned has_internal_error:1;	/* 0 or 1 */
   unsigned abort:1;		/* this flag is for aborting a transaction */
   /* if deadlock occurs during query execution */
@@ -3539,23 +3592,18 @@ struct parser_context
 					   when it printed a value whose type
 					   cannot be clearly determined from
 					   the string representation */
-  bool strings_have_no_escapes:1;
-  bool is_in_and_list:1;	/* set to 1 when the caller immediately above is
+  unsigned strings_have_no_escapes:1;
+  unsigned is_in_and_list:1;	/* set to 1 when the caller immediately above is
 				   pt_print_and_list(). Used because AND lists (CNF
 				   trees) can be printed via print_and_list or
 				   straight via pt_print_expr().
 				   We need to keep print_and_list because it could
 				   get called before we get a chance to mark the
 				   CNF start nodes. */
-  bool is_holdable;		/* set to true if result must be available across
+  unsigned is_holdable:1;	/* set to true if result must be available across
 				   commits */
-  bool dont_collect_exec_stats:1;
-  char *ddl_stmt_for_replication;
-  struct compile_context *context;
-
-  bool query_trace;
-  int num_plan_trace;
-  PT_PLAN_TRACE_INFO plan_trace[MAX_NUM_PLAN_TRACE];
+  unsigned dont_collect_exec_stats:1;
+  unsigned return_generated_keys:1;
 };
 
 /* used in assignments enumeration */

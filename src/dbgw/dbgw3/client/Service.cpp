@@ -25,6 +25,7 @@
 #include "dbgw3/Logger.h"
 #include "dbgw3/Value.h"
 #include "dbgw3/ValueSet.h"
+#include "dbgw3/system/Time.h"
 #include "dbgw3/system/ThreadEx.h"
 #include "dbgw3/sql/DatabaseInterface.h"
 #include "dbgw3/sql/ResultSetMetaData.h"
@@ -36,6 +37,7 @@
 #include "dbgw3/client/Service.h"
 #include "dbgw3/client/CharsetConverter.h"
 #include "dbgw3/client/Group.h"
+#include "dbgw3/system/Time.h"
 
 namespace dbgw
 {
@@ -51,11 +53,12 @@ namespace dbgw
   public:
     Impl(const std::string &fileName, const std::string &nameSpace,
         const std::string &description, bool bNeedValidation[],
-        int nValidateRatio) :
+        int nValidateRatio, long lWaitTimeMilSec) :
       m_fileName(fileName), m_nameSpace(nameSpace), m_description(description),
-      m_nValidateRatio(nValidateRatio),
+      m_nValidateRatio(nValidateRatio), m_lMaxWait(system::pool::NOWAIT_TIMEOUT),
       m_ulTimeBetweenEvictionRunsMillis(
-          _ExecutorPoolContext::DEFAULT_TIME_BETWEEN_EVICTION_RUNS_MILLIS())
+          _ExecutorPoolContext::DEFAULT_TIME_BETWEEN_EVICTION_RUNS_MILLIS()),
+      m_lWaitTimeMilSec(lWaitTimeMilSec)
     {
       memcpy(m_bNeedValidation, bNeedValidation, sql::DBGW_STMT_TYPE_SIZE);
 
@@ -92,6 +95,7 @@ namespace dbgw
 
     void initGroup(_ExecutorPoolContext &poolContext)
     {
+      m_lMaxWait = poolContext.maxWait;
       m_ulTimeBetweenEvictionRunsMillis =
           poolContext.timeBetweenEvictionRunsMillis;
 
@@ -127,6 +131,15 @@ namespace dbgw
 
           ChangePoolContextException e("initialSize", poolContext.initialSize,
               "initialSize > maxIdle");
+          DBGW_LOG_WARN(e.what());
+        }
+
+      if (poolContext.maxWait < -1)
+        {
+          poolContext.maxWait = system::pool::INFINITE_TIMEOUT;
+
+          ChangePoolContextException e("maxWait", poolContext.maxWait,
+              "INFINITE TIMEOUT is -1");
           DBGW_LOG_WARN(e.what());
         }
 
@@ -227,6 +240,11 @@ namespace dbgw
       return m_groupList.empty();
     }
 
+    long getWaitTimeMilSec() const
+    {
+      return m_lWaitTimeMilSec;
+    }
+
     trait<_Group>::sp getGroup(const char *szGroupName) const
     {
       trait<_Group>::spvector::const_iterator it = m_groupList.begin();
@@ -280,18 +298,25 @@ namespace dbgw
     std::string m_description;
     bool m_bNeedValidation[sql::DBGW_STMT_TYPE_SIZE];
     int m_nValidateRatio;
+    long m_lMaxWait;
     unsigned long m_ulTimeBetweenEvictionRunsMillis;
+    long m_lWaitTimeMilSec;
     /* (groupName => Group) */
     trait<_Group>::spvector m_groupList;
   };
 
+  long _Service::DEFAULT_WAIT_TIME_MILSEC()
+  {
+    return system::UNDEFINED_TIMEOUT;
+  }
+
   _Service::_Service(const _Connector &connector,
       const std::string &fileName, const std::string &nameSpace,
       const std::string &description, bool bNeedValidation[],
-      int nValidateRatio) :
+      int nValidateRatio, long lWaitTimeMilSec) :
     system::_ThreadEx(Impl::run), _ConfigurationObject(connector),
     m_pImpl(new Impl(fileName, nameSpace, description,
-        bNeedValidation, nValidateRatio))
+        bNeedValidation, nValidateRatio, lWaitTimeMilSec))
   {
   }
 
@@ -341,6 +366,11 @@ namespace dbgw
   bool _Service::empty() const
   {
     return m_pImpl->empty();
+  }
+
+  long _Service::getWaitTimeMilSec() const
+  {
+    return m_pImpl->getWaitTimeMilSec();
   }
 
   trait<_Group>::sp _Service::getGroup(const char *szGroupName) const

@@ -2451,7 +2451,8 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	  /* adjust range */
 	  btree_ils_adjust_range (thread_p, &key_vals[iscan_id->curr_keyno],
 				  &BTS->cur_key, indx_infop->ils_prefix_len,
-				  indx_infop->use_desc_index);
+				  indx_infop->use_desc_index,
+				  BTREE_IS_PART_KEY_DESC (&(BTS->btid_int)));
 	}
 
       if (iscan_id->multi_range_opt.use)
@@ -2552,7 +2553,8 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	  /* adjust range */
 	  btree_ils_adjust_range (thread_p, &key_vals[iscan_id->curr_keyno],
 				  &BTS->cur_key, indx_infop->ils_prefix_len,
-				  indx_infop->use_desc_index);
+				  indx_infop->use_desc_index,
+				  BTREE_IS_PART_KEY_DESC (&(BTS->btid_int)));
 	}
 
       if (iscan_id->multi_range_opt.use)
@@ -2632,12 +2634,15 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	    }
 	  else if (indx_infop->ils_prefix_len > 0)
 	    {
+	      bool part_key_desc = BTREE_IS_PART_KEY_DESC (&(BTS->btid_int));
+
 	      /* adjust range */
 	      btree_ils_adjust_range (thread_p,
 				      &key_vals[iscan_id->curr_keyno],
 				      &BTS->cur_key,
 				      indx_infop->ils_prefix_len,
-				      indx_infop->use_desc_index);
+				      indx_infop->use_desc_index,
+				      part_key_desc);
 	    }
 
 	  if (iscan_id->multi_range_opt.use)
@@ -2776,12 +2781,15 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	    }
 	  else if (indx_infop->ils_prefix_len > 0)
 	    {
+	      bool part_key_desc = BTREE_IS_PART_KEY_DESC (&(BTS->btid_int));
+
 	      /* adjust range */
 	      btree_ils_adjust_range (thread_p,
 				      &key_vals[iscan_id->curr_keyno],
 				      &BTS->cur_key,
 				      indx_infop->ils_prefix_len,
-				      indx_infop->use_desc_index);
+				      indx_infop->use_desc_index,
+				      part_key_desc);
 	    }
 
 	  if (iscan_id->multi_range_opt.use)
@@ -3228,7 +3236,8 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   BTID *btid;
   VPID Root_vpid;
   PAGE_PTR Root;
-  BTREE_ROOT_HEADER root_header;
+  RECDES Rec;
+  BTREE_ROOT_HEADER *root_header;
   BTREE_SCAN *BTS;
   int coverage_enabled;
   int func_index_col_id;
@@ -3255,16 +3264,32 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 
   (void) pgbuf_check_page_ptype (thread_p, Root, PAGE_BTREE);
 
-  if (btree_read_root_header (Root, &root_header) != NO_ERROR)
+  root_header = btree_get_root_header_ptr (Root);
+  if (root_header == NULL)
     {
       pgbuf_unfix_and_init (thread_p, Root);
       return ER_FAILED;
     }
 
-  pgbuf_unfix_and_init (thread_p, Root);
-
   /* initialize INDEX_SCAN_ID structure */
   isidp = &scan_id->s.isid;
+
+  /* index scan info */
+  BTS = &isidp->bt_scan;
+
+  /* construct BTID_INT structure */
+  BTS->btid_int.sys_btid = btid;
+
+  if (btree_glean_root_header_info (thread_p,
+				    root_header, &BTS->btid_int) != NO_ERROR)
+    {
+      pgbuf_unfix_and_init (thread_p, Root);
+      goto exit_on_error;
+    }
+
+  pgbuf_unfix_and_init (thread_p, Root);
+
+  BTREE_INIT_SCAN (BTS);
 
   /* index information */
   isidp->indx_info = indx_info;
@@ -3282,19 +3307,6 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   /* initialize key limits */
   if (scan_init_index_key_limit (thread_p, isidp, &indx_info->key_info, vd) !=
       NO_ERROR)
-    {
-      goto exit_on_error;
-    }
-
-  BTS = &isidp->bt_scan;
-
-  /* index scan info */
-  BTREE_INIT_SCAN (BTS);
-
-  /* construct BTID_INT structure */
-  BTS->btid_int.sys_btid = btid;
-  if (btree_glean_root_header_info (thread_p,
-				    &root_header, &BTS->btid_int) != NO_ERROR)
     {
       goto exit_on_error;
     }
@@ -3327,6 +3339,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 
   /* indicator whether covering index is used or not */
   coverage_enabled = (indx_info->coverage != 0) && (scan_op_type == S_SELECT);
+  scan_id->stats.loose_index_scan = indx_info->ils_prefix_len > 0;
 
   /* is a single range? */
   isidp->one_range = false;
@@ -3462,7 +3475,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 
   if (scan_init_indx_coverage (thread_p, coverage_enabled, output_val_list,
 			       regu_val_list, vd, query_id,
-			       root_header.node.max_key_len,
+			       root_header->node.max_key_len,
 			       func_index_col_id,
 			       &(isidp->indx_cov)) != NO_ERROR)
     {
@@ -3591,7 +3604,7 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   BTID *btid = NULL;
   VPID root_vpid;
   PAGE_PTR root_page = NULL;
-  BTREE_ROOT_HEADER root_header;
+  BTREE_ROOT_HEADER *root_header = NULL;
   BTREE_SCAN *bts = NULL;
   int func_index_col_id;
   DB_TYPE single_node_type = DB_TYPE_NULL;
@@ -3615,7 +3628,7 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     {
       return ER_FAILED;
     }
-  btree_read_root_header (root_page, &root_header);
+  root_header = btree_get_root_header_ptr (root_page);
   pgbuf_unfix_and_init (thread_p, root_page);
 
   /* initialize INDEX_SCAN_ID structure */
@@ -3648,8 +3661,8 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 
   /* construct BTID_INT structure */
   bts->btid_int.sys_btid = btid;
-  if (btree_glean_root_header_info (thread_p,
-				    &root_header, &bts->btid_int) != NO_ERROR)
+  if (btree_glean_root_header_info (thread_p, root_header, &bts->btid_int)
+      != NO_ERROR)
     {
       goto exit_on_error;
     }
@@ -3714,7 +3727,7 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   isidp->lock_hint = NULL_LOCK;
 
   if (scan_init_indx_coverage (thread_p, false, NULL, NULL, vd, query_id,
-			       root_header.node.max_key_len,
+			       root_header->node.max_key_len,
 			       func_index_col_id,
 			       &(isidp->indx_cov)) != NO_ERROR)
     {
@@ -3816,7 +3829,7 @@ scan_open_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   INDEX_NODE_SCAN_ID *idx_nsid_p = NULL;
   VPID root_vpid;
   PAGE_PTR root_page = NULL;
-  BTREE_ROOT_HEADER root_header;
+  BTREE_ROOT_HEADER *root_header = NULL;
   DB_TYPE single_node_type = DB_TYPE_NULL;
   BTID *btid = NULL;
 
@@ -3851,12 +3864,12 @@ scan_open_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     {
       return ER_FAILED;
     }
-  btree_read_root_header (root_page, &root_header);
+  root_header = btree_get_root_header_ptr (root_page);
   pgbuf_unfix_and_init (thread_p, root_page);
 
   /* construct BTID_INT structure */
   idx_nsid_p->btns.btid_int.sys_btid = btid;
-  if (btree_glean_root_header_info (thread_p, &root_header,
+  if (btree_glean_root_header_info (thread_p, root_header,
 				    &idx_nsid_p->btns.btid_int) != NO_ERROR)
     {
       return ER_FAILED;
@@ -4602,6 +4615,11 @@ scan_reset_scan_block (THREAD_ENTRY * thread_p, SCAN_ID * s_id)
       qfile_start_scan_fix (thread_p, &s_id->s.llsid.lsid);
       s_id->position = S_BEFORE;
       s_id->s.llsid.lsid.position = S_BEFORE;
+      break;
+
+    case S_SHOWSTMT_SCAN:
+      s_id->s.stsid.cursor = 0;
+      s_id->position = S_BEFORE;
       break;
 
     case S_CLASS_ATTR_SCAN:
@@ -7433,11 +7451,12 @@ resolve_domains_on_list_scan (LLIST_SCAN_ID * llsidp, VAL_LIST * ref_val_list)
       return;
     }
 
-  /*resolve domains on regu_list of scan predicate */
+  /* resolve domains on regu_list of scan predicate */
   for (scan_regu = llsidp->scan_pred.regu_list; scan_regu != NULL;
        scan_regu = scan_regu->next)
     {
-      if (TP_DOMAIN_TYPE (scan_regu->value.domain) == DB_TYPE_VARIABLE
+      if ((TP_DOMAIN_TYPE (scan_regu->value.domain) == DB_TYPE_VARIABLE
+	   || TP_DOMAIN_COLLATION_FLAG (scan_regu->value.domain))
 	  && scan_regu->value.type == TYPE_POSITION)
 	{
 	  int pos = scan_regu->value.value.pos_descr.pos_no;
@@ -7446,8 +7465,8 @@ resolve_domains_on_list_scan (LLIST_SCAN_ID * llsidp, VAL_LIST * ref_val_list)
 	  assert (pos < llsidp->list_id->type_list.type_cnt);
 	  new_dom = llsidp->list_id->type_list.domp[pos];
 
-
-	  if (TP_DOMAIN_TYPE (new_dom) == DB_TYPE_VARIABLE)
+	  if (TP_DOMAIN_TYPE (new_dom) == DB_TYPE_VARIABLE
+	      || TP_DOMAIN_COLLATION_FLAG (new_dom) != TP_DOMAIN_COLL_NORMAL)
 	    {
 	      continue;
 	    }
@@ -7457,11 +7476,13 @@ resolve_domains_on_list_scan (LLIST_SCAN_ID * llsidp, VAL_LIST * ref_val_list)
 	}
     }
 
-  /*resolve domains on rest_regu_list of scan predicate */
+  /* resolve domains on rest_regu_list of scan predicate */
   for (scan_regu = llsidp->rest_regu_list; scan_regu != NULL;
        scan_regu = scan_regu->next)
     {
-      if (TP_DOMAIN_TYPE (scan_regu->value.domain) == DB_TYPE_VARIABLE
+      if ((TP_DOMAIN_TYPE (scan_regu->value.domain) == DB_TYPE_VARIABLE
+	   || TP_DOMAIN_COLLATION_FLAG (scan_regu->value.domain)
+	   != TP_DOMAIN_COLL_NORMAL)
 	  && scan_regu->value.type == TYPE_POSITION)
 	{
 	  int pos = scan_regu->value.value.pos_descr.pos_no;
@@ -7470,8 +7491,8 @@ resolve_domains_on_list_scan (LLIST_SCAN_ID * llsidp, VAL_LIST * ref_val_list)
 	  assert (pos < llsidp->list_id->type_list.type_cnt);
 	  new_dom = llsidp->list_id->type_list.domp[pos];
 
-
-	  if (TP_DOMAIN_TYPE (new_dom) == DB_TYPE_VARIABLE)
+	  if (TP_DOMAIN_TYPE (new_dom) == DB_TYPE_VARIABLE
+	      || TP_DOMAIN_COLLATION_FLAG (new_dom) != TP_DOMAIN_COLL_NORMAL)
 	    {
 	      continue;
 	    }
@@ -7480,7 +7501,7 @@ resolve_domains_on_list_scan (LLIST_SCAN_ID * llsidp, VAL_LIST * ref_val_list)
 	}
     }
 
-  /*resolve domains on predicate expression of scan predicate */
+  /* resolve domains on predicate expression of scan predicate */
   if (llsidp->scan_pred.pred_expr == NULL)
     {
       return;
@@ -7493,16 +7514,20 @@ resolve_domains_on_list_scan (LLIST_SCAN_ID * llsidp, VAL_LIST * ref_val_list)
       if (ev_t.et_type == T_COMP_EVAL_TERM)
 	{
 	  if (ev_t.et.et_comp.lhs != NULL &&
-	      TP_DOMAIN_TYPE (ev_t.et.et_comp.lhs->domain) ==
-	      DB_TYPE_VARIABLE)
+	      (TP_DOMAIN_TYPE (ev_t.et.et_comp.lhs->domain) ==
+	       DB_TYPE_VARIABLE ||
+	       TP_DOMAIN_COLLATION_FLAG (ev_t.et.et_comp.lhs->domain)
+	       != TP_DOMAIN_COLL_NORMAL))
 	    {
 	      resolve_domain_on_regu_operand (ev_t.et.et_comp.lhs,
 					      ref_val_list,
 					      &(llsidp->list_id->type_list));
 	    }
 	  if (ev_t.et.et_comp.rhs != NULL &&
-	      TP_DOMAIN_TYPE (ev_t.et.et_comp.rhs->domain) ==
-	      DB_TYPE_VARIABLE)
+	      (TP_DOMAIN_TYPE (ev_t.et.et_comp.rhs->domain) ==
+	       DB_TYPE_VARIABLE ||
+	       TP_DOMAIN_COLLATION_FLAG (ev_t.et.et_comp.rhs->domain)
+	       != TP_DOMAIN_COLL_NORMAL))
 	    {
 	      resolve_domain_on_regu_operand (ev_t.et.et_comp.rhs,
 					      ref_val_list,
@@ -7536,7 +7561,7 @@ resolve_domain_on_regu_operand (REGU_VARIABLE * regu_var,
       int pos = 0;
       bool found = false;
 
-      /*search in ref_val_list for the corresponding DB_VALUE */
+      /* search in ref_val_list for the corresponding DB_VALUE */
       for (value_list = ref_val_list->valp; value_list != NULL;
 	   value_list = value_list->next, pos++)
 	{
@@ -7758,6 +7783,11 @@ scan_print_stats_json (SCAN_ID * scan_id, json_t * stats)
 	{
 	  json_object_set_new (stats, "iss", json_true ());
 	}
+
+      if (scan_id->stats.loose_index_scan == true)
+	{
+	  json_object_set_new (stats, "loose", json_true ());
+	}
     }
   else if (scan_id->type == S_SHOWSTMT_SCAN)
     {
@@ -7859,6 +7889,10 @@ scan_print_stats_text (FILE * fp, SCAN_ID * scan_id)
 	  fprintf (fp, ", iss: true");
 	}
 
+      if (scan_id->stats.loose_index_scan == true)
+	{
+	  fprintf (fp, ", loose: true");
+	}
       fprintf (fp, ")");
 
       if (scan_id->stats.covered_index == false)

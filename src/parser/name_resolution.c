@@ -89,6 +89,8 @@ struct natural_join_attr_info
   NATURAL_JOIN_ATTR_INFO *next;
 };
 
+static const char *CPTR_PT_NAME_IN_GROUP_HAVING = "name_in_group_having";
+
 typedef struct pt_bind_names_data_type PT_BIND_NAMES_DATA_TYPE;
 struct pt_bind_names_data_type
 {
@@ -182,7 +184,6 @@ static PT_NODE *pt_object_to_data_type (PARSER_CONTEXT * parser,
 static int pt_resolve_hint_args (PARSER_CONTEXT * parser, PT_NODE * arg_list,
 				 PT_NODE * spec_list);
 static int pt_resolve_hint (PARSER_CONTEXT * parser, PT_NODE * node);
-static const char *pt_unique_id (PARSER_CONTEXT * parser, UINTPTR t);
 static PT_NODE *pt_copy_data_type_entity (PARSER_CONTEXT * parser,
 					  PT_NODE * data_type);
 static PT_NODE *pt_insert_conjunct (PARSER_CONTEXT * parser,
@@ -229,6 +230,8 @@ static void pt_bind_names_merge_update (PARSER_CONTEXT * parser,
 					PT_BIND_NAMES_ARG * bind_arg,
 					SCOPES * scopestack,
 					PT_EXTRA_SPECS_FRAME * specs_frame);
+static const char *pt_get_unique_exposed_name (PARSER_CONTEXT * parser,
+					       PT_NODE * first_spec);
 
 static PT_NODE *pt_resolve_natural_join (PARSER_CONTEXT * parser,
 					 PT_NODE * node, void *chk_parent,
@@ -265,6 +268,39 @@ static int generate_natural_join_attrs_from_db_attrs (DB_ATTRIBUTE * db_attrs,
 						      NATURAL_JOIN_ATTR_INFO
 						      ** attrs_p);
 
+static bool is_pt_name_in_group_having (PT_NODE * node);
+
+static PT_NODE *pt_mark_pt_name (PARSER_CONTEXT * parser, PT_NODE * node,
+				 void *chk_parent, int *continue_walk);
+
+static PT_NODE *pt_mark_group_having_pt_name (PARSER_CONTEXT * parser,
+					      PT_NODE * node,
+					      void *chk_parent,
+					      int *continue_walk);
+
+static void pt_resolve_group_having_alias_pt_sort_spec (PARSER_CONTEXT *
+							parser,
+							PT_NODE * node,
+							PT_NODE *
+							select_list);
+
+static void pt_resolve_group_having_alias_pt_name (PARSER_CONTEXT * parser,
+						   PT_NODE ** node_p,
+						   PT_NODE * select_list);
+
+static void pt_resolve_group_having_alias_pt_expr (PARSER_CONTEXT * parser,
+						   PT_NODE * node,
+						   PT_NODE * select_list);
+
+static void pt_resolve_group_having_alias_internal (PARSER_CONTEXT * parser,
+						    PT_NODE ** node_p,
+						    PT_NODE * select_list);
+
+static PT_NODE *pt_resolve_group_having_alias (PARSER_CONTEXT * parser,
+					       PT_NODE * node,
+					       void *chk_parent,
+					       int *continue_walk);
+
 static PT_NODE *pt_resolve_star_reserved_names (PARSER_CONTEXT * parser,
 						PT_NODE * from);
 static PT_NODE *pt_bind_reserved_name (PARSER_CONTEXT * parser,
@@ -278,7 +314,7 @@ static PT_NODE *pt_set_reserved_name_key_type (PARSER_CONTEXT * parser,
  *			   insert to make sure no "correlated" names are used
  * 			   in subqueries.
  *
- * return	      : Unchanged node argument. 
+ * return	      : Unchanged node argument.
  * parser (in)	      : Parser context.
  * node (in)	      : Parse tree node.
  * arg (in)	      : Insert spec.
@@ -806,19 +842,25 @@ pt_bind_name_or_path_in_scope (PARSER_CONTEXT * parser,
       node = pt_bind_parameter_path (parser, in_node);
     }
 
-  if (!node)
+  if (node == NULL)
     {
-      if (!pt_has_error (parser))
+      /* If pt_name in group by/ having, maybe it's alias. We will try 
+       * to resolve it later.
+       */
+      if (is_pt_name_in_group_having (in_node) == false)
 	{
-	  if (er_errid () != NO_ERROR)
+	  if (!pt_has_error (parser))
 	    {
-	      PT_ERRORc (parser, in_node, er_msg ());
-	    }
-	  else
-	    {
-	      PT_ERRORmf (parser, in_node, MSGCAT_SET_PARSER_SEMANTIC,
-			  MSGCAT_SEMANTIC_IS_NOT_DEFINED,
-			  pt_short_print (parser, in_node));
+	      if (er_errid () != NO_ERROR)
+		{
+		  PT_ERRORc (parser, in_node, er_msg ());
+		}
+	      else
+		{
+		  PT_ERRORmf (parser, in_node, MSGCAT_SET_PARSER_SEMANTIC,
+			      MSGCAT_SEMANTIC_IS_NOT_DEFINED,
+			      pt_short_print (parser, in_node));
+		}
 	    }
 	}
     }
@@ -4286,6 +4328,7 @@ pt_domain_to_data_type (PARSER_CONTEXT * parser, DB_DOMAIN * domain)
       result->info.data_type.dec_precision = db_domain_scale (domain);
       result->info.data_type.units = db_domain_codeset (domain);
       result->info.data_type.collation_id = db_domain_collation_id (domain);
+      result->info.data_type.collation_flag = domain->collation_flag;
       assert (result->info.data_type.collation_id >= 0);
       break;
 
@@ -6458,6 +6501,8 @@ static int
 pt_must_have_exposed_name (PARSER_CONTEXT * parser, PT_NODE * p)
 {
   PT_NODE *q = 0, *r;
+  PT_NODE *spec_first = p;
+
   while (p)
     {
       if (p->node_type == PT_SPEC)
@@ -6477,6 +6522,7 @@ pt_must_have_exposed_name (PARSER_CONTEXT * parser, PT_NODE * p)
 		}
 	      else
 		{
+		  const char *unique_exposed_name;
 		  /*
 		     Was sublist, they didn't give a correlation variable name so
 		     We generate a unique name and attach it.
@@ -6491,8 +6537,17 @@ pt_must_have_exposed_name (PARSER_CONTEXT * parser, PT_NODE * p)
 
 		  r->info.name.spec_id = p->info.spec.id;
 		  r->info.name.meta_class = p->info.spec.meta_class;
-		  r->info.name.original = pt_unique_id (parser,
-							r->info.name.spec_id);
+
+		  unique_exposed_name =
+		    pt_get_unique_exposed_name (parser, spec_first);
+
+		  if (unique_exposed_name == NULL)
+		    {
+		      PT_INTERNAL_ERROR (parser, "allocate new table name");
+		      return 0;
+		    }
+
+		  r->info.name.original = unique_exposed_name;
 		  r->line_number = p->line_number;
 		  r->column_number = p->column_number;
 		  p->info.spec.range_var = r;
@@ -7067,12 +7122,6 @@ pt_resolve_hint (PARSER_CONTEXT * parser, PT_NODE * node)
     }
 
 #if 0
-  if (hint & PT_HINT_W)
-    {				/* not used */
-    }
-  if (hint & PT_HINT_X)
-    {				/* not used */
-    }
   if (hint & PT_HINT_Y)
     {				/* not used */
     }
@@ -7357,20 +7406,35 @@ pt_str_compare (const char *p, const char *q, CASE_SENSITIVENESS case_flag)
 }
 
 /*
- * pt_unique_id () - Given a long, convert it to a unique identifier
- *   return: const char allocated with pt_append_string()
- *   parser(in):
- *   t(in):
+ * pt_get_unique_exposed_name () -
+ *   return:
  *
- * Note :
- *       Identifier is of form:   a<numeric-characters>
+ *   parser(in):
+ *   first_spec(in):
  */
 static const char *
-pt_unique_id (PARSER_CONTEXT * parser, UINTPTR t)
+pt_get_unique_exposed_name (PARSER_CONTEXT * parser, PT_NODE * first_spec)
 {
-  char c[40];
-  sprintf (c, "a%lld", (long long) t);
-  return pt_append_string (parser, 0, c);
+  char name_buf[32];
+  int i = 1;
+
+  if (first_spec->node_type != PT_SPEC)
+    {
+      assert (first_spec->node_type == PT_SPEC);
+      return NULL;
+    }
+
+  while (1)
+    {
+      snprintf (name_buf, 32, "__t%u", i);
+      if (pt_name_occurs_in_from_list (parser, name_buf, first_spec) == 0)
+	{
+	  return pt_append_string (parser, NULL, name_buf);
+	}
+      i++;
+    }
+
+  return NULL;
 }
 
 /*
@@ -7440,13 +7504,13 @@ pt_quick_resolve_names (PARSER_CONTEXT * parser, PT_NODE ** spec_p,
 
 /*
  * natural_join_equal_attr () - If the two attributes have same name,
- *     the function return true. We don't consider the type there. 
- *     Whether the join can be executed is dependent on whether the 
- *     two types are compatible. If not, the error will be threw by 
+ *     the function return true. We don't consider the type there.
+ *     Whether the join can be executed is dependent on whether the
+ *     two types are compatible. If not, the error will be threw by
  *     subsequent process.
  *   return:
  *   lhs(in):
- *   rhs(in): 
+ *   rhs(in):
  */
 static bool
 natural_join_equal_attr (NATURAL_JOIN_ATTR_INFO * lhs,
@@ -7474,7 +7538,7 @@ natural_join_equal_attr (NATURAL_JOIN_ATTR_INFO * lhs,
 }
 
 /*
- * free_natural_join_attrs () - 
+ * free_natural_join_attrs () -
  *   return:
  *   attrs(in):
  */
@@ -7494,10 +7558,10 @@ free_natural_join_attrs (NATURAL_JOIN_ATTR_INFO * attrs)
 }
 
 /*
- * generate_natural_join_attrs_from_subquery () - 
+ * generate_natural_join_attrs_from_subquery () -
  *   return:
  *   subquery_attrs_list(in):
- *   attrs_p(out): 
+ *   attrs_p(out):
  */
 static int
 generate_natural_join_attrs_from_subquery (PT_NODE * subquery_attrs_list,
@@ -7510,11 +7574,11 @@ generate_natural_join_attrs_from_subquery (PT_NODE * subquery_attrs_list,
 
   for (pt_cur = subquery_attrs_list; pt_cur != NULL; pt_cur = pt_cur->next)
     {
-      /* 
-       * We just deal the attributes which have name. It means we just 
-       * deal PT_NAME or other's pt_node have alias_name. For example, 
+      /*
+       * We just deal the attributes which have name. It means we just
+       * deal PT_NAME or other's pt_node have alias_name. For example,
        * select 1 from t1. The '1' is impossible to be used in natural
-       * join, so we skip it. 
+       * join, so we skip it.
        */
 
       if (pt_cur->alias_print == NULL && pt_cur->node_type != PT_NAME)
@@ -7531,8 +7595,8 @@ generate_natural_join_attrs_from_subquery (PT_NODE * subquery_attrs_list,
 
       attr_cur->next = NULL;
 
-      /* 
-       * Alias name have higher priority. select a as txx from .... 
+      /*
+       * Alias name have higher priority. select a as txx from ....
        * We consider txx as the attribute's name and ignore a.
        */
       if (pt_cur->alias_print)
@@ -7577,10 +7641,10 @@ exit_on_error:
 
 
 /*
- * generate_natural_join_attrs_from_db_attrs () - 
+ * generate_natural_join_attrs_from_db_attrs () -
  *   return:
  *   db_attrs(in):
- *   attrs_p(out): 
+ *   attrs_p(out):
  */
 static int
 generate_natural_join_attrs_from_db_attrs (DB_ATTRIBUTE * db_attrs,
@@ -7629,11 +7693,11 @@ exit_on_error:
 }
 
 /*
- * get_natural_join_attrs_from_pt_spec () - Get all attributes from a pt_spec 
+ * get_natural_join_attrs_from_pt_spec () - Get all attributes from a pt_spec
  *     node that indicates an table or a subquery.
  *   return:
  *   parser(in):
- *   node(in): 
+ *   node(in):
  */
 static NATURAL_JOIN_ATTR_INFO *
 get_natural_join_attrs_from_pt_spec (PARSER_CONTEXT * parser, PT_NODE * node)
@@ -7716,11 +7780,11 @@ exit_on_error:
 }
 
 /*
- * pt_create_pt_expr_equal_node () - The function creates the PT_expr 
- *     for natural join. The operator is " = ". 
+ * pt_create_pt_expr_equal_node () - The function creates the PT_expr
+ *     for natural join. The operator is " = ".
  *   return:
  *   parser(in):
- *   arg1(in): 
+ *   arg1(in):
  *   arg2(in):
  */
 static PT_NODE *
@@ -7746,11 +7810,11 @@ pt_create_pt_expr_equal_node (PARSER_CONTEXT * parser, PT_NODE * arg1,
 
 /*
  * pt_create_pt_name () - The function creates the PT_NAME name for natural
- *     join. The pt_name node indicates an attribute in a table/subquery. 
+ *     join. The pt_name node indicates an attribute in a table/subquery.
  *     The spec indicates the table/subquery.
  *   return:
  *   parser(in):
- *   spec(in): 
+ *   spec(in):
  *   attr(in):
  */
 static PT_NODE *
@@ -7785,11 +7849,11 @@ pt_create_pt_name (PARSER_CONTEXT * parser, PT_NODE * spec,
 }
 
 /*
- * pt_create_pt_expr_and_node () - The function create the PT_expr for natural 
- *     join. The operator is AND. 
+ * pt_create_pt_expr_and_node () - The function create the PT_expr for natural
+ *     join. The operator is AND.
  *   return:
  *   parser(in):
- *   arg1(in): 
+ *   arg1(in):
  *   arg2(in):
  */
 static PT_NODE *
@@ -7815,11 +7879,11 @@ pt_create_pt_expr_and_node (PARSER_CONTEXT * parser, PT_NODE * arg1,
 
 /*
  * pt_resolve_natural_join_internal () - Resolve natural join into inner/outer join actually.
- *     For t1 natural join t2, join_lhs is t1 and join_rhs is t2. The function adds on_cond 
+ *     For t1 natural join t2, join_lhs is t1 and join_rhs is t2. The function adds on_cond
  *     into t2. After the process, the join will become an inner/outer join.
  *   return:
  *   parser(in):
- *   join_lhs(in): 
+ *   join_lhs(in):
  *   join_rhs(in/out):
  */
 static void
@@ -7886,8 +7950,8 @@ pt_resolve_natural_join_internal (PARSER_CONTEXT * parser, PT_NODE * join_lhs,
 	    }
 
 	  /*
-	   * step4: If there is no on_cond, the new expr we created will be on_cond. 
-	   *   If not, it means there is old on_conds. So we will create a new expr 
+	   * step4: If there is no on_cond, the new expr we created will be on_cond.
+	   *   If not, it means there is old on_conds. So we will create a new expr
 	   *   like "(old on_cond) and (new on_cond)".
 	   */
 	  if (on_cond_tail == NULL)
@@ -7956,29 +8020,328 @@ pt_resolve_natural_join (PARSER_CONTEXT * parser, PT_NODE * node,
 
   *continue_walk = PT_CONTINUE_WALK;
 
+  if (node == NULL || node->node_type != PT_SPEC)
+    {
+      return node;
+    }
+
+  join_lhs = node;
+  join_rhs = node->next;
+
+  /* there is a natural join */
+  if (join_rhs != NULL
+      && join_rhs->node_type == PT_SPEC
+      && join_rhs->info.spec.natural == true)
+    {
+      pt_resolve_natural_join_internal (parser, join_lhs, join_rhs);
+    }
+
+  return node;
+}
+
+/*
+ * is_pt_name_in_group_having () -
+ *   return:
+ *   node(in):
+ */
+static bool
+is_pt_name_in_group_having (PT_NODE * node)
+{
+  if (node == NULL || node->node_type != PT_NAME || node->etc == NULL)
+    {
+      return false;
+    }
+
+  if (intl_identifier_casecmp
+      ((char *) node->etc, CPTR_PT_NAME_IN_GROUP_HAVING) == 0)
+    {
+      return true;
+    }
+
+  return false;
+}
+
+/*
+ * pt_mark_pt_name () -
+ *   return:
+ *   parser(in):
+ *   node(in/out):
+ *   chk_parent(in):
+ *   continue_walk(in/out):
+ */
+static PT_NODE *
+pt_mark_pt_name (PARSER_CONTEXT * parser, PT_NODE * node,
+		 void *chk_parent, int *continue_walk)
+{
+  *continue_walk = PT_CONTINUE_WALK;
+
+  if (node == NULL || node->node_type != PT_NAME)
+    {
+      return node;
+    }
+  node->etc =
+    (void *) pt_append_string (parser, NULL, CPTR_PT_NAME_IN_GROUP_HAVING);
+
+  return node;
+}
+
+/*
+ * pt_mark_group_having_pt_name () - Mark the PT_NAME in group by / having.
+ *   return:
+ *   parser(in):
+ *   node(in/out):
+ *   chk_parent(in):
+ *   continue_walk(in/out):
+ */
+static PT_NODE *
+pt_mark_group_having_pt_name (PARSER_CONTEXT * parser, PT_NODE * node,
+			      void *chk_parent, int *continue_walk)
+{
+  *continue_walk = PT_CONTINUE_WALK;
+
   if (node == NULL || node->node_type != PT_SELECT)
     {
       return node;
     }
 
-  if (node->info.query.q.select.from == NULL)
+  if (node->info.query.q.select.group_by != NULL)
+    {
+      node->info.query.q.select.group_by =
+	parser_walk_tree (parser, node->info.query.q.select.group_by,
+			  pt_mark_pt_name, NULL, NULL, NULL);
+    }
+
+  if (node->info.query.q.select.having != NULL)
+    {
+      node->info.query.q.select.having =
+	parser_walk_tree (parser, node->info.query.q.select.having,
+			  pt_mark_pt_name, NULL, NULL, NULL);
+    }
+
+  return node;
+}
+
+/*
+ * pt_resolve_group_having_alias_pt_sort_spec () - 
+ *   return:
+ *   parser(in):
+ *   node(in/out):
+ *   select_list(in):
+ */
+static void
+pt_resolve_group_having_alias_pt_sort_spec (PARSER_CONTEXT * parser,
+					    PT_NODE * node,
+					    PT_NODE * select_list)
+{
+  if (node != NULL && node->node_type == PT_SORT_SPEC)
+    {
+      pt_resolve_group_having_alias_internal (parser,
+					      &(node->info.sort_spec.expr),
+					      select_list);
+    }
+}
+
+/*
+ * pt_resolve_group_having_alias_pt_name () - 
+ *   return:
+ *   parser(in):
+ *   node_p(in/out):
+ *   select_list(in):
+ */
+static void
+pt_resolve_group_having_alias_pt_name (PARSER_CONTEXT * parser,
+				       PT_NODE ** node_p,
+				       PT_NODE * select_list)
+{
+  PT_NODE *col;
+  char *n_str;
+  PT_NODE *node;
+
+  assert (node_p != NULL);
+
+  node = *node_p;
+
+  if (node == NULL || node->node_type != PT_NAME)
+    {
+      return;
+    }
+
+  /* It have been resolved. */
+  if (node->info.name.resolved != NULL)
+    {
+      return;
+    }
+
+  n_str = parser_print_tree (parser, *node_p);
+
+  for (col = select_list; col != NULL; col = col->next)
+    {
+      if (col->alias_print != NULL
+	  && intl_identifier_casecmp (n_str, col->alias_print) == 0)
+	{
+	  parser_free_node (parser, *node_p);
+	  *node_p = parser_copy_tree (parser, col);
+	  if ((*node_p) != NULL)
+	    {
+	      (*node_p)->next = NULL;
+	    }
+	  break;
+	}
+    }
+
+  /* We can not resolve the pt_name. */
+  if (col == NULL)
+    {
+      PT_ERRORmf (parser, (*node_p), MSGCAT_SET_PARSER_SEMANTIC,
+		  MSGCAT_SEMANTIC_IS_NOT_DEFINED,
+		  pt_short_print (parser, (*node_p)));
+    }
+}
+
+/*
+ * pt_resolve_group_having_alias_pt_expr () - 
+ *   return:
+ *   parser(in):
+ *   node(in/out):
+ *   select_list(in):
+ */
+static void
+pt_resolve_group_having_alias_pt_expr (PARSER_CONTEXT * parser,
+				       PT_NODE * node, PT_NODE * select_list)
+{
+  if (node == NULL || node->node_type != PT_EXPR)
+    {
+      return;
+    }
+
+  /* Resolve arg1 */
+  if (node->info.expr.arg1 != NULL
+      && node->info.expr.arg1->node_type == PT_NAME)
+    {
+      pt_resolve_group_having_alias_pt_name (parser, &node->info.expr.arg1,
+					     select_list);
+    }
+  else if (node->info.expr.arg1 != NULL
+	   && node->info.expr.arg1->node_type == PT_EXPR)
+    {
+      pt_resolve_group_having_alias_pt_expr (parser, node->info.expr.arg1,
+					     select_list);
+    }
+  else
+    {
+
+    }
+
+  /* Resolve arg2 */
+  if (node->info.expr.arg2 != NULL
+      && node->info.expr.arg2->node_type == PT_NAME)
+    {
+      pt_resolve_group_having_alias_pt_name (parser, &node->info.expr.arg2,
+					     select_list);
+    }
+  else if (node->info.expr.arg2 != NULL
+	   && node->info.expr.arg2->node_type == PT_EXPR)
+    {
+      pt_resolve_group_having_alias_pt_expr (parser, node->info.expr.arg2,
+					     select_list);
+    }
+  else
+    {
+
+    }
+
+  /* Resolve arg3 */
+  if (node->info.expr.arg3 != NULL
+      && node->info.expr.arg3->node_type == PT_NAME)
+    {
+      pt_resolve_group_having_alias_pt_name (parser, &node->info.expr.arg3,
+					     select_list);
+    }
+  else if (node->info.expr.arg3 != NULL
+	   && node->info.expr.arg3->node_type == PT_EXPR)
+    {
+      pt_resolve_group_having_alias_pt_expr (parser, node->info.expr.arg3,
+					     select_list);
+    }
+  else
+    {
+
+    }
+}
+
+/*
+ * pt_resolve_group_having_alias_internal () - Rosolve alias name in groupby and having clause.
+ *   return:
+ *   parser(in):
+ *   node_p(in/out):
+ *   select_list(in):
+ */
+static void
+pt_resolve_group_having_alias_internal (PARSER_CONTEXT * parser,
+					PT_NODE ** node_p,
+					PT_NODE * select_list)
+{
+  assert (node_p != NULL);
+  assert ((*node_p) != NULL);
+
+  switch ((*node_p)->node_type)
+    {
+    case PT_NAME:
+      pt_resolve_group_having_alias_pt_name (parser, node_p, select_list);
+      break;
+    case PT_EXPR:
+      pt_resolve_group_having_alias_pt_expr (parser, *node_p, select_list);
+      break;
+    case PT_SORT_SPEC:
+      pt_resolve_group_having_alias_pt_sort_spec (parser, *node_p,
+						  select_list);
+      break;
+    default:
+      return;
+    }
+  return;
+}
+
+/*
+ * pt_resolve_group_having_alias () - Resolve alias name in groupby and having clause. We 
+ *     resolve groupby/having alias after bind_name, it means when the alias name is same
+ *     with table attribute, we choose table attribute firstly.
+ *   return:
+ *   parser(in):
+ *   node(in/out):
+ *   chk_parent(in):
+ *   continue_walk(in/out):
+ */
+static PT_NODE *
+pt_resolve_group_having_alias (PARSER_CONTEXT * parser, PT_NODE * node,
+			       void *chk_parent, int *continue_walk)
+{
+  PT_NODE *pt_cur;
+
+  *continue_walk = PT_CONTINUE_WALK;
+
+  if (node == NULL || node->node_type != PT_SELECT)
     {
       return node;
     }
 
-  select_from = node->info.query.q.select.from;
-
-  for (join_lhs = select_from, join_rhs = select_from->next; join_rhs != NULL;
-       join_lhs = join_lhs->next, join_rhs = join_rhs->next)
+  /* support for alias in GROUP BY */
+  pt_cur = node->info.query.q.select.group_by;
+  while (pt_cur != NULL)
     {
-      /* there is a natural join */
-      if (join_rhs->node_type == PT_SPEC
-	  && join_rhs->info.spec.natural == true)
-	{
-	  pt_resolve_natural_join_internal (parser, join_lhs, join_rhs);
-	}
+      pt_resolve_group_having_alias_internal (parser, &pt_cur,
+					      node->info.query.q.select.list);
+      pt_cur = pt_cur->next;
     }
 
+  /* support for alias in HAVING */
+  pt_cur = node->info.query.q.select.having;
+  while (pt_cur != NULL)
+    {
+      pt_resolve_group_having_alias_internal (parser, &pt_cur,
+					      node->info.query.q.select.list);
+      pt_cur = pt_cur->next;
+    }
   return node;
 }
 
@@ -8036,6 +8399,12 @@ pt_resolve_names (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  idx_name = statement->info.index.index_name;
 	  statement->info.index.index_name = NULL;
 	}
+
+      /* Before pt_bind_name, we mark PT_NAME in group by/ having. */
+      statement =
+	parser_walk_tree (parser, statement, pt_mark_group_having_pt_name,
+			  NULL, NULL, NULL);
+
       statement =
 	parser_walk_tree (parser, statement, pt_bind_names, &bind_arg,
 			  pt_bind_names_post, &bind_arg);
@@ -8046,9 +8415,14 @@ pt_resolve_names (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  statement->info.index.index_name = idx_name;
 	}
 
-      /* 
-       * The process converts natural join to inner/outer join. 
-       * The on_cond is added there. 
+      /* Resolve alias in group by/having. */
+      statement =
+	parser_walk_tree (parser, statement, pt_resolve_group_having_alias,
+			  NULL, NULL, NULL);
+
+      /*
+       * The process converts natural join to inner/outer join.
+       * The on_cond is added there.
        */
       statement =
 	parser_walk_tree (parser, statement, NULL,

@@ -59,8 +59,6 @@
 
 /* each page is supposed to have around 30% blank area during merge
    considerations of a delete operation */
-#define FIXED_EMPTY   ( DB_PAGESIZE * 0.33 )
-
 #define BTREE_MAX_ALIGN INT_ALIGNMENT	/* Maximum Alignment            */
 					     /* Maximum Leaf Node Entry Size */
 #define LEAFENTSZ(n)  ( LEAF_RECORD_SIZE + BTREE_MAX_ALIGN \
@@ -108,8 +106,6 @@ typedef enum
   BTREE_NON_LEAF_NODE,
   BTREE_OVERFLOW_NODE
 } BTREE_NODE_TYPE;
-
-#define NODE_HEADER_SIZE       BTREE_NUM_OIDS_OFFSET	/* Node Header Disk Size */
 
 extern int btree_get_node_key_cnt (PAGE_PTR page_ptr, int *keycnt);
 extern int btree_get_root_ovfid (PAGE_PTR page_ptr, VFID * vfid);
@@ -187,7 +183,13 @@ struct btree_root_header
   int reverse_reserved;		/* reverse or normal *//* not used */
   int rev_level;		/* Btree revision level */
   VFID ovfid;			/* Overflow file */
-  TP_DOMAIN *key_type;		/* The key type for the index        */
+  char packed_key_domain[1];	/* The key type for the index        */
+};
+
+typedef struct btree_overflow_header BTREE_OVERFLOW_HEADER;
+struct btree_overflow_header
+{				/*  overflow header information  */
+  VPID next_vpid;
 };
 
 typedef struct non_leaf_rec NON_LEAF_REC;
@@ -242,37 +244,30 @@ extern void btree_rv_dump_create_index (FILE * fp, int length_ignore,
 extern void btree_rv_nodehdr_dump (FILE * fp, int length, void *data);
 
 extern bool btree_clear_key_value (bool * clear_flag, DB_VALUE * key_value);
-extern void btree_write_overflow_header (RECDES * Rec,
-					 VPID * next_overflow_page);
 extern int btree_create_overflow_key_file (THREAD_ENTRY * thread_p,
 					   BTID_INT * btid);
-#if defined(ENABLE_UNUSED_FUNCTION)
-extern void btree_read_overflow_header (RECDES * Rec,
-					VPID * next_overflow_page);
-#endif
+extern int btree_init_overflow_header (THREAD_ENTRY * thread_p,
+				       PAGE_PTR page_ptr,
+				       BTREE_OVERFLOW_HEADER * header);
 extern int btree_init_node_header (THREAD_ENTRY * thread_p, VFID * vfid,
 				   PAGE_PTR page_ptr,
 				   BTREE_NODE_HEADER * header, bool redo);
-extern int btree_read_node_header (PAGE_PTR page_ptr,
-				   BTREE_NODE_HEADER * header);
-extern int btree_write_node_header (THREAD_ENTRY * thread_p, VFID * vfid,
-				    PAGE_PTR page_ptr,
-				    BTREE_NODE_HEADER * header,
-				    bool write_undo, bool write_redo);
 extern int btree_init_root_header (THREAD_ENTRY * thread_p, VFID * vfid,
 				   PAGE_PTR page_ptr,
-				   BTREE_ROOT_HEADER * root_header);
-extern int btree_read_root_header (PAGE_PTR page_ptr,
-				   BTREE_ROOT_HEADER * root_header);
-extern int btree_write_root_header (THREAD_ENTRY * thread_p, VFID * vfid,
-				    PAGE_PTR page_ptr,
-				    BTREE_ROOT_HEADER * root_header,
-				    bool write_undo, bool write_redo);
-extern int btree_write_root_header_delta (THREAD_ENTRY * thread_p,
-					  VFID * vfid, PAGE_PTR page_ptr,
-					  BTREE_ROOT_HEADER * root_header,
-					  int null_delta, int oid_delta,
-					  int key_delta);
+				   BTREE_ROOT_HEADER * root_header,
+				   TP_DOMAIN * key_type);
+extern BTREE_NODE_HEADER *btree_get_node_header_ptr (PAGE_PTR page_ptr);
+extern BTREE_ROOT_HEADER *btree_get_root_header_ptr (PAGE_PTR page_ptr);
+extern BTREE_OVERFLOW_HEADER *btree_get_overflow_header_ptr (PAGE_PTR
+							     page_ptr);
+extern int btree_node_header_undo_log (THREAD_ENTRY * thread_p, VFID * vfid,
+				       PAGE_PTR page_ptr);
+extern int btree_node_header_redo_log (THREAD_ENTRY * thread_p, VFID * vfid,
+				       PAGE_PTR page_ptr);
+extern int btree_change_root_header_delta (THREAD_ENTRY * thread_p,
+					   VFID * vfid, PAGE_PTR page_ptr,
+					   int null_delta, int oid_delta,
+					   int key_delta);
 
 extern int btree_get_key_length (DB_VALUE *);
 extern int btree_write_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
@@ -283,9 +278,14 @@ extern int btree_write_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			       MVCC_REC_HEADER * p_mvcc_rec_header,
 			       RECDES * rec);
 extern void btree_read_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
-			       RECDES * Rec, DB_VALUE * key, void *rec_header,
-			       int node_type, bool * clear_key, int *offset,
-			       int copy);
+			       PAGE_PTR pgptr, RECDES * Rec, DB_VALUE * key,
+			       void *rec_header, int node_type,
+			       bool * clear_key, int *offset, int copy);
+extern void btree_read_record_helper (THREAD_ENTRY * thread_p,
+				      BTID_INT * btid, RECDES * Rec,
+				      DB_VALUE * key, void *rec_header,
+				      int node_type, bool * clear_key,
+				      int *offset, int copy);
 extern TP_DOMAIN *btree_generate_prefix_domain (BTID_INT * btid);
 extern int btree_glean_root_header_info (THREAD_ENTRY * thread_p,
 					 BTREE_ROOT_HEADER * root_header,

@@ -4281,8 +4281,14 @@ stx_build_insert_proc (THREAD_ENTRY * thread_p, char *ptr,
     }
 
   ptr = or_unpack_int (ptr, &insert_info->no_val_lists);
-  if (insert_info->no_val_lists > 0)
+  if (insert_info->no_val_lists == 0)
     {
+      insert_info->valptr_lists = NULL;
+    }
+  else
+    {
+      assert (insert_info->no_val_lists > 0);
+
       insert_info->valptr_lists =
 	(OUTPTR_LIST **) stx_alloc_struct (thread_p,
 					   sizeof (OUTPTR_LIST *) *
@@ -4862,6 +4868,7 @@ stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 			    ACCESS_SPEC_TYPE * access_spec, void *arg)
 {
   int offset;
+  int val;
   OUTPTR_LIST *outptr_list = NULL;
 
   XASL_UNPACK_INFO *xasl_unpack_info =
@@ -5019,7 +5026,8 @@ stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
   access_spec->curent = NULL;
   access_spec->pruned = false;
 
-  ptr = or_unpack_int (ptr, &access_spec->flags);
+  ptr = or_unpack_int (ptr, &val);
+  access_spec->flags = val;
 
   return ptr;
 
@@ -5550,10 +5558,12 @@ stx_build_showstmt_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 			      SHOWSTMT_SPEC_TYPE * showstmt_spec_type)
 {
   int offset;
+  int val;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
-  ptr = or_unpack_int (ptr, &showstmt_spec_type->show_type);
+  ptr = or_unpack_int (ptr, &val);
+  showstmt_spec_type->show_type = val;
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)

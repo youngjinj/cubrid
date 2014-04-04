@@ -118,6 +118,9 @@ enum css_client_request
   IS_REGISTERED_HA_PROC = 35,	/* HA: check registered ha process */
   DEREGISTER_HA_PROCESS_BY_ARGS = 36,	/* HA: deregister ha process by args */
   GET_HA_PING_HOST_INFO = 37,	/* HA: get ping hosts info */
+  DEACT_STOP_ALL = 38,		/* HA: prepare for deactivation */
+  DEACT_CONFIRM_STOP_ALL = 39,	/* HA: confirm preparation for deactiavtion */
+  DEACT_CONFIRM_NO_SERVER = 40,	/* HA: confirm the completion of deactivation */
 };
 
 /*
@@ -135,7 +138,8 @@ enum css_server_request
   SERVER_SHUTDOWN_IMMEDIATE = 8,
   SERVER_GET_HA_MODE = 9,
   SERVER_REGISTER_HA_PROCESS = 10,
-  SERVER_CHANGE_HA_MODE = 11
+  SERVER_CHANGE_HA_MODE = 11,
+  SERVER_DEREGISTER_HA_PROCESS = 12
 };
 
 /*
@@ -443,6 +447,8 @@ struct css_conn_entry
 
   char *version_string;		/* client version string */
 
+  int prefetcher_thread_count;          /* number of active thread */
+  int prefetchlogdb_max_thread_count;      /* max number of active thread */
   CSS_QUEUE_ENTRY *free_queue_list;
   struct css_wait_queue_entry *free_wait_queue_list;
   char *free_net_header_list;
@@ -483,6 +489,21 @@ struct css_mapping_entry
 #endif
   unsigned short id;		/* host id to help identify the connection */
 };
+
+/*
+ * This data structure is the information of user access status written
+ * when client login server.
+ */
+typedef struct last_access_status LAST_ACCESS_STATUS;
+struct last_access_status
+{
+  char db_user[DB_MAX_USER_LENGTH];
+  time_t time;
+  char host[MAXHOSTNAMELEN];
+  char program_name[32];
+  LAST_ACCESS_STATUS *next;
+};
+
 #if defined (ENABLE_UNUSED_FUNCTION)
 extern void css_shutdown (int exit_reason);
 #endif

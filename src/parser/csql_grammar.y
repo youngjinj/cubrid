@@ -191,8 +191,12 @@ static FUNCTION_MAP functions[] = {
   {"substring_index", PT_SUBSTRING_INDEX},
   {"find_in_set", PT_FINDINSET},
   {"md5", PT_MD5},
-  {"aes_encrypt", PT_AES_ENCRYPT},
-  {"aes_decrypt", PT_AES_DECRYPT},	
+/*
+ * temporarily block aes_encrypt and aes_decrypt functions until binary string charset is available.
+ *
+ *  {"aes_encrypt", PT_AES_ENCRYPT},
+ *  {"aes_decrypt", PT_AES_DECRYPT},
+ */	
   {"sha1", PT_SHA_ONE},	
   {"sha2", PT_SHA_TWO},	
   {"substrb", PT_SUBSTRING},
@@ -223,7 +227,9 @@ static FUNCTION_MAP functions[] = {
   {"coercibility", PT_COERCIBILITY},
   {"width_bucket", PT_WIDTH_BUCKET},
   {"trace_stats", PT_TRACE_STATS},
-  {"str_to_date", PT_STR_TO_DATE}
+  {"str_to_date", PT_STR_TO_DATE},
+  {"to_base64", PT_TO_BASE64},
+  {"from_base64", PT_FROM_BASE64}
 };
 
 
@@ -654,12 +660,11 @@ typedef struct YYLTYPE
 %type <number> opt_trace_output_format
 %type <number> opt_if_not_exists
 %type <number> opt_if_exists
+%type <number> show_type
 %type <number> show_type_arg1
-/* uncomment it when implement other show statements.
 %type <number> show_type_arg1_opt
 %type <number> show_type_arg_named
 %type <number> show_type_id_dot_id
-*/
 /*}}}*/
 
 /* define rule type (node) */
@@ -959,12 +964,10 @@ typedef struct YYLTYPE
 %type <node> values_expr_item
 %type <node> opt_partition_spec
 %type <node> opt_for_update_clause
-/* uncomment it when implement other show statement.
 %type <node> of_or_where
 %type <node> named_arg
 %type <node> named_args
 %type <node> opt_arg_value
-*/
 %type <node> arg_value
 %type <node> vacuum_stmt
 /*}}}*/
@@ -1219,7 +1222,6 @@ typedef struct YYLTYPE
 %token NCHAR
 %token NEXT
 %token NO
-%token NONE
 %token NOT
 %token Null
 %token NULLIF
@@ -1410,14 +1412,17 @@ typedef struct YYLTYPE
 %token COMP_LE
 %token PARAM_HEADER
 
+%token <cptr> ACCESS
 %token <cptr> ACTIVE
 %token <cptr> ADDDATE
 %token <cptr> ANALYZE
+%token <cptr> ARCHIVE
 %token <cptr> AUTO_INCREMENT
 %token <cptr> BIT_AND
 %token <cptr> BIT_OR
 %token <cptr> BIT_XOR
 %token <cptr> CACHE
+%token <cptr> CAPACITY
 %token <cptr> CHARACTER_SET_
 %token <cptr> CHARSET
 %token <cptr> CHR
@@ -1446,6 +1451,7 @@ typedef struct YYLTYPE
 %token <cptr> GT_LT_
 %token <cptr> HASH
 %token <cptr> HEADER
+%token <cptr> HEAP
 %token <cptr> IFNULL
 %token <cptr> INACTIVE
 %token <cptr> INCREMENT
@@ -1465,6 +1471,7 @@ typedef struct YYLTYPE
 %token <cptr> LCASE
 %token <cptr> LEAD
 %token <cptr> LOCK_
+%token <cptr> LOG
 %token <cptr> MAXIMUM
 %token <cptr> MAXVALUE
 %token <cptr> MEDIAN
@@ -1475,11 +1482,13 @@ typedef struct YYLTYPE
 %token <cptr> NOCACHE
 %token <cptr> NOMAXVALUE
 %token <cptr> NOMINVALUE
+%token <cptr> NONE
 %token <cptr> NTH_VALUE
 %token <cptr> NTILE
 %token <cptr> NULLS
 %token <cptr> OFFSET
 %token <cptr> OWNER
+%token <cptr> PAGE
 %token <cptr> PARTITIONING
 %token <cptr> PARTITIONS
 %token <cptr> PASSWORD
@@ -1501,6 +1510,8 @@ typedef struct YYLTYPE
 %token <cptr> SEPARATOR
 %token <cptr> SERIAL
 %token <cptr> SHOW
+%token <cptr> SLOTS
+%token <cptr> SLOTTED
 %token <cptr> STABILITY
 %token <cptr> START_
 %token <cptr> STATEMENT
@@ -6501,24 +6512,57 @@ show_stmt
 			$$ = node;
 
 		DBG_PRINT}}						
+	| SHOW show_type
+		{{
+			int type = $2;
+			PT_NODE *node = pt_make_query_showstmt (this_parser, type, NULL, 0, NULL);
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}						
+	| SHOW show_type LIKE expression_
+		{{
+
+			const int like_where_syntax = 1;  /* is LIKE */
+			int type = $2;
+			PT_NODE *like_rhs = $4;
+			PT_NODE *node = pt_make_query_showstmt (this_parser, type, NULL, 
+                                                                like_where_syntax, like_rhs);
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}						
+	| SHOW show_type WHERE search_condition
+		{{
+			const int like_where_syntax = 2;  /* is WHERE */
+			int type = $2;
+			PT_NODE *where_cond = $4;
+			PT_NODE *node = pt_make_query_showstmt (this_parser, type, NULL, 
+                                                               like_where_syntax, where_cond);
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}						
 	| SHOW show_type_arg1 OF arg_value
 		{{
 			int type = $2;
 			PT_NODE *args = $4;
-			PT_NODE *node = pt_make_query_showstmt (this_parser, type, args, NULL);
+			PT_NODE *node = pt_make_query_showstmt (this_parser, type, args, 0, NULL);
 
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-/* uncomment it when implement other show statements.
 	| SHOW show_type_arg1_opt opt_arg_value
 		{{
 			PT_NODE *node = NULL;
 			int type = $2;
 			PT_NODE *args = $3;
 
-			node = pt_make_query_showstmt (this_parser, type, args, NULL);
+			node = pt_make_query_showstmt (this_parser, type, args, 0, NULL);
 
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -6530,7 +6574,7 @@ show_stmt
 			int type = $2;
 			PT_NODE *args = $4;
 
-			node = pt_make_query_showstmt (this_parser, type, args, NULL);
+			node = pt_make_query_showstmt (this_parser, type, args, 0, NULL);
 
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
@@ -6539,16 +6583,22 @@ show_stmt
 	| SHOW show_type_id_dot_id OF identifier DOT identifier
 		{{
 			int type = $2;
-			PT_NODE *args = $4;
-			args->next = $6;
+			PT_NODE *node, *args = $4;
 
-			PT_NODE *node = pt_make_query_showstmt (this_parser, type, args, NULL);
+			args->next = $6;
+			node = pt_make_query_showstmt (this_parser, type, args, 0, NULL);
 
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-*/
+	;
+
+show_type
+	: ACCESS STATUS
+		{{
+			$$ = SHOWSTMT_ACCESS_STATUS;
+		}}
 	;
 
 show_type_arg1
@@ -6556,19 +6606,63 @@ show_type_arg1
 		{{
 			$$ = SHOWSTMT_VOLUME_HEADER;
 		}}
+	| ARCHIVE LOG HEADER
+		{{
+			$$ = SHOWSTMT_ARCHIVE_LOG_HEADER;
+		}}
+	| HEAP HEADER
+		{{
+			$$ = SHOWSTMT_HEAP_HEADER;
+		}}
+	| ALL HEAP HEADER
+		{{
+			$$ = SHOWSTMT_ALL_HEAP_HEADER;
+		}}
+	| HEAP CAPACITY
+		{{
+			$$ = SHOWSTMT_HEAP_CAPACITY;
+		}}
+	| ALL HEAP CAPACITY
+		{{
+			$$ = SHOWSTMT_ALL_HEAP_CAPACITY;
+		}}
+	| ALL INDEXES HEADER
+		{{
+			$$ = SHOWSTMT_ALL_INDEXES_HEADER;
+		}}
+	| ALL INDEXES CAPACITY
+		{{
+			$$ = SHOWSTMT_ALL_INDEXES_CAPACITY;
+		}}
 	;
 
-/* uncomment it when implement other show statement.
 show_type_arg1_opt
-	:
+	: LOG HEADER
+		{{
+			$$ = SHOWSTMT_ACTIVE_LOG_HEADER;
+		}}
 	;
 
 show_type_arg_named
-	: 
+	: SLOTTED PAGE HEADER
+		{{
+			$$ = SHOWSTMT_SLOTTED_PAGE_HEADER;
+		}}
+	| SLOTTED PAGE SLOTS
+		{{
+			$$ = SHOWSTMT_SLOTTED_PAGE_SLOTS;
+		}}
 	;
 
 show_type_id_dot_id
-	: 
+	: INDEX HEADER
+		{{
+			$$ = SHOWSTMT_INDEX_HEADER;
+		}}
+	| INDEX CAPACITY
+		{{
+			$$ = SHOWSTMT_INDEX_CAPACITY;
+		}}
 	;
 
 of_or_where
@@ -6617,7 +6711,6 @@ opt_arg_value
 			$$ = $2;
 		}}
 	;
-*/
 
 arg_value
 	: char_string_literal
@@ -11857,22 +11950,6 @@ opt_from_clause
 			    if (n)
 			      is_dummy_select = false;	/* not dummy */
 
-			    /* support for alias in GROUP BY */
-			    n = node->info.query.q.select.group_by;
-			    while (n)
-			      {
-				resolve_alias_in_expr_node (n, node->info.query.q.select.list);
-				n = n->next;
-			      }
-
-			    /* support for alias in HAVING */
-			    n = node->info.query.q.select.having;
-			    while (n)
-			      {
-				resolve_alias_in_expr_node (n, node->info.query.q.select.list);
-				n = n->next;
-			      }
-
 			    node->info.query.q.select.using_index =
 			      (node->info.query.q.select.using_index ?
 			       parser_make_link (node->info.query.q.select.using_index, $9) : $9);
@@ -12824,18 +12901,6 @@ index_name
 		{{
 
 			PT_NODE *node = $1;
-			/* Since both .NONE and ."NONE" (or .[NONE], .`NONE`) will be
-			 * parsed as DOT IdName by lexer. In order to distinguish the 
-			 * ambiguous word "NONE" (reserved word or normal IdName) in the 
-			 * context of USING INDEX clause, we have to check the
-			 * last character of the word "NONE" in the original SQL text.
-			 */
-			if (strcasecmp (node->info.name.original, "none") == 0
-			    && toupper (node->sql_user_text[node->buffer_pos - 1]) == 'E')
-			  { 
-			    PT_ERRORmf2 (this_parser, node, MSGCAT_SET_PARSER_SYNTAX,
-			        MSGCAT_SYNTAX_KEYWORD_ERROR, "NONE", "a valid index name");
-			  }
 			node->info.name.meta_class = PT_INDEX_NAME;
 			node->etc = (void *) PT_IDX_HINT_FORCE;
 			$$ = node;
@@ -12846,18 +12911,6 @@ index_name
 		{{
 
 			PT_NODE *node = $1;
-			/* Since both .NONE and ."NONE" (or .[NONE], .`NONE`) will be
-			 * parsed as DOT IdName by lexer. In order to distinguish the 
-			 * ambiguous word "NONE" (reserved word or normal IdName) in the 
-			 * context of USING INDEX clause, we have to check the
-			 * last character of the word "NONE" in the original SQL text.
-			 */
-			if (strcasecmp (node->info.name.original, "none") == 0
-			    && toupper (node->sql_user_text[node->buffer_pos - 1]) == 'E')
-			  { 
-			    PT_ERRORmf2 (this_parser, node, MSGCAT_SET_PARSER_SYNTAX,
-			        MSGCAT_SYNTAX_KEYWORD_ERROR, "NONE", "a valid index name");
-			  }
 			node->info.name.meta_class = PT_INDEX_NAME;
 			node->etc = (void *) PT_IDX_HINT_IGNORE;
 			$$ = node;
@@ -12869,25 +12922,22 @@ index_name
 
 			PT_NODE *node = $1;
 			node->info.name.meta_class = PT_INDEX_NAME;
-			/* Since both .NONE and ."NONE" (or .[NONE], .`NONE`) will be
-			 * parsed as DOT IdName by lexer. In order to distinguish the 
-			 * ambiguous word "NONE" (reserved word or normal IdName) in the 
-			 * context of USING INDEX clause, we have to check the
-			 * last character of the word "NONE" in the original SQL text.
-			 */
-			if (strcasecmp (node->info.name.original, "none") == 0
-			    && toupper (node->sql_user_text[node->buffer_pos - 1]) == 'E')
-			  {
-			    node->info.name.original = NULL;
-			    node->etc = (void *) PT_IDX_HINT_CLASS_NONE;
-			  }
-			else
-			  {
-			    node->etc = (void *) PT_IDX_HINT_USE;
-			  }
+			node->etc = (void *) PT_IDX_HINT_USE;
 			$$ = node;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
+		DBG_PRINT}}
+	| identifier DOT NONE
+		{{
+		
+			PT_NODE *node = $1;
+			node->info.name.meta_class = PT_INDEX_NAME;
+			node->info.name.resolved = node->info.name.original;
+			node->info.name.original = NULL;
+			node->etc = (void *) PT_IDX_HINT_CLASS_NONE;
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+		
 		DBG_PRINT}}
 	;
 
@@ -17349,14 +17399,26 @@ subquery
 
 
 path_expression
-	: path_header DOT IDENTITY		%dprec 5
+	: path_header path_dot NONE		%dprec 6
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  {
+			    p->info.name.original = $3;
+			  }
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| path_header path_dot IDENTITY		%dprec 5
 		{{
 
 			$$ = $1;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
-	| path_header DOT OBJECT		%dprec 4
+	| path_header path_dot OBJECT		%dprec 4
 		{{
 
 			PT_NODE *node = $1;
@@ -19294,6 +19356,16 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| ARCHIVE
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	| AUTO_INCREMENT
 		{{
 
@@ -19305,6 +19377,16 @@ identifier
 
 		DBG_PRINT}}
 	| CACHE
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| CAPACITY
 		{{
 
 			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
@@ -19565,6 +19647,16 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| HEAP
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	| INACTIVE
 		{{
 
@@ -19714,6 +19806,16 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| LOG
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	| MAXIMUM
 		{{
 
@@ -19805,6 +19907,16 @@ identifier
 
 		DBG_PRINT}}
 	| OWNER
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| PAGE
 		{{
 
 			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
@@ -19997,6 +20109,26 @@ identifier
 
 		DBG_PRINT}}
 	| SHOW
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| SLOTS
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| SLOTTED
 		{{
 
 			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
@@ -22614,22 +22746,31 @@ parser_remove_dummy_select (PT_NODE ** ent_inout)
 	  && PT_SELECT_INFO_IS_FLAGED (subq, PT_SELECT_INFO_DUMMY)
 	  && subq->info.query.q.select.from)
 	{
-	  new_ent = subq->info.query.q.select.from;
-	  subq->info.query.q.select.from = NULL;
-
-	  /* free, reset new_spec's range_var, as_attr_list */
-	  if (new_ent->info.spec.range_var)
-	    {
-	      parser_free_node (this_parser, new_ent->info.spec.range_var);
-	      new_ent->info.spec.range_var = NULL;
+	  if (PT_SELECT_INFO_IS_FLAGED (subq, PT_SELECT_INFO_FOR_UPDATE))
+  	    {
+  	      /* the FOR UPDATE clause cannot be used in subqueries */
+  	      PT_ERRORm (this_parser, subq, MSGCAT_SET_PARSER_SEMANTIC,
+			 MSGCAT_SEMANTIC_INVALID_USE_FOR_UPDATE_CLAUSE);
 	    }
+	  else
+	    {
+	      new_ent = subq->info.query.q.select.from;
+	      subq->info.query.q.select.from = NULL;
 
-	  new_ent->info.spec.range_var = ent->info.spec.range_var;
-	  ent->info.spec.range_var = NULL;
+	      /* free, reset new_spec's range_var, as_attr_list */
+	      if (new_ent->info.spec.range_var)
+		{
+		  parser_free_node (this_parser, new_ent->info.spec.range_var);
+		  new_ent->info.spec.range_var = NULL;
+		}
 
-	  /* free old ent, reset to new_ent */
-	  parser_free_node (this_parser, ent);
-	  *ent_inout = new_ent;
+	      new_ent->info.spec.range_var = ent->info.spec.range_var;
+	      ent->info.spec.range_var = NULL;
+
+	      /* free old ent, reset to new_ent */
+	      parser_free_node (this_parser, ent);
+	      *ent_inout = new_ent;
+	    }
 	}
     }
 }
@@ -22852,6 +22993,10 @@ parse_one_statement (int state)
 PT_HINT parser_hint_table[] = {
   {"ORDERED", NULL, PT_HINT_ORDERED}
   ,
+  {"NO_INDEX_SS", NULL, PT_HINT_NO_INDEX_SS}
+  ,
+  {"INDEX_SS", NULL, PT_HINT_INDEX_SS}
+  ,
   {"USE_NL", NULL, PT_HINT_USE_NL}
   ,
   {"USE_IDX", NULL, PT_HINT_USE_IDX}
@@ -22889,6 +23034,12 @@ PT_HINT parser_hint_table[] = {
   {"NO_SORT_LIMIT", NULL, PT_HINT_NO_SORT_LIMIT}
   ,
   {"NO_HASH_AGGREGATE", NULL, PT_HINT_NO_HASH_AGGREGATE}
+  ,
+  {"SKIP_UPDATE_NULL", NULL, PT_HINT_SKIP_UPDATE_NULL}
+  ,
+  {"NO_INDEX_LS", NULL, PT_HINT_NO_INDEX_LS}
+  ,
+  {"INDEX_LS", NULL, PT_HINT_INDEX_LS}
   ,
   {"SELECT_RECORD_INFO", NULL, PT_HINT_SELECT_RECORD_INFO}
   ,
@@ -23060,7 +23211,9 @@ parser_keyword_func (const char *name, PT_NODE * args)
     case PT_INET_ATON:
     case PT_INET_NTOA:
     case PT_COERCIBILITY:
-    case PT_SHA_ONE:	
+    case PT_SHA_ONE:
+    case PT_TO_BASE64:
+    case PT_FROM_BASE64:
       if (c != 1)
         {
 	  return NULL;

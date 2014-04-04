@@ -248,6 +248,24 @@ extern int spage_mark_deleted_slot_as_reusable (THREAD_ENTRY * thread_p,
 extern PGSLOTID spage_find_free_slot (PAGE_PTR page_p,
 				      SPAGE_SLOT ** out_slot_p,
 				      PGSLOTID start_id);
+
+
+extern int spage_header_start_scan (THREAD_ENTRY * thread_p, int show_type,
+				    DB_VALUE ** arg_values, int arg_cnt,
+				    void **ctx);
+extern SCAN_CODE spage_header_next_scan (THREAD_ENTRY * thread_p, int cursor,
+					 DB_VALUE ** out_values, int out_cnt,
+					 void *ctx);
+extern int spage_header_end_scan (THREAD_ENTRY * thread_p, void **ctx);
+
+extern int spage_slots_start_scan (THREAD_ENTRY * thread_p, int show_type,
+				   DB_VALUE ** arg_values, int arg_cnt,
+				   void **ctx);
+extern SCAN_CODE spage_slots_next_scan (THREAD_ENTRY * thread_p, int cursor,
+					DB_VALUE ** out_values, int out_cnt,
+					void *ctx);
+extern int spage_slots_end_scan (THREAD_ENTRY * thread_p, void **ctx);
+
 extern int spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
 			      VPID page_vpid,
 			      VACUUM_PAGE_DATA * page_clean_p,

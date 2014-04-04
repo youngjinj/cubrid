@@ -46,6 +46,16 @@
 
 #define OID_BATCH_SIZE  2000
 
+#define LC_INSERT_OPERATION_TYPE(p) \
+        ((p)==DB_NOT_PARTITIONED_CLASS ? LC_FLUSH_INSERT :   \
+         ((p)==DB_PARTITIONED_CLASS ? LC_FLUSH_INSERT_PRUNE :\
+				      LC_FLUSH_INSERT_PRUNE_VERIFY))
+
+#define LC_UPDATE_OPERATION_TYPE(p) \
+        ((p)==DB_NOT_PARTITIONED_CLASS ? LC_FLUSH_UPDATE :   \
+         ((p)==DB_PARTITIONED_CLASS ? LC_FLUSH_UPDATE_PRUNE :\
+				      LC_FLUSH_UPDATE_PRUNE_VERIFY))
+
 typedef struct list_mops LIST_MOPS;
 struct list_mops
 {
@@ -109,7 +119,9 @@ extern LC_FIND_CLASSNAME locator_lockhint_classes (int num_classes,
 						   **many_classnames,
 						   LOCK * many_locks,
 						   int *need_subclasses,
-						   int quit_on_errors);
+						   int quit_on_errors,
+						   LC_LOCKHINT **
+						   out_lockhint);
 extern int locator_does_exist_object (MOP mop, DB_FETCH_MODE purpose);
 extern LIST_MOPS *locator_get_all_mops (MOP class_mop,
 					DB_FETCH_MODE class_purpose);

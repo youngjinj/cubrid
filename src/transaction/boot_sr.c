@@ -2804,17 +2804,17 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
 	   *       update database.txt that we have a read copy of its content.
 	   */
 
-	  /* Note: for database replacement, we need to remove the old database 
+	  /* Note: for database replacement, we need to remove the old database
 	   *       with its original path!
 	   */
 	  memset (original_namebuf, 0, sizeof (original_namebuf));
 
 	  /* Compose the original full name of the database */
 	  snprintf (original_namebuf, sizeof (original_namebuf), "%s%c%s",
-		    dir->pathname, PATH_SEPARATOR, dir->name);
+		    db->pathname, PATH_SEPARATOR, db->name);
 
 	  error_code = boot_remove_all_volumes (thread_p, original_namebuf,
-						dir->logpath, log_prefix,
+						db->logpath, log_prefix,
 						false, true);
 	  if (error_code != NO_ERROR)
 	    {
@@ -3473,7 +3473,6 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       fileio_dismount_all (thread_p);
       goto error;
     }
-
   catalog_initialize (&boot_Db_parm->ctid);
 
   (void) qexec_initialize_xasl_cache (thread_p);
@@ -3684,8 +3683,11 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 	}
     }
 
-  /* if starting jvm fail, it would be ignored. */
-  (void) jsp_start_server (db_name, db->pathname);
+  error_code = jsp_start_server (db_name, db->pathname);
+  if (error_code != NO_ERROR)
+    {
+      goto error;
+    }
 
   /* read only mode ? */
   if (prm_get_bool_value (PRM_ID_READ_ONLY_MODE))
@@ -3835,9 +3837,6 @@ xboot_restart_from_backup (THREAD_ENTRY * thread_p, int print_restart,
   area_init (false);
 
   tp_init ();
-
-  /* Initialize tsc-timer */
-  tsc_init ();
 
   if (boot_restart_server (thread_p, print_restart, db_name, true, true,
 			   r_args) != NO_ERROR)
@@ -4360,32 +4359,27 @@ enum
  *
  */
 int
-xboot_checkdb_table (THREAD_ENTRY * thread_p, int check_flag, OID * oid)
+xboot_checkdb_table (THREAD_ENTRY * thread_p, int check_flag, OID * oid,
+		     BTID * index_btid)
 {
   HFID hfid;
   bool repair = check_flag & CHECKDB_REPAIR;
 
   if (check_flag & CHECKDB_CHECK_PREV_LINK)
     {
-      if (btree_repair_prev_link (thread_p, oid, CHECK_ONLY) != DISK_VALID)
+      if (btree_repair_prev_link (thread_p, oid, index_btid, CHECK_ONLY) !=
+	  DISK_VALID)
 	{
 	  return ER_FAILED;
-	}
-      else
-	{
-	  return NO_ERROR;
 	}
     }
 
   if (check_flag & CHECKDB_REPAIR_PREV_LINK)
     {
-      if (btree_repair_prev_link (thread_p, oid, REPAIR_ALL) != DISK_VALID)
+      if (btree_repair_prev_link (thread_p, oid, index_btid, REPAIR_ALL) !=
+	  DISK_VALID)
 	{
 	  return ER_FAILED;
-	}
-      else
-	{
-	  return NO_ERROR;
 	}
     }
 
@@ -4395,17 +4389,22 @@ xboot_checkdb_table (THREAD_ENTRY * thread_p, int check_flag, OID * oid)
       return ER_FAILED;
     }
 
-  if (heap_check_heap_file (thread_p, &hfid) != DISK_VALID)
+  if (index_btid == NULL)
+    {
+      /* if index name was specified, skip checking heap file */
+      if (heap_check_heap_file (thread_p, &hfid) != DISK_VALID)
+	{
+	  return ER_FAILED;
+	}
+    }
+
+  if (btree_check_by_class_oid (thread_p, oid, index_btid) != DISK_VALID)
     {
       return ER_FAILED;
     }
 
-  if (btree_check_by_class_oid (thread_p, oid) != DISK_VALID)
-    {
-      return ER_FAILED;
-    }
-
-  if (locator_check_by_class_oid (thread_p, oid, &hfid, repair) != DISK_VALID)
+  if (locator_check_by_class_oid (thread_p, oid, &hfid, index_btid, repair) !=
+      DISK_VALID)
     {
       return ER_FAILED;
     }
@@ -4438,7 +4437,7 @@ xcallback_console_print (THREAD_ENTRY * thread_p, char *print_str)
  */
 int
 xboot_check_db_consistency (THREAD_ENTRY * thread_p, int check_flag,
-			    OID * oids, int num_oids)
+			    OID * oids, int num_oids, BTID * index_btid)
 {
   DISK_ISVALID isvalid = DISK_VALID;
   VOLID volid;
@@ -4448,6 +4447,11 @@ xboot_check_db_consistency (THREAD_ENTRY * thread_p, int check_flag,
 
   error_code = boot_check_permanent_volumes (thread_p);
   nperm_vols = xboot_find_number_permanent_volumes (thread_p);
+
+  if (index_btid != NULL && BTID_IS_NULL (index_btid))
+    {
+      index_btid = NULL;
+    }
 
   for (volid = 0; volid < nperm_vols && isvalid != DISK_ERROR; volid++)
     {
@@ -4466,8 +4470,8 @@ xboot_check_db_consistency (THREAD_ENTRY * thread_p, int check_flag,
 	    {
 	      continue;
 	    }
-	  if (xboot_checkdb_table (thread_p, check_flag, &oids[i]) !=
-	      NO_ERROR)
+	  if (xboot_checkdb_table (thread_p, check_flag, &oids[i], index_btid)
+	      != NO_ERROR)
 	    {
 	      error_code = ER_FAILED;
 	    }
@@ -4479,28 +4483,24 @@ xboot_check_db_consistency (THREAD_ENTRY * thread_p, int check_flag,
     {
       if (isvalid != DISK_ERROR)
 	{
-	  isvalid = btree_repair_prev_link (thread_p, NULL, CHECK_ONLY);
+	  isvalid = btree_repair_prev_link (thread_p, NULL, NULL, CHECK_ONLY);
 	  if (isvalid != DISK_VALID)
 	    {
 	      error_code = ER_FAILED;
 	    }
 	}
-
-      return error_code;
     }
 
   if (check_flag & CHECKDB_REPAIR_PREV_LINK)
     {
       if (isvalid != DISK_ERROR)
 	{
-	  isvalid = btree_repair_prev_link (thread_p, NULL, REPAIR_ALL);
+	  isvalid = btree_repair_prev_link (thread_p, NULL, NULL, REPAIR_ALL);
 	  if (isvalid != DISK_VALID)
 	    {
 	      error_code = ER_FAILED;
 	    }
 	}
-
-      return error_code;
     }
 
   if (check_flag & CHECKDB_FILE_TRACKER_CHECK)
@@ -4721,6 +4721,7 @@ xboot_copy (THREAD_ENTRY * thread_p, const char *from_dbname,
   char new_db_pathbuf[PATH_MAX];
   char new_db_pathbuf2[PATH_MAX];
   char new_log_pathbuf[PATH_MAX];
+  char new_lob_pathbuf2[PATH_MAX];
   char new_lob_pathbuf[PATH_MAX];
   char new_volext_pathbuf[PATH_MAX];
   char fixed_pathbuf[PATH_MAX];
@@ -4776,37 +4777,42 @@ xboot_copy (THREAD_ENTRY * thread_p, const char *from_dbname,
       new_log_path = new_log_pathbuf;
     }
 
+  if (new_lob_path == NULL)
+    {
+      assert_release (new_db_path != NULL);
+      snprintf (new_lob_pathbuf2, sizeof (new_lob_pathbuf2), "%s%s/lob",
+		LOB_PATH_DEFAULT_PREFIX, new_db_path);
+      new_lob_path = new_lob_pathbuf2;
+    }
+
   if (new_lob_path != NULL)
     {
       ES_TYPE es_type = es_get_type (new_lob_path);
-      char *p;
+      char *p = NULL;
 
-      p = strchr (new_lob_path, ':');
-      if (p == NULL)
+      switch (es_type)
 	{
+	case ES_NONE:
 	  /* prepend default prefix */
 	  snprintf (new_lob_pathbuf, sizeof (new_lob_pathbuf), "%s%s",
 		    LOB_PATH_DEFAULT_PREFIX, new_lob_path);
 	  new_lob_path = new_lob_pathbuf;
 	  es_type = ES_POSIX;
 	  p = strchr (new_lob_path, ':') + 1;
-	}
-      else
-	{
-	  switch (es_type)
-	    {
-	    case ES_NONE:
-#if !defined (CUBRID_OWFS)
-	    case ES_OWFS:
-#endif /* !CUBRID_OWFS */
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		      ER_ES_INVALID_PATH, 1, new_lob_path);
-	      error_code = ER_ES_INVALID_PATH;
-	      goto error;
-	    default:
-	      break;
-	    }
+	  break;
+	case ES_POSIX:
 	  p = strchr (strcpy (new_lob_pathbuf, new_lob_path), ':') + 1;
+	  break;
+	case ES_OWFS:
+#if !defined (CUBRID_OWFS)
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		  ER_ES_INVALID_PATH, 1, new_lob_path);
+	  error_code = ER_ES_INVALID_PATH;
+	  goto error;
+#endif /* !CUBRID_OWFS */
+	case ES_LOCAL:
+	default:
+	  break;
 	}
 
       if (es_type == ES_POSIX && p != NULL)

@@ -384,31 +384,37 @@ void
 css_add_to_job_queue (CSS_JOB_ENTRY * job_entry_p)
 {
   int rv;
-  int i, jobq_index;
+  int i, j, jobq_index;
+  const int MAX_NTRIES = 100;
 
   jobq_index = job_entry_p->jobq_index;
 
-  for (i = 0; i <= CSS_NUM_JOB_QUEUE; i++)
+  for (i = 0; i <= MAX_NTRIES; i++)
     {
-      rv = pthread_mutex_lock (&css_Job_queue[jobq_index].job_lock);
-
-      if (i == CSS_NUM_JOB_QUEUE
-	  || css_can_occupy_worker_thread_on_jobq (jobq_index))
+      for (j = 0; j < CSS_NUM_JOB_QUEUE; j++)
 	{
-	  /* If there's no available thread even though it has probed
-	   * the entire job queues, just add the job to the original job queue.
-	   */
-	  css_add_list (&css_Job_queue[jobq_index].job_list, job_entry_p);
-	  css_wakeup_worker_thread_on_jobq (jobq_index);
+	  rv = pthread_mutex_lock (&css_Job_queue[jobq_index].job_lock);
+
+	  if (css_can_occupy_worker_thread_on_jobq (jobq_index)
+	      || i == MAX_NTRIES)
+	    {
+	      /* If there's no available thread even though it has probed
+	       * the entire job queues, just add the job to the original job queue.
+	       */
+	      css_add_list (&css_Job_queue[jobq_index].job_list, job_entry_p);
+	      css_wakeup_worker_thread_on_jobq (jobq_index);
+
+	      pthread_mutex_unlock (&css_Job_queue[jobq_index].job_lock);
+	      return;
+	    }
 
 	  pthread_mutex_unlock (&css_Job_queue[jobq_index].job_lock);
-	  return;
+
+	  /* linear probing */
+	  jobq_index = (++jobq_index) % CSS_NUM_JOB_QUEUE;
 	}
 
-      pthread_mutex_unlock (&css_Job_queue[jobq_index].job_lock);
-
-      /* linear probing */
-      jobq_index = (++jobq_index) % CSS_NUM_JOB_QUEUE;
+      thread_sleep (10 * ((i / 10) + 1));	/* sleep 10ms upto 100ms */
     }
 }
 
@@ -1222,6 +1228,7 @@ css_connection_handler_thread (THREAD_ENTRY * thread_p, CSS_CONN_ENTRY * conn)
 {
   CSS_JOB_ENTRY *job;
   int n, type, rv, status, timeout;
+  int prefetchlogdb_max_thread_count = 0;
   SOCKET fd;
   struct pollfd po[1] = { {0, 0, 0} };
 
@@ -1235,6 +1242,9 @@ css_connection_handler_thread (THREAD_ENTRY * thread_p, CSS_CONN_ENTRY * conn)
   pthread_mutex_unlock (&thread_p->tran_index_lock);
 
   thread_p->type = TT_SERVER;	/* server thread */
+
+  prefetchlogdb_max_thread_count =
+    prm_get_integer_value (PRM_ID_HA_PREFETCHLOGDB_MAX_THREAD_COUNT);
 
   status = NO_ERRORS;
   /* check if socket has error or client is down */
@@ -1319,6 +1329,23 @@ css_connection_handler_thread (THREAD_ENTRY * thread_p, CSS_CONN_ENTRY * conn)
 	         make new job and add it to job queue */
 	      if (type == COMMAND_TYPE)
 		{
+		  do
+		    {
+		      if (conn->client_type == BOOT_CLIENT_LOG_PREFETCHER
+			  && (prefetchlogdb_max_thread_count
+			      > 0)
+			  && (conn->prefetcher_thread_count >=
+			      prefetchlogdb_max_thread_count))
+			{
+			  thread_sleep (10);	/* 10 msec */
+			  continue;
+			}
+
+		      break;
+		    }
+		  while (thread_p->shutdown == false
+			 && conn->stop_talk == false);
+
 		  job = css_make_job_entry (conn, css_Request_handler,
 					    (CSS_THREAD_ARG) conn, -1);
 		  if (job)
@@ -1703,8 +1730,23 @@ shutdown:
   LOG_CS_ENTER (thread_p);
   logpb_flush_pages_direct (thread_p);
 
-  assert_release (LSA_EQ (&log_Gl.append.nxio_lsa,
-			  &log_Gl.prior_info.prior_lsa));
+#if !defined(NDEBUG)
+  pthread_mutex_lock (&log_Gl.prior_info.prior_lsa_mutex);
+  if (!LSA_EQ (&log_Gl.append.nxio_lsa, &log_Gl.prior_info.prior_lsa))
+    {
+      LOG_PRIOR_NODE *node;
+
+      assert (LSA_LT (&log_Gl.append.nxio_lsa, &log_Gl.prior_info.prior_lsa));
+      node = log_Gl.prior_info.prior_list_header;
+      while (node != NULL)
+	{
+	  assert (node->log_header.trid == LOG_SYSTEM_TRANID);
+	  node = node->next;
+	}
+    }
+  pthread_mutex_unlock (&log_Gl.prior_info.prior_lsa_mutex);
+#endif
+
   LOG_CS_EXIT (thread_p);
 
   thread_stop_active_workers (THREAD_STOP_LOGWR);
@@ -2558,11 +2600,11 @@ css_transit_ha_server_state (THREAD_ENTRY * thread_p,
 	  /* append a dummy log record for LFT to wake LWTs up */
 	  log_append_ha_server_state (thread_p, new_state);
 	  if (prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF)
-		{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		  ER_CSS_SERVER_HA_MODE_CHANGE, 2,
-		  css_ha_server_state_string (ha_Server_state),
-		  css_ha_server_state_string (new_state));
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_CSS_SERVER_HA_MODE_CHANGE, 2,
+		      css_ha_server_state_string (ha_Server_state),
+		      css_ha_server_state_string (new_state));
 	    }
 	  ha_Server_state = new_state;
 	  /* sync up the current HA state with the system parameter */
@@ -2753,12 +2795,12 @@ css_change_ha_server_state (THREAD_ENTRY * thread_p, HA_SERVER_STATE state,
 	  /* append a dummy log record for LFT to wake LWTs up */
 	  log_append_ha_server_state (thread_p, state);
 	  if (prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF)
-	  {
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		  ER_CSS_SERVER_HA_MODE_CHANGE, 2,
-		  css_ha_server_state_string (ha_Server_state),
-		  css_ha_server_state_string (state));
-	  }
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_CSS_SERVER_HA_MODE_CHANGE, 2,
+		      css_ha_server_state_string (ha_Server_state),
+		      css_ha_server_state_string (state));
+	    }
 	}
     }
 

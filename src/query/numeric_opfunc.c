@@ -1937,11 +1937,13 @@ numeric_db_value_div (const DB_VALUE * dbv1, const DB_VALUE * dbv2,
   unsigned char long_temp_quo[DB_LONG_NUMERIC_MULTIPLIER *
 			      DB_NUMERIC_BUF_SIZE];
   unsigned char dbv1_copy[DB_NUMERIC_BUF_SIZE];	/* Copy of a DB_C_NUMERIC */
+  unsigned char dbv2_copy[DB_NUMERIC_BUF_SIZE];	/* Copy of a DB_C_NUMERIC */
   unsigned char temp_quo[DB_NUMERIC_BUF_SIZE];	/* Copy of a DB_C_NUMERIC */
   unsigned char temp_rem[DB_NUMERIC_BUF_SIZE];	/* Copy of a DB_C_NUMERIC */
   int scale, scaleup = 0;
   int ret = NO_ERROR;
   TP_DOMAIN *domain;
+  DB_C_NUMERIC divisor_p;
 
   /* Check for bad inputs */
   if (answer == NULL)
@@ -2035,6 +2037,45 @@ numeric_db_value_div (const DB_VALUE * dbv1, const DB_VALUE * dbv2,
     {
       numeric_longnum_to_shortnum (dbv1_copy, long_dbv1_copy);
       numeric_div (dbv1_copy, db_locate_numeric (dbv2), temp_quo, temp_rem);
+    }
+
+  /* round! 
+   * Check if remainder is larger than or equal to 2*divisor.
+   * i.e. rem / divisor >= 0.5
+   */
+
+  /* first convert to positive number 
+   * Note that reminder and dbv2 must be numeric, so we don't consider 
+   * long numeric.
+   */
+  if (numeric_is_negative (temp_rem))
+    {
+      numeric_negate (temp_rem);
+    }
+
+  if (numeric_is_negative (db_locate_numeric (dbv2)))
+    {
+      numeric_copy (dbv2_copy, db_locate_numeric (dbv2));
+      numeric_negate (dbv2_copy);
+      divisor_p = dbv2_copy;
+    }
+  else
+    {
+      divisor_p = db_locate_numeric (dbv2);
+    }
+
+  numeric_add (temp_rem, temp_rem, temp_rem, DB_NUMERIC_BUF_SIZE);
+  if (numeric_compare (temp_rem, divisor_p) >= 0)
+    {
+      if (numeric_is_negative (temp_quo))
+	{
+	  /* for negative number */
+	  numeric_decrease (temp_quo);
+	}
+      else
+	{
+	  numeric_increase (temp_quo);
+	}
     }
 
   if (numeric_overflow (temp_quo, prec))
