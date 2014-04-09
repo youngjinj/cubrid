@@ -807,6 +807,23 @@ tf_mem_to_disk (MOP classmop, MOBJ classobj,
     }
 
   expected_size = object_size (class_, obj, &offset_size);
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      if ((expected_size + OR_MVCC_MAX_HEADER_SIZE -
+	   OR_MVCC_INSERT_HEADER_SIZE) > record->area_size)
+	{
+	  record->length = -expected_size;
+
+	  /* make sure we free this */
+	  if (tf_Allow_fixups)
+	    {
+	      tf_free_fixup (buf->fixups);
+	    }
+
+	  *index_flag = false;
+	  return (TF_OUT_OF_SPACE);
+	}
+    }
 
   switch (_setjmp (buf->env))
     {

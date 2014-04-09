@@ -563,20 +563,24 @@ desc_obj_to_disk (DESC_OBJ * obj, RECDES * record, bool * index_flag)
   unsigned int repid_bits;
   int expected_disk_size;
   int offset_size;
+  int mvcc_additional_space = 0;
 
   buf = &orep;
   or_init (buf, record->data, record->area_size);
   buf->error_abort = 1;
 
   expected_disk_size = object_disk_size (obj, &offset_size);
-  if (record->area_size < expected_disk_size)
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      mvcc_additional_space =
+	OR_MVCC_MAX_HEADER_SIZE - OR_MVCC_INSERT_HEADER_SIZE;
+    }
+  if (record->area_size < (expected_disk_size + mvcc_additional_space))
     {
       record->length = -expected_disk_size;
-      error = 1;
-      has_index = false;
 
-      *index_flag = has_index;
-      return (error);
+      *index_flag = false;
+      return (1);
     }
 
   status = setjmp (buf->env);

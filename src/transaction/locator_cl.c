@@ -4627,6 +4627,15 @@ locator_mem_to_disk (LOCATOR_MFLUSH_CACHE * mflush, MOBJ object,
 
 	      *round_length_p = -mflush->recdes.length;
 
+	      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+		{
+		  /* reserve enough space for instances, since we can add
+		   * additional MVCC header info at heap insert/update/delete       
+		   */
+		  *round_length_p += (OR_MVCC_MAX_HEADER_SIZE
+				      - OR_MVCC_INSERT_HEADER_SIZE);
+		}
+
 	      /*
 	       * If this is the only object in the flushing copy
 	       * area and does not fit even when the copy area seems
@@ -5075,9 +5084,12 @@ locator_mflush (MOP mop, void *mf)
    * start at alignment of sizeof(int)
    */
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true)
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
+      && !locator_is_root (class_mop))
     {
-      /* reserve enough space if need to add additional MVCC header info */
+      /* reserve enough space for instances, since we can add additional
+       * MVCC header info at heap insert/update/delete       
+       */
       round_length += (OR_MVCC_MAX_HEADER_SIZE - OR_MVCC_INSERT_HEADER_SIZE);
     }
 

@@ -400,10 +400,6 @@ static int rv;
 			error_code = ER_PAGE_LATCH_ABORTED; \
 		      } \
 		  }	\
-		else  \
-		  {	\
-		    goto try_again;	\
-		  }	\
 	      } \
 	    } \
       }	\
@@ -463,27 +459,31 @@ static int rv;
 			} \
 		    } \
 		}	\
-	      fwd_page = pgbuf_fix (thread_p, &fwd_vpid, OLD_PAGE, \
-				    PGBUF_LATCH_WRITE, PGBUF_CONDITIONAL_LATCH);  \
-	      if (fwd_page == NULL) \
-		{	\
-		  pgbuf_unfix_and_init (thread_p, hdr_pgptr); \
-		  pgbuf_unfix_and_init (thread_p, home_page); \
-		  if (again_count++ >= again_max)	\
-		    { \
-		      error_code = er_errid ();	\
-		      if (error_code == ER_PB_BAD_PAGEID)	\
+	      else  \
+		{ \
+		  fwd_page = pgbuf_fix (thread_p, &fwd_vpid, OLD_PAGE, \
+					PGBUF_LATCH_WRITE,  \
+					PGBUF_CONDITIONAL_LATCH);  \
+		  if (fwd_page == NULL) \
+		    {	\
+		      pgbuf_unfix_and_init (thread_p, hdr_pgptr); \
+		      pgbuf_unfix_and_init (thread_p, home_page); \
+		      if (again_count++ >= again_max)	\
 			{ \
-			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, \
-				  ER_HEAP_UNKNOWN_OBJECT, 3,	fwd_oid.volid, \
-				  fwd_oid.pageid, fwd_oid.slotid);  \
-			  error_code = ER_HEAP_UNKNOWN_OBJECT;	\
-			} \
-		      else if (er_errid () == NO_ERROR) \
-			{ \
-			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, \
-				  ER_PAGE_LATCH_ABORTED, 2, fwd_vpid.volid, \
-				  fwd_vpid.pageid); \
+			  error_code = er_errid ();	\
+			  if (error_code == ER_PB_BAD_PAGEID)	\
+			    { \
+			      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, \
+				      ER_HEAP_UNKNOWN_OBJECT, 3, fwd_oid.volid, \
+				      fwd_oid.pageid, fwd_oid.slotid);  \
+			      error_code = ER_HEAP_UNKNOWN_OBJECT;	\
+			    } \
+			  else if (er_errid () == NO_ERROR) \
+			    { \
+			      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, \
+				      ER_PAGE_LATCH_ABORTED, 2, fwd_vpid.volid, \
+				      fwd_vpid.pageid); \
+			    } \
 			} \
 		    } \
 		} \
@@ -8252,6 +8252,15 @@ try_again:
 			/* the new record doesn't fit into home or new home page */
 			is_new_home_insert = false;
 		      }
+		    else
+		      {
+			if (spage_get_record
+			    (forward_addr.pgptr, forward_oid.slotid,
+			     &forward_recdes, PEEK) != S_SUCCESS)
+			  {
+			    goto error;
+			  }
+		      }
 		  }
 	      }
 
@@ -8278,6 +8287,15 @@ try_again:
 			/* the new record doesn't fit into home or new home page */
 			is_new_home_insert = false;
 		      }
+		    else
+		      {
+			if (spage_get_record
+			    (forward_addr.pgptr, forward_oid.slotid,
+			     &forward_recdes, PEEK) != S_SUCCESS)
+			  {
+			    goto error;
+			  }
+		      }
 		  }
 	      }
 
@@ -8298,6 +8316,15 @@ try_again:
 					 &slotid) != SP_SUCCESS)
 		      {
 			is_new_home_insert = false;
+		      }
+		    else
+		      {
+			if (spage_get_record
+			    (forward_addr.pgptr, forward_oid.slotid,
+			     &forward_recdes, PEEK) != S_SUCCESS)
+			  {
+			    goto error;
+			  }
 		      }
 		  }
 	      }
@@ -8346,6 +8373,15 @@ try_again:
 			/* the new record doesn't fit into home or new home page */
 			is_new_home_insert = false;
 		      }
+		    else
+		      {
+			if (spage_get_record
+			    (forward_addr.pgptr, forward_oid.slotid,
+			     &forward_recdes, PEEK) != S_SUCCESS)
+			  {
+			    goto error;
+			  }
+		      }
 		  }
 	      }
 
@@ -8370,6 +8406,15 @@ try_again:
 			/* the new record doesn't fit into home or new home page */
 			is_new_home_insert = false;
 		      }
+		    else
+		      {
+			if (spage_get_record
+			    (forward_addr.pgptr, forward_oid.slotid,
+			     &forward_recdes, PEEK) != S_SUCCESS)
+			  {
+			    goto error;
+			  }
+		      }
 		  }
 	      }
 
@@ -8390,6 +8435,15 @@ try_again:
 					 &slotid) != SP_SUCCESS)
 		      {
 			is_new_home_insert = false;
+		      }
+		    else
+		      {
+			if (spage_get_record
+			    (forward_addr.pgptr, forward_oid.slotid,
+			     &forward_recdes, PEEK) != S_SUCCESS)
+			  {
+			    goto error;
+			  }
 		      }
 		  }
 	      }
@@ -9101,6 +9155,16 @@ try_again:
 		    is_home_insert = false;
 		    goto update_mvcc_home_fetch_header_page;
 		  }
+		else
+		  {
+		    /* get home recdes again */
+		    if (spage_get_record
+			(addr.pgptr, oid->slotid, &home_recdes,
+			 PEEK) != S_SUCCESS)
+		      {
+			goto error;
+		      }
+		  }
 	      }
 	    else
 	      {
@@ -9110,6 +9174,16 @@ try_again:
 		  {
 		    assert (hdr_pgptr != NULL);
 		    is_home_insert = false;
+		  }
+		else
+		  {
+		    /* get home recdes again */
+		    if (spage_get_record
+			(addr.pgptr, oid->slotid, &home_recdes,
+			 PEEK) != S_SUCCESS)
+		      {
+			goto error;
+		      }
 		  }
 	      }
 	  }
@@ -9140,6 +9214,16 @@ try_again:
 				     &slotid) == SP_SUCCESS)
 		  {
 		    is_home_insert = true;
+		  }
+		else
+		  {
+		    /* get home recdes again */
+		    if (spage_get_record
+			(addr.pgptr, oid->slotid, &home_recdes,
+			 PEEK) != S_SUCCESS)
+		      {
+			goto error;
+		      }
 		  }
 
 		new_recdes = &new_forward_recdes;
@@ -22087,7 +22171,8 @@ heap_rv_mvcc_redo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
     }
   else
     {
-      char data_buffer[IO_DEFAULT_PAGE_SIZE + MAX_ALIGNMENT];
+      char data_buffer[IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE +
+		       MAX_ALIGNMENT];
       int repid_and_flags, offset, mvcc_flag, offset_size;
 
       offset = sizeof (record_type);
@@ -22122,8 +22207,9 @@ heap_rv_mvcc_redo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
       MVCC_SET_INSID (&mvcc_rec_header, rcv->mvcc_id);
       MVCC_SET_CHN (&mvcc_rec_header, chn);
 
-      HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0, record_type,
-		       PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
+      HEAP_SET_RECORD (&recdes,
+		       IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE, 0,
+		       record_type, PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
       or_mvcc_add_header (&recdes, &mvcc_rec_header,
 			  repid_and_flags & OR_BOUND_BIT_FLAG, offset_size);
 
@@ -22208,7 +22294,8 @@ heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   char new_flags;
   int *chn = NULL, old_mvcc_header_size;
   int offset = 0;
-  char data_buffer[IO_DEFAULT_PAGE_SIZE + MAX_ALIGNMENT];
+  char data_buffer[IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE +
+		   MAX_ALIGNMENT];
   RECDES recdes;
   int sp_success;
 
@@ -22265,45 +22352,47 @@ heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
       MVCC_SET_DELID (&mvcc_rec_header, MVCCID_NULL);
     }
 
-  /* handle next version */
-  if (is_bigone == false)
+  if (is_bigone)
+    {
+      assert (MVCC_IS_FLAG_SET (&mvcc_rec_header,
+				OR_MVCC_FLAG_VALID_NEXT_VERSION));
+      MVCC_SET_NEXT_VERSION (&mvcc_rec_header, &oid_Null_oid);
+
+      heap_set_mvcc_rec_header_on_overflow (rcv->pgptr, &mvcc_rec_header);
+    }
+  else
     {
       /* remove OR_MVCC_FLAG_VALID_NEXT_VERSION flag even if this flag was set
        * together with null next oid, before delete execution
        */
       MVCC_CLEAR_FLAG_BITS (&mvcc_rec_header,
 			    OR_MVCC_FLAG_VALID_NEXT_VERSION);
-    }
-  else
-    {
-      assert (MVCC_IS_FLAG_SET (&mvcc_rec_header,
-				OR_MVCC_FLAG_VALID_NEXT_VERSION));
-      MVCC_SET_NEXT_VERSION (&mvcc_rec_header, &oid_Null_oid);
-    }
 
-  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0, peek_recdes.type,
-		   PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
+      HEAP_SET_RECORD (&recdes,
+		       IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE, 0,
+		       peek_recdes.type, PTR_ALIGN (data_buffer,
+						    MAX_ALIGNMENT));
 
-  or_mvcc_add_header (&recdes, &mvcc_rec_header,
-		      OR_GET_BOUND_BIT_FLAG (peek_recdes.data),
-		      OR_GET_OFFSET_SIZE (peek_recdes.data));
-  memcpy (recdes.data + recdes.length,
-	  peek_recdes.data + old_mvcc_header_size,
-	  peek_recdes.length - old_mvcc_header_size);
-  recdes.length += (peek_recdes.length - old_mvcc_header_size);
+      or_mvcc_add_header (&recdes, &mvcc_rec_header,
+			  OR_GET_BOUND_BIT_FLAG (peek_recdes.data),
+			  OR_GET_OFFSET_SIZE (peek_recdes.data));
+      memcpy (recdes.data + recdes.length,
+	      peek_recdes.data + old_mvcc_header_size,
+	      peek_recdes.length - old_mvcc_header_size);
+      recdes.length += (peek_recdes.length - old_mvcc_header_size);
 
-  sp_success = spage_update (thread_p, rcv->pgptr, slotid, &recdes);
-  if (sp_success != SP_SUCCESS)
-    {
-      /* Unable to recover update for object */
-      if (sp_success != SP_ERROR)
+      sp_success = spage_update (thread_p, rcv->pgptr, slotid, &recdes);
+      if (sp_success != SP_SUCCESS)
 	{
-	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR,
-		  0);
+	  /* Unable to recover update for object */
+	  if (sp_success != SP_ERROR)
+	    {
+	      er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_GENERIC_ERROR, 0);
+	    }
+	  return er_errid ();
 	}
-      return er_errid ();
     }
-
 
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
   return NO_ERROR;
@@ -22377,12 +22466,15 @@ heap_rv_mvcc_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
     }
   else
     {
-      char data_buffer[IO_DEFAULT_PAGE_SIZE + MAX_ALIGNMENT];
+      char data_buffer[IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE +
+		       MAX_ALIGNMENT];
       RECDES recdes;
       int sp_success;
 
-      HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0, peek_recdes.type,
-		       PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
+      HEAP_SET_RECORD (&recdes,
+		       IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE, 0,
+		       peek_recdes.type, PTR_ALIGN (data_buffer,
+						    MAX_ALIGNMENT));
 
       or_mvcc_add_header (&recdes, &mvcc_rec_header,
 			  OR_GET_BOUND_BIT_FLAG (peek_recdes.data),
@@ -24160,9 +24252,15 @@ heap_mvcc_insert_internal (THREAD_ENTRY * thread_p,
     }
   else
     {
-      LOG_CRUMB redo_crumbs[3];
+      LOG_CRUMB redo_crumbs[4];
       int chn;
       char flags;
+      int mvcc_header_size;
+      MVCC_REC_HEADER mvcc_rec_header;
+
+      (void) or_mvcc_get_header (recdes, &mvcc_rec_header);
+      mvcc_header_size =
+	or_mvcc_header_size_from_flags (mvcc_rec_header.mvcc_flag);
 
       repid_and_flags = OR_GET_INT (recdes->data);
       flags =
@@ -24190,7 +24288,10 @@ heap_mvcc_insert_internal (THREAD_ENTRY * thread_p,
       redo_crumbs[2].length = OR_INT_SIZE;
       redo_crumbs[2].data = &chn;
 
-      log_append_undoredo_crumbs (thread_p, RVHF_MVCC_INSERT, &addr, 0, 3,
+      redo_crumbs[3].length = recdes->length - mvcc_header_size;
+      redo_crumbs[3].data = recdes->data + mvcc_header_size;
+
+      log_append_undoredo_crumbs (thread_p, RVHF_MVCC_INSERT, &addr, 0, 4,
 				  NULL, redo_crumbs);
     }
 
@@ -28665,9 +28766,11 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		}
 	      else
 		{
-		  char data_buffer[IO_DEFAULT_PAGE_SIZE + MAX_ALIGNMENT];
+		  char data_buffer[IO_DEFAULT_PAGE_SIZE
+				   + OR_MVCC_MAX_HEADER_SIZE + MAX_ALIGNMENT];
 		  /* init recdes */
-		  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0,
+		  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE +
+				   OR_MVCC_MAX_HEADER_SIZE, 0,
 				   REC_NEWHOME,
 				   PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
 
@@ -28715,18 +28818,20 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	}
       else
 	{
-	  char data_buffer[IO_DEFAULT_PAGE_SIZE + MAX_ALIGNMENT];
+	  char data_buffer[IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE
+			   + MAX_ALIGNMENT];
 	  int prev_freespace;
 	  bool need_update;
 
 	  /* update home page */
-	  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0,
+	  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE
+			   + OR_MVCC_MAX_HEADER_SIZE, 0,
 			   REC_HOME, PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
 	  assert (fwd_recdes != NULL && fwd_recdes->length > 0);
 	  or_mvcc_add_header (&recdes, &new_rec_header,
 			      OR_GET_BOUND_BIT_FLAG (fwd_recdes->data),
 			      OR_GET_OFFSET_SIZE (fwd_recdes->data));
-	  memcpy (&recdes.data + recdes.length,
+	  memcpy (recdes.data + recdes.length,
 		  fwd_recdes->data + old_mvcc_header_size,
 		  fwd_recdes->length - old_mvcc_header_size);
 	  recdes.length += (fwd_recdes->length - old_mvcc_header_size);
@@ -28775,7 +28880,7 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	      p_chn = &chn;
 	    }
 	  HEAP_SET_MVCC_DELETE_RELOCATION_LOGS
-	    (&home_oid, fwd_recdes->type, p_chn, (RECDES *) NULL, undo_crumbs,
+	    (home_oid, fwd_recdes->type, p_chn, (RECDES *) NULL, undo_crumbs,
 	     undo_size, (LOG_CRUMB *) NULL, redo_size);
 	  log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATION,
 				      &forward_addr, undo_size, 0,
@@ -28835,14 +28940,17 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	  || !spage_is_updatable (thread_p, home_pgptr, home_oid->slotid,
 				  size))
 	{
-	  char data_buffer[IO_DEFAULT_PAGE_SIZE + MAX_ALIGNMENT];
+	  char data_buffer[IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE +
+			   MAX_ALIGNMENT];
 	  RECDES new_forward_recdes;
 	  OID new_forward_oid;
 	  INT16 new_forward_recdes_type;
 
 	  assert (hdr_pgptr != NULL);
-	  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0, REC_UNKNOWN,
-			   PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
+	  HEAP_SET_RECORD (&recdes,
+			   IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE, 0,
+			   REC_UNKNOWN, PTR_ALIGN (data_buffer,
+						   MAX_ALIGNMENT));
 	  or_mvcc_add_header (&recdes, &new_rec_header,
 			      OR_GET_BOUND_BIT_FLAG (home_recdes->data),
 			      OR_GET_OFFSET_SIZE (home_recdes->data));
@@ -28972,11 +29080,14 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	    }
 	  else
 	    {
-	      char data_buffer[IO_DEFAULT_PAGE_SIZE + MAX_ALIGNMENT];
+	      char data_buffer[IO_DEFAULT_PAGE_SIZE +
+			       OR_MVCC_MAX_HEADER_SIZE + MAX_ALIGNMENT];
 
 	      /* build recdes */
-	      HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0, REC_HOME,
-			       PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
+	      HEAP_SET_RECORD (&recdes,
+			       IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE,
+			       0, REC_HOME, PTR_ALIGN (data_buffer,
+						       MAX_ALIGNMENT));
 
 	      /* new_recdes->type will be set later, now copy header and data */
 	      or_mvcc_add_header (&recdes, &new_rec_header,
@@ -29108,10 +29219,8 @@ heap_rv_mvcc_redo_delete_relocated (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
       MVCC_SET_NEXT_VERSION (&mvcc_rec_header, next_version);
     }
 
-  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0, REC_HOME,
-		   PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
-  /* TO DO - check OR_GET_BOUND_BIT_FLAG (fwd_recdes->data),
-     OR_GET_OFFSET_SIZE (fwd_recdes->data) */
+  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE, 0,
+		   REC_HOME, PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
   or_mvcc_add_header (&recdes, &mvcc_rec_header,
 		      OR_GET_BOUND_BIT_FLAG (mvcc_delete_recdes.data),
 		      OR_GET_OFFSET_SIZE (mvcc_delete_recdes.data));
@@ -29235,8 +29344,8 @@ heap_rv_mvcc_undo_delete_relocation (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   /* we are sure that is not bigone record, so, clear next version flag */
   MVCC_CLEAR_FLAG_BITS (&mvcc_rec_header, OR_MVCC_FLAG_VALID_NEXT_VERSION);
 
-  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE, 0, rec_type,
-		   PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
+  HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE, 0,
+		   rec_type, PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
   /* TO DO - check OR_GET_BOUND_BIT_FLAG (fwd_recdes->data),
      OR_GET_OFFSET_SIZE (fwd_recdes->data) */
   or_mvcc_add_header (&recdes, &mvcc_rec_header,

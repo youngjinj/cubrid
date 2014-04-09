@@ -10018,7 +10018,7 @@ btree_merge_node (THREAD_ENTRY * thread_p, BTID_INT * btid, PAGE_PTR P,
 	    }
 	}
 
-      /* read orginal key */
+      /* read original key */
       btree_read_record_helper (thread_p, btid, &peek_rec, &key,
 				&leaf_pnt, BTREE_LEAF_NODE, &clear_key,
 				&offset, PEEK_KEY_VALUE);
@@ -14913,12 +14913,16 @@ btree_compress_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       pr_midxkey_remove_prefix (&key, diff_column);
       new_key_len = btree_get_key_length (&key);
 
-      new_offset = OR_OID_SIZE + new_key_len;
+      new_offset = offset + new_key_len - key_len;
       new_offset = DB_ALIGN (new_offset, INT_ALIGNMENT);
 
-      /* move remaining part of oids */
-      memmove (rec.data + new_offset, rec.data + offset, rec.length - offset);
-      rec.length = new_offset + (rec.length - offset);
+      if (new_offset != offset)
+	{
+	  /* move the remaining part of record */
+	  memmove (rec.data + new_offset, rec.data + offset,
+		   rec.length - offset);
+	  rec.length = new_offset + (rec.length - offset);
+	}
 
       spage_update (thread_p, page_ptr, i, &rec);
       btree_clear_key_value (&clear_key, &key);
@@ -25666,6 +25670,7 @@ btree_verify_leaf_node (THREAD_ENTRY * thread_p, BTID_INT * btid,
   LEAF_REC leaf_pnt;
   OID oid, class_oid;
   OR_BUF buf;
+  short mvcc_flags;
 
   assert_release (btid != NULL);
   assert_release (page_ptr != NULL);
@@ -25703,8 +25708,7 @@ btree_verify_leaf_node (THREAD_ENTRY * thread_p, BTID_INT * btid,
       btree_leaf_get_first_oid (btid, &rec, &oid, &class_oid);
       if (btree_leaf_is_flaged (&rec, BTREE_LEAF_RECORD_FENCE))
 	{
-	  if (oid.pageid != NULL_PAGEID || oid.volid != NULL_VOLID
-	      || oid.slotid != 0)
+	  if (oid.pageid != NULL_PAGEID || oid.volid != 0 || oid.slotid != 0)
 	    {
 	      btree_dump_page (thread_p, stdout, NULL, btid, NULL,
 			       page_ptr, NULL, 2, 2);
@@ -25750,7 +25754,19 @@ btree_verify_leaf_node (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
 	for (k = 1; k < oid_cnt; k++)
 	  {
+	    mvcc_flags = btree_leaf_key_oid_get_mvcc_flag (buf.ptr);
 	    or_get_oid (&buf, &oid);
+	    oid.volid = oid.volid & ~BTREE_LEAF_OID_MVCC_MASK;
+	    if (mvcc_Enabled)
+	      {
+		if (BTREE_IS_UNIQUE (btid))
+		  {
+		    or_get_oid (&buf, &class_oid);
+		  }
+		buf.ptr +=
+		  BTREE_LEAF_GET_MVCC_SIZE_FROM_LEAF_OID_FLAG (mvcc_flags);
+	      }
+	    
 	    if (oid.pageid <= NULL_PAGEID && oid.volid <= NULL_VOLID
 		&& oid.slotid <= NULL_SLOTID)
 	      {

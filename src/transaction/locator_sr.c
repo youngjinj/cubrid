@@ -2192,7 +2192,7 @@ locator_return_object_assign (THREAD_ENTRY * thread_p,
 	   * be invalidated. To do so, the client must have this information.
 	   */
 	  OR_GET_MVCC_INSERT_ID (assign->recdes.data,
-				 OR_GET_MVCC_FLAG (&assign->recdes.data),
+				 OR_GET_MVCC_FLAG (assign->recdes.data),
 				 &mvcc_insid);
 	  if (logtb_is_current_mvccid (thread_p, mvcc_insid))
 	    {

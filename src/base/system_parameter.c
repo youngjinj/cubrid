@@ -1886,8 +1886,8 @@ static float prm_mvcc_clean_page_ratio_lower = 0.1f;
 static float prm_mvcc_clean_page_ratio_upper = 0.95f;
 static unsigned int prm_mvcc_clean_page_ratio_flag = 0;
 
-bool PRM_AUTO_VACUUM_ENABLED = true;
-static bool prm_auto_vacuum_enabled_default = true;
+bool PRM_AUTO_VACUUM_ENABLED = false;
+static bool prm_auto_vacuum_enabled_default = false;
 static unsigned int prm_auto_vacuum_enabled_flag = 0;
 
 int PRM_AUTO_VACUUM_INTERVAL = 300;
@@ -1906,8 +1906,8 @@ static float prm_auto_vacuum_ratio_lower = 0.05f;
 static float prm_auto_vacuum_ratio_upper = 0.8f;
 static unsigned int prm_auto_vacuum_ratio_flag = 0;
 
-bool PRM_SCAN_HEAP_PAGE_VACUUM_ENABLED = true;
-static bool prm_scan_heap_page_vacuum_enabled_default = true;
+bool PRM_SCAN_HEAP_PAGE_VACUUM_ENABLED = false;
+static bool prm_scan_heap_page_vacuum_enabled_default = false;
 static unsigned int prm_scan_heap_page_vacuum_enabled_flag = 0;
 
 bool PRM_OBJECT_PRINT_FORMAT_OID = false;
