@@ -49,8 +49,9 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
 			 const BOOT_CLIENT_CREDENTIAL * client_credential,
 			 BOOT_DB_PATH_INFO * db_path_info,
 			 bool db_overwrite, const char *file_addmore_vols,
-			 DKNPAGES db_npages, PGLENGTH db_desired_pagesize,
-			 DKNPAGES xlog_npages,
+			 volatile DKNPAGES db_npages,
+			 PGLENGTH db_desired_pagesize,
+			 volatile DKNPAGES xlog_npages,
 			 PGLENGTH db_desired_log_page_size,
 			 OID * rootclass_oid, HFID * rootclass_hfid,
 			 int client_lock_wait,
@@ -178,10 +179,11 @@ extern int xlocator_check_fk_validity (THREAD_ENTRY * thread_p,
 				       BTID * pk_btid, int cache_attr_id,
 				       char *fk_name);
 extern int xlocator_prefetch_repl_insert (THREAD_ENTRY * thread_p,
-                                          OID * class_oid, RECDES *recdes);
+					  OID * class_oid, RECDES * recdes);
 extern int xlocator_prefetch_repl_update_or_delete (THREAD_ENTRY * thread_p,
-                                          BTID * btid, OID * class_oid,
-                                          DB_VALUE * key_value);
+						    BTID * btid,
+						    OID * class_oid,
+						    DB_VALUE * key_value);
 extern LOG_LSA *xrepl_log_get_append_lsa (void);
 extern int xrepl_set_info (THREAD_ENTRY * thread_p, REPL_INFO * repl_info);
 
@@ -362,8 +364,7 @@ extern QFILE_LIST_ID *xqmgr_execute_query (THREAD_ENTRY * thrd,
 					   CACHE_TIME * srv_cache_time,
 					   int query_timeout,
 					   XASL_CACHE_ENTRY **
-					   ret_cache_entry_p,
-					   LC_LOCKHINT * lockhint);
+					   ret_cache_entry_p);
 extern QFILE_LIST_ID *xqmgr_prepare_and_execute_query (THREAD_ENTRY * thrd,
 						       char *xasl_stream,
 						       int xasl_stream_size,

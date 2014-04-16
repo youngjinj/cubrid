@@ -33,6 +33,7 @@
 #include <time.h>
 #if defined(SERVER_MODE)
 #include "jansson.h"
+#include "memory_hash.h"
 #endif
 
 #include "storage_common.h"
@@ -1067,6 +1068,11 @@ struct xasl_cache_ent
   struct xasl_cache_clo *clo_list;	/* list of cache clones for this XASL */
   bool deletion_marker;		/* this entry will be deleted if marker set */
   XASL_QSTR_HT_KEY qstr_ht_key;	/* The key of query string hash table */
+  HENTRY_PTR qstr_ht_entry_ptr;	/* Hash entry of the query string hash table
+				 * that holds this xasl cache entry.
+				 * This pointer is used to update
+				 * query string hash table's lru list.
+				 */
 };
 
 /* XASL cache clone type definition */
@@ -1181,7 +1187,8 @@ extern int qexec_free_filter_pred_cache_clo (THREAD_ENTRY * thread_p,
 					     XASL_CACHE_CLONE * clo);
 extern int xasl_id_hash_cmpeq (const void *key1, const void *key2);
 extern int qexec_remove_xasl_cache_ent_by_class (THREAD_ENTRY * thread_p,
-						 const OID * oid);
+						 const OID * class_oid,
+						 int force_remove);
 extern int qexec_remove_filter_pred_cache_ent_by_class (THREAD_ENTRY *
 							thread_p,
 							const OID *

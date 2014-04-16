@@ -3093,7 +3093,7 @@ qo_join_fprint (QO_PLAN * plan, FILE * f, int howfar)
     case JOIN_RIGHT:
       fputs (" (right outer join)", f);
       break;
-    case JOIN_OUTER:
+    case JOIN_OUTER:		/* not used */
       fputs (" (full outer join)", f);
       break;
     case JOIN_CSELECT:
@@ -6415,20 +6415,6 @@ qo_examine_correlated_index (QO_INFO * info,
 	      continue;
 	    }
 
-	  if (QO_TERM_LOCATION (termp) == 0)
-	    {			/* WHERE clause */
-	      if (QO_TERM_CLASS (termp) == QO_TC_SARG
-		  || QO_TERM_CLASS (termp) == QO_TC_DURING_JOIN)
-		{
-		  /* include sarg term, during join term */
-		}
-	      else
-		{
-		  /* exclude after-joinable terms in 'sarged_terms' */
-		  continue;
-		}
-	    }
-
 	  bitset_add (&indexable_terms, t);
 	}			/* for (t = ...) */
     }
@@ -6904,6 +6890,7 @@ planner_visit_node (QO_PLANNER * planner,
   QO_INFO *tail_info = (QO_INFO *) NULL;
   QO_INFO *new_info = (QO_INFO *) NULL;
   int i, j;
+  bool check_afj_terms = false;
   BITSET_ITERATOR bi, bj;
   BITSET nl_join_terms;		/* nested-loop join terms */
   BITSET sm_join_terms;		/* sort merge join terms */
@@ -7138,9 +7125,31 @@ planner_visit_node (QO_PLANNER * planner,
 
 	term = QO_ENV_TERM (planner->env, i);
 
+	/* check term nodes */
 	if (!bitset_subset (visited_nodes, &(QO_TERM_NODES (term))))
 	  {
 	    continue;
+	  }
+
+	/* check location for outer join */
+	if (QO_TERM_CLASS (term) == QO_TC_DURING_JOIN)
+	  {
+	    QO_ASSERT (planner->env, QO_ON_COND_TERM (term));
+
+	    for (j = bitset_iterate (visited_nodes, &bj); j != -1;
+		 j = bitset_next_member (&bj))
+	      {
+		node = QO_ENV_NODE (planner->env, j);
+		if (QO_NODE_LOCATION (node) == QO_TERM_LOCATION (term))
+		  {
+		    break;
+		  }
+	      }
+
+	    if (j == -1)
+	      {			/* out of location */
+		continue;
+	      }
 	  }
 
 	found_edge = false;	/* init */
@@ -7208,22 +7217,16 @@ planner_visit_node (QO_PLANNER * planner,
 		  }
 	      }
 
-	    /* check for always true dummy join term */
-	    if (QO_TERM_CLASS (term) == QO_TC_DUMMY_JOIN)
+	    switch (QO_TERM_CLASS (term))
 	      {
+	      case QO_TC_DUMMY_JOIN:	/* is always true dummy join term */
 		/* check for idx-join */
 		if (QO_TERM_CAN_USE_INDEX (term))
 		  {
 		    idx_join_cnt++;
 		  }
+		break;
 
-		bitset_add (&info_terms, i);	/* add to info term */
-
-		continue;	/* skip out from join terms and sarged terms */
-	      }
-
-	    switch (QO_TERM_CLASS (term))
-	      {
 	      case QO_TC_PATH:
 		if (follow_term == NULL)
 		  {		/* get the first PATH term idx */
@@ -7268,7 +7271,7 @@ planner_visit_node (QO_PLANNER * planner,
 		else
 		  {		/* non-eq edge */
 		    if (IS_OUTER_JOIN_TYPE (join_type)
-			&& QO_TERM_LOCATION (term) > 0)
+			&& QO_ON_COND_TERM (term))
 		      {		/* ON clause */
 			bitset_add (&duj_terms, i);	/* need for m-join */
 		      }
@@ -7292,36 +7295,12 @@ planner_visit_node (QO_PLANNER * planner,
 
 	    if (QO_TERM_CLASS (term) == QO_TC_DURING_JOIN)
 	      {
-		/* check location for outer join */
-		for (j = bitset_iterate (visited_nodes, &bj); j != -1;
-		     j = bitset_next_member (&bj))
-		  {
-		    node = QO_ENV_NODE (planner->env, j);
-		    if (QO_NODE_LOCATION (node) == QO_TERM_LOCATION (term))
-		      {
-			bitset_add (&duj_terms, i);
-			/* check for joinable edge */
-			if (bitset_cardinality (&(QO_TERM_NODES (term))) == 2
-			    && BITSET_MEMBER (QO_TERM_NODES (term),
-					      QO_NODE_IDX (tail_node)))
-			  {
-			    /* check for idx-join */
-			    if (QO_TERM_CAN_USE_INDEX (term))
-			      {
-				idx_join_cnt++;
-			      }
-			  }
-			break;
-		      }
-		  }		/* for (j = ...) */
-
-		if (j == -1)
-		  {		/* out of location */
-		    continue;
-		  }
+		bitset_add (&duj_terms, i);
 	      }
 	    else if (QO_TERM_CLASS (term) == QO_TC_AFTER_JOIN)
 	      {
+		check_afj_terms = true;
+
 		/* If visited_nodes is the same as partition's nodes,
 		 * then we have successfully generated one of the graph
 		 * permutations(i.e., we have considered every one of the
@@ -7334,10 +7313,9 @@ planner_visit_node (QO_PLANNER * planner,
 		  }
 		bitset_add (&afj_terms, i);
 	      }
-	    else
+	    else if (QO_TERM_CLASS (term) == QO_TC_OTHER)
 	      {
-		if (IS_OUTER_JOIN_TYPE (join_type)
-		    && QO_TERM_LOCATION (term) > 0)
+		if (IS_OUTER_JOIN_TYPE (join_type) && QO_ON_COND_TERM (term))
 		  {		/* ON clause */
 		    bitset_add (&duj_terms, i);
 		  }
@@ -7370,6 +7348,49 @@ planner_visit_node (QO_PLANNER * planner,
 	goto wrapup;
       }
   }
+
+#if 1				/* TO NOT DELETE ME - very special case for Object fetch plan */
+  /* re-check for after join term; is depence to Object fetch plan
+   */
+  if (check_afj_terms && bitset_is_empty (&afj_terms))
+    {
+      BITSET path_nodes;
+
+      bitset_init (&path_nodes, planner->env);
+
+      for (i = bitset_iterate (remaining_terms, &bi); i != -1;
+	   i = bitset_next_member (&bi))
+	{
+	  term = QO_ENV_TERM (planner->env, i);
+
+	  if (QO_TERM_CLASS (term) == QO_TC_PATH)
+	    {
+	      bitset_add (&path_nodes, QO_NODE_IDX (QO_TERM_TAIL (term)));
+	    }
+	}
+
+      /* there is only path joined nodes.
+       * So, should apply after join terms at here.
+       */
+      if (bitset_subset (&path_nodes, remaining_nodes))
+	{
+	  for (i = bitset_iterate (remaining_terms, &bi); i != -1;
+	       i = bitset_next_member (&bi))
+	    {
+	      term = QO_ENV_TERM (planner->env, i);
+
+	      if (QO_TERM_CLASS (term) == QO_TC_AFTER_JOIN)
+		{
+		  bitset_add (&afj_terms, i);
+		  bitset_add (&info_terms, i);	/* add to info term */
+		  bitset_add (&sarged_terms, i);	/* add to sarged term */
+		}
+	    }
+	}
+
+      bitset_delset (&path_nodes);
+    }
+#endif
 
   /* extract visited info terms
    */
@@ -8336,7 +8357,6 @@ qo_generate_index_scan (QO_INFO * infop, QO_NODE * nodep,
       bitset_remove (&range_terms, t);
     }
 
-end:
   bitset_delset (&seg_other_terms);
   bitset_delset (&range_terms);
 
@@ -8382,7 +8402,6 @@ qo_generate_loose_index_scan (QO_INFO * infop, QO_NODE * nodep,
 
   n = qo_check_plan_on_info (infop, planp);
 
-end:
   bitset_delset (&range_terms);
 
   return n;
@@ -10318,7 +10337,7 @@ qo_validate_index_term_notnull (QO_ENV * env, QO_INDEX_ENTRY * index_entryp)
       /* get the pointer to QO_TERM structure */
       termp = QO_ENV_TERM (env, t);
       assert (termp != NULL);
-      if (QO_TERM_LOCATION (termp) > 0)
+      if (QO_ON_COND_TERM (termp))
 	{
 	  continue;
 	}
@@ -11722,7 +11741,7 @@ static json_t *
 qo_plan_sort_print_json (QO_PLAN * plan)
 {
   json_t *sort, *subplan = NULL;
-  const char *type;
+  const char *type = NULL;
 
   switch (plan->plan_un.sort.sort_type)
     {
@@ -11740,6 +11759,10 @@ qo_plan_sort_print_json (QO_PLAN * plan)
 
     case SORT_DISTINCT:
       type = "SORT (distinct)";
+      break;
+
+    case SORT_LIMIT:
+      type = "SORT (limit)";
       break;
 
     default:
@@ -11810,7 +11833,7 @@ qo_plan_join_print_json (QO_PLAN * plan)
     case JOIN_RIGHT:
       type = "right outer join";
       break;
-    case JOIN_OUTER:
+    case JOIN_OUTER:		/* not used */
       type = "full outer join";
       break;
     case JOIN_CSELECT:
@@ -12043,7 +12066,7 @@ qo_plan_scan_print_text (FILE * fp, QO_PLAN * plan, int indent)
 static void
 qo_plan_sort_print_text (FILE * fp, QO_PLAN * plan, int indent)
 {
-  const char *type;
+  const char *type = NULL;
 
   indent += 2;
 
@@ -12063,6 +12086,10 @@ qo_plan_sort_print_text (FILE * fp, QO_PLAN * plan, int indent)
 
     case SORT_DISTINCT:
       type = "SORT (distinct)";
+      break;
+
+    case SORT_LIMIT:
+      type = "SORT (limit)";
       break;
 
     default:
@@ -12128,7 +12155,7 @@ qo_plan_join_print_text (FILE * fp, QO_PLAN * plan, int indent)
     case JOIN_RIGHT:
       type = "right outer join";
       break;
-    case JOIN_OUTER:
+    case JOIN_OUTER:		/* not used */
       type = "full outer join";
       break;
     case JOIN_CSELECT:

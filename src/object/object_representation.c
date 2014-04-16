@@ -333,13 +333,13 @@ or_class_name (RECDES * record)
 /*
  * or_rep_id - Extracts the representation id from the disk representation of
  * an object.
- *    return: representation of id of object. or -1 for error
+ *    return: representation of id of object. or NULL_REPRID for error
  *    record(in): disk record
  */
 int
 or_rep_id (RECDES * record)
 {
-  int rep = -1;
+  int rep = NULL_REPRID;
 
   assert (record != NULL && record->data != NULL);
 
@@ -434,7 +434,7 @@ or_set_rep_id (RECDES * record, int repid)
 /*
  * or_chn - extracts cache coherency number from the disk representation of an
  * object
- *    return: cache coherency number (chn), or -1 for error
+ *    return: cache coherency number (chn), or NULL_CHN for error
  *    record(in): disk record
  */
 int
@@ -3559,7 +3559,7 @@ char *
 or_pack_recdes (char *buf, RECDES * recdes)
 {
   buf = or_pack_int (buf, recdes->length);
-  buf = or_pack_int (buf, recdes->type);
+  buf = or_pack_short (buf, recdes->type);
   buf = or_pack_stream (buf, recdes->data, recdes->length);
   return buf;
 }
@@ -7086,7 +7086,7 @@ or_unpack_recdes (char *buf, RECDES ** recdes)
   tmp_recdes->length = length;
   tmp_recdes->data = ((char *) tmp_recdes) + sizeof (RECDES);
 
-  buf = or_unpack_int (buf, &tmp_recdes->type);
+  buf = or_unpack_short (buf, &tmp_recdes->type);
   buf = or_unpack_stream (buf, tmp_recdes->data, length);
 
   *recdes = tmp_recdes;

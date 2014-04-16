@@ -5636,7 +5636,7 @@ do_check_for_empty_classes_in_delete (PARSER_CONTEXT * parser,
   /* lock splitted classes with X_LOCK */
   if (locator_lockhint_classes
       (num_classes, (const char **) classes_names, locks, need_subclasses,
-       flags, 1, NULL) != LC_CLASSNAME_EXIST)
+       flags, 1) != LC_CLASSNAME_EXIST)
     {
       error = er_errid ();
       goto cleanup;
@@ -9131,7 +9131,7 @@ do_execute_update (PARSER_CONTEXT * parser, PT_NODE * statement)
 			       parser->host_var_count +
 			       parser->auto_param_count,
 			       parser->host_variables, &list_id, query_flag,
-			       NULL, NULL, parser->lockhint);
+			       NULL, NULL);
 	  AU_RESTORE (au_save);
 	  if (err != NO_ERROR)
 	    {
@@ -10376,7 +10376,7 @@ do_execute_delete (PARSER_CONTEXT * parser, PT_NODE * statement)
 			   parser->host_var_count +
 			   parser->auto_param_count,
 			   parser->host_variables, &list_id, query_flag,
-			   NULL, NULL, parser->lockhint);
+			   NULL, NULL);
       AU_RESTORE (au_save);
 
       /* in the case of OID list deletion, now delete the selected OIDs */
@@ -13676,7 +13676,7 @@ do_execute_insert (PARSER_CONTEXT * parser, PT_NODE * statement)
 		       parser->host_var_count +
 		       parser->auto_param_count,
 		       parser->host_variables, &list_id, query_flag,
-		       NULL, NULL, parser->lockhint);
+		       NULL, NULL);
 
   /* free returned QFILE_LIST_ID */
   if (list_id)
@@ -14500,8 +14500,7 @@ do_execute_session_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
 		       parser->host_var_count + parser->auto_param_count,
 		       parser->host_variables,
 		       &list_id,
-		       query_flag, &clt_cache_time, &statement->cache_time,
-		       parser->lockhint);
+		       query_flag, &clt_cache_time, &statement->cache_time);
 
   AU_RESTORE (au_save);
 
@@ -14691,8 +14690,7 @@ do_execute_select (PARSER_CONTEXT * parser, PT_NODE * statement)
 		       parser->host_var_count + parser->auto_param_count,
 		       parser->host_variables,
 		       &list_id,
-		       query_flag, &clt_cache_time, &statement->cache_time,
-		       parser->lockhint);
+		       query_flag, &clt_cache_time, &statement->cache_time);
 
   AU_RESTORE (au_save);
 
@@ -16376,7 +16374,7 @@ do_execute_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
       err = execute_query (statement->xasl_id, &parser->query_id,
 			   parser->host_var_count + parser->auto_param_count,
 			   parser->host_variables, &list_id, query_flag,
-			   NULL, NULL, parser->lockhint);
+			   NULL, NULL);
       AU_RESTORE (au_save);
       if (err != NO_ERROR)
 	{
@@ -16427,7 +16425,7 @@ do_execute_merge (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    execute_query (statement->xasl_id, &parser->query_id,
 			   parser->host_var_count + parser->auto_param_count,
 			   parser->host_variables, &list_id, query_flag,
-			   NULL, NULL, parser->lockhint);
+			   NULL, NULL);
 	  AU_RESTORE (au_save);
 	  if (err != NO_ERROR)
 	    {

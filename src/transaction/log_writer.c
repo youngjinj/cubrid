@@ -287,6 +287,12 @@ logwr_shutdown_by_signal ()
   return;
 }
 
+bool
+logwr_force_shutdown (void)
+{
+  return (logwr_need_shutdown) ? true : false;
+}
+
 /*
  * logwr_initialize - Initialize logwr_Gl structure
  *
@@ -1825,7 +1831,7 @@ logwr_update_last_eof_lsa (LOGWR_ENTRY * entry)
  */
 int
 xlogwr_get_log_pages (THREAD_ENTRY * thread_p, LOG_PAGEID first_pageid,
-		      int mode)
+		      LOGWR_MODE mode)
 {
   LOGWR_ENTRY *entry;
   char *logpg_area;

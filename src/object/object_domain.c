@@ -976,7 +976,6 @@ tp_domain_free (TP_DOMAIN * dom)
 static void
 domain_init (TP_DOMAIN * domain, DB_TYPE typeid_)
 {
-  assert (typeid_ >= DB_TYPE_FIRST);
   assert (typeid_ <= DB_TYPE_LAST);
 
   domain->next = NULL;
@@ -3121,7 +3120,7 @@ tp_domain_resolve (DB_TYPE domain_type, DB_OBJECT * class_obj,
 TP_DOMAIN *
 tp_domain_resolve_default (DB_TYPE type)
 {
-  if (type < 0 || type >= sizeof (tp_Domains) / sizeof (tp_Domains[0]))
+  if (type >= sizeof (tp_Domains) / sizeof (tp_Domains[0]))
     {
       assert_release (false);
       return NULL;
@@ -3906,7 +3905,7 @@ tp_domain_filter_list (TP_DOMAIN * dlist)
  *    maxlen(in): maximum length of buffer
  */
 int
-tp_domain_name (TP_DOMAIN * domain, char *buffer, int maxlen)
+tp_domain_name (const TP_DOMAIN * domain, char *buffer, int maxlen)
 {
   /*
    * need to get more sophisticated here, do full name decomposition and
@@ -3926,7 +3925,7 @@ tp_domain_name (TP_DOMAIN * domain, char *buffer, int maxlen)
  *    maxlen(in): maximum length of buffer
  */
 int
-tp_value_domain_name (DB_VALUE * value, char *buffer, int maxlen)
+tp_value_domain_name (const DB_VALUE * value, char *buffer, int maxlen)
 {
   /* need to get more sophisticated here */
 
@@ -9593,8 +9592,6 @@ tp_value_compare_with_error (const DB_VALUE * value1, const DB_VALUE * value2,
 		  common_coll = DB_GET_STRING_COLLATION (v1);
 		}
 	      else if (TP_IS_CHAR_TYPE (vtype1)
-		       && (DB_GET_STRING_CODESET (v1)
-			   != DB_GET_STRING_CODESET (v2))
 		       && (use_collation_of_v1 || use_collation_of_v2))
 		{
 		  INTL_CODESET codeset;
@@ -9644,10 +9641,8 @@ tp_value_compare_with_error (const DB_VALUE * value1, const DB_VALUE * value2,
 
 		      v1 = &tmp_char_conv;
 		    }
-		  else
+		  else if (DB_GET_STRING_CODESET (v2) != codeset)
 		    {
-		      assert (DB_GET_STRING_CODESET (v2) != codeset);
-
 		      db_value_domain_init (&tmp_char_conv, vtype2,
 					    DB_VALUE_PRECISION (v2), 0);
 

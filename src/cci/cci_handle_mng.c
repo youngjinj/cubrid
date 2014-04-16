@@ -305,6 +305,11 @@ hm_pool_drop_node_from_list (T_REQ_HANDLE ** head, T_REQ_HANDLE ** tail,
 
   assert (*head != NULL && *tail != NULL);
 
+  if (*head == NULL || *tail == NULL)
+    {
+      return CCI_ER_REQ_HANDLE;
+    }
+
   prev_target = target->prev;
   next_target = target->next;
   if (prev_target != NULL)
@@ -338,6 +343,11 @@ hm_pool_move_node_from_use_to_lru (T_CON_HANDLE * connection,
   target = connection->req_handle_table[statement_id - 1];
   assert (target != NULL);
 
+  if (target == NULL)
+    {
+      return CCI_ER_REQ_HANDLE;
+    }
+
   /* cut from use */
   hm_pool_drop_node_from_list (&connection->pool_use_head,
 			       &connection->pool_use_tail, target);
@@ -359,6 +369,11 @@ hm_pool_move_node_from_lru_to_use (T_CON_HANDLE * connection,
   statement_id = statement_id % CON_HANDLE_ID_FACTOR;
   target = connection->req_handle_table[statement_id - 1];
   assert (target != NULL);
+
+  if (target == NULL)
+    {
+      return CCI_ER_REQ_HANDLE;
+    }
 
   /* cut from lru */
   hm_pool_drop_node_from_list (&connection->pool_lru_head,
@@ -542,6 +557,10 @@ hm_req_get_from_pool (T_CON_HANDLE * con, T_REQ_HANDLE ** req, char *sql)
   if (req != NULL)
     {
       *req = con->req_handle_table[GET_REQ_ID (req_id) - 1];
+      if (*req == NULL)
+	{
+	  return CCI_ER_REQ_HANDLE;
+	}
     }
 
   return req_id;
@@ -1154,6 +1173,15 @@ hm_broker_support_holdable_result (T_CON_HANDLE * con_handle)
 
   return (f & BROKER_SUPPORT_HOLDABLE_RESULT)
     == BROKER_SUPPORT_HOLDABLE_RESULT;
+}
+
+bool
+hm_broker_reconnect_when_server_down (T_CON_HANDLE * con_handle)
+{
+  char f = con_handle->broker_info[BROKER_INFO_FUNCTION_FLAG];
+
+  return (f & BROKER_RECONNECT_WHEN_SERVER_DOWN) ==
+    BROKER_RECONNECT_WHEN_SERVER_DOWN;
 }
 
 void

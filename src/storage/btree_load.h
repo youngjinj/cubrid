@@ -107,18 +107,7 @@ typedef enum
   BTREE_OVERFLOW_NODE
 } BTREE_NODE_TYPE;
 
-extern int btree_get_node_key_cnt (PAGE_PTR page_ptr, int *keycnt);
-extern int btree_get_root_ovfid (PAGE_PTR page_ptr, VFID * vfid);
-extern int btree_get_root_stat (PAGE_PTR page_ptr, int *num_nulls,
-				int *num_keys, int *num_oids);
-extern int btree_get_root_unique (PAGE_PTR page_ptr, int *unique);
-extern int btree_get_node_level (PAGE_PTR page_ptr, int *node_level);
-extern int btree_get_node_type (PAGE_PTR page_ptr, BTREE_NODE_TYPE * type);
-extern int btree_get_node_max_key_len (PAGE_PTR page_ptr, int *max_key_len);
-extern int btree_get_node_next_vpid (PAGE_PTR page_ptr, VPID * vpid);
-extern int btree_get_node_prev_vpid (PAGE_PTR page_ptr, VPID * vpid);
-extern int btree_get_node_split_info (PAGE_PTR page_ptr,
-				      BTREE_NODE_SPLIT_INFO * split_info);
+extern int btree_node_number_of_keys (PAGE_PTR page_ptr);
 extern int btree_get_next_overflow_vpid (PAGE_PTR page_ptr, VPID * vpid);
 
 #define BTREE_GET_KEY_LEN_IN_PAGE(node_type, key_len) \
@@ -248,7 +237,7 @@ extern int btree_create_overflow_key_file (THREAD_ENTRY * thread_p,
 					   BTID_INT * btid);
 extern int btree_init_overflow_header (THREAD_ENTRY * thread_p,
 				       PAGE_PTR page_ptr,
-				       BTREE_OVERFLOW_HEADER * header);
+				       BTREE_OVERFLOW_HEADER * ovf_header);
 extern int btree_init_node_header (THREAD_ENTRY * thread_p, VFID * vfid,
 				   PAGE_PTR page_ptr,
 				   BTREE_NODE_HEADER * header, bool redo);
@@ -256,10 +245,9 @@ extern int btree_init_root_header (THREAD_ENTRY * thread_p, VFID * vfid,
 				   PAGE_PTR page_ptr,
 				   BTREE_ROOT_HEADER * root_header,
 				   TP_DOMAIN * key_type);
-extern BTREE_NODE_HEADER *btree_get_node_header_ptr (PAGE_PTR page_ptr);
-extern BTREE_ROOT_HEADER *btree_get_root_header_ptr (PAGE_PTR page_ptr);
-extern BTREE_OVERFLOW_HEADER *btree_get_overflow_header_ptr (PAGE_PTR
-							     page_ptr);
+extern BTREE_NODE_HEADER *btree_get_node_header (PAGE_PTR page_ptr);
+extern BTREE_ROOT_HEADER *btree_get_root_header (PAGE_PTR page_ptr);
+extern BTREE_OVERFLOW_HEADER *btree_get_overflow_header (PAGE_PTR page_ptr);
 extern int btree_node_header_undo_log (THREAD_ENTRY * thread_p, VFID * vfid,
 				       PAGE_PTR page_ptr);
 extern int btree_node_header_redo_log (THREAD_ENTRY * thread_p, VFID * vfid,
@@ -280,7 +268,8 @@ extern int btree_write_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
 extern void btree_read_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			       PAGE_PTR pgptr, RECDES * Rec, DB_VALUE * key,
 			       void *rec_header, int node_type,
-			       bool * clear_key, int *offset, int copy);
+			       bool * clear_key, int *offset, int copy,
+			       BTREE_SCAN * bts);
 extern void btree_read_record_helper (THREAD_ENTRY * thread_p,
 				      BTID_INT * btid, RECDES * Rec,
 				      DB_VALUE * key, void *rec_header,

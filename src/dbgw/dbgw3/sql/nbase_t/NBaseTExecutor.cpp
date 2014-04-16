@@ -30,36 +30,93 @@ namespace dbgw
   namespace sql
   {
 
+    typedef boost::unordered_map<std::string, trait<nbase_mgmt>::sp,
+            boost::hash<std::string>, func::compareString> _NBaseTMgmtMap;
+
     typedef enum
     {
       NBASE_SQL_TYPE_SELECT,
       NBASE_SQL_TYPE_OTHERS
     } NBASE_SQL_TYPE;
 
-    _NBaseTGlobal::_NBaseTGlobal()
+    class _NBaseTGlobal::Impl
     {
-      nbase_param_t param;
+    public:
+      Impl()
+      {
+        nbase_param_t param;
 
-      nbase_get_param(&param);
-      nbase_init(&param);
+        nbase_get_param(&param);
+        nbase_init(&param);
+      }
+
+      ~Impl()
+      {
+        system::_MutexAutoLock lock(&m_mutex);
+
+        for (_NBaseTMgmtMap::iterator it = m_mgmtMap.begin();
+            it != m_mgmtMap.end(); it++)
+          {
+            int nResult = nbase_mgmt_unregister_cs_list(it->second.get());
+            if (NE_ERROR(nResult))
+              {
+                NBaseTException e = NBaseTExceptionFactory::create(
+                    nResult, "fail to unregister cs list");
+                DBGW_LOG_ERROR(e.what());
+              }
+          }
+
+        m_mgmtMap.clear();
+        nbase_finalize();
+      }
+
+      nbase_mgmt *getMgmtHandle(const char *szHost, int nPort)
+      {
+        system::_MutexAutoLock lock(&m_mutex);
+
+        std::string key = szHost;
+        key += ":";
+        key += nPort;
+
+        _NBaseTMgmtMap::iterator it = m_mgmtMap.find(key);
+        if (it == m_mgmtMap.end())
+          {
+            trait<nbase_mgmt>::sp pMgmt(new nbase_mgmt());
+
+            int nResult = nbase_mgmt_register_cs_list(szHost, nPort,
+                pMgmt.get());
+            if (NE_ERROR(nResult) && nResult != nbase_t::NE_EXIST)
+              {
+                NBaseTException e = NBaseTExceptionFactory::create(
+                    nResult, "fail to register cs list");
+                DBGW_LOG_ERROR(e.what());
+                throw e;
+              }
+
+            m_mgmtMap[key] = pMgmt;
+            return pMgmt.get();
+          }
+        else
+          {
+            return it->second.get();
+          }
+      }
+
+    private:
+      system::_Mutex m_mutex;
+      _NBaseTMgmtMap m_mgmtMap;
+    };
+
+    _NBaseTGlobal::_NBaseTGlobal() :
+      m_pImpl(new Impl())
+    {
     }
 
     _NBaseTGlobal::~_NBaseTGlobal()
     {
-      nbase_unregister_cs_list();
-
-      nbase_finalize();
-    }
-
-    void _NBaseTGlobal::registerCsList(const char *szHost, int nPort)
-    {
-      int nResult = nbase_register_cs_list(szHost, nPort);
-      if (NE_ERROR(nResult) && nResult != nbase_t::NE_EXIST)
+      if (m_pImpl)
         {
-          NBaseTException e =
-              NBaseTExceptionFactory::create(nResult, "fail to register cs list");
-          DBGW_LOG_ERROR(e.what());
-          throw e;
+          delete m_pImpl;
         }
     }
 
@@ -74,16 +131,23 @@ namespace dbgw
       return pInstance;
     }
 
+    nbase_mgmt *_NBaseTGlobal::getMgmtHandle(const char *szHost, int nPort)
+    {
+      return m_pImpl->getMgmtHandle(szHost, nPort);
+    }
+
     class NBaseTExecutor::Impl
     {
     public:
       Impl(const std::string &mgmtHost, int mgmtPort,
           const std::string &keyspace) :
-        m_keyspace(keyspace), m_csPort(0), m_nTimeoutMilSec(10000),
-        m_bAutocommit(true), m_type(NBASE_SQL_TYPE_OTHERS)
+        m_keyspace(keyspace), m_csPort(0), m_pMgmt(NULL),
+        m_nTimeoutMilSec(10000), m_bAutocommit(true),
+        m_type(NBASE_SQL_TYPE_OTHERS)
       {
         m_pGlobal = _NBaseTGlobal::getInstance();
-        m_pGlobal->registerCsList(mgmtHost.c_str(), mgmtPort);
+
+        m_pMgmt = m_pGlobal->getMgmtHandle(mgmtHost.c_str(), mgmtPort);
       }
 
       virtual ~Impl()
@@ -375,8 +439,8 @@ namespace dbgw
       {
         nbase_ipstr csAddr;
 
-        int nResult = nbase_get_rand_cs(m_ckey.c_str(), csAddr, &m_csPort,
-            m_exIpList.c_str());
+        int nResult = nbase_mgmt_get_rand_cs(m_pMgmt, m_ckey.c_str(), csAddr,
+            &m_csPort, m_exIpList.c_str());
         if (NE_ERROR(nResult))
           {
             NBaseTException e = NBaseTExceptionFactory::create(nResult,
@@ -415,6 +479,7 @@ namespace dbgw
       std::string m_keyspace;
       std::string m_exIpList;
       unsigned short m_csPort;
+      nbase_mgmt *m_pMgmt;
       nbase_tx m_tx;
       nquery_res m_result;
       int m_nTimeoutMilSec;

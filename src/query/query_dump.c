@@ -2935,7 +2935,7 @@ qdump_print_access_spec_stats_json (ACCESS_SPEC_TYPE * spec_list_p)
   char *class_name = NULL, *index_name = NULL;
   CLS_SPEC_TYPE *cls_node;
   ACCESS_SPEC_TYPE *spec;
-  json_t *trace, *scan = NULL, *scan_array = NULL;
+  json_t *scan = NULL, *scan_array = NULL;
   int num_spec = 0;
   char spec_name[1024];
 

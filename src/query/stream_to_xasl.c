@@ -1983,9 +1983,10 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
   /* XASL node header is packed first */
   ptr = stx_build_xasl_header (thread_p, ptr, &xasl->header);
 
-  ptr = or_unpack_int (ptr, (int *) &xasl->type);
+  ptr = or_unpack_int (ptr, &tmp);
+  xasl->type = (PROC_TYPE) tmp;
 
-  ptr = or_unpack_int (ptr, (int *) &xasl->flag);
+  ptr = or_unpack_int (ptr, &xasl->flag);
 
   /* initialize xasl status */
   xasl->status = XASL_INITIALIZED;
@@ -2124,7 +2125,8 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
 
   ptr = or_unpack_int (ptr, &xasl->is_single_tuple);
 
-  ptr = or_unpack_int (ptr, (int *) &xasl->option);
+  ptr = or_unpack_int (ptr, &tmp);
+  xasl->option = (QUERY_OPTIONS) tmp;
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
@@ -3559,12 +3561,13 @@ static char *
 stx_build_ls_merge_info (THREAD_ENTRY * thread_p, char *ptr,
 			 QFILE_LIST_MERGE_INFO * list_merge_info)
 {
-  int offset;
+  int tmp, offset;
   int single_fetch;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
-  ptr = or_unpack_int (ptr, (int *) &list_merge_info->join_type);
+  ptr = or_unpack_int (ptr, &tmp);
+  list_merge_info->join_type = (JOIN_TYPE) tmp;
 
   ptr = or_unpack_int (ptr, &single_fetch);
   list_merge_info->single_fetch = (QPROC_SINGLE_FETCH) single_fetch;
@@ -4466,11 +4469,12 @@ static char *
 stx_build_pred_expr (THREAD_ENTRY * thread_p, char *ptr,
 		     PRED_EXPR * pred_expr)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
-  ptr = or_unpack_int (ptr, (int *) &pred_expr->type);
+  ptr = or_unpack_int (ptr, &tmp);
+  pred_expr->type = (TYPE_PRED_EXPR) tmp;
 
   switch (pred_expr->type)
     {
@@ -4512,7 +4516,7 @@ stx_build_pred_expr (THREAD_ENTRY * thread_p, char *ptr,
 static char *
 stx_build_pred (THREAD_ENTRY * thread_p, char *ptr, PRED * pred)
 {
-  int offset;
+  int tmp, offset;
   int rhs_type;
   PRED_EXPR *rhs;
   XASL_UNPACK_INFO *xasl_unpack_info =
@@ -4535,7 +4539,8 @@ stx_build_pred (THREAD_ENTRY * thread_p, char *ptr, PRED * pred)
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &pred->bool_op);	/* bool_op */
+  ptr = or_unpack_int (ptr, &tmp);
+  pred->bool_op = (BOOL_OP) tmp;
 
   ptr = or_unpack_int (ptr, &rhs_type);	/* rhs-type */
 
@@ -4572,7 +4577,8 @@ stx_build_pred (THREAD_ENTRY * thread_p, char *ptr, PRED * pred)
 	    }
 	}
 
-      ptr = or_unpack_int (ptr, (int *) &pred->bool_op);	/* bool_op */
+      ptr = or_unpack_int (ptr, &tmp);
+      pred->bool_op = (BOOL_OP) tmp;	/* bool_op */
 
       ptr = or_unpack_int (ptr, &rhs_type);	/* rhs-type */
     }
@@ -4605,7 +4611,10 @@ static char *
 stx_build_eval_term (THREAD_ENTRY * thread_p, char *ptr,
 		     EVAL_TERM * eval_term)
 {
-  ptr = or_unpack_int (ptr, (int *) &eval_term->et_type);
+  int tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  eval_term->et_type = (TYPE_EVAL_TERM) tmp;
 
   switch (eval_term->et_type)
     {
@@ -4638,7 +4647,7 @@ static char *
 stx_build_comp_eval_term (THREAD_ENTRY * thread_p, char *ptr,
 			  COMP_EVAL_TERM * comp_eval_term)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -4676,9 +4685,11 @@ stx_build_comp_eval_term (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &comp_eval_term->rel_op);
+  ptr = or_unpack_int (ptr, &tmp);
+  comp_eval_term->rel_op = (REL_OP) tmp;
 
-  ptr = or_unpack_int (ptr, (int *) &comp_eval_term->type);
+  ptr = or_unpack_int (ptr, &tmp);
+  comp_eval_term->type = (DB_TYPE) tmp;
 
   return ptr;
 }
@@ -4687,7 +4698,7 @@ static char *
 stx_build_alsm_eval_term (THREAD_ENTRY * thread_p, char *ptr,
 			  ALSM_EVAL_TERM * alsm_eval_term)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -4725,9 +4736,14 @@ stx_build_alsm_eval_term (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &alsm_eval_term->eq_flag);
-  ptr = or_unpack_int (ptr, (int *) &alsm_eval_term->rel_op);
-  ptr = or_unpack_int (ptr, (int *) &alsm_eval_term->item_type);
+  ptr = or_unpack_int (ptr, &tmp);
+  alsm_eval_term->eq_flag = (QL_FLAG) tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  alsm_eval_term->rel_op = (REL_OP) tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  alsm_eval_term->item_type = (DB_TYPE) tmp;
 
   return ptr;
 }
@@ -4867,16 +4883,20 @@ static char *
 stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 			    ACCESS_SPEC_TYPE * access_spec, void *arg)
 {
-  int offset;
+  int tmp, offset;
   int val;
   OUTPTR_LIST *outptr_list = NULL;
 
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
-  ptr = or_unpack_int (ptr, (int *) &access_spec->type);
-  ptr = or_unpack_int (ptr, (int *) &access_spec->access);
-  ptr = or_unpack_int (ptr, (int *) &access_spec->lock_hint);
+  ptr = or_unpack_int (ptr, &tmp);
+  access_spec->type = (TARGET_TYPE) tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  access_spec->access = (ACCESS_METHOD) tmp;
+
+  ptr = or_unpack_int (ptr, &access_spec->lock_hint);
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
@@ -4999,7 +5019,9 @@ stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &access_spec->grouped_scan);
   ptr = or_unpack_int (ptr, &access_spec->fixed_scan);
   ptr = or_unpack_int (ptr, &access_spec->qualified_block);
-  ptr = or_unpack_int (ptr, (int *) &access_spec->single_fetch);
+
+  ptr = or_unpack_int (ptr, &tmp);
+  access_spec->single_fetch = (QPROC_SINGLE_FETCH) tmp;
 
   ptr = or_unpack_int (ptr, &access_spec->pruning_type);
   access_spec->parts = NULL;
@@ -5040,6 +5062,7 @@ static char *
 stx_build_indx_info (THREAD_ENTRY * thread_p, char *ptr,
 		     INDX_INFO * indx_info)
 {
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -5049,9 +5072,10 @@ stx_build_indx_info (THREAD_ENTRY * thread_p, char *ptr,
       return NULL;
     }
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->coverage));
+  ptr = or_unpack_int (ptr, &indx_info->coverage);
 
-  ptr = or_unpack_int (ptr, (int *) &indx_info->range_type);
+  ptr = or_unpack_int (ptr, &tmp);
+  indx_info->range_type = (RANGE_TYPE) tmp;
 
   ptr = stx_build_key_info (thread_p, ptr, &indx_info->key_info);
   if (ptr == NULL)
@@ -5059,27 +5083,26 @@ stx_build_indx_info (THREAD_ENTRY * thread_p, char *ptr,
       return NULL;
     }
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->orderby_desc));
+  ptr = or_unpack_int (ptr, &indx_info->orderby_desc);
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->groupby_desc));
+  ptr = or_unpack_int (ptr, &indx_info->groupby_desc);
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->use_desc_index));
+  ptr = or_unpack_int (ptr, &indx_info->use_desc_index);
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->orderby_skip));
+  ptr = or_unpack_int (ptr, &indx_info->orderby_skip);
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->groupby_skip));
+  ptr = or_unpack_int (ptr, &indx_info->groupby_skip);
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->use_iss));
+  ptr = or_unpack_int (ptr, &indx_info->use_iss);
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->ils_prefix_len));
+  ptr = or_unpack_int (ptr, &indx_info->ils_prefix_len);
 
-  ptr = or_unpack_int (ptr, (int *) &(indx_info->func_idx_col_id));
+  ptr = or_unpack_int (ptr, &indx_info->func_idx_col_id);
 
   if (indx_info->use_iss)
     {
-      int offset;
-
-      ptr = or_unpack_int (ptr, (int *) &(indx_info->iss_range.range));
+      ptr = or_unpack_int (ptr, &tmp);
+      indx_info->iss_range.range = (RANGE) tmp;
 
       ptr = or_unpack_int (ptr, &offset);
       if (offset == 0)
@@ -5109,7 +5132,10 @@ stx_build_indx_info (THREAD_ENTRY * thread_p, char *ptr,
 static char *
 stx_build_indx_id (THREAD_ENTRY * thread_p, char *ptr, INDX_ID * indx_id)
 {
-  ptr = or_unpack_int (ptr, (int *) &indx_id->type);
+  int tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  indx_id->type = (INDX_ID_TYPE) tmp;
   if (ptr == NULL)
     {
       return NULL;
@@ -5205,7 +5231,7 @@ static char *
 stx_build_cls_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 			 CLS_SPEC_TYPE * cls_spec)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -5410,7 +5436,8 @@ stx_build_cls_spec_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &cls_spec->schema_type);
+  ptr = or_unpack_int (ptr, &tmp);
+  cls_spec->schema_type = (ACCESS_SCHEMA_TYPE) tmp;
 
   ptr = or_unpack_int (ptr, &cls_spec->num_attrs_reserved);
 
@@ -5817,13 +5844,16 @@ static char *
 stx_build_regu_variable (THREAD_ENTRY * thread_p, char *ptr,
 			 REGU_VARIABLE * regu_var)
 {
-  int offset;
+  int tmp, offset;
 
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
   ptr = or_unpack_domain (ptr, &regu_var->domain, NULL);
-  ptr = or_unpack_int (ptr, (int *) &regu_var->type);
+
+  ptr = or_unpack_int (ptr, &tmp);
+  regu_var->type = (REGU_DATATYPE) tmp;
+
   ptr = or_unpack_int (ptr, &regu_var->flags);
 
   ptr = or_unpack_int (ptr, &offset);
@@ -6039,12 +6069,15 @@ static char *
 stx_build_attr_descr (THREAD_ENTRY * thread_p, char *ptr,
 		      ATTR_DESCR * attr_descr)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
-  ptr = or_unpack_int (ptr, (int *) &attr_descr->id);
-  ptr = or_unpack_int (ptr, (int *) &attr_descr->type);
+  ptr = or_unpack_int (ptr, &tmp);
+  attr_descr->id = (CL_ATTR_ID) tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  attr_descr->type = (DB_TYPE) tmp;
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
@@ -6089,7 +6122,7 @@ static char *
 stx_build_arith_type (THREAD_ENTRY * thread_p, char *ptr,
 		      ARITH_TYPE * arith_type)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -6111,7 +6144,8 @@ stx_build_arith_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &arith_type->opcode);
+  ptr = or_unpack_int (ptr, &tmp);
+  arith_type->opcode = (OPERATOR_TYPE) tmp;
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
@@ -6177,7 +6211,9 @@ stx_build_arith_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &arith_type->misc_operand);
+  ptr = or_unpack_int (ptr, &tmp);
+  arith_type->misc_operand = (MISC_OPERAND) tmp;
+
   if (arith_type->opcode == T_CASE || arith_type->opcode == T_DECODE
       || arith_type->opcode == T_PREDICATE || arith_type->opcode == T_IF)
     {
@@ -6217,7 +6253,7 @@ stx_build_aggregate_type (THREAD_ENTRY * thread_p, char *ptr,
 			  AGGREGATE_TYPE * aggregate)
 {
   int offset;
-  int type;
+  int tmp;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -6273,10 +6309,14 @@ stx_build_aggregate_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &aggregate->function);
-  ptr = or_unpack_int (ptr, (int *) &aggregate->option);
-  ptr = or_unpack_int (ptr, (int *) &type);
-  aggregate->opr_dbtype = (DB_TYPE) type;
+  ptr = or_unpack_int (ptr, &tmp);
+  aggregate->function = (FUNC_TYPE) tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  aggregate->option = (QUERY_OPTIONS) tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  aggregate->opr_dbtype = (DB_TYPE) tmp;
 
   ptr = stx_build_regu_variable (thread_p, ptr, &aggregate->operand);
   if (ptr == NULL)
@@ -6330,7 +6370,7 @@ static char *
 stx_build_function_type (THREAD_ENTRY * thread_p, char *ptr,
 			 FUNCTION_TYPE * function)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -6351,7 +6391,8 @@ stx_build_function_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &function->ftype);
+  ptr = or_unpack_int (ptr, &tmp);
+  function->ftype = (FUNC_TYPE) tmp;
 
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
@@ -6378,7 +6419,6 @@ stx_build_analytic_type (THREAD_ENTRY * thread_p, char *ptr,
 			 ANALYTIC_TYPE * analytic)
 {
   int offset;
-  int type;
   int tmp_i;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
@@ -6453,12 +6493,14 @@ stx_build_analytic_type (THREAD_ENTRY * thread_p, char *ptr,
 	}
     }
 
-  ptr = or_unpack_int (ptr, (int *) &analytic->function);
+  ptr = or_unpack_int (ptr, &tmp_i);
+  analytic->function = (FUNC_TYPE) tmp_i;
 
-  ptr = or_unpack_int (ptr, (int *) &analytic->option);
+  ptr = or_unpack_int (ptr, &tmp_i);
+  analytic->option = (QUERY_OPTIONS) tmp_i;
 
-  ptr = or_unpack_int (ptr, (int *) &type);
-  analytic->opr_dbtype = (DB_TYPE) type;
+  ptr = or_unpack_int (ptr, &tmp_i);
+  analytic->opr_dbtype = (DB_TYPE) tmp_i;
 
   ptr = stx_build_regu_variable (thread_p, ptr, &analytic->operand);
   if (ptr == NULL)
@@ -6509,8 +6551,6 @@ stx_build_analytic_eval_type (THREAD_ENTRY * thread_p, char *ptr,
 			      ANALYTIC_EVAL_TYPE * analytic_eval)
 {
   int offset;
-  int type;
-  int tmp_i;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -6611,7 +6651,7 @@ static char *
 stx_build_sort_list (THREAD_ENTRY * thread_p, char *ptr,
 		     SORT_LIST * sort_list)
 {
-  int offset;
+  int tmp, offset;
   XASL_UNPACK_INFO *xasl_unpack_info =
     stx_get_xasl_unpack_info_ptr (thread_p);
 
@@ -6637,8 +6677,11 @@ stx_build_sort_list (THREAD_ENTRY * thread_p, char *ptr,
     {
       return NULL;
     }
-  ptr = or_unpack_int (ptr, (int *) &sort_list->s_order);
-  ptr = or_unpack_int (ptr, (int *) &sort_list->s_nulls);
+  ptr = or_unpack_int (ptr, &tmp);
+  sort_list->s_order = (SORT_ORDER) tmp;
+
+  ptr = or_unpack_int (ptr, &tmp);
+  sort_list->s_nulls = (SORT_NULLS) tmp;
 
   return ptr;
 }
@@ -6924,7 +6967,7 @@ stx_build_regu_value_list (THREAD_ENTRY * thread_p, char *ptr,
 			   REGU_VALUE_LIST * regu_value_list,
 			   TP_DOMAIN * domain)
 {
-  int i, count;
+  int i, count, tmp;
   REGU_VALUE_ITEM *list_node;
   REGU_VARIABLE *regu;
   XASL_UNPACK_INFO *xasl_unpack_info =
@@ -6980,7 +7023,8 @@ stx_build_regu_value_list (THREAD_ENTRY * thread_p, char *ptr,
 
       regu_value_list->current_value = list_node;
 
-      ptr = or_unpack_int (ptr, (int *) (&regu->type));
+      ptr = or_unpack_int (ptr, &tmp);
+      regu->type = (REGU_DATATYPE) tmp;
       regu->domain = domain;
 
       if (regu->type != TYPE_DBVAL && regu->type != TYPE_INARITH

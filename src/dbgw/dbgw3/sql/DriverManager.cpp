@@ -21,6 +21,7 @@
 #include "dbgw3/Exception.h"
 #include "dbgw3/Logger.h"
 #include "dbgw3/SynchronizedResource.h"
+#include "dbgw3/GlobalOnce.h"
 #include "dbgw3/sql/DatabaseInterface.h"
 #include "dbgw3/sql/Connection.h"
 #include "dbgw3/sql/DriverManager.h"
@@ -30,6 +31,7 @@
 #include "dbgw3/sql/mysql/MySQLConnection.h"
 #elif DBGW_NBASE_T
 #include <nbase.h>
+#include "dbgw3/sql/cubrid/CUBRIDConnection.h"
 #include "dbgw3/sql/nbase_t/NBaseTConnection.h"
 #elif DBGW_ALL
 #include "dbgw3/sql/oracle/OracleConnection.h"
@@ -70,6 +72,8 @@ namespace dbgw
     trait<Connection>::sp DriverManager::getConnection(const char *szUrl,
         const char *szUser, const char *szPassword, DataBaseType dbType)
     {
+      initializeSqlGlobalOnce();
+
       clearException();
 
       try
@@ -83,8 +87,16 @@ namespace dbgw
           pConnection = trait<Connection>::sp(
               new MySQLConnection(szUrl, szUser, szPassword));
 #elif DBGW_NBASE_T
-          pConnection = trait<Connection>::sp(
-              new NBaseTConnection(szUrl));
+          if (dbType == DBGW_DB_TYPE_NBASE_T)
+            {
+              pConnection = trait<Connection>::sp(
+                  new NBaseTConnection(szUrl));
+            }
+          else
+            {
+              pConnection = trait<Connection>::sp(
+                  new CUBRIDConnection(szUrl, szUser, szPassword));
+            }
 #elif DBGW_ALL
           if (dbType == DBGW_DB_TYPE_ORACLE)
             {

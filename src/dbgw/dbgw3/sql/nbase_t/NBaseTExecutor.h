@@ -29,34 +29,37 @@ namespace dbgw
     class _NBaseTGlobal
     {
     public:
-      virtual ~_NBaseTGlobal();
+      virtual ~ _NBaseTGlobal ();
 
-      void registerCsList(const char *szHost, int nPort);
-      static trait<_NBaseTGlobal>::sp getInstance();
+      static trait < _NBaseTGlobal >::sp getInstance ();
+      nbase_mgmt *getMgmtHandle (const char *szHost, int nPort);
 
     private:
-      _NBaseTGlobal();
+        _NBaseTGlobal ();
+
+      class Impl;
+      Impl *m_pImpl;
     };
 
     class NBaseTExecutor
     {
     public:
-      NBaseTExecutor(const std::string &mgmtHost, int mgmtPort,
-          const std::string &keyspace);
-      virtual ~NBaseTExecutor();
+      NBaseTExecutor (const std::string & mgmtHost, int mgmtPort,
+		      const std::string & keyspace);
+        virtual ~ NBaseTExecutor ();
 
-      void setContainerKey(const char *szKey);
-      void beginTransaction();
-      void commit();
-      void rollback();
-      int executeUpdate(const char *szSql);
-      int executeQuery(const char *szSql);
+      void setContainerKey (const char *szKey);
+      void beginTransaction ();
+      void commit ();
+      void rollback ();
+      int executeUpdate (const char *szSql);
+      int executeQuery (const char *szSql);
 
     public:
-      std::string getResultStream() const;
+        std::string getResultStream () const;
 
     private:
-      class Impl;
+        class Impl;
       Impl *m_pImpl;
     };
 

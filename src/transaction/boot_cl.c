@@ -705,7 +705,7 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
   TRAN_ISOLATION tran_isolation;
   int tran_lock_wait_msecs;
   TRAN_STATE transtate;
-  int error_code;
+  int error_code = NO_ERROR;
   DB_INFO *db = NULL;
 #if !defined(WINDOWS)
   bool dl_initialized = false;
@@ -716,12 +716,11 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
 
   char **ha_hosts;
   int num_hosts;
+  int i, optional_cap;
   char *ha_node_list = NULL;
+  bool check_capabilities;
 #endif /* CS_MODE */
   bool is_db_user_alloced = false;
-
-  int i, optional_cap;
-  bool check_capabilities;
   bool skip_preferred_hosts = false;
   bool skip_db_info = false;
 

@@ -23,8 +23,9 @@
 namespace dbgw
 {
 
-  void initializeGlobalOnce(void);
+  void initializeGlobalOnce (void);
+  void initializeSqlGlobalOnce (void);
 
 }
 
-#endif /* GLOBAL_ONCE_H_ */
+#endif				/* GLOBAL_ONCE_H_ */

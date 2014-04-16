@@ -1501,13 +1501,19 @@ thread_wakeup_internal (THREAD_ENTRY * thread_p, int resume_reason,
     {
       er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			   ER_CSS_PTHREAD_COND_SIGNAL, 0);
-      thread_unlock_entry (thread_p);
+      if (had_mutex == false)
+	{
+	  thread_unlock_entry (thread_p);
+	}
       return ER_CSS_PTHREAD_COND_SIGNAL;
     }
 
   thread_p->resume_status = resume_reason;
 
-  r = thread_unlock_entry (thread_p);
+  if (had_mutex == false)
+    {
+      r = thread_unlock_entry (thread_p);
+    }
 
   return r;
 }
@@ -2819,15 +2825,17 @@ thread_check_ha_delay_info_thread (void *arg_p)
   };
 
   int rv;
-  int error_code;
   INT64 tmp_usec;
   int wakeup_interval = 1000;
+#if !defined(WINDOWS)
+  time_t log_record_time = 0;
+  int error_code;
   int delay_limit_in_secs;
   int acceptable_delay_in_secs;
   int curr_delay_in_secs;
   HA_SERVER_STATE server_state;
-  time_t log_record_time = 0;
   char buffer[LINE_MAX];
+#endif
 
   tsd_ptr = (THREAD_ENTRY *) arg_p;
   /* wait until THREAD_CREATE() finishes */

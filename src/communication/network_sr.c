@@ -1150,10 +1150,6 @@ net_server_request (THREAD_ENTRY * thread_p, unsigned int rid, int request,
       conn->in_transaction = true;
     }
 
-  /* set event logging parameter */
-  thread_p->event_stats.trace_log_flush_time =
-    prm_get_integer_value (PRM_ID_LOG_TRACE_FLUSH_TIME_MSECS);
-
   /* call a request processing function */
   if (thread_p->tran_index > 0)
     {
@@ -1319,10 +1315,7 @@ loop:
 		    thread_wakeup_already_had_mutex (suspended_p,
 						     THREAD_RESUME_DUE_TO_INTERRUPT);
 		}
-	      else
-		{
-		  r = thread_unlock_entry (suspended_p);
-		}
+	      r = thread_unlock_entry (suspended_p);
 
 	      if (r != NO_ERROR)
 		{

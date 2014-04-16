@@ -3578,8 +3578,6 @@ struct parser_context
   int num_plan_trace;
   PT_PLAN_TRACE_INFO plan_trace[MAX_NUM_PLAN_TRACE];
 
-  LC_LOCKHINT *lockhint;
-
   unsigned has_internal_error:1;	/* 0 or 1 */
   unsigned abort:1;		/* this flag is for aborting a transaction */
   /* if deadlock occurs during query execution */
@@ -3655,7 +3653,9 @@ struct pt_coll_infer
   int coll_id;
   INTL_CODESET codeset;
   PT_COLL_COERC_LEV coerc_level;
-  bool can_force_cs;		/* used for auto-CAST expressions around numbers:
+  bool can_force_cs;		/* used as a weak-modifier for collation coercibility
+				 * (when node is a host variable).
+				 * + for auto-CAST expressions around numbers:
 				 * initially the string data type of CAST is created
 				 * with system charset by generic type checking
 				 * but that charset can be forced to another charset

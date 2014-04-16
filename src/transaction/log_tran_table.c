@@ -144,17 +144,17 @@ static void logtb_mvcc_free_update_stats (LOG_MVCC_UPDATE_STATS *
 static void logtb_mvcc_clear_update_stats (LOG_MVCC_UPDATE_STATS *
 					   log_upd_stats);
 static LOG_MVCC_CLASS_UPDATE_STATS
-  *logtb_mvcc_alloc_class_stats (LOG_MVCC_UPDATE_STATS * log_upd_stats);
+  * logtb_mvcc_alloc_class_stats (LOG_MVCC_UPDATE_STATS * log_upd_stats);
 static void logtb_mvcc_free_class_stats (LOG_MVCC_UPDATE_STATS *
 					 log_upd_stats,
 					 LOG_MVCC_CLASS_UPDATE_STATS * entry);
 static LOG_MVCC_CLASS_UPDATE_STATS
-  *logtb_mvcc_create_class_stats (THREAD_ENTRY * thread_p,
-				  const OID * class_oid);
+  * logtb_mvcc_create_class_stats (THREAD_ENTRY * thread_p,
+				   const OID * class_oid);
 static LOG_MVCC_BTID_UNIQUE_STATS
-  *logtb_mvcc_create_btid_unique_stats (THREAD_ENTRY * thread_p,
-					LOG_MVCC_CLASS_UPDATE_STATS *
-					class_stats, BTID * btid);
+  * logtb_mvcc_create_btid_unique_stats (THREAD_ENTRY * thread_p,
+					 LOG_MVCC_CLASS_UPDATE_STATS *
+					 class_stats, BTID * btid);
 static int logtb_mvcc_reflect_unique_statistics (THREAD_ENTRY * thread_p);
 static int logtb_mvcc_load_global_statistics (THREAD_ENTRY * thread_p);
 
@@ -3632,7 +3632,7 @@ logtb_mvcc_search_btid_stats_all_classes (THREAD_ENTRY * thread_p,
 
       (void) pgbuf_check_page_ptype (thread_p, root, PAGE_BTREE);
 
-      root_header = btree_get_root_header_ptr (root);
+      root_header = btree_get_root_header (root);
       if (root_header == NULL)
 	{
 	  pgbuf_unfix_and_init (thread_p, root);

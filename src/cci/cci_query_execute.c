@@ -279,9 +279,8 @@ qe_end_tran (T_CON_HANDLE * con_handle, char type, T_CCI_ERROR * err_buf)
 
   if (IS_INVALID_SOCKET (con_handle->sock_fd))
     {
-      hm_req_handle_free_all (con_handle);
       con_handle->con_status = CCI_CON_STATUS_OUT_TRAN;
-      return 0;
+      return CCI_ER_COMMUNICATION;
     }
 
   net_buf_init (&net_buf);
@@ -6116,6 +6115,7 @@ bind_value_to_net_buf (T_NET_BUF * net_buf, char u_type, void *value,
 	  default_value.hh = 0;
 	  default_value.mm = 0;
 	  default_value.ss = 0;
+	  default_value.ms = 0;
 	  ADD_ARG_DATETIME (net_buf, &default_value);
 	}
       else

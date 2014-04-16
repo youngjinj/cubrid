@@ -561,8 +561,8 @@ desc_obj_to_disk (DESC_OBJ * obj, RECDES * record, bool * index_flag)
   int error, status;
   bool has_index = false;
   unsigned int repid_bits;
-  int expected_disk_size;
-  int offset_size;
+  volatile int expected_disk_size;
+  volatile int offset_size;
   int mvcc_additional_space = 0;
 
   buf = &orep;

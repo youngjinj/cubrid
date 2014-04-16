@@ -1156,8 +1156,7 @@ qmgr_initialize (THREAD_ENTRY * thread_p)
 void
 qmgr_finalize (THREAD_ENTRY * thread_p)
 {
-  QMGR_QUERY_ENTRY *query_p;
-  int i, j;
+  int i;
 
   scan_finalize ();
   qfile_finalize ();
@@ -1821,8 +1820,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 		     QUERY_FLAG * flag_p,
 		     CACHE_TIME * client_cache_time_p,
 		     CACHE_TIME * server_cache_time_p,
-		     int query_timeout, XASL_CACHE_ENTRY ** ret_cache_entry_p,
-		     LC_LOCKHINT * lockhint)
+		     int query_timeout, XASL_CACHE_ENTRY ** ret_cache_entry_p)
 {
   XASL_CACHE_ENTRY *xasl_cache_entry_p;
   QFILE_LIST_CACHE_ENTRY *list_cache_entry_p;
@@ -1839,7 +1837,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   int tran_index = -1;
   QMGR_TRAN_ENTRY *tran_entry_p;
   QFILE_LIST_ID *list_id_p, *tmp_list_id_p;
-  XASL_CACHE_CLONE *cache_clone_p = NULL;
+  XASL_CACHE_CLONE *cache_clone_p;
   bool cached_result;
   bool saved_is_stats_on;
   bool xasl_trace;
@@ -1856,6 +1854,7 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
 #if defined (SERVER_MODE)
   use_global_heap = false;
   data = (char *) dbval_p;
+  old_pri_heap_id = 0;
 #endif
 
   assert_release (IS_SYNC_EXEC_MODE (*flag_p));
@@ -1894,16 +1893,9 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
       session_set_trigger_state (thread_p, true);
     }
 
-  if (lockhint)
-    {
-      if (lock_classes_lock_hint (thread_p, lockhint) != LK_GRANTED)
-	{
-	  goto exit_on_error;
-	}
-    }
-
   /* Check the existance of the given XASL. If someone marked it
      to be deleted, then remove it if possible. */
+  cache_clone_p = NULL;		/* mark as pop */
   xasl_cache_entry_p = qexec_check_xasl_cache_ent_by_xasl (thread_p,
 							   xasl_id_p,
 							   dbval_count,
@@ -2305,10 +2297,7 @@ end:
     }
 
 #if defined (SERVER_MODE)
-  if (tran_index >= 0)
-    {
-      qmgr_reset_query_exec_info (tran_index);
-    }
+  qmgr_reset_query_exec_info (tran_index);
 #endif
 
   return list_id_p;
@@ -2474,6 +2463,7 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
 #if defined (SERVER_MODE)
   use_global_heap = false;
   data = (char *) dbval_p;
+  old_pri_heap_id = 0;
 #endif
 
   saved_is_stats_on = mnt_server_is_stats_on (thread_p);
@@ -4383,7 +4373,7 @@ qmgr_execute_async_select (THREAD_ENTRY * thread_p,
 
   XASL_NODE *xasl_p;
   void *xasl_buf_info;
-  QMGR_TRAN_ENTRY *tran_entry_p;
+  QMGR_TRAN_ENTRY *tran_entry_p = NULL;
   XASL_STATE xasl_state;
   int rv;
 
@@ -4416,6 +4406,8 @@ qmgr_execute_async_select (THREAD_ENTRY * thread_p,
 
   xasl_p = NULL;
   xasl_buf_info = NULL;
+
+  tran_entry_p = &qmgr_Query_table.tran_entries_p[tran_index];
 
   /* load the XASL stream from the file of xasl_id */
   if (xqmgr_unpack_xasl_tree (thread_p, xasl_id, xasl_stream,
@@ -4450,8 +4442,6 @@ qmgr_execute_async_select (THREAD_ENTRY * thread_p,
 	  XASL_SET_FLAG (xasl_p, XASL_TO_BE_CACHED);
 	}
     }
-
-  tran_entry_p = &qmgr_Query_table.tran_entries_p[tran_index];
 
   query_p->tid = thread_p->tid;
   thread_p->query_entry = query_p;	/* save query entry pointer */

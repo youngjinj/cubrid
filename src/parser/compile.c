@@ -416,7 +416,7 @@ pt_add_row_classoid_name (PARSER_CONTEXT * parser,
  *   statement(in/out):
  */
 PT_NODE *
-pt_compile (PARSER_CONTEXT * parser, PT_NODE * statement)
+pt_compile (PARSER_CONTEXT * parser, PT_NODE * volatile statement)
 {
   PT_NODE *next;
 
@@ -467,8 +467,7 @@ pt_compile (PARSER_CONTEXT * parser, PT_NODE * statement)
  */
 
 PT_NODE *
-pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement,
-		    LC_LOCKHINT ** lockhint)
+pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
   PT_CLASS_LOCKS lcks;
   int error = NO_ERROR;
@@ -560,8 +559,8 @@ pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement,
   if (!pt_has_error (parser)
       && locator_lockhint_classes (lcks.num_classes,
 				   (const char **) lcks.classes, lcks.locks,
-				   lcks.only_all, lcks.flags, true,
-				   lockhint) != LC_CLASSNAME_EXIST)
+				   lcks.only_all, lcks.flags,
+				   true) != LC_CLASSNAME_EXIST)
     {
       PT_ERRORc (parser, statement, db_error_string (3));
     }

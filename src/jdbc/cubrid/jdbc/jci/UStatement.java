@@ -208,7 +208,7 @@ public class UStatement {
 
 		bindParameter = null;
 		batchParameter = null;
-		totalTupleNumber = fetchedTupleNumber = 1;
+		executeResult = totalTupleNumber = fetchedTupleNumber = 1;
 		currentFirstCursor = cursorPosition = 0;
 		maxFetchSize = 0;
 		realFetched = false;
@@ -854,7 +854,11 @@ public class UStatement {
 
 		if (relatedConnection.isErrorToReconnect(errorHandler.getJdbcErrorCode())) {
 			if (!relatedConnection.isActive() || isFirstExecInTran) {
-				relatedConnection.clientSocketClose();
+				if (!relatedConnection.brokerInfoReconnectWhenServerDown()
+				    || relatedConnection.isErrorCommunication (errorHandler.getJdbcErrorCode())) {
+					relatedConnection.clientSocketClose();
+				}
+
 				try {
 					reset();
 					executeInternal(maxRow, maxField, isScrollable,
@@ -1034,7 +1038,11 @@ public class UStatement {
 
 		if (relatedConnection.isErrorToReconnect(errorHandler.getJdbcErrorCode())) {
 			if (!relatedConnection.isActive() || isFirstExecInTran) {
-				relatedConnection.clientSocketClose();
+				if (!relatedConnection.brokerInfoReconnectWhenServerDown()
+				    || relatedConnection.isErrorCommunication (errorHandler.getJdbcErrorCode())) {
+					relatedConnection.clientSocketClose();
+				}
+
 				try {
 					reset();
 					batchResult = executeBatchInternal(queryTimeout);

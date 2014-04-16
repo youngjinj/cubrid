@@ -383,7 +383,7 @@ static char la_peer_host[MAXHOSTNAMELEN + 1];
 static bool la_enable_sql_logging = false;
 static bool la_use_server_side_update_repl = true;
 
-static void la_shutdown_by_signal ();
+static void la_shutdown_by_signal (void);
 static void la_init_ha_apply_info (LA_HA_APPLY_INFO * ha_apply_info);
 
 static LOG_PHY_PAGEID la_log_phypageid (LOG_PAGEID logical_pageid);
@@ -519,7 +519,8 @@ static int la_check_mem_size (void);
 static int la_check_time_commit (struct timeval *time,
 				 unsigned int threshold);
 
-static void la_init (const char *log_path, const int max_mem_size);
+static void la_init (const char *log_path, const int max_mem_size,
+		     BOOT_CLIENT_TYPE type);
 
 static int la_check_duplicated (const char *logpath, const char *dbname,
 				int *lockf_vdes, int *last_deleted_arv_num);
@@ -527,7 +528,7 @@ static int la_lock_dbname (int *lockf_vdes, char *db_name, char *log_path);
 static int la_unlock_dbname (int *lockf_vdes, char *db_name,
 			     bool clear_owner);
 
-static void la_shutdown (void);
+static void la_shutdown (BOOT_CLIENT_TYPE type);
 
 static int la_remove_archive_logs (const char *db_name,
 				   int last_deleted_arv_num, int nxarv_num,
@@ -575,12 +576,19 @@ static void *lp_calc_applier_speed_thread_f (void *arg);
  *        process "shutdown"
  */
 static void
-la_shutdown_by_signal ()
+la_shutdown_by_signal (void)
 {
   la_applier_need_shutdown = true;
   la_applier_shutdown_by_signal = true;
 
   return;
+}
+
+bool
+la_force_shutdown (void)
+{
+  return (la_applier_need_shutdown
+	  || la_applier_shutdown_by_signal) ? true : false;
 }
 
 static void
@@ -7071,11 +7079,18 @@ la_unlock_dbname (int *lockf_vdes, char *db_name, bool clear_owner)
 }
 
 static void
-la_init (const char *log_path, const int max_mem_size)
+la_init (const char *log_path, const int max_mem_size, BOOT_CLIENT_TYPE type)
 {
   static unsigned long start_vsize = 0;
 
-  er_log_debug (ARG_FILE_LINE, "log applier will be initialized...");
+  if (type == BOOT_CLIENT_LOG_APPLIER)
+    {
+      er_log_debug (ARG_FILE_LINE, "log applier will be initialized...");
+    }
+  else
+    {
+      er_log_debug (ARG_FILE_LINE, "log prefetcher will be initialized...");
+    }
 
   memset (&la_Info, 0, sizeof (la_Info));
 
@@ -7119,11 +7134,18 @@ la_init (const char *log_path, const int max_mem_size)
 }
 
 static void
-la_shutdown (void)
+la_shutdown (BOOT_CLIENT_TYPE type)
 {
   int i;
 
-  er_log_debug (ARG_FILE_LINE, "log applier will be shutting down...");
+  if (type == BOOT_CLIENT_LOG_APPLIER)
+    {
+      er_log_debug (ARG_FILE_LINE, "log applier will be shutting down...");
+    }
+  else
+    {
+      er_log_debug (ARG_FILE_LINE, "log prefetcher will be shutting down...");
+    }
 
   /* clean up */
   if (la_Info.arv_log.log_vdes != NULL_VOLDES)
@@ -7160,8 +7182,15 @@ la_shutdown (void)
 	}
     }
 
-  free_and_init (la_Info.log_data);
-  free_and_init (la_Info.rec_type);
+  if (la_Info.log_data != NULL)
+    {
+      free_and_init (la_Info.log_data);
+    }
+
+  if (la_Info.rec_type != NULL)
+    {
+      free_and_init (la_Info.rec_type);
+    }
 
   if (la_Info.undo_unzip_ptr != NULL)
     {
@@ -7174,18 +7203,44 @@ la_shutdown (void)
       la_Info.redo_unzip_ptr = NULL;
     }
 
-  free_and_init (la_Info.cache_pb->buffer_area);
-  free_and_init (la_Info.cache_pb->log_buffer);
-  mht_destroy (la_Info.cache_pb->hash_table);
-  free_and_init (la_Info.cache_pb);
+  if (la_Info.cache_pb != NULL)
+    {
+      if (la_Info.cache_pb->buffer_area != NULL)
+	{
+	  free_and_init (la_Info.cache_pb->buffer_area);
+	}
+
+      if (la_Info.cache_pb->log_buffer != NULL)
+	{
+	  free_and_init (la_Info.cache_pb->log_buffer);
+	}
+
+      if (la_Info.cache_pb->hash_table != NULL)
+	{
+	  mht_destroy (la_Info.cache_pb->hash_table);
+	  la_Info.cache_pb->hash_table = NULL;
+	}
+
+      free_and_init (la_Info.cache_pb);
+    }
 
   for (i = 0; i < la_Info.repl_cnt; i++)
     {
-      free_and_init (la_Info.repl_lists[i]);
+      if (la_Info.repl_lists[i] != NULL)
+	{
+	  free_and_init (la_Info.repl_lists[i]);
+	}
     }
-  free_and_init (la_Info.repl_lists);
 
-  free_and_init (la_Info.act_log.hdr_page);
+  if (la_Info.repl_lists)
+    {
+      free_and_init (la_Info.repl_lists);
+    }
+
+  if (la_Info.act_log.hdr_page)
+    {
+      free_and_init (la_Info.act_log.hdr_page);
+    }
 }
 
 /*
@@ -7297,7 +7352,7 @@ la_log_page_check (const char *database_name, const char *log_path,
     }
 
   /* init la_Info */
-  la_init (log_path, 0);
+  la_init (log_path, 0, BOOT_CLIENT_LOG_APPLIER);
 
   if (check_applied_info)
     {
@@ -7563,7 +7618,7 @@ lp_prefetch_log_file (const char *database_name, const char *log_path)
   error = lp_init_prefetcher (database_name, log_path);
   if (error != NO_ERROR)
     {
-      return error;
+      goto end;
     }
 
   do
@@ -7614,13 +7669,32 @@ lp_prefetch_log_file (const char *database_name, const char *log_path)
     }
   while (!la_applier_need_shutdown);
 
+end:
+  la_shutdown (BOOT_CLIENT_LOG_PREFETCHER);
+
+#if !defined(WINDOWS)
+  if (hb_Proc_shutdown == true)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HB_PROCESS_EVENT, 2,
+	      "Disconnected with the cub_master and will shut itself down",
+	      "");
+    }
+#endif /* ! WINDOWS */
+
+  if (la_applier_shutdown_by_signal == true)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HA_LA_STOPPED_BY_SIGNAL,
+	      0);
+      error = ER_HA_LA_STOPPED_BY_SIGNAL;
+    }
+
   return error;
 }
 
 static void
 lp_init (const char *log_path)
 {
-  la_init (log_path, 0);
+  la_init (log_path, 0, BOOT_CLIENT_LOG_PREFETCHER);
 
   LSA_SET_NULL (&lp_Info.final_lsa);
   LSA_SET_NULL (&lp_Info.la_sync_lsa);
@@ -8011,12 +8085,12 @@ lp_process_log_record (struct log_header *final_log_hdr,
 	  if (error == ER_NET_CANT_CONNECT_SERVER
 	      || error == ER_OBJ_NO_CONNECT)
 	    {
-	      la_shutdown ();
+	      la_shutdown (BOOT_CLIENT_LOG_PREFETCHER);
 	      return ER_NET_CANT_CONNECT_SERVER;
 	    }
 	  else if (error == ER_HA_LA_EXCEED_MAX_MEM_SIZE)
 	    {
-	      la_shutdown ();
+	      la_shutdown (BOOT_CLIENT_LOG_PREFETCHER);
 	      return error;
 	    }
 
@@ -8592,7 +8666,7 @@ la_apply_log_file (const char *database_name, const char *log_path,
     }
 
   /* init la_Info */
-  la_init (log_path, max_mem_size);
+  la_init (log_path, max_mem_size, BOOT_CLIENT_LOG_APPLIER);
 
   if (prm_get_bool_value (PRM_ID_HA_SQL_LOGGING))
     {
@@ -9043,7 +9117,7 @@ la_apply_log_file (const char *database_name, const char *log_path,
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			  ER_LOG_PAGE_CORRUPTED, 1, la_Info.final_lsa.pageid);
 		  error = ER_LOG_PAGE_CORRUPTED;
-		  la_shutdown ();
+		  la_shutdown (BOOT_CLIENT_LOG_APPLIER);
 		  return error;
 		}
 
@@ -9064,18 +9138,18 @@ la_apply_log_file (const char *database_name, const char *log_path,
 		  if (error == ER_NET_CANT_CONNECT_SERVER
 		      || error == ER_OBJ_NO_CONNECT)
 		    {
-		      la_shutdown ();
+		      la_shutdown (BOOT_CLIENT_LOG_APPLIER);
 		      return ER_NET_CANT_CONNECT_SERVER;
 		    }
 		  else if (error == ER_HA_LA_EXCEED_MAX_MEM_SIZE)
 		    {
-		      la_shutdown ();
+		      la_shutdown (BOOT_CLIENT_LOG_APPLIER);
 		      return error;
 		    }
 		  else if (error == ER_LC_PARTIALLY_FAILED_TO_FLUSH
 			   && la_applier_need_shutdown == true)
 		    {
-		      la_shutdown ();
+		      la_shutdown (BOOT_CLIENT_LOG_APPLIER);
 		      return error;
 		    }
 
@@ -9105,7 +9179,7 @@ la_apply_log_file (const char *database_name, const char *log_path,
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			  ER_LOG_PAGE_CORRUPTED, 1, la_Info.final_lsa.pageid);
 		  error = ER_LOG_PAGE_CORRUPTED;
-		  la_shutdown ();
+		  la_shutdown (BOOT_CLIENT_LOG_APPLIER);
 		  return error;
 		}
 
@@ -9180,7 +9254,7 @@ la_apply_log_file (const char *database_name, const char *log_path,
     }
   while (la_applier_need_shutdown == false);
 
-  la_shutdown ();
+  la_shutdown (BOOT_CLIENT_LOG_APPLIER);
 
 #if !defined(WINDOWS)
   if (hb_Proc_shutdown == true)

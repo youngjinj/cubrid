@@ -928,15 +928,27 @@ public class UConnection {
 		return isClosed;
 	}
 
+    public boolean isErrorCommunication (int error) {
+	switch (error) {
+	case UErrorCode.ER_COMMUNICATION:
+	case UErrorCode.ER_ILLEGAL_DATA_SIZE:
+	case UErrorCode.CAS_ER_COMMUNICATION:
+	    return true;
+	default:
+	    return false;
+	}
+    }
+    
     public boolean isErrorToReconnect(int error) {
+	if (isErrorCommunication(error)) {
+	  return true;
+	}
+
 	switch (error) {
 	case -111: // ER_TM_SERVER_DOWN_UNILATERALLY_ABORTED
 	case -199: // ER_NET_SERVER_CRASHED
 	case -224: // ER_OBJ_NO_CONNECT
 	case -677: // ER_BO_CONNECT_FAILED
-	case UErrorCode.ER_COMMUNICATION:
-	case UErrorCode.ER_ILLEGAL_DATA_SIZE:
-	case UErrorCode.CAS_ER_COMMUNICATION:
 	    return true;
 	default:
 	    return false;
@@ -1014,7 +1026,11 @@ public class UConnection {
 
 	// second loop
 	while (isErrorToReconnect(errorHandler.getJdbcErrorCode())) {
-	    clientSocketClose();
+	    if (!brokerInfoReconnectWhenServerDown()
+		|| isErrorCommunication (errorHandler.getJdbcErrorCode())) {
+		clientSocketClose();
+	    }
+
 	    try {
 		errorHandler.clear();
 		checkReconnect();
@@ -1308,6 +1324,14 @@ public class UConnection {
 			
 	    return (broker_info[BROKER_INFO_FUNCTION_FLAG] & CAS_SUPPORT_HOLDABLE_RESULT)
 	    	== CAS_SUPPORT_HOLDABLE_RESULT;
+	}
+
+	public boolean brokerInfoReconnectWhenServerDown() {
+		if (broker_info == null)
+			return false;
+			
+	    return (broker_info[BROKER_INFO_FUNCTION_FLAG] & CAS_RECONNECT_WHEN_SERVER_DOWN)
+	    	== CAS_RECONNECT_WHEN_SERVER_DOWN;
 	}
 
 	public boolean supportHoldableResult() {
@@ -2233,9 +2257,10 @@ public class UConnection {
     }
 
     public boolean isRenewedSessionId() {
-	return (casinfo[CAS_INFO_ADDITIONAL_FLAG] 
-	            & CAS_INFO_FLAG_MASK_NEW_SESSION_ID) 
-	                == CAS_INFO_FLAG_MASK_NEW_SESSION_ID;
+	return (brokerInfoReconnectWhenServerDown()
+		  && ((casinfo[CAS_INFO_ADDITIONAL_FLAG] 
+	             & CAS_INFO_FLAG_MASK_NEW_SESSION_ID) 
+	                == CAS_INFO_FLAG_MASK_NEW_SESSION_ID));
     }
 
     public void setNewSessionId(byte[] newSessionId) {

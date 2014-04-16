@@ -3008,14 +3008,24 @@ sm_is_system_class (MOP op)
 
 /*
  * sm_is_reuse_oid_class() - Tests the reuse OID class flag of a class object.
- *   return: non-zero if class is an OID reusable class
+ *   return: true if class is an OID reusable class. otherwise, false
  *   op(in): class object
  */
 
 bool
 sm_is_reuse_oid_class (MOP op)
 {
-  return sm_get_class_flag (op, SM_CLASSFLAG_REUSE_OID) ? true : false;
+  SM_CLASS *class_;
+
+  if (op != NULL)
+    {
+      if (au_fetch_class_force (op, &class_, AU_FETCH_READ) == NO_ERROR)
+	{
+	  return (class_->flags & SM_CLASSFLAG_REUSE_OID);
+	}
+    }
+
+  return false;
 }
 
 /*
@@ -6373,7 +6383,7 @@ sm_virtual_queries (DB_OBJECT * class_object)
     {
       (void) pt_class_pre_fetch (cl->virtual_query_cache,
 				 cl->virtual_query_cache->view_cache->
-				 vquery_for_query, NULL);
+				 vquery_for_query);
       if (er_has_error ())
 	{
 	  return NULL;
@@ -12656,7 +12666,7 @@ lockhint_subclasses (SM_TEMPLATE * temp, SM_CLASS * class_)
       locks[0] = locator_fetch_mode_to_lock (DB_FETCH_WRITE, LC_CLASS);
       subs[0] = 1;
       flags[0] = LC_PREF_FLAG_LOCK;
-      if (locator_lockhint_classes (1, names, locks, subs, flags, 1, NULL) ==
+      if (locator_lockhint_classes (1, names, locks, subs, flags, 1) ==
 	  LC_CLASSNAME_ERROR)
 	{
 	  error = er_errid ();
@@ -12668,7 +12678,7 @@ lockhint_subclasses (SM_TEMPLATE * temp, SM_CLASS * class_)
       locks[0] = locator_fetch_mode_to_lock (DB_FETCH_WRITE, LC_CLASS);
       subs[0] = 1;
       flags[0] = LC_PREF_FLAG_LOCK;
-      if (locator_lockhint_classes (1, names, locks, subs, flags, 1, NULL) ==
+      if (locator_lockhint_classes (1, names, locks, subs, flags, 1) ==
 	  LC_CLASSNAME_ERROR)
 	{
 	  error = er_errid ();

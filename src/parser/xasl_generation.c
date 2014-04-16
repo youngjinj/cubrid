@@ -15430,6 +15430,7 @@ pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
   unsigned int f1_fps_cpp = 0, f2_fps_cpp = 0;
   int i, j;
   bool found;
+  ANALYTIC_TYPE *analytic1 = NULL, *analytic2 = NULL;
 
   assert (f1 != NULL && f2 != NULL);
 
@@ -15440,6 +15441,9 @@ pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
       f1 = f2;
       f2 = aux;
     }
+
+  analytic1 = f1->source;
+  analytic2 = f2->source;
 
   /* step (a): compare common sort lists */
   for (i = f1->part_size; i < MIN (level, MIN (f1->key_size, f2->key_size));
@@ -15464,6 +15468,31 @@ pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
     {
       /* f2_fps_cpp is not a subset of f1_fps_cpp */
       return false;
+    }
+
+  /* interpolate function with string arg type is not compatible with other functions */
+  if (analytic1 != NULL && analytic2 != NULL)
+    {
+      if (analytic1->function == PT_MEDIAN
+	  && analytic2->function == PT_MEDIAN
+	  && (f1->part_size != f2->part_size
+	      || (TP_IS_STRING_TYPE (analytic1->opr_dbtype)
+		  ^ TP_IS_STRING_TYPE (analytic2->opr_dbtype))))
+	{
+	  return false;
+	}
+      else if (analytic1->function == PT_MEDIAN
+	       && analytic2->function != PT_MEDIAN
+	       && TP_IS_STRING_TYPE (analytic1->opr_dbtype))
+	{
+	  return false;
+	}
+      else if (analytic2->function == PT_MEDIAN
+	       && analytic1->function != PT_MEDIAN
+	       && TP_IS_STRING_TYPE (analytic2->opr_dbtype))
+	{
+	  return false;
+	}
     }
 
   if (out == NULL || lost_link_count == NULL)
@@ -18845,7 +18874,6 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
     }
 
   hfid = sm_heap (class_);
-
   if (hfid == NULL)
     {
       return NULL;
@@ -18856,8 +18884,8 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
       return NULL;
     }
 
-  error =
-    check_for_default_expr (parser, attrs, &default_expr_attrs, class_obj);
+  error = check_for_default_expr (parser, attrs, &default_expr_attrs,
+				  class_obj);
   if (error != NO_ERROR)
     {
       return NULL;
@@ -18868,9 +18896,8 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
     {
       query = value_clauses->info.node_list.list;
       assert (PT_IS_QUERY (query));
-      no_vals =
-	pt_length_of_select_list (pt_get_select_list (parser, query),
-				  EXCLUDE_HIDDEN_COLUMNS);
+      no_vals = pt_length_of_select_list (pt_get_select_list (parser, query),
+					  EXCLUDE_HIDDEN_COLUMNS);
       /* also add columns referenced in assignments */
       if (PT_IS_SELECT (query)
 	  && statement->info.insert.odku_assignments != NULL)
@@ -18966,7 +18993,9 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
       /* count the number of value lists in values clause */
       for (insert->no_val_lists = 0, val_list = value_clauses;
 	   val_list != NULL;
-	   insert->no_val_lists++, val_list = val_list->next);
+	   insert->no_val_lists++, val_list = val_list->next)
+	;
+
       /* alloc valptr_lists for each list of values */
       insert->valptr_lists =
 	regu_outlistptr_array_alloc (insert->no_val_lists);
@@ -18974,6 +19003,7 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 	{
 	  return NULL;
 	}
+
       for (i = 0, val_list = value_clauses; val_list != NULL;
 	   i++, val_list = val_list->next)
 	{

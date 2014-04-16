@@ -4842,6 +4842,15 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
   }
 #endif
 
+#if defined(SERVER_MODE)
+  if (thread_p && thread_p->type != TT_DAEMON)
+    {
+      /* set event logging parameter */
+      thread_p->event_stats.trace_log_flush_time =
+	prm_get_integer_value (PRM_ID_LOG_TRACE_FLUSH_TIME_MSECS);
+    }
+#endif /* SERVER_MODE */
+
 #if defined(CUBRID_DEBUG)
   if (log_Gl.append.nxio_lsa.pageid !=
       logpb_get_page_id (flush_info->toflush[0]))
@@ -5368,6 +5377,14 @@ logpb_flush_all_append_pages (THREAD_ENTRY * thread_p)
     }
 #endif /* SERVER_MODE */
 
+#if defined(SERVER_MODE)
+  if (thread_p && thread_p->type != TT_DAEMON)
+    {
+      /* reset event logging parameter */
+      thread_p->event_stats.trace_log_flush_time = 0;
+    }
+#endif /* SERVER_MODE */
+
   return 1;
 
 error:
@@ -5383,6 +5400,14 @@ error:
 
   logpb_fatal_error (thread_p, true, ARG_FILE_LINE,
 		     "logpb_flush_all_append_pages");
+
+#if defined(SERVER_MODE)
+  if (thread_p && thread_p->type != TT_DAEMON)
+    {
+      /* reset event logging parameter */
+      thread_p->event_stats.trace_log_flush_time = 0;
+    }
+#endif /* SERVER_MODE */
 
   return error_code;
 }
@@ -10157,7 +10182,6 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
   FILEIO_BACKUP_SESSION session_storage;
   FILEIO_BACKUP_SESSION *session = NULL;
   const char *nopath_name;	/* Name without path          */
-  const char *volnameptr;
   char to_volname[PATH_MAX];	/* Name of a volume (TO)      */
   char verbose_to_volname[PATH_MAX];	/* Printable name of a volume (TO) */
   char prev_volname[PATH_MAX];	/* Name of a prev volume (TO) */
@@ -10165,8 +10189,6 @@ logpb_restore (THREAD_ENTRY * thread_p, const char *db_fullname,
 					 * (FROM)
 					 */
   VOLID to_volid;
-  int retry;
-  struct stat stbuf;
   FILE *backup_volinfo_fp = NULL;	/* Pointer to backup
 					 * information/directory file
 					 */

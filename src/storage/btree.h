@@ -174,6 +174,8 @@ struct btree_scan
   int read_keys;
   int qualified_keys;
 
+  int common_prefix;
+
 #if defined(SERVER_MODE)
   OID cls_oid;			/* class OID */
 
@@ -215,17 +217,20 @@ struct btree_scan
 #endif				/* SERVER_MODE */
 };
 
-#define BTREE_INIT_SCAN(bts)			\
-  do {						\
-    (bts)->P_vpid.pageid = NULL_PAGEID;		\
-    (bts)->C_vpid.pageid = NULL_PAGEID;		\
-    (bts)->O_vpid.pageid = NULL_PAGEID;		\
-    (bts)->P_page = NULL;			\
-    (bts)->C_page = NULL;			\
-    (bts)->O_page = NULL;			\
-    (bts)->slot_id = -1;			\
-    (bts)->oid_pos = 0;				\
-    (bts)->restart_scan = 0;                    \
+#define COMMON_PREFIX_UNKNOWN	-1
+
+#define BTREE_INIT_SCAN(bts)				\
+  do {							\
+    (bts)->P_vpid.pageid = NULL_PAGEID;			\
+    (bts)->C_vpid.pageid = NULL_PAGEID;			\
+    (bts)->O_vpid.pageid = NULL_PAGEID;			\
+    (bts)->P_page = NULL;				\
+    (bts)->C_page = NULL;				\
+    (bts)->O_page = NULL;				\
+    (bts)->slot_id = -1;				\
+    (bts)->oid_pos = 0;					\
+    (bts)->restart_scan = 0;                    	\
+    (bts)->common_prefix = COMMON_PREFIX_UNKNOWN;	\
   } while (0)
 
 #define BTREE_END_OF_SCAN(bts) \
@@ -348,9 +353,7 @@ extern int btree_find_foreign_key (THREAD_ENTRY * thread_p, BTID * btid,
 extern void btree_scan_clear_key (BTREE_SCAN * btree_scan);
 
 extern bool btree_is_unique_type (BTREE_TYPE type);
-extern int xbtree_test_unique (THREAD_ENTRY * thread_p, BTID * btid);
 extern int xbtree_get_unique (THREAD_ENTRY * thread_p, BTID * btid);
-extern int btree_is_unique (THREAD_ENTRY * thread_p, BTID * btid);
 extern int btree_get_unique_statistics (THREAD_ENTRY * thread_p, BTID * btid,
 					int *oid_cnt, int *null_cnt,
 					int *key_cnt);
@@ -414,18 +417,8 @@ extern int btree_get_prefix_separator (const DB_VALUE * key1,
 				       const DB_VALUE * key2,
 				       DB_VALUE * prefix_key,
 				       TP_DOMAIN * key_domain);
-
-#if defined(ENABLE_UNUSED_FUNCTION)
 /* for migration */
 extern TP_DOMAIN *btree_read_key_type (THREAD_ENTRY * thread_p, BTID * btid);
-#endif /* ENABLE_UNUSED_FUNCTION */
-
-#if 0				/* TODO: currently not used */
-#if defined(SA_MODE)
-extern int xbtree_get_keytype_revlevel (BTID * btid, DB_TYPE * keytype,
-					int *revleve);
-#endif /* SA_MODE */
-#endif
 
 /* Dump routines */
 extern int btree_dump_capacity (THREAD_ENTRY * thread_p, FILE * fp,

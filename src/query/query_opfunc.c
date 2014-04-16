@@ -9581,8 +9581,6 @@ qdata_group_concat_first_value (THREAD_ENTRY * thread_p,
       pr_clone_value (&tmp_val, agg_p->accumulator.value);
     }
 
-cleanup:
-
   (void) pr_clear_value (&tmp_val);
 
   return NO_ERROR;
@@ -9652,8 +9650,6 @@ qdata_group_concat_value (THREAD_ENTRY * thread_p,
       (void) pr_clear_value (agg_p->accumulator.value);
       pr_clone_value (&tmp_val, agg_p->accumulator.value);
     }
-
-cleanup:
 
   pr_clear_value (&tmp_val);
 
@@ -12510,13 +12506,16 @@ qdata_save_agg_htable_to_list (THREAD_ENTRY * thread_p,
 	    }
 	}
 
-      /* dump accumulators to partial list */
-      rc =
-	qdata_save_agg_hentry_to_list (thread_p, key, value, temp_dbval_array,
-				       partial_list_id);
-      if (rc != NO_ERROR)
+      if (value->tuple_count > 0)
 	{
-	  return rc;
+	  /* dump accumulators to partial list */
+	  rc =
+	    qdata_save_agg_hentry_to_list (thread_p, key, value,
+					   temp_dbval_array, partial_list_id);
+	  if (rc != NO_ERROR)
+	    {
+	      return rc;
+	    }
 	}
 
       /* next */

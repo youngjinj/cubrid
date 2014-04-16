@@ -540,7 +540,9 @@ struct logwr_info
     PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,       \
     PTHREAD_MUTEX_INITIALIZER,                                 \
     false, false, false,                                       \
-    {-1, }, 0                                                  \
+    /* last_writer_client_info */                              \
+    { -1, {'0'}, {'0'}, {'0'}, {'0'}, {'0'}, 0 },              \
+    0                                                          \
    }
 
 typedef struct log_append_info LOG_APPEND_INFO;
@@ -2264,12 +2266,12 @@ extern LOG_MVCC_BTID_UNIQUE_STATS *logtb_mvcc_find_btid_stats (THREAD_ENTRY *
 							       btid,
 							       bool create);
 extern LOG_MVCC_BTID_UNIQUE_STATS
-  *logtb_mvcc_find_class_oid_btid_stats (THREAD_ENTRY * thread_p,
-					 OID * class_oid, BTID * btid,
-					 bool create);
+  * logtb_mvcc_find_class_oid_btid_stats (THREAD_ENTRY * thread_p,
+					  OID * class_oid, BTID * btid,
+					  bool create);
 extern LOG_MVCC_BTID_UNIQUE_STATS
-  *logtb_mvcc_search_btid_stats_all_classes (THREAD_ENTRY * thread_p,
-					     const BTID * btid, bool create);
+  * logtb_mvcc_search_btid_stats_all_classes (THREAD_ENTRY * thread_p,
+					      const BTID * btid, bool create);
 extern int logtb_mvcc_prepare_count_optim_classes (THREAD_ENTRY * thread_p,
 						   const char **classes,
 						   LC_PREFETCH_FLAGS * flags,

@@ -370,6 +370,7 @@ scan_save_range_details (INDX_SCAN_ID * isidp_src,
 {
   if (rdp_dest == NULL || isidp_src == NULL || isidp_src->indx_info == NULL)
     {
+      assert (false);
       return ER_FAILED;
     }
 
@@ -442,8 +443,8 @@ scan_get_next_iss_value (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 			 INDX_SCAN_ID * isidp)
 {
   /* we are being called either before any other btree range search, or
-     after somebody finished a real range search and wants to advance to
-     the next value for the first column of the index.
+   * after somebody finished a real range search and wants to advance to
+   * the next value for the first column of the index.
    */
 
   INDEX_SKIP_SCAN *iss = NULL;
@@ -555,12 +556,16 @@ scan_get_next_iss_value (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   fetch_range_det.key_cnt = 1;
   fetch_range_det.key_ranges = iss->skipped_range;
   fetch_range_det.key_pred.pred_expr = NULL;
+  fetch_range_det.key_pred.pr_eval_fnc = NULL;
   fetch_range_det.key_pred.regu_list = NULL;
   fetch_range_det.range_type = R_RANGE;
   fetch_range_det.part_key_desc = descending_skip_key;
 
   /* save current range details */
-  scan_save_range_details (isidp, &scan_range_det);
+  if (scan_save_range_details (isidp, &scan_range_det) != NO_ERROR)
+    {
+      return S_ERROR;
+    }
 
   /* load the range we set up for fetching the next key of the first column */
   scan_restore_range_details (&fetch_range_det, isidp);
@@ -3237,7 +3242,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   VPID Root_vpid;
   PAGE_PTR Root;
   RECDES Rec;
-  BTREE_ROOT_HEADER *root_header;
+  BTREE_ROOT_HEADER *root_header = NULL;
   BTREE_SCAN *BTS;
   int coverage_enabled;
   int func_index_col_id;
@@ -3264,7 +3269,7 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 
   (void) pgbuf_check_page_ptype (thread_p, Root, PAGE_BTREE);
 
-  root_header = btree_get_root_header_ptr (Root);
+  root_header = btree_get_root_header (Root);
   if (root_header == NULL)
     {
       pgbuf_unfix_and_init (thread_p, Root);
@@ -3628,7 +3633,7 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     {
       return ER_FAILED;
     }
-  root_header = btree_get_root_header_ptr (root_page);
+  root_header = btree_get_root_header (root_page);
   pgbuf_unfix_and_init (thread_p, root_page);
 
   /* initialize INDEX_SCAN_ID structure */
@@ -3864,7 +3869,7 @@ scan_open_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     {
       return ER_FAILED;
     }
-  root_header = btree_get_root_header_ptr (root_page);
+  root_header = btree_get_root_header (root_page);
   pgbuf_unfix_and_init (thread_p, root_page);
 
   /* construct BTID_INT structure */
@@ -4908,6 +4913,7 @@ scan_close_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
     case S_HEAP_SCAN_RECORD_INFO:
     case S_HEAP_PAGE_SCAN:
     case S_CLASS_ATTR_SCAN:
+    case S_VALUES_SCAN:
       break;
 
     case S_INDX_SCAN:
@@ -5162,13 +5168,13 @@ static SCAN_CODE
 scan_next_scan_local (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 {
   SCAN_CODE status;
-
-  UINT64 old_fetches, old_ioreads;
-
+  bool on_trace;
+  UINT64 old_fetches = 0, old_ioreads = 0;
   TSC_TICKS start_tick, end_tick;
   TSCTIMEVAL tv_diff;
 
-  if (thread_is_on_trace (thread_p))
+  on_trace = thread_is_on_trace (thread_p);
+  if (on_trace)
     {
       tsc_getticks (&start_tick);
 
@@ -5222,12 +5228,13 @@ scan_next_scan_local (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
     case S_METHOD_SCAN:
       status = scan_next_method_scan (thread_p, scan_id);
       break;
+
     default:
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
       return S_ERROR;
     }
 
-  if (thread_is_on_trace (thread_p))
+  if (on_trace)
     {
       tsc_getticks (&end_tick);
       tsc_elapsed_time_usec (&tv_diff, end_tick, start_tick);

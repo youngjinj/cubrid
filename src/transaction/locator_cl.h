@@ -120,9 +120,7 @@ extern LC_FIND_CLASSNAME locator_lockhint_classes (int num_classes,
 						   LOCK * many_locks,
 						   int *need_subclasses,
 						   LC_PREFETCH_FLAGS * flags,
-						   int quit_on_errors,
-						   LC_LOCKHINT **
-						   out_lockhint);
+						   int quit_on_errors);
 extern int locator_does_exist_object (MOP mop, DB_FETCH_MODE purpose);
 extern LIST_MOPS *locator_get_all_mops (MOP class_mop,
 					DB_FETCH_MODE class_purpose);

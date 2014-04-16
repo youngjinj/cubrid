@@ -54,6 +54,8 @@
 #define DEFAULT_DIFF_TIME_LOWER         (0.01)	/* 10 millisecond */
 #define DEFAULT_BREAK_TIME              (0.01)	/* 10 millisecond */
 
+#define INVALID_PORT_NUM                (-1)
+
 #define free_and_init(ptr) \
         do { \
           if ((ptr)) { \
@@ -115,9 +117,9 @@ struct t_sql_result
   char *sql_info;
 };
 
-static int log_replay (FILE * infp, FILE * outfp);
+static int log_replay (char *infilename, char *outfilename);
 static char *get_next_log_line (FILE * infp, T_STRING * linebuf_tstr,
-				int *lineno);
+				const off_t last_offset, int *lineno);
 
 static char *get_query_stmt_from_plan (int req);
 static int log_prepare (FILE * cci_err, FILE * pass_sql, int con,
@@ -153,11 +155,12 @@ static int print_result_with_sort (FILE * outfp, int print_diff_time_lower,
 static int get_args (int argc, char *argv[]);
 
 static int open_file (char *infilename, char *outfilename, FILE ** infp,
-		      FILE ** outfp);
-static void close_file (FILE * infp, FILE * outfp);
+		      FILE ** outfp, FILE ** cci_errfp, FILE ** skip_sqlfp);
+static void close_file (FILE * infp, FILE * outfp, FILE * cci_errfp,
+			FILE * skip_sqlfp);
 
 static char *host = NULL;
-static int broker_port = 0;
+static int broker_port = INVALID_PORT_NUM;
 static char *dbname = NULL;
 static char *dbuser = NULL;
 static char *dbpasswd = NULL;
@@ -181,9 +184,10 @@ static unsigned int num_faster_queries[STAT_MAX_DIFF_TIME] = { 0 };
  *   return: NO_ERROR or ER_FAILED
  *   infp(in): input file pointer
  *   outfp(in): output file pointer
+ *   last_offset(in): last offset of input file
  */
 static int
-log_replay (FILE * infp, FILE * outfp)
+log_replay (char *infilename, char *outfilename)
 {
   char *linebuf;
   int lineno = 0;
@@ -199,9 +203,12 @@ log_replay (FILE * infp, FILE * outfp)
   int temp_line_len = 0;
   int temp_line_len_max = 0;
   FILE *cci_errfp = NULL;
-  FILE *pass_sqlfp = NULL;
+  FILE *skip_sqlfp = NULL;
+  FILE *outfp = NULL;
+  FILE *infp = NULL;
   struct timeval begin, end;
   double program_run_time;
+  off_t last_offset;
   T_SQL_INFO sql_info;
   T_SUMMARY_INFO summary;
   T_CCI_ERROR err_buf;
@@ -226,33 +233,29 @@ log_replay (FILE * infp, FILE * outfp)
       goto end;
     }
 
-  cci_errfp = fopen (CCI_ERR_FILE_NAME, "w");
-  if (cci_errfp == NULL)
+  if (open_file
+      (infilename, outfilename, &infp, &outfp, &cci_errfp, &skip_sqlfp) < 0)
     {
-      fprintf (stderr, "fopen error[%s]\n", CCI_ERR_FILE_NAME);
       result = ER_FAILED;
       goto end;
     }
 
-  pass_sqlfp = fopen (PASS_SQL_FILE_NAME, "w");
-  if (pass_sqlfp == NULL)
-    {
-      fprintf (stderr, "fopen error[%s]\n", PASS_SQL_FILE_NAME);
-      result = ER_FAILED;
-      goto end;
-    }
+  assert (infp != NULL);
+  last_offset = lseek (fileno (infp), 0, SEEK_END);
+
+  lseek (fileno (infp), 0, SEEK_SET);
 
   linebuf_tstr = t_string_make (1024);
   if (linebuf_tstr == NULL)
     {
-      fprintf (stderr, "malloc error\n");
+      fprintf (stderr, "memory allocation failed\n");
       result = ER_FAILED;
       goto end;
     }
 
   while (1)
     {
-      linebuf = get_next_log_line (infp, linebuf_tstr, &lineno);
+      linebuf = get_next_log_line (infp, linebuf_tstr, last_offset, &lineno);
       if (linebuf == NULL)
 	{
 	  break;
@@ -280,7 +283,7 @@ log_replay (FILE * infp, FILE * outfp)
       memset (&sql_info, '\0', sizeof (T_SQL_INFO));
 
       req =
-	log_prepare (cci_errfp, pass_sqlfp, con_h, msg_p, &sql_info,
+	log_prepare (cci_errfp, skip_sqlfp, con_h, msg_p, &sql_info,
 		     &summary);
       if (req < 0)
 	{
@@ -291,7 +294,8 @@ log_replay (FILE * infp, FILE * outfp)
 
       while (1)
 	{
-	  linebuf = get_next_log_line (infp, linebuf_tstr, &lineno);
+	  linebuf =
+	    get_next_log_line (infp, linebuf_tstr, last_offset, &lineno);
 	  if (linebuf == NULL)
 	    {
 	      break;
@@ -403,15 +407,7 @@ log_replay (FILE * infp, FILE * outfp)
 end:
   cci_disconnect (con_h, &err_buf);
 
-  if (cci_errfp)
-    {
-      fclose (cci_errfp);
-    }
-
-  if (pass_sqlfp)
-    {
-      fclose (pass_sqlfp);
-    }
+  close_file (infp, outfp, cci_errfp, skip_sqlfp);
 
   if (linebuf_tstr)
     {
@@ -427,18 +423,27 @@ end:
  *   return: address of linebuf
  *   infp(in):
  *   linebuf_tstr(in):
+ *   last_offset(in):
  *   lineno(in/out):
  */
 static char *
-get_next_log_line (FILE * infp, T_STRING * linebuf_tstr, int *lineno)
+get_next_log_line (FILE * infp, T_STRING * linebuf_tstr,
+		   const off_t last_offset, int *lineno)
 {
   char *linebuf;
+  off_t cur_offset;
 
   assert (lineno != NULL);
 
+  cur_offset = ftell (infp);
+  if (cur_offset >= last_offset)
+    {
+      return NULL;
+    }
+
   if (ut_get_line (infp, linebuf_tstr, NULL, NULL) < 0)
     {
-      fprintf (stderr, "malloc error\n");
+      fprintf (stderr, "memory allocation failed\n");
       return NULL;
     }
   if (t_string_len (linebuf_tstr) <= 0)
@@ -539,7 +544,7 @@ get_query_stmt_from_plan (int req)
     }
   else
     {
-      fprintf (stderr, "malloc error\n");
+      fprintf (stderr, "memory allocation failed\n");
     }
 
   cci_query_info_free (plan);
@@ -617,7 +622,7 @@ log_prepare (FILE * cci_errfp, FILE * pass_sql, int con, char *sql_log,
       if (rewrite_query == NULL)
 	{
 	  summary->num_skip_query++;
-	  fprintf (pass_sql, "pass sql [%s]\n", sql_log);
+	  fprintf (pass_sql, "skip sql [%s]\n", sql_log);
 	  cci_close_req_handle (req);
 	  return ER_FAILED;
 	}
@@ -648,7 +653,7 @@ log_prepare (FILE * cci_errfp, FILE * pass_sql, int con, char *sql_log,
   sql_info->sql = strdup (sql_log);
   if (sql_info->sql == NULL)
     {
-      fprintf (stderr, "malloc error\n");
+      fprintf (stderr, "memory allocation failed\n");
       return ER_FAILED;
     }
 
@@ -1070,6 +1075,7 @@ static void
 print_summary_info (T_SUMMARY_INFO * summary)
 {
   double avg_diff_time = 0;
+  char msg_buf[64];
 
   if (summary->num_exec_query != 0)
     {
@@ -1078,17 +1084,18 @@ print_summary_info (T_SUMMARY_INFO * summary)
 
   fprintf (stdout,
 	   "------------------- Result Summary --------------------------\n");
-  fprintf (stdout, "* %-35s : %d\n", "Total queries",
+  fprintf (stdout, "* %-40s : %d\n", "Total queries",
 	   summary->num_total_query);
-  fprintf (stdout, "* %-35s : %d\n", "Skipped queries (out : skip.sql)",
+  fprintf (stdout, "* %-40s : %d\n", "Skipped queries (see skip.sql)",
 	   summary->num_skip_query);
-  fprintf (stdout, "* %-35s : %d\n", "Error queries (out : replay.err)",
+  fprintf (stdout, "* %-40s : %d\n", "Failed queries (see replay.err)",
 	   summary->num_err_query);
-  fprintf (stdout, "* %-35s : %d\n", "Longer than difftime lower",
-	   summary->num_diff_time_query);
-  fprintf (stdout, "* %-35s : %.3f\n", "Max different time",
+  snprintf (msg_buf, sizeof (msg_buf), "Slow queries (time diff > %.3f secs)",
+	    print_result_diff_time_lower);
+  fprintf (stdout, "* %-40s : %d\n", msg_buf, summary->num_diff_time_query);
+  fprintf (stdout, "* %-40s : %.3f\n", "Max execution time diff",
 	   summary->max_diff_time);
-  fprintf (stdout, "* %-35s : %.3f\n", "Average different time",
+  fprintf (stdout, "* %-40s : %.3f\n", "Avg execution time diff",
 	   avg_diff_time);
 
   return;
@@ -1252,14 +1259,14 @@ print_result_without_sort (FILE * outfp, int print_diff_time_lower,
   next_tmp_fp = tmpfile ();
   if (next_tmp_fp == NULL)
     {
-      fprintf (stderr, "temp file open error\n");
+      fprintf (stderr, "cannot open temp file\n");
       return ER_FAILED;
     }
 
   read_buf = (char *) malloc (read_buf_max);
   if (read_buf == NULL)
     {
-      fprintf (stderr, "malloc error (%d)\n", read_buf_max);
+      fprintf (stderr, "memory allocation failed\n");
       fclose (next_tmp_fp);
       return ER_FAILED;
     }
@@ -1286,8 +1293,7 @@ print_result_without_sort (FILE * outfp, int print_diff_time_lower,
       result.sql_info = (char *) malloc (read_buf_max + SQL_INFO_TITLE_LEN);
       if (result.sql_info == NULL)
 	{
-	  fprintf (stderr, "malloc error (%d)\n",
-		   read_buf_max + SQL_INFO_TITLE_LEN);
+	  fprintf (stderr, "memory allocation failed\n");
 	  fclose (next_tmp_fp);
 	  free_and_init (read_buf);
 	  return ER_FAILED;
@@ -1339,15 +1345,14 @@ print_result_with_sort (FILE * outfp, int print_diff_time_lower,
   next_tmp_fp = tmpfile ();
   if (next_tmp_fp == NULL)
     {
-      fprintf (stderr, "temp file open error\n");
+      fprintf (stderr, "cannot open temp file\n");
       return ER_FAILED;
     }
 
   result = (T_SQL_RESULT *) malloc (sizeof (T_SQL_RESULT) * num_query);
   if (result == NULL)
     {
-      fprintf (stderr, "malloc error (%ld)\n",
-	       sizeof (T_SQL_RESULT) * num_query);
+      fprintf (stderr, "memory allocation failed\n");
       fclose (next_tmp_fp);
       return ER_FAILED;
     }
@@ -1356,7 +1361,7 @@ print_result_with_sort (FILE * outfp, int print_diff_time_lower,
   read_buf = (char *) malloc (read_buf_max);
   if (read_buf == NULL)
     {
-      fprintf (stderr, "malloc error(%d)\n", read_buf_max);
+      fprintf (stderr, "memory allocation failed\n");
       goto error;
     }
 
@@ -1380,8 +1385,7 @@ print_result_with_sort (FILE * outfp, int print_diff_time_lower,
 	    (char *) malloc (read_buf_max + SQL_INFO_TITLE_LEN);
 	  if (result[i].sql_info == NULL)
 	    {
-	      fprintf (stderr, "malloc error(%d)\n",
-		       read_buf_max + SQL_INFO_TITLE_LEN);
+	      fprintf (stderr, "memory allocation failed\n");
 	      goto error;
 	    }
 
@@ -1521,6 +1525,7 @@ static int
 get_args (int argc, char *argv[])
 {
   int c;
+  int num_file_arg;
   double break_time_in_sec = DEFAULT_BREAK_TIME;
   print_result_diff_time_lower = DEFAULT_DIFF_TIME_LOWER;
 
@@ -1537,7 +1542,10 @@ get_args (int argc, char *argv[])
 	  host = optarg;
 	  break;
 	case 'P':
-	  broker_port = atoi (optarg);
+	  if (parse_int (&broker_port, optarg, 10) < 0)
+	    {
+	      goto usage;
+	    }
 	  break;
 	case 'd':
 	  dbname = optarg;
@@ -1578,22 +1586,13 @@ get_args (int argc, char *argv[])
 
   break_time = (int) (break_time_in_sec * 1000);
 
-  if (host == NULL)
+  num_file_arg = argc - optind;
+  if (num_file_arg != 2)
     {
-      host = (char *) "localhost";
+      goto usage;
     }
 
-  if (dbuser == NULL)
-    {
-      dbuser = (char *) "PUBLIC";
-    }
-
-  if (dbpasswd == NULL)
-    {
-      dbpasswd = (char *) "";
-    }
-
-  if (optind + 1 >= argc)
+  if (host == NULL || broker_port == INVALID_PORT_NUM || dbname == NULL)
     {
       goto usage;
     }
@@ -1602,20 +1601,17 @@ get_args (int argc, char *argv[])
 
 usage:
   fprintf (stderr,
-	   "usage : %s infile outfile [OPTION] \n"
+	   "usage : %s -I broker_host -P broker_port -d database_name infile outfile [OPTION] \n"
 	   "\n"
 	   "valid options:\n"
-	   "  -I   broker host\n"
-	   "  -P   broker port\n"
-	   "  -d   database name\n"
 	   "  -u   user name\n"
 	   "  -p   user password\n"
 	   "  -h   break time between query execute; default: %.3f(sec)\n"
-	   "  -r   enable to rewrite update/delete query to select\n"
+	   "  -r   enable to rewrite update/delete query to select query\n"
 	   "  -D   minimum value of time difference make print result; default: %.3f(sec)\n"
 	   "  -F   datetime when start to replay sql_log\n"
-	   "  -T   datetime when end to replay sql_log\n", argv[0], DEFAULT_BREAK_TIME,
-           DEFAULT_DIFF_TIME_LOWER);
+	   "  -T   datetime when end to replay sql_log\n", argv[0],
+	   DEFAULT_BREAK_TIME, DEFAULT_DIFF_TIME_LOWER);
 
   return ER_FAILED;
 date_format_err:
@@ -1630,42 +1626,52 @@ date_format_err:
  *   outfilename(in):
  *   infp(out):
  *   outfp(out):
+ *   cci_errfp(out):
+ *   skip_sqlfp(out):
  */
 static int
-open_file (char *infilename, char *outfilename, FILE ** infp, FILE ** outfp)
+open_file (char *infilename, char *outfilename, FILE ** infp,
+	   FILE ** outfp, FILE ** cci_errfp, FILE ** skip_sqlfp)
 {
   *infp = fopen (infilename, "r");
   if (*infp == NULL)
     {
-      fprintf (stderr, "fopen error[%s]\n", infilename);
+      fprintf (stderr, "cannot open input file '%s'\n", infilename);
       return ER_FAILED;
     }
 
-  if (outfilename == NULL)
+  *outfp = fopen (outfilename, "w");
+  if (*outfp == NULL)
     {
-      *outfp = stdout;
-    }
-  else
-    {
-      *outfp = fopen (outfilename, "w");
-      if (*outfp == NULL)
-	{
-	  fprintf (stderr, "fopen error[%s]\n", outfilename);
-	  goto error;;
-	}
+      fprintf (stderr, "cannot open output file '%s'\n", outfilename);
+      goto error;;
     }
 
   br_tmpfp = tmpfile ();
   if (br_tmpfp == NULL)
     {
-      fprintf (stderr, "temp file open error\n");
+      fprintf (stderr, "cannot open temp file\n");
+      goto error;
+    }
+
+  *cci_errfp = fopen (CCI_ERR_FILE_NAME, "w");
+  if (*cci_errfp == NULL)
+    {
+      fprintf (stderr, "cannot open output file '%s'\n", CCI_ERR_FILE_NAME);
+      goto error;
+    }
+
+  *skip_sqlfp = fopen (PASS_SQL_FILE_NAME, "w");
+  if (*skip_sqlfp == NULL)
+    {
+      fprintf (stderr, "cannot open output file '%s'\n", PASS_SQL_FILE_NAME);
       goto error;
     }
 
   return NO_ERROR;
 
 error:
-  close_file (*infp, *outfp);
+  close_file (*infp, *outfp, *cci_errfp, *skip_sqlfp);
   return ER_FAILED;
 }
 
@@ -1674,17 +1680,18 @@ error:
  *   return: void
  *   infp(in):
  *   outfp(in):
+ *   cci_errfp(in):
+ *   skip_sqlfp(in):
  */
 static void
-close_file (FILE * infp, FILE * outfp)
+close_file (FILE * infp, FILE * outfp, FILE * cci_errfp, FILE * skip_sqlfp)
 {
   if (infp != NULL)
     {
       fclose (infp);
     }
 
-  fflush (outfp);
-  if (outfp != NULL && outfp != stdout)
+  if (outfp != NULL)
     {
       fclose (outfp);
     }
@@ -1692,6 +1699,16 @@ close_file (FILE * infp, FILE * outfp)
   if (br_tmpfp != NULL)
     {
       fclose (br_tmpfp);
+    }
+
+  if (cci_errfp != NULL)
+    {
+      fclose (cci_errfp);
+    }
+
+  if (skip_sqlfp != NULL)
+    {
+      fclose (skip_sqlfp);
     }
 
   return;
@@ -1703,27 +1720,21 @@ main (int argc, char *argv[])
   int start_arg;
   char *infilename = NULL;
   char *outfilename = NULL;
-  FILE *outfp, *infp;
   int res;
 
-  if ((start_arg = get_args (argc, argv)) < 0)
+  start_arg = get_args (argc, argv);
+  if (start_arg < 0)
     {
       return ER_FAILED;
     }
+
+  assert (start_arg < argc);
 
   infilename = argv[start_arg];
-  if (start_arg + 1 <= argc)
-    {
-      outfilename = argv[start_arg + 1];
-    }
-  if (open_file (infilename, outfilename, &infp, &outfp) < 0)
-    {
-      return ER_FAILED;
-    }
 
-  res = log_replay (infp, outfp);
+  outfilename = argv[start_arg + 1];
 
-  close_file (infp, outfp);
+  res = log_replay (infilename, outfilename);
 
   return res;
 }

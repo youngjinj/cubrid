@@ -318,8 +318,9 @@ static int locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 static TP_DOMAIN *locator_make_midxkey_domain (OR_INDEX * index);
 static DISK_ISVALID
 locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
-				    RECDES * classrec, ATTR_ID * attr_ids,
-				    const char *btname, bool repair);
+				    OID * cls_oid, RECDES * classrec,
+				    ATTR_ID * attr_ids, const char *btname,
+				    bool repair);
 static int locator_eval_filter_predicate (THREAD_ENTRY * thread_p,
 					  BTID * btid,
 					  OR_PREDICATE * or_pred,
@@ -2315,9 +2316,6 @@ locator_return_object (THREAD_ENTRY * thread_p,
       chn = heap_chnguess_get (thread_p, oid, tran_index);
     }
 
-  /*scan =
-     heap_get (thread_p, oid, &assign->recdes, assign->ptr_scancache, COPY,
-     chn); */
   scan =
     heap_get_last (thread_p, oid, &assign->recdes, assign->ptr_scancache,
 		   COPY, chn, &updated_oid);
@@ -3521,7 +3519,7 @@ locator_all_reference_lockset (THREAD_ENTRY * thread_p,
 		  continue;
 		}
 	      COPY_OID (&reqclasses->oid, &class_oid);
-	      reqclasses->chn = -1;	/* Note that this is a level */
+	      reqclasses->chn = NULL_CHN;	/* Note that this is a level */
 	      lockset->objects[ref_num].class_index =
 		lockset->num_classes_of_reqobjs;
 	      lockset->num_classes_of_reqobjs++;
@@ -5915,7 +5913,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
       /* remove XASL cache entries which is relevant with that class */
       if (!OID_IS_ROOTOID (oid)
 	  && prm_get_integer_value (PRM_ID_XASL_MAX_PLAN_CACHE_ENTRIES) > 0
-	  && qexec_remove_xasl_cache_ent_by_class (thread_p, oid) != NO_ERROR)
+	  && qexec_remove_xasl_cache_ent_by_class (thread_p, oid,
+						   1) != NO_ERROR)
 	{
 	  er_log_debug (ARG_FILE_LINE,
 			"locator_update_force:"
@@ -6042,6 +6041,21 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    {
 	      goto error;
 	    }
+
+	  /* make sure we use the correct class oid - we could be dealing
+	   * with a classoid resulted from a unique btid pruning
+	   */
+	  if (heap_get_class_oid (thread_p, class_oid, oid) == NULL)
+	    {
+	      goto error;
+	    }
+
+	  if (heap_get_hfid_from_class_oid (thread_p, class_oid, hfid)
+	      != NO_ERROR)
+	    {
+	      goto error;
+	    }
+
 	  if (!OID_EQ (class_oid, &real_class_oid))
 	    {
 	      /* If we have to move the record to another partition, we have
@@ -6593,7 +6607,8 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
       /* remove XASL cache entries which is relevant with that class */
       if (!OID_IS_ROOTOID (oid)
 	  && prm_get_integer_value (PRM_ID_XASL_MAX_PLAN_CACHE_ENTRIES) > 0
-	  && qexec_remove_xasl_cache_ent_by_class (thread_p, oid) != NO_ERROR)
+	  && qexec_remove_xasl_cache_ent_by_class (thread_p, oid,
+						   1) != NO_ERROR)
 	{
 	  er_log_debug (ARG_FILE_LINE,
 			"locator_delete_force:"
@@ -7460,7 +7475,6 @@ xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
       goto error;
     }
 
-done:
   if (force_scancache != NULL)
     {
       locator_end_force_scan_cache (thread_p, force_scancache);
@@ -10109,6 +10123,7 @@ error:
  * return: valid
  *
  *   btid(in): Btree identifier
+ *   class_oid(in):
  *   classrec(in):
  *   attr_ids(in): Array of indexed attributes for the btid
  *   repair(in):
@@ -10120,8 +10135,9 @@ error:
  */
 static DISK_ISVALID
 locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
-				    RECDES * classrec, ATTR_ID * attr_ids,
-				    const char *btname, bool repair)
+				    OID * cls_oid, RECDES * classrec,
+				    ATTR_ID * attr_ids, const char *btname,
+				    bool repair)
 {
   DISK_ISVALID isvalid = DISK_VALID, isallvalid = DISK_VALID;
   OID inst_oid, *p_inst_oid = &inst_oid;
@@ -10146,7 +10162,8 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
   KEY_VAL_RANGE key_val_range;
   OR_INDEX *index;
   DB_LOGICAL ev_res;
-  MVCC_SNAPSHOT *mvcc_snapshot;
+  int partition_local_index = 0;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 #if defined(SERVER_MODE)
   int tran_index;
 #endif /* SERVER_MODE */
@@ -10161,9 +10178,9 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
   scan_init_index_scan (&isid, NULL);
 
   /* get all the heap files associated with this unique btree */
-  if ((or_get_unique_hierarchy (thread_p, classrec, attr_ids[0], btid,
-				&class_oids, &hfids,
-				&num_classes) != NO_ERROR)
+  if (or_get_unique_hierarchy (thread_p, classrec, attr_ids[0], btid,
+			       &class_oids, &hfids, &num_classes,
+			       &partition_local_index) != NO_ERROR
       || class_oids == NULL || hfids == NULL || num_classes < 1)
     {
       if (class_oids != NULL)
@@ -10190,6 +10207,21 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
 	      num_classes * sizeof (HEAP_SCANCACHE));
       goto error;
+    }
+
+  if (partition_local_index == 1)
+    {
+      if (num_classes == 1)
+	{
+	  /* partition class with local index */
+	  COPY_OID (&class_oids[0], cls_oid);
+	  or_class_hfid (classrec, &hfids[0]);
+	}
+      else
+	{
+	  /* a partitioned class and a local index */
+	  goto end;
+	}
     }
 
   mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
@@ -10628,6 +10660,8 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
       isallvalid = DISK_INVALID;
     }
 
+end:
+
   for (j = 0; j < scancache_inited; j++)
     {
       if (heap_scancache_end (thread_p, &scan_cache[j]) != NO_ERROR)
@@ -10787,10 +10821,11 @@ locator_check_class (THREAD_ENTRY * thread_p, OID * class_oid,
 	  break;
 	}
 
-      if (btree_is_unique (thread_p, btid))
+      if (xbtree_get_unique (thread_p, btid))
 	{
-	  rv = locator_check_unique_btree_entries (thread_p, btid, peek,
-						   attrids, btname, repair);
+	  rv = locator_check_unique_btree_entries (thread_p, btid, class_oid,
+						   peek, attrids, btname,
+						   repair);
 	}
       else
 	{
@@ -12286,8 +12321,8 @@ free_and_return:
 }
 
 int
-xlocator_prefetch_repl_update_or_delete (THREAD_ENTRY * thread_p, BTID * btid,
-					 OID * class_oid,
+xlocator_prefetch_repl_update_or_delete (THREAD_ENTRY * thread_p,
+					 BTID * btid, OID * class_oid,
 					 DB_VALUE * key_value)
 {
   int error = NO_ERROR;
@@ -12828,7 +12863,8 @@ locator_filter_errid (THREAD_ENTRY * thread_p, int num_ignore_error_count,
  */
 PRUNING_SCAN_CACHE *
 locator_get_partition_scancache (PRUNING_CONTEXT * pcontext,
-				 const OID * class_oid, const HFID * hfid,
+				 const OID * class_oid,
+				 const HFID * hfid,
 				 int op_type, bool has_function_indexes)
 {
   PRUNING_SCAN_CACHE *scan_cache = NULL;
@@ -12918,7 +12954,8 @@ locator_area_op_to_pruning_type (LC_COPYAREA_OPERATION op)
 static int
 locator_prefetch_index_page (THREAD_ENTRY * thread_p, OID * class_oid,
 			     RECDES * classrec, RECDES * recdes,
-			     int btid_index, HEAP_CACHE_ATTRINFO * attr_info,
+			     int btid_index,
+			     HEAP_CACHE_ATTRINFO * attr_info,
 			     HEAP_IDX_ELEMENTS_INFO * idx_info)
 {
   int error = NO_ERROR;
@@ -12977,7 +13014,7 @@ locator_prefetch_index_page (THREAD_ENTRY * thread_p, OID * class_oid,
       goto free_and_return;
     }
 
-  if (btree_is_unique (thread_p, btid))
+  if (xbtree_get_unique (thread_p, btid))
     {
       locator_prefetch_unique_index_page_internal (thread_p, classrec,
 						   recdes,
@@ -13014,12 +13051,11 @@ locator_prefetch_unique_index_page_internal (THREAD_ENTRY * thread_p,
 					     RECDES * classrec,
 					     RECDES * recdes, BTID * btid,
 					     int btid_index,
-					     HEAP_CACHE_ATTRINFO * attr_info,
-					     ATTR_ID * attr_ids)
+					     HEAP_CACHE_ATTRINFO *
+					     attr_info, ATTR_ID * attr_ids)
 {
   int error = NO_ERROR;
-  int index_id;
-  int i, j;
+  int j;
   HEAP_SCANCACHE *scan_cache = NULL;
   BTREE_CHECKSCAN bt_checkscan, *bt_checkscan_p = NULL;
   DB_VALUE *key = NULL;
@@ -13030,7 +13066,6 @@ locator_prefetch_unique_index_page_internal (THREAD_ENTRY * thread_p,
   HFID *hfids = NULL, *hfid = NULL;
   OID *class_oids = NULL, *class_oid = NULL;
   OR_INDEX *index;
-  DB_LOGICAL ev_res;
   char buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_buf = NULL;
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
@@ -13038,7 +13073,7 @@ locator_prefetch_unique_index_page_internal (THREAD_ENTRY * thread_p,
   /* get all the heap files associated with this unique btree */
   if ((or_get_unique_hierarchy (thread_p, classrec, attr_ids[0], btid,
 				&class_oids, &hfids,
-				&num_classes) != NO_ERROR)
+				&num_classes, NULL) != NO_ERROR)
       || class_oids == NULL || hfids == NULL || num_classes < 1)
     {
       if (class_oids != NULL)
@@ -13096,7 +13131,7 @@ locator_prefetch_unique_index_page_internal (THREAD_ENTRY * thread_p,
       if ((heap_attrinfo_read_dbvalues_without_oid (thread_p, recdes,
 						    attr_info) != NO_ERROR) ||
 	  (key =
-	   heap_attrvalue_get_key (thread_p, index_id, attr_info, recdes,
+	   heap_attrvalue_get_key (thread_p, btid_index, attr_info, recdes,
 				   btid, &dbvalue, aligned_buf,
 				   NULL)) == NULL)
 	{
@@ -13162,7 +13197,6 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
   HEAP_SCANCACHE scan_cache, *scan_cache_p = NULL;
   BTREE_CHECKSCAN bt_checkscan, *bt_checkscan_p = NULL;
   HFID hfid;
-  int index_id;
   char buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_buf;
   OR_INDEX *index = NULL;
   DB_VALUE dbvalue;
@@ -13203,8 +13237,8 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
   if ((heap_attrinfo_read_dbvalues_without_oid
        (thread_p, recdes, attr_info) != NO_ERROR)
       || (key =
-	  heap_attrvalue_get_key (thread_p, index_id, attr_info, recdes, btid,
-				  &dbvalue, aligned_buf, NULL)) == NULL)
+	  heap_attrvalue_get_key (thread_p, btid_index, attr_info, recdes,
+				  btid, &dbvalue, aligned_buf, NULL)) == NULL)
     {
       error = ER_FAILED;
       goto free_and_return;

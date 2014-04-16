@@ -1215,9 +1215,9 @@ $ LOADDB
 1146 볼륨 식별자 %1$d이(가) 존재하지 않습니다.
 1147 XASL stream 캐시의 현재크기(%1$d)가 최대크기(%2$d)를 초과합니다. 캐시의 엔트리가 모두 사용중이기 때문에 엔트리를 제거하지 못하고 새로운 엔트리가 추가되었습니다.
 1148 Filter predicate stream 캐시의 현재크기(%1$d)가 최대크기(%2$d)를 초과합니다. 캐시의 엔트리가 모두 사용중이기 때문에 엔트리를 제거하지 못하고 새로운 엔트리가 추가되었습니다.
-1149 volume identifier %1$d does not exist.
-1150 Cannot find the page %1$d of volume %2$d.
-1151 Context requires compatible collations.
+1149 Cannot find the page %1$d of volume %2$d.
+1150 Context requires compatible collations.
+1151 The page %1$d of volume %2$d is not a slotted page.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 마지막 에러

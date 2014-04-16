@@ -5785,10 +5785,9 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 		  + OR_CACHE_TIME_SIZE) a_reply;
   CACHE_TIME clt_cache_time;
   CACHE_TIME srv_cache_time;
-  int query_timeout, lock_hint_size;
+  int query_timeout;
   XASL_CACHE_ENTRY *xasl_cache_entry_p = NULL;
-  LC_LOCKHINT *lockhint = NULL;
-  char *packed_lockhint = NULL;
+
   int response_time = 0;
 
   TSC_TICKS start_tick, end_tick;
@@ -5831,7 +5830,6 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
   OR_UNPACK_XASL_ID (ptr, &xasl_id);
   ptr = or_unpack_int (ptr, &dbval_cnt);
   ptr = or_unpack_int (ptr, &data_size);
-  ptr = or_unpack_int (ptr, &lock_hint_size);
   ptr = or_unpack_int (ptr, &query_flag);
   OR_UNPACK_CACHE_TIME (ptr, &clt_cache_time);
   ptr = or_unpack_int (ptr, &query_timeout);
@@ -5856,62 +5854,19 @@ sqmgr_execute_query (THREAD_ENTRY * thread_p, unsigned int rid,
 	}
     }
 
-  if (lock_hint_size > 0)
-    {
-      csserror = css_receive_data_from_client (thread_p->conn_entry,
-					       rid, &packed_lockhint,
-					       &lock_hint_size);
-
-      if (csserror)
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		  ER_NET_SERVER_DATA_RECEIVE, 0);
-	  css_send_abort_to_client (thread_p->conn_entry, rid);
-	  if (packed_lockhint)
-	    {
-	      free_and_init (packed_lockhint);
-	    }
-	  if (data)
-	    {
-	      free_and_init (data);
-	    }
-	  return;		/* error */
-	}
-      lockhint =
-	locator_allocate_and_unpack_lockhint (packed_lockhint, lock_hint_size,
-					      true, false);
-      free_and_init (packed_lockhint);
-
-      if (lockhint == NULL)
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
-		  ER_NET_SERVER_DATA_RECEIVE, 0);
-	  css_send_abort_to_client (thread_p->conn_entry, rid);
-	  if (data)
-	    {
-	      free_and_init (data);
-	    }
-	  return;		/* error */
-	}
-    }
-
   CACHE_TIME_RESET (&srv_cache_time);
 
   /* call the server routine of query execute */
   list_id = xqmgr_execute_query (thread_p, &xasl_id, &query_id,
 				 dbval_cnt, data, &query_flag,
 				 &clt_cache_time, &srv_cache_time,
-				 query_timeout, &xasl_cache_entry_p,
-				 lockhint);
+				 query_timeout, &xasl_cache_entry_p);
 
   if (data)
     {
       free_and_init (data);
     }
-  if (lockhint)
-    {
-      locator_free_lockhint (lockhint);
-    }
+
   if (xasl_cache_entry_p)
     {
       info = xasl_cache_entry_p->sql_info;
@@ -8972,13 +8927,14 @@ slogwr_get_log_pages (THREAD_ENTRY * thread_p, unsigned int rid,
 {
   OR_ALIGNED_BUF (OR_INT_SIZE * 2) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
-  LOG_PAGEID first_pageid;
-  int mode;
   char *ptr;
-  int error, remote_error;
+  LOG_PAGEID first_pageid;
+  LOGWR_MODE mode;
+  int m, error, remote_error;
 
   ptr = or_unpack_int64 (request, &first_pageid);
-  ptr = or_unpack_int (ptr, &mode);
+  ptr = or_unpack_int (ptr, &m);
+  mode = (LOGWR_MODE) m;
   ptr = or_unpack_int (ptr, &remote_error);
 
   error = xlogwr_get_log_pages (thread_p, first_pageid, mode);
@@ -10712,6 +10668,11 @@ slocator_prefetch_repl_insert (THREAD_ENTRY * thread_p,
 
   ptr = or_pack_int (reply, error);
 
+  /*
+   * This is for asynchronouse working.
+   * Regardless of whethea or not the processing of the actual work is done, 
+   * we will send the client a response.
+   */
   error = css_send_data_to_client (thread_p->conn_entry, rid,
 				   reply, OR_ALIGNED_BUF_SIZE (a_reply));
   if (error != NO_ERROR)
@@ -10750,6 +10711,11 @@ slocator_prefetch_repl_update_or_delete (THREAD_ENTRY * thread_p,
 
   ptr = or_pack_int (reply, error);
 
+  /*
+   * This is for asynchronouse working.
+   * Regardless of whethea or not the processing of the actual work is done, 
+   * we will send the client a response.
+   */
   error = css_send_data_to_client (thread_p->conn_entry, rid,
 				   reply, OR_ALIGNED_BUF_SIZE (a_reply));
   if (error != NO_ERROR)

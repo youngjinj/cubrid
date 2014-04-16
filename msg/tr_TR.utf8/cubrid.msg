@@ -1216,8 +1216,8 @@ $ LOADDB
 1147 The size of XASL stream cache(%1$d) exceeds the max(%2$d). New entry is added although nothing is victimized bacause all cache entries are used.
 1148 The size of filter predicate stream cache(%1$d) exceeds the max(%2$d). New entry is added although nothing is victimized bacause all cache entries are used.
 1149 Cannot find the page %1$d of volume %2$d.
-1150 The page %1$d of volume %2$d is not a slotted page.
-1151 Context requires compatible collations.
+1150 Context requires compatible collations.
+1151 The page %1$d of volume %2$d is not a slotted page.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 Son Hata

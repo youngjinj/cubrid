@@ -1181,7 +1181,6 @@ static void
 print_monitor_header (MONITOR_TYPE mnt_type)
 {
   char buf[256];
-  char line_buf[256];
   int buf_offset = 0;
   int i;
   static unsigned int tty_print_header = 0;
@@ -1438,6 +1437,8 @@ set_monitor_items (BR_MONITORING_ITEM * mnt_items,
     }
   else if (mnt_type == MONITOR_T_SHARDDB)
     {
+      /* we should init num_appl_server of shard monitor first item */
+      mnt_items[0].num_appl_server = 0;
       for (i = 0; i < shm_proxy->num_proxy; i++)
 	{
 	  proxy_info_p = &shm_proxy->proxy_info[i];
@@ -1451,6 +1452,8 @@ set_monitor_items (BR_MONITORING_ITEM * mnt_items,
     }
   else if (mnt_type == MONITOR_T_PROXY)
     {
+      /* we should init num_appl_server of proxy monitor first item */
+      mnt_items[0].num_appl_server = 0;
       for (i = 0; i < shm_proxy->num_proxy; i++)
 	{
 	  proxy_info_p = &shm_proxy->proxy_info[i];

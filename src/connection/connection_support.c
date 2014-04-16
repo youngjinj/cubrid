@@ -2596,18 +2596,17 @@ css_user_access_status_start_scan (THREAD_ENTRY * thread_p, int type,
 				   void **ptr)
 {
   int error = NO_ERROR;
-  int i, num_user = 0;
+  int num_user = 0;
   const int num_cols = 4;	/* user_name, last_access_time, last_access_host, program_name */
   const int default_num_tuple = 10;
-  SCAN_CODE scan;
   OID *class_oid;
   SHOWSTMT_ARRAY_CONTEXT *ctx;
   LAST_ACCESS_STATUS *access_status = NULL;
   LAST_ACCESS_STATUS **access_status_array = NULL;
-
+#if defined(SERVER_MODE)
   DB_VALUE *vals;
-  char *user_name = NULL;
   DB_DATETIME access_time;
+#endif
 
   *ptr = NULL;
 

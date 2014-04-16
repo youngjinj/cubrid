@@ -92,6 +92,7 @@
 static int rv;
 #endif /* not SERVER_MODE */
 
+#define HEAP_BESTSPACE_SYNC_THRESHOLD (0.1f)
 
 /* ATTRIBUTE LOCATION */
 
@@ -731,9 +732,6 @@ static DB_LOGICAL heap_mvcc_reev_cond_assigns (THREAD_ENTRY * thread_p,
   (((i) + 1) % HEAP_NUM_BEST_SPACESTATS)
 #define HEAP_STATS_PREV_BEST_INDEX(i)   \
   (((i) == 0) ? (HEAP_NUM_BEST_SPACESTATS - 1) : ((i) - 1));
-
-#define USE_MEMORY_CACHE 1
-#define DONT_USE_MEMORY_CACHE 2
 
 typedef struct heap_hdr_stats HEAP_HDR_STATS;
 struct heap_hdr_stats
@@ -3226,8 +3224,9 @@ static int
 heap_classrepr_dump (THREAD_ENTRY * thread_p, FILE * fp,
 		     const OID * class_oid, const OR_CLASSREP * repr)
 {
-  OR_ATTRIBUTE *attrepr;
-  int i, k, j;
+  OR_ATTRIBUTE *volatile attrepr;
+  volatile int i;
+  int k, j;
   char *classname;
   const char *attr_name;
   DB_VALUE def_dbvalue;
@@ -3522,7 +3521,8 @@ heap_stats_update (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, const HFID * hfid,
 	  (void) heap_stats_add_bestspace (thread_p, hfid, vpid, freespace);
 	}
     }
-  else if (need_update || prev_freespace <= HEAP_DROP_FREE_SPACE)
+
+  if (need_update || prev_freespace <= HEAP_DROP_FREE_SPACE)
     {
       if (freespace > HEAP_DROP_FREE_SPACE)
 	{
@@ -4181,13 +4181,14 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 
   HEAP_FINDSPACE found;
   int old_wait_msecs;
-  int bestspace_type;
   int notfound_cnt;
   HEAP_STATS_ENTRY *ent;
   HEAP_BESTSPACE best;
   int rc;
   int idx_worstspace;
-  int i;
+  int i, best_array_index = -1;
+  bool hash_is_available;
+  bool best_hint_is_used;
 
   *pgptr = NULL;
 
@@ -4203,23 +4204,18 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
   /* backup previous error */
   er_stack_push ();
 
-  if (prm_get_integer_value (PRM_ID_HF_MAX_BESTSPACE_ENTRIES) > 0)
-    {
-      bestspace_type = USE_MEMORY_CACHE;
-    }
-  else
-    {
-      bestspace_type = DONT_USE_MEMORY_CACHE;
-    }
-
   found = HEAP_FINDSPACE_NOTFOUND;
   notfound_cnt = 0;
+  best_array_index = 0;
+  hash_is_available =
+    prm_get_integer_value (PRM_ID_HF_MAX_BESTSPACE_ENTRIES) > 0;
 
   while (found == HEAP_FINDSPACE_NOTFOUND)
     {
       best.freespace = -1;	/* init */
+      best_hint_is_used = false;
 
-      if (bestspace_type == USE_MEMORY_CACHE)
+      if (hash_is_available)
 	{
 	  rc = pthread_mutex_lock (&heap_Bestspace->bestspace_mutex);
 
@@ -4255,20 +4251,25 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 
 	  pthread_mutex_unlock (&heap_Bestspace->bestspace_mutex);
 	}
-      else
+
+      if (best.freespace == -1)
 	{
-	  while (notfound_cnt < HEAP_NUM_BEST_SPACESTATS)
+	  /* Maybe PRM_ID_HF_MAX_BESTSPACE_ENTRIES <= 0
+	   * or There is no best space in heap_Bestspace hashtable.
+	   * We will use bestspace hint in heap_header.
+	   */
+	  while (best_array_index < HEAP_NUM_BEST_SPACESTATS)
 	    {
-	      if (bestspace[notfound_cnt].freespace >= needed_space)
+	      if (bestspace[best_array_index].freespace >= needed_space)
 		{
-		  best.vpid = bestspace[notfound_cnt].vpid;
-		  best.freespace = bestspace[notfound_cnt].freespace;
+		  best.vpid = bestspace[best_array_index].vpid;
+		  best.freespace = bestspace[best_array_index].freespace;
 		  assert (best.freespace > 0
 			  && best.freespace <= PGLENGTH_MAX);
-
+		  best_hint_is_used = true;
 		  break;
 		}
-	      notfound_cnt++;
+	      best_array_index++;
 	    }
 	}
 
@@ -4285,11 +4286,6 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 	   * Either we timeout and we want to continue in this case, or
 	   * we have another kind of problem.
 	   */
-	  if (bestspace_type == USE_MEMORY_CACHE)
-	    {
-	      heap_stats_del_bestspace_by_vpid (thread_p, &best.vpid);
-	    }
-
 	  switch (er_errid ())
 	    {
 	    case NO_ERROR:
@@ -4318,17 +4314,16 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 	      /*
 	       * Something went wrong, we are unable to fetch this page.
 	       */
-	      if (bestspace_type == USE_MEMORY_CACHE)
+	      if (best_hint_is_used == true)
 
 		{
-		  (void) heap_stats_del_bestspace_by_vpid (thread_p,
-							   &best.vpid);
+		  assert (best_array_index < HEAP_NUM_BEST_SPACESTATS);
+		  bestspace[best_array_index].freespace = 0;
 		}
 	      else
 		{
-		  assert (notfound_cnt < HEAP_NUM_BEST_SPACESTATS);
-
-		  bestspace[notfound_cnt].freespace = 0;
+		  (void) heap_stats_del_bestspace_by_vpid (thread_p,
+							   &best.vpid);
 		}
 	      found = HEAP_FINDSPACE_ERROR;
 	      break;
@@ -4349,18 +4344,20 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 	      found = HEAP_FINDSPACE_FOUND;
 	    }
 
-	  /* just refresh the free space of the page */
-	  if (bestspace_type == USE_MEMORY_CACHE)
+	  if (hash_is_available)
 	    {
+	      /* Add or refresh the free space of the page */
 	      (void) heap_stats_add_bestspace (thread_p, hfid, &best.vpid,
 					       best.freespace);
 	    }
-	  else
-	    {
-	      assert (VPID_EQ (&best.vpid, &(bestspace[notfound_cnt].vpid)));
-	      assert (notfound_cnt < HEAP_NUM_BEST_SPACESTATS);
 
-	      bestspace[notfound_cnt].freespace = best.freespace;
+	  if (best_hint_is_used == true)
+	    {
+	      assert (VPID_EQ
+		      (&best.vpid, &(bestspace[best_array_index].vpid)));
+	      assert (best_array_index < HEAP_NUM_BEST_SPACESTATS);
+
+	      bestspace[best_array_index].freespace = best.freespace;
 	    }
 
 	  if (found != HEAP_FINDSPACE_FOUND)
@@ -4368,10 +4365,23 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 	      pgbuf_unfix_and_init (thread_p, *pgptr);
 	    }
 	}
+
+      if (found == HEAP_FINDSPACE_NOTFOUND)
+	{
+	  if (best_hint_is_used)
+	    {
+	      /* Increment best_array_index for next search */
+	      best_array_index++;
+	    }
+	  else
+	    {
+	      notfound_cnt++;
+	    }
+	}
     }
 
   idx_worstspace = 0;
-  for (i = 1; i < HEAP_NUM_BEST_SPACESTATS; i++)
+  for (i = 0; i < HEAP_NUM_BEST_SPACESTATS; i++)
     {
       /* find worst space in bestspace */
       if (bestspace[idx_worstspace].freespace > bestspace[i].freespace)
@@ -4380,7 +4390,7 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 	}
 
       /* update bestspace of heap header page if found best page at memory hash table */
-      if (bestspace_type == USE_MEMORY_CACHE && found == HEAP_FINDSPACE_FOUND
+      if (best_hint_is_used == false && found == HEAP_FINDSPACE_FOUND
 	  && VPID_EQ (&best.vpid, &bestspace[i].vpid))
 	{
 	  bestspace[i].freespace = best.freespace;
@@ -4437,6 +4447,7 @@ heap_stats_find_best_page (THREAD_ENTRY * thread_p, const HFID * hfid,
   int try_find, try_sync;
   int num_pages_found;
   FILE_IS_NEW_FILE is_new_file = FILE_ERROR;
+  float other_high_best_ratio;
 
   /*
    * Try to use the space cache for as much information as possible to avoid
@@ -4522,15 +4533,28 @@ heap_stats_find_best_page (THREAD_ENTRY * thread_p, const HFID * hfid,
 	  break;
 	}
 
+      if (heap_hdr->estimates.num_other_high_best <= 0
+	  || heap_hdr->estimates.num_pages <= 0)
+	{
+	  assert (heap_hdr->estimates.num_pages > 0);
+	  other_high_best_ratio = 0;
+	}
+      else
+	{
+	  other_high_best_ratio =
+	    (float) heap_hdr->estimates.num_other_high_best /
+	    (float) heap_hdr->estimates.num_pages;
+	}
+
       if (try_find >= 2
-	  || (heap_hdr->estimates.num_other_high_best <= 0
-	      && heap_hdr->estimates.num_second_best <= 0))
+	  || other_high_best_ratio < HEAP_BESTSPACE_SYNC_THRESHOLD)
 	{
 	  /* We stop to find free pages if:
 	   * (1) we have tried to do it twice
 	   * (2) it is first trying but we have no hints
 	   * Regarding (2), we will find free pages by heap_stats_sync_bestspace
 	   * only if we know that a free page exists somewhere.
+	   * and (num_other_high_best/total page) > HEAP_BESTSPACE_SYNC_THRESHOLD.
 	   * num_other_high_best means the number of free pages existing somewhere
 	   * in the heap file.
 	   */
@@ -5795,7 +5819,6 @@ heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid,
   int best;
   HEAP_CHAIN_TOLAST tolast;
   VPID last_vpid;
-  int last_freespace;
 
   addr.vfid = &hfid->vfid;
   addr.offset = HEAP_HEADER_AND_CHAIN_SLOTID;
@@ -5808,12 +5831,6 @@ heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid,
       return NULL;
     }
   assert (!VPID_ISNULL (&last_vpid));
-
-  last_freespace = spage_max_space_for_new_record (thread_p, last_pgptr);
-  if (last_freespace > needed_space)
-    {
-      return last_pgptr;
-    }
 
   /*
    * Now allocate a new page as close as possible to the last allocated page.
@@ -12172,7 +12189,7 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
   /*
    * Don't retrieve the object when the object has the same cache
    * coherency number given by the caller. That is, the caller has the
-   * object cached.
+   * valid cached object.
    */
 
   if (ispeeking == PEEK)
@@ -16439,10 +16456,10 @@ heap_attrvalue_read (RECDES * recdes, HEAP_ATTRVALUE * value,
 {
   OR_BUF buf;
   PR_TYPE *pr_type;		/* Primitive type array function structure */
-  OR_ATTRIBUTE *attrepr;
+  OR_ATTRIBUTE *volatile attrepr;
   char *disk_data = NULL;
   int disk_bound = false;
-  int disk_length = -1;
+  volatile int disk_length = -1;
   int ret = NO_ERROR;
 
   /* Initialize disk value information */
@@ -16911,9 +16928,7 @@ heap_attrinfo_delete_lob (THREAD_ENTRY * thread_p,
 		  goto exit_on_error;
 		}
 	    }
-	  if ((value->state == HEAP_READ_ATTRVALUE ||
-	       value->state == HEAP_WRITTEN_LOB_ATTRVALUE) &&
-	      !db_value_is_null (&value->dbvalue))
+	  if (!db_value_is_null (&value->dbvalue))
 	    {
 	      DB_ELO *elo;
 	      assert (db_value_type (&value->dbvalue) == DB_TYPE_BLOB ||
@@ -16923,10 +16938,7 @@ heap_attrinfo_delete_lob (THREAD_ENTRY * thread_p,
 		{
 		  ret = db_elo_delete (elo);
 		}
-	      if (value->state == HEAP_WRITTEN_LOB_ATTRVALUE)
-		{
-		  value->state = HEAP_WRITTEN_ATTRVALUE;
-		}
+	      value->state = HEAP_WRITTEN_ATTRVALUE;
 	    }
 	}
     }
@@ -18127,7 +18139,7 @@ heap_attrinfo_transform_to_disk_internal (THREAD_ENTRY * thread_p,
   int i;
   DB_VALUE *dbvalue = NULL;
   int expected_size;
-  int offset_size;
+  volatile int offset_size;
   int mvcc_wasted_space = 0, header_size;
 
   /* check to make sure the attr_info has been used, it should not be empty. */
@@ -18376,6 +18388,12 @@ heap_attrinfo_transform_to_disk_internal (THREAD_ENTRY * thread_p,
 		      free_and_init (elo_p->meta_data);
 		      elo_p->meta_data = save_meta_data;
 
+		      /* The purpose of HEAP_WRITTEN_LOB_ATTRVALUE is to avoid
+		       * reenter this branch. In the first pass, this branch
+		       * is entered and elo is copied. When BUFFER_OVERFLOW
+		       * happens, we need avoid to copy elo again. Otherwize
+		       * it will generate 2 copies.
+		       */
 		      value->state = HEAP_WRITTEN_LOB_ATTRVALUE;
 
 		      error = (error >= 0 ? NO_ERROR : error);
@@ -18434,28 +18452,6 @@ heap_attrinfo_transform_to_disk_internal (THREAD_ENTRY * thread_p,
 
       status = S_DOESNT_FIT;
 
-      if (lob_create_flag == LOB_FLAG_INCLUDE_LOB)
-	{
-	  for (i = 0; i < attr_info->num_values; i++)
-	    {
-	      value = &attr_info->values[i];
-	      if (value->last_attrepr->type == DB_TYPE_BLOB ||
-		  value->last_attrepr->type == DB_TYPE_CLOB)
-		{
-		  break;
-		}
-	    }
-
-	  if (i < attr_info->num_values)
-	    {
-	      if (heap_attrinfo_delete_lob (thread_p, NULL, attr_info) !=
-		  NO_ERROR)
-		{
-		  status = S_ERROR;
-		  break;
-		}
-	    }
-	}
 
       /*
        * Give a hint of the needed space. The hint is given as a negative
@@ -22578,7 +22574,6 @@ heap_rv_undoredo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   return NO_ERROR;
 }
 
-
 /*
  * heap_rv_undoredo_update_type () - Recover the type of the object/record. used either for
  *                        undo or redo
@@ -23674,7 +23669,7 @@ heap_eval_function_index (THREAD_ENTRY * thread_p,
   void *unpack_info = NULL;
   DB_VALUE *res = NULL;
   int nr_atts;
-  ATTR_ID *atts;
+  ATTR_ID *atts = NULL;
   bool atts_free = false, attrinfo_clear = false, attrinfo_end = false;
   HEAP_CACHE_ATTRINFO *cache_attr_info;
 
@@ -23973,6 +23968,620 @@ heap_free_func_pred_unpack_info (THREAD_ENTRY * thread_p, int n_indexes,
 	}
     }
   db_private_free_and_init (thread_p, func_indx_preds);
+}
+
+/*
+ * heap_header_capacity_start_scan () - start scan function for 'show heap ...'
+ *   return: NO_ERROR, or ER_code
+ *   thread_p(in): thread entry
+ *   show_type(in):
+ *   arg_values(in):
+ *   arg_cnt(in):
+ *   ptr(in/out): 'show heap' context
+ */
+int
+heap_header_capacity_start_scan (THREAD_ENTRY * thread_p, int show_type,
+				 DB_VALUE ** arg_values, int arg_cnt,
+				 void **ptr)
+{
+  int error = NO_ERROR;
+  char *class_name = NULL;
+  DB_CLASS_PARTITION_TYPE partition_type = DB_NOT_PARTITIONED_CLASS;
+  OID class_oid;
+  LC_FIND_CLASSNAME status;
+  HEAP_SHOW_SCAN_CTX *ctx = NULL;
+  OR_PARTITION *parts = NULL;
+  int i = 0;
+  int parts_count = 0;
+  bool is_all = false;
+
+  assert (arg_cnt == 2);
+  assert (DB_VALUE_TYPE (arg_values[0]) == DB_TYPE_CHAR);
+  assert (DB_VALUE_TYPE (arg_values[1]) == DB_TYPE_INTEGER);
+
+  *ptr = NULL;
+
+  class_name = db_get_string (arg_values[0]);
+
+  partition_type = (DB_CLASS_PARTITION_TYPE) db_get_int (arg_values[1]);
+
+  ctx = (HEAP_SHOW_SCAN_CTX *) db_private_alloc (thread_p,
+						 sizeof (HEAP_SHOW_SCAN_CTX));
+  if (ctx == NULL)
+    {
+      error = er_errid ();
+      goto cleanup;
+    }
+  memset (ctx, 0, sizeof (HEAP_SHOW_SCAN_CTX));
+
+  status = xlocator_find_class_oid (thread_p, class_name, &class_oid, S_LOCK);
+  if (status == LC_CLASSNAME_ERROR || status == LC_CLASSNAME_DELETED)
+    {
+      error = ER_LC_UNKNOWN_CLASSNAME;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, class_name);
+      goto cleanup;
+    }
+
+  is_all = (show_type == SHOWSTMT_ALL_HEAP_HEADER
+	    || show_type == SHOWSTMT_ALL_HEAP_CAPACITY);
+
+  if (is_all && partition_type == DB_PARTITIONED_CLASS)
+    {
+      error = heap_get_class_partitions (thread_p, &class_oid, &parts,
+					 &parts_count);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+
+      ctx->hfids = (HFID *) db_private_alloc (thread_p,
+					      parts_count * sizeof (HFID));
+      if (ctx->hfids == NULL)
+	{
+	  error = er_errid ();
+	  goto cleanup;
+	}
+
+      for (i = 0; i < parts_count; i++)
+	{
+	  HFID_COPY (&ctx->hfids[i], &parts[i].class_hfid);
+	}
+
+      ctx->hfids_count = parts_count;
+    }
+  else
+    {
+      ctx->hfids = (HFID *) db_private_alloc (thread_p, sizeof (HFID));
+      if (ctx->hfids == NULL)
+	{
+	  error = er_errid ();
+	  goto cleanup;
+	}
+
+      error = heap_get_hfid_from_class_oid (thread_p, &class_oid,
+					    &ctx->hfids[0]);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+
+      ctx->hfids_count = 1;
+    }
+
+  *ptr = ctx;
+  ctx = NULL;
+
+cleanup:
+
+  if (parts != NULL)
+    {
+      heap_clear_partition_info (thread_p, parts, parts_count);
+    }
+
+  if (ctx != NULL)
+    {
+      if (ctx->hfids != NULL)
+	{
+	  db_private_free (thread_p, ctx->hfids);
+	}
+
+      db_private_free_and_init (thread_p, ctx);
+    }
+
+  return error;
+}
+
+/*
+ * heap_header_next_scan () - next scan function for
+ *                            'show (all) heap header'
+ *   return: NO_ERROR, or ER_code
+ *   thread_p(in):
+ *   cursor(in):
+ *   out_values(in/out):
+ *   out_cnt(in):
+ *   ptr(in): 'show heap' context
+ */
+SCAN_CODE
+heap_header_next_scan (THREAD_ENTRY * thread_p, int cursor,
+		       DB_VALUE ** out_values, int out_cnt, void *ptr)
+{
+  int error = NO_ERROR;
+  HEAP_SHOW_SCAN_CTX *ctx = NULL;
+  VPID vpid;
+  HEAP_HDR_STATS *heap_hdr = NULL;
+  RECDES hdr_recdes;
+  int i = 0;
+  int idx = 0;
+  PAGE_PTR pgptr = NULL;
+  HFID *hfid_p;
+  char *class_name = NULL;
+  int avg_length = 0;
+  char buf[512] = { 0 };
+  char temp[64] = { 0 };
+  char *buf_p, *end;
+
+  ctx = (HEAP_SHOW_SCAN_CTX *) ptr;
+
+  if (cursor >= ctx->hfids_count)
+    {
+      return S_END;
+    }
+
+  hfid_p = &ctx->hfids[cursor];
+
+  vpid.volid = hfid_p->vfid.volid;
+  vpid.pageid = hfid_p->hpgid;
+
+  pgptr = heap_scan_pb_lock_and_fetch (thread_p, &vpid, OLD_PAGE, S_LOCK,
+				       NULL);
+  if (pgptr == NULL)
+    {
+      error = er_errid ();
+      goto cleanup;
+    }
+
+  if (spage_get_record (pgptr, HEAP_HEADER_AND_CHAIN_SLOTID, &hdr_recdes,
+			PEEK) != S_SUCCESS)
+    {
+      error = ER_SP_INVALID_HEADER;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 3, vpid.pageid,
+	      fileio_get_volume_label (vpid.volid, PEEK), 0);
+      goto cleanup;
+    }
+
+  heap_hdr = (HEAP_HDR_STATS *) hdr_recdes.data;
+
+  class_name = heap_get_class_name (thread_p, &(heap_hdr->class_oid));
+  if (class_name == NULL)
+    {
+      error = er_errid ();
+      goto cleanup;
+    }
+
+  idx = 0;
+
+  /* Class_name */
+  error = db_make_string_copy (out_values[idx], class_name);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  /* Class_oid */
+  oid_to_string (buf, sizeof (buf), &heap_hdr->class_oid);
+  error = db_make_string_copy (out_values[idx], buf);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  /* HFID */
+  db_make_int (out_values[idx], hfid_p->vfid.volid);
+  idx++;
+
+  db_make_int (out_values[idx], hfid_p->vfid.fileid);
+  idx++;
+
+  db_make_int (out_values[idx], hfid_p->hpgid);
+  idx++;
+
+  /* Overflow_vfid */
+  vfid_to_string (buf, sizeof (buf), &heap_hdr->ovf_vfid);
+  error = db_make_string_copy (out_values[idx], buf);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  /* Next_vpid */
+  vpid_to_string (buf, sizeof (buf), &heap_hdr->next_vpid);
+  error = db_make_string_copy (out_values[idx], buf);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  /* Unfill space */
+  db_make_int (out_values[idx], heap_hdr->unfill_space);
+  idx++;
+
+  /* Estimated */
+  db_make_bigint (out_values[idx], heap_hdr->estimates.num_pages);
+  idx++;
+
+  db_make_bigint (out_values[idx], heap_hdr->estimates.num_recs);
+  idx++;
+
+  avg_length = ((heap_hdr->estimates.num_recs > 0)
+		? (int) ((heap_hdr->estimates.recs_sumlen /
+			  (float) heap_hdr->estimates.num_recs) + 0.9) : 0);
+  db_make_int (out_values[idx], avg_length);
+  idx++;
+
+  db_make_int (out_values[idx], heap_hdr->estimates.num_high_best);
+  idx++;
+
+  db_make_int (out_values[idx], heap_hdr->estimates.num_other_high_best);
+  idx++;
+
+  db_make_int (out_values[idx], heap_hdr->estimates.head);
+  idx++;
+
+  /* Estimates_best_list */
+  buf_p = buf;
+  end = buf + sizeof (buf);
+  for (i = 0; i < HEAP_NUM_BEST_SPACESTATS; i++)
+    {
+      if (i > 0)
+	{
+	  if (fill_string_to_buffer (&buf_p, end, ", ") == -1)
+	    {
+	      break;
+	    }
+	}
+
+      heap_bestspace_to_string (temp, sizeof (temp),
+				heap_hdr->estimates.best + i);
+      if (fill_string_to_buffer (&buf_p, end, temp) == -1)
+	{
+	  break;
+	}
+    }
+
+  error = db_make_string_copy (out_values[idx], buf);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  db_make_int (out_values[idx], heap_hdr->estimates.num_second_best);
+  idx++;
+
+  db_make_int (out_values[idx], heap_hdr->estimates.head_second_best);
+  idx++;
+
+  db_make_int (out_values[idx], heap_hdr->estimates.tail_second_best);
+  idx++;
+
+  db_make_int (out_values[idx], heap_hdr->estimates.num_substitutions);
+  idx++;
+
+  /* Estimates_second_best */
+  buf_p = buf;
+  end = buf + sizeof (buf);
+  for (i = 0; i < HEAP_NUM_BEST_SPACESTATS; i++)
+    {
+      if (i > 0)
+	{
+	  if (fill_string_to_buffer (&buf_p, end, ", ") == -1)
+	    {
+	      break;
+	    }
+	}
+
+      vpid_to_string (temp, sizeof (temp),
+		      heap_hdr->estimates.second_best + i);
+      if (fill_string_to_buffer (&buf_p, end, temp) == -1)
+	{
+	  break;
+	}
+    }
+
+  error = db_make_string_copy (out_values[idx], buf);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  vpid_to_string (buf, sizeof (buf), &heap_hdr->estimates.last_vpid);
+  error = db_make_string_copy (out_values[idx], buf);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  vpid_to_string (buf, sizeof (buf), &heap_hdr->estimates.full_search_vpid);
+  error = db_make_string_copy (out_values[idx], buf);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  assert (idx == out_cnt);
+
+cleanup:
+
+  if (pgptr != NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, pgptr);
+    }
+
+  if (class_name != NULL)
+    {
+      free_and_init (class_name);
+    }
+
+  return (error == NO_ERROR) ? S_SUCCESS : S_ERROR;
+}
+
+/*
+ * heap_capacity_next_scan () - next scan function for
+ *                              'show (all) heap capacity'
+ *   return: NO_ERROR, or ER_code
+ *   thread_p(in):
+ *   cursor(in):
+ *   out_values(in/out):
+ *   out_cnt(in):
+ *   ptr(in): 'show heap' context
+ */
+SCAN_CODE
+heap_capacity_next_scan (THREAD_ENTRY * thread_p, int cursor,
+			 DB_VALUE ** out_values, int out_cnt, void *ptr)
+{
+  int error = NO_ERROR;
+  HEAP_SHOW_SCAN_CTX *ctx = NULL;
+  HFID *hfid_p = NULL;
+  FILE_HEAP_DES hfdes;
+  HEAP_CACHE_ATTRINFO attr_info;
+  OR_CLASSREP *repr = NULL;
+  char *class_name = NULL;
+  char class_oid_str[64] = { 0 };
+  bool is_heap_attrinfo_started = false;
+  INT64 num_recs = 0;
+  INT64 num_relocated_recs = 0;
+  INT64 num_overflowed_recs = 0;
+  INT64 num_pages = 0;
+  int avg_rec_len = 0;
+  int avg_free_space_per_page = 0;
+  int avg_free_space_without_last_page = 0;
+  int avg_overhead_per_page = 0;
+  int val = 0;
+  int idx = 0;
+
+  ctx = (HEAP_SHOW_SCAN_CTX *) ptr;
+
+  if (cursor >= ctx->hfids_count)
+    {
+      return S_END;
+    }
+
+  hfid_p = &ctx->hfids[cursor];
+
+  error = heap_get_capacity (thread_p, hfid_p, &num_recs,
+			     &num_relocated_recs, &num_overflowed_recs,
+			     &num_pages, &avg_free_space_per_page,
+			     &avg_free_space_without_last_page,
+			     &avg_rec_len, &avg_overhead_per_page);
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  if (file_get_descriptor (thread_p, &hfid_p->vfid, &hfdes,
+			   sizeof (FILE_HEAP_DES)) != sizeof (FILE_HEAP_DES))
+    {
+      error = ER_FILE_INCONSISTENT_HEADER;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 3,
+	      hfid_p->vfid.volid, hfid_p->vfid.fileid,
+	      fileio_get_volume_label (hfid_p->vfid.volid, PEEK));
+      goto cleanup;
+    }
+
+  error = heap_attrinfo_start (thread_p, &hfdes.class_oid, -1,
+			       NULL, &attr_info);
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  is_heap_attrinfo_started = true;
+
+  repr = attr_info.last_classrepr;
+  if (repr == NULL)
+    {
+      error = ER_HEAP_UNKNOWN_OBJECT;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 3,
+	      hfdes.class_oid.volid, hfdes.class_oid.pageid,
+	      hfdes.class_oid.slotid);
+      goto cleanup;
+    }
+
+  class_name = heap_get_class_name (thread_p, &hfdes.class_oid);
+  if (class_name == NULL)
+    {
+      error = er_errid ();
+      goto cleanup;
+    }
+
+  idx = 0;
+
+  error = db_make_string_copy (out_values[idx], class_name);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  oid_to_string (class_oid_str, sizeof (class_oid_str), &hfdes.class_oid);
+  error = db_make_string_copy (out_values[idx], class_oid_str);
+  idx++;
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  db_make_int (out_values[idx], hfid_p->vfid.volid);
+  idx++;
+
+  db_make_int (out_values[idx], hfid_p->vfid.fileid);
+  idx++;
+
+  db_make_int (out_values[idx], hfid_p->hpgid);
+  idx++;
+
+  db_make_bigint (out_values[idx], num_recs);
+  idx++;
+
+  db_make_bigint (out_values[idx], num_relocated_recs);
+  idx++;
+
+  db_make_bigint (out_values[idx], num_overflowed_recs);
+  idx++;
+
+  db_make_bigint (out_values[idx], num_pages);
+  idx++;
+
+  db_make_int (out_values[idx], avg_rec_len);
+  idx++;
+
+  db_make_int (out_values[idx], avg_free_space_per_page);
+  idx++;
+
+  db_make_int (out_values[idx], avg_free_space_without_last_page);
+  idx++;
+
+  db_make_int (out_values[idx], avg_overhead_per_page);
+  idx++;
+
+  db_make_int (out_values[idx], repr->id);
+  idx++;
+
+  db_make_int (out_values[idx], repr->n_attributes);
+  idx++;
+
+  val = repr->n_attributes - repr->n_variable
+    - repr->n_shared_attrs - repr->n_class_attrs;
+  db_make_int (out_values[idx], val);
+  idx++;
+
+  db_make_int (out_values[idx], repr->n_variable);
+  idx++;
+
+  db_make_int (out_values[idx], repr->n_shared_attrs);
+  idx++;
+
+  db_make_int (out_values[idx], repr->n_class_attrs);
+  idx++;
+
+  db_make_int (out_values[idx], repr->fixed_length);
+  idx++;
+
+  assert (idx == out_cnt);
+
+cleanup:
+
+  if (class_name != NULL)
+    {
+      free_and_init (class_name);
+    }
+
+  if (is_heap_attrinfo_started)
+    {
+      heap_attrinfo_end (thread_p, &attr_info);
+    }
+
+  return (error == NO_ERROR) ? S_SUCCESS : S_ERROR;
+}
+
+/*
+ *  heap_header_capacity_end_scan() - end scan function of
+ *                                    'show (all) heap ...'
+ *   return: NO_ERROR, or ER_code
+ *   thread_p(in):
+ *   ptr(in/out): 'show heap' context
+ */
+int
+heap_header_capacity_end_scan (THREAD_ENTRY * thread_p, void **ptr)
+{
+  HEAP_SHOW_SCAN_CTX *ctx;
+
+  ctx = (HEAP_SHOW_SCAN_CTX *) (*ptr);
+
+  if (ctx == NULL)
+    {
+      return NO_ERROR;
+    }
+
+  if (ctx->hfids != NULL)
+    {
+      db_private_free (thread_p, ctx->hfids);
+    }
+
+  db_private_free (thread_p, ctx);
+  *ptr = NULL;
+
+  return NO_ERROR;
+}
+
+static char *
+heap_bestspace_to_string (char *buf, int buf_size, const HEAP_BESTSPACE * hb)
+{
+  snprintf (buf, buf_size, "((%d|%d), %d)",
+	    hb->vpid.volid, hb->vpid.pageid, hb->freespace);
+  buf[buf_size - 1] = '\0';
+
+  return buf;
+}
+
+/*
+ * fill_string_to_buffer () - fill string into buffer
+ *
+ *   -----------------------------
+ *   |        buffer             |
+ *   -----------------------------
+ *   ^                           ^
+ *   |                           |
+ *   start                       end
+ *
+ *   return: the count of characters (not include '\0') which has been
+ *           filled into buffer; -1 means error.
+ *   start(in/out): After filling, start move to the '\0' position.
+ *   end(in): The first unavailble position.
+ *   str(in):
+ */
+static int
+fill_string_to_buffer (char **start, char *end, const char *str)
+{
+  int len = strlen (str);
+
+  if (*start + len >= end)
+    {
+      return -1;
+    }
+
+  memcpy (*start, str, len);
+  *start += len;
+  **start = '\0';
+
+  return len;
 }
 
 /*
@@ -29421,618 +30030,4 @@ heap_rv_mvcc_redo_delete_relocation (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
       /* update case */
       return heap_rv_undoredo_update (thread_p, rcv);
     }
-}
-
-/*
- * heap_header_capacity_start_scan () - start scan function for 'show heap ...'
- *   return: NO_ERROR, or ER_code
- *   thread_p(in): thread entry
- *   show_type(in):
- *   arg_values(in):
- *   arg_cnt(in):
- *   ptr(in/out): 'show heap' context
- */
-int
-heap_header_capacity_start_scan (THREAD_ENTRY * thread_p, int show_type,
-				 DB_VALUE ** arg_values, int arg_cnt,
-				 void **ptr)
-{
-  int error = NO_ERROR;
-  char *class_name = NULL;
-  DB_CLASS_PARTITION_TYPE partition_type = DB_NOT_PARTITIONED_CLASS;
-  OID class_oid;
-  LC_FIND_CLASSNAME status;
-  HEAP_SHOW_SCAN_CTX *ctx = NULL;
-  OR_PARTITION *parts = NULL;
-  int i = 0;
-  int parts_count = 0;
-  bool is_all = false;
-
-  assert (arg_cnt == 2);
-  assert (DB_VALUE_TYPE (arg_values[0]) == DB_TYPE_CHAR);
-  assert (DB_VALUE_TYPE (arg_values[1]) == DB_TYPE_INTEGER);
-
-  *ptr = NULL;
-
-  class_name = db_get_string (arg_values[0]);
-
-  partition_type = (DB_CLASS_PARTITION_TYPE) db_get_int (arg_values[1]);
-
-  ctx = (HEAP_SHOW_SCAN_CTX *) db_private_alloc (thread_p,
-						 sizeof (HEAP_SHOW_SCAN_CTX));
-  if (ctx == NULL)
-    {
-      error = er_errid ();
-      goto cleanup;
-    }
-  memset (ctx, 0, sizeof (HEAP_SHOW_SCAN_CTX));
-
-  status = xlocator_find_class_oid (thread_p, class_name, &class_oid, S_LOCK);
-  if (status == LC_CLASSNAME_ERROR || status == LC_CLASSNAME_DELETED)
-    {
-      error = ER_LC_UNKNOWN_CLASSNAME;
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, class_name);
-      goto cleanup;
-    }
-
-  is_all = (show_type == SHOWSTMT_ALL_HEAP_HEADER
-	    || show_type == SHOWSTMT_ALL_HEAP_CAPACITY);
-
-  if (is_all && partition_type == DB_PARTITIONED_CLASS)
-    {
-      error = heap_get_class_partitions (thread_p, &class_oid, &parts,
-					 &parts_count);
-      if (error != NO_ERROR)
-	{
-	  goto cleanup;
-	}
-
-      ctx->hfids = (HFID *) db_private_alloc (thread_p,
-					      parts_count * sizeof (HFID));
-      if (ctx->hfids == NULL)
-	{
-	  error = er_errid ();
-	  goto cleanup;
-	}
-
-      for (i = 0; i < parts_count; i++)
-	{
-	  HFID_COPY (&ctx->hfids[i], &parts[i].class_hfid);
-	}
-
-      ctx->hfids_count = parts_count;
-    }
-  else
-    {
-      ctx->hfids = (HFID *) db_private_alloc (thread_p, sizeof (HFID));
-      if (ctx->hfids == NULL)
-	{
-	  error = er_errid ();
-	  goto cleanup;
-	}
-
-      error = heap_get_hfid_from_class_oid (thread_p, &class_oid,
-					    &ctx->hfids[0]);
-      if (error != NO_ERROR)
-	{
-	  goto cleanup;
-	}
-
-      ctx->hfids_count = 1;
-    }
-
-  *ptr = ctx;
-  ctx = NULL;
-
-cleanup:
-
-  if (parts != NULL)
-    {
-      heap_clear_partition_info (thread_p, parts, parts_count);
-    }
-
-  if (ctx != NULL)
-    {
-      if (ctx->hfids != NULL)
-	{
-	  db_private_free (thread_p, ctx->hfids);
-	}
-
-      db_private_free_and_init (thread_p, ctx);
-    }
-
-  return error;
-}
-
-/*
- * heap_header_next_scan () - next scan function for
- *                            'show (all) heap header'
- *   return: NO_ERROR, or ER_code
- *   thread_p(in):
- *   cursor(in):
- *   out_values(in/out):
- *   out_cnt(in):
- *   ptr(in): 'show heap' context
- */
-SCAN_CODE
-heap_header_next_scan (THREAD_ENTRY * thread_p, int cursor,
-		       DB_VALUE ** out_values, int out_cnt, void *ptr)
-{
-  int error = NO_ERROR;
-  HEAP_SHOW_SCAN_CTX *ctx = NULL;
-  VPID vpid;
-  HEAP_HDR_STATS *heap_hdr = NULL;
-  RECDES hdr_recdes;
-  int i = 0;
-  int idx = 0;
-  PAGE_PTR pgptr = NULL;
-  HFID *hfid_p;
-  char *class_name = NULL;
-  int avg_length = 0;
-  char buf[512] = { 0 };
-  char temp[64] = { 0 };
-  char *buf_p, *end;
-
-  ctx = (HEAP_SHOW_SCAN_CTX *) ptr;
-
-  if (cursor >= ctx->hfids_count)
-    {
-      return S_END;
-    }
-
-  hfid_p = &ctx->hfids[cursor];
-
-  vpid.volid = hfid_p->vfid.volid;
-  vpid.pageid = hfid_p->hpgid;
-
-  pgptr = heap_scan_pb_lock_and_fetch (thread_p, &vpid, OLD_PAGE, S_LOCK,
-				       NULL);
-  if (pgptr == NULL)
-    {
-      error = er_errid ();
-      goto cleanup;
-    }
-
-  if (spage_get_record (pgptr, HEAP_HEADER_AND_CHAIN_SLOTID, &hdr_recdes,
-			PEEK) != S_SUCCESS)
-    {
-      error = ER_SP_INVALID_HEADER;
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 3, vpid.pageid,
-	      fileio_get_volume_label (vpid.volid, PEEK), 0);
-      goto cleanup;
-    }
-
-  heap_hdr = (HEAP_HDR_STATS *) hdr_recdes.data;
-
-  class_name = heap_get_class_name (thread_p, &(heap_hdr->class_oid));
-  if (class_name == NULL)
-    {
-      error = er_errid ();
-      goto cleanup;
-    }
-
-  idx = 0;
-
-  /* Class_name */
-  error = db_make_string_copy (out_values[idx], class_name);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  /* Class_oid */
-  oid_to_string (buf, sizeof (buf), &heap_hdr->class_oid);
-  error = db_make_string_copy (out_values[idx], buf);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  /* HFID */
-  db_make_int (out_values[idx], hfid_p->vfid.volid);
-  idx++;
-
-  db_make_int (out_values[idx], hfid_p->vfid.fileid);
-  idx++;
-
-  db_make_int (out_values[idx], hfid_p->hpgid);
-  idx++;
-
-  /* Overflow_vfid */
-  vfid_to_string (buf, sizeof (buf), &heap_hdr->ovf_vfid);
-  error = db_make_string_copy (out_values[idx], buf);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  /* Next_vpid */
-  vpid_to_string (buf, sizeof (buf), &heap_hdr->next_vpid);
-  error = db_make_string_copy (out_values[idx], buf);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  /* Unfill space */
-  db_make_int (out_values[idx], heap_hdr->unfill_space);
-  idx++;
-
-  /* Estimated */
-  db_make_bigint (out_values[idx], heap_hdr->estimates.num_pages);
-  idx++;
-
-  db_make_bigint (out_values[idx], heap_hdr->estimates.num_recs);
-  idx++;
-
-  avg_length = ((heap_hdr->estimates.num_recs > 0)
-		? (int) ((heap_hdr->estimates.recs_sumlen /
-			  (float) heap_hdr->estimates.num_recs) + 0.9) : 0);
-  db_make_int (out_values[idx], avg_length);
-  idx++;
-
-  db_make_int (out_values[idx], heap_hdr->estimates.num_high_best);
-  idx++;
-
-  db_make_int (out_values[idx], heap_hdr->estimates.num_other_high_best);
-  idx++;
-
-  db_make_int (out_values[idx], heap_hdr->estimates.head);
-  idx++;
-
-  /* Estimates_best_list */
-  buf_p = buf;
-  end = buf + sizeof (buf);
-  for (i = 0; i < HEAP_NUM_BEST_SPACESTATS; i++)
-    {
-      if (i > 0)
-	{
-	  if (fill_string_to_buffer (&buf_p, end, ", ") == -1)
-	    {
-	      break;
-	    }
-	}
-
-      heap_bestspace_to_string (temp, sizeof (temp),
-				heap_hdr->estimates.best + i);
-      if (fill_string_to_buffer (&buf_p, end, temp) == -1)
-	{
-	  break;
-	}
-    }
-
-  error = db_make_string_copy (out_values[idx], buf);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  db_make_int (out_values[idx], heap_hdr->estimates.num_second_best);
-  idx++;
-
-  db_make_int (out_values[idx], heap_hdr->estimates.head_second_best);
-  idx++;
-
-  db_make_int (out_values[idx], heap_hdr->estimates.tail_second_best);
-  idx++;
-
-  db_make_int (out_values[idx], heap_hdr->estimates.num_substitutions);
-  idx++;
-
-  /* Estimates_second_best */
-  buf_p = buf;
-  end = buf + sizeof (buf);
-  for (i = 0; i < HEAP_NUM_BEST_SPACESTATS; i++)
-    {
-      if (i > 0)
-	{
-	  if (fill_string_to_buffer (&buf_p, end, ", ") == -1)
-	    {
-	      break;
-	    }
-	}
-
-      vpid_to_string (temp, sizeof (temp),
-		      heap_hdr->estimates.second_best + i);
-      if (fill_string_to_buffer (&buf_p, end, temp) == -1)
-	{
-	  break;
-	}
-    }
-
-  error = db_make_string_copy (out_values[idx], buf);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  vpid_to_string (buf, sizeof (buf), &heap_hdr->estimates.last_vpid);
-  error = db_make_string_copy (out_values[idx], buf);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  vpid_to_string (buf, sizeof (buf), &heap_hdr->estimates.full_search_vpid);
-  error = db_make_string_copy (out_values[idx], buf);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  assert (idx == out_cnt);
-
-cleanup:
-
-  if (pgptr != NULL)
-    {
-      pgbuf_unfix_and_init (thread_p, pgptr);
-    }
-
-  if (class_name != NULL)
-    {
-      free_and_init (class_name);
-    }
-
-  return (error == NO_ERROR) ? S_SUCCESS : S_ERROR;
-}
-
-/*
- * heap_capacity_next_scan () - next scan function for
- *                              'show (all) heap capacity'
- *   return: NO_ERROR, or ER_code
- *   thread_p(in):
- *   cursor(in):
- *   out_values(in/out):
- *   out_cnt(in):
- *   ptr(in): 'show heap' context
- */
-SCAN_CODE
-heap_capacity_next_scan (THREAD_ENTRY * thread_p, int cursor,
-			 DB_VALUE ** out_values, int out_cnt, void *ptr)
-{
-  int error = NO_ERROR;
-  HEAP_SHOW_SCAN_CTX *ctx = NULL;
-  HFID *hfid_p = NULL;
-  FILE_HEAP_DES hfdes;
-  HEAP_CACHE_ATTRINFO attr_info;
-  OR_CLASSREP *repr = NULL;
-  char *class_name = NULL;
-  char class_oid_str[64] = { 0 };
-  bool is_heap_attrinfo_started = false;
-  INT64 num_recs = 0;
-  INT64 num_relocated_recs = 0;
-  INT64 num_overflowed_recs = 0;
-  INT64 num_pages = 0;
-  int avg_rec_len = 0;
-  int avg_free_space_per_page = 0;
-  int avg_free_space_without_last_page = 0;
-  int avg_overhead_per_page = 0;
-  int val = 0;
-  int idx = 0;
-
-  ctx = (HEAP_SHOW_SCAN_CTX *) ptr;
-
-  if (cursor >= ctx->hfids_count)
-    {
-      return S_END;
-    }
-
-  hfid_p = &ctx->hfids[cursor];
-
-  error = heap_get_capacity (thread_p, hfid_p, &num_recs,
-			     &num_relocated_recs, &num_overflowed_recs,
-			     &num_pages, &avg_free_space_per_page,
-			     &avg_free_space_without_last_page,
-			     &avg_rec_len, &avg_overhead_per_page);
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  if (file_get_descriptor (thread_p, &hfid_p->vfid, &hfdes,
-			   sizeof (FILE_HEAP_DES)) != sizeof (FILE_HEAP_DES))
-    {
-      error = ER_FILE_INCONSISTENT_HEADER;
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 3,
-	      hfid_p->vfid.volid, hfid_p->vfid.fileid,
-	      fileio_get_volume_label (hfid_p->vfid.volid, PEEK));
-      goto cleanup;
-    }
-
-  error = heap_attrinfo_start (thread_p, &hfdes.class_oid, -1,
-			       NULL, &attr_info);
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  is_heap_attrinfo_started = true;
-
-  repr = attr_info.last_classrepr;
-  if (repr == NULL)
-    {
-      error = ER_HEAP_UNKNOWN_OBJECT;
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 3,
-	      hfdes.class_oid.volid, hfdes.class_oid.pageid,
-	      hfdes.class_oid.slotid);
-      goto cleanup;
-    }
-
-  class_name = heap_get_class_name (thread_p, &hfdes.class_oid);
-  if (class_name == NULL)
-    {
-      error = er_errid ();
-      goto cleanup;
-    }
-
-  idx = 0;
-
-  error = db_make_string_copy (out_values[idx], class_name);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  oid_to_string (class_oid_str, sizeof (class_oid_str), &hfdes.class_oid);
-  error = db_make_string_copy (out_values[idx], class_oid_str);
-  idx++;
-  if (error != NO_ERROR)
-    {
-      goto cleanup;
-    }
-
-  db_make_int (out_values[idx], hfid_p->vfid.volid);
-  idx++;
-
-  db_make_int (out_values[idx], hfid_p->vfid.fileid);
-  idx++;
-
-  db_make_int (out_values[idx], hfid_p->hpgid);
-  idx++;
-
-  db_make_bigint (out_values[idx], num_recs);
-  idx++;
-
-  db_make_bigint (out_values[idx], num_relocated_recs);
-  idx++;
-
-  db_make_bigint (out_values[idx], num_overflowed_recs);
-  idx++;
-
-  db_make_bigint (out_values[idx], num_pages);
-  idx++;
-
-  db_make_int (out_values[idx], avg_rec_len);
-  idx++;
-
-  db_make_int (out_values[idx], avg_free_space_per_page);
-  idx++;
-
-  db_make_int (out_values[idx], avg_free_space_without_last_page);
-  idx++;
-
-  db_make_int (out_values[idx], avg_overhead_per_page);
-  idx++;
-
-  db_make_int (out_values[idx], repr->id);
-  idx++;
-
-  db_make_int (out_values[idx], repr->n_attributes);
-  idx++;
-
-  val = repr->n_attributes - repr->n_variable
-    - repr->n_shared_attrs - repr->n_class_attrs;
-  db_make_int (out_values[idx], val);
-  idx++;
-
-  db_make_int (out_values[idx], repr->n_variable);
-  idx++;
-
-  db_make_int (out_values[idx], repr->n_shared_attrs);
-  idx++;
-
-  db_make_int (out_values[idx], repr->n_class_attrs);
-  idx++;
-
-  db_make_int (out_values[idx], repr->fixed_length);
-  idx++;
-
-  assert (idx == out_cnt);
-
-cleanup:
-
-  if (class_name != NULL)
-    {
-      free_and_init (class_name);
-    }
-
-  if (is_heap_attrinfo_started)
-    {
-      heap_attrinfo_end (thread_p, &attr_info);
-    }
-
-  return (error == NO_ERROR) ? S_SUCCESS : S_ERROR;
-}
-
-/*
- *  heap_header_capacity_end_scan() - end scan function of
- *                                    'show (all) heap ...'
- *   return: NO_ERROR, or ER_code
- *   thread_p(in):
- *   ptr(in/out): 'show heap' context
- */
-int
-heap_header_capacity_end_scan (THREAD_ENTRY * thread_p, void **ptr)
-{
-  HEAP_SHOW_SCAN_CTX *ctx;
-
-  ctx = (HEAP_SHOW_SCAN_CTX *) (*ptr);
-
-  if (ctx == NULL)
-    {
-      return NO_ERROR;
-    }
-
-  if (ctx->hfids != NULL)
-    {
-      db_private_free (thread_p, ctx->hfids);
-    }
-
-  db_private_free (thread_p, ctx);
-  *ptr = NULL;
-
-  return NO_ERROR;
-}
-
-static char *
-heap_bestspace_to_string (char *buf, int buf_size, const HEAP_BESTSPACE * hb)
-{
-  snprintf (buf, buf_size, "((%d|%d), %d)",
-	    hb->vpid.volid, hb->vpid.pageid, hb->freespace);
-  buf[buf_size - 1] = '\0';
-
-  return buf;
-}
-
-/*
- * fill_string_to_buffer () - fill string into buffer
- *
- *   -----------------------------
- *   |        buffer             |
- *   -----------------------------
- *   ^                           ^
- *   |                           |
- *   start                       end
- *
- *   return: the count of characters (not include '\0') which has been
- *           filled into buffer; -1 means error.
- *   start(in/out): After filling, start move to the '\0' position.
- *   end(in): The first unavailble position.
- *   str(in):
- */
-static int
-fill_string_to_buffer (char **start, char *end, const char *str)
-{
-  int len = strlen (str);
-
-  if (*start + len >= end)
-    {
-      return -1;
-    }
-
-  memcpy (*start, str, len);
-  *start += len;
-  **start = '\0';
-
-  return len;
 }
