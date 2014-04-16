@@ -1569,8 +1569,7 @@ int
 overflow_rv_newpage_delete_relocated_redo (THREAD_ENTRY * thread_p,
 					   LOG_RCV * rcv)
 {
-  char data_buffer[IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE
-		   + MAX_ALIGNMENT];
+  char data_buffer[2 * IO_DEFAULT_PAGE_SIZE];
   RECDES mvcc_delete_recdes, recdes;
   OID *mvcc_delete_oid;
   VPID mvcc_delete_vpid;
@@ -1601,15 +1600,16 @@ overflow_rv_newpage_delete_relocated_redo (THREAD_ENTRY * thread_p,
   copy_length = *(int *) data;
   data += OR_INT_SIZE;
 
-  assert ((int) (data - rcv->data) <= (OR_OID_SIZE + OR_INT_SIZE));
-  if ((int) (data - rcv->data) >= OR_OID_SIZE)
+  assert ((rcv->length - (int) (data - rcv->data))
+	  <= (OR_OID_SIZE + OR_INT_SIZE));
+  if ((rcv->length - (int) (data - rcv->data)) >= OR_OID_SIZE)
     {
       next_version = (OID *) data;
       data += OR_OID_SIZE;
     }
 
-  assert ((int) (data - rcv->data) <= (OR_INT_SIZE));
-  if ((int) (data - rcv->data) == OR_INT_SIZE)
+  assert ((rcv->length - (int) (data - rcv->data)) <= (OR_INT_SIZE));
+  if ((rcv->length - (int) (data - rcv->data)) == OR_INT_SIZE)
     {
       fixed_part_length = (int *) data;
       data += OR_INT_SIZE;
@@ -1700,7 +1700,6 @@ overflow_rv_newpage_delete_relocated_redo (THREAD_ENTRY * thread_p,
     }
 
   memcpy (data, recdes.data + copy_position, copy_length);
-  pgbuf_unfix_and_init (thread_p, mvcc_delete_page_ptr);
 
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
 

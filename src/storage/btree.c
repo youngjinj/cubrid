@@ -108,13 +108,17 @@
 /* move the data inside the record */
 #define BTREE_LEAF_MOVE_INSIDE_RECORD(rec, dest_offset, src_offset)  \
   do {	\
-    assert (mvcc_Enabled == true && rec != NULL && (dest_offset) >= 0 \
-	    && (src_offset) >= 0); \
+    assert ((rec) != NULL && (dest_offset) >= 0 && (src_offset) >= 0); \
+    assert (((rec)->length - (src_offset)) >= 0);  \
+    assert (((rec)->area_size <= 0) || ((rec)->area_size >= (rec)->length));  \
+    assert (((rec)->area_size <= 0) \
+	    || (((rec)->length + ((dest_offset) - (src_offset)))  \
+		<= (rec)->area_size));  \
     if ((dest_offset) != (src_offset))  \
     { \
-      memmove (rec->data + (dest_offset), rec->data + (src_offset),	\
-	       rec->length - (src_offset)); \
-      rec->length = rec->length + ((dest_offset) - (src_offset)); \
+      memmove ((rec)->data + (dest_offset), (rec)->data + (src_offset),	\
+	       (rec)->length - (src_offset)); \
+      (rec)->length = (rec)->length + ((dest_offset) - (src_offset)); \
     } \
   }while (0)
 
@@ -4662,6 +4666,16 @@ xbtree_delete_index (THREAD_ENTRY * thread_p, BTID * btid)
   btree_get_root_ovfid (P, &ovfid);
   pgbuf_unfix_and_init (thread_p, P);
 
+  /* mark the statistics associated with deelted B-tree as deleted */
+  unique_stats =
+    logtb_mvcc_find_class_oid_btid_stats (thread_p,
+					  &root_header->topclass_oid, btid,
+					  true);
+  if (unique_stats != NULL)
+    {
+      unique_stats->deleted = true;
+    }
+
   btid->root_pageid = NULL_PAGEID;
 
   /*
@@ -4677,16 +4691,6 @@ xbtree_delete_index (THREAD_ENTRY * thread_p, BTID * btid)
   if (!VFID_ISNULL (&ovfid))
     {
       ret = file_destroy (thread_p, &ovfid);
-    }
-
-  /* mark the statistics associated with deleted B-tree as deleted */
-  unique_stats =
-    logtb_mvcc_find_class_oid_btid_stats (thread_p,
-					  &root_header->topclass_oid, btid,
-					  true);
-  if (unique_stats != NULL)
-    {
-      unique_stats->deleted = true;
     }
 
   return ret;
@@ -25766,7 +25770,7 @@ btree_verify_leaf_node (THREAD_ENTRY * thread_p, BTID_INT * btid,
 		buf.ptr +=
 		  BTREE_LEAF_GET_MVCC_SIZE_FROM_LEAF_OID_FLAG (mvcc_flags);
 	      }
-	    
+
 	    if (oid.pageid <= NULL_PAGEID && oid.volid <= NULL_VOLID
 		&& oid.slotid <= NULL_SLOTID)
 	      {

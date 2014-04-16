@@ -683,6 +683,7 @@ log_recovery (THREAD_ENTRY * thread_p, int ismedia_crash, time_t * stopat)
   INT64 num_redo_log_records;
 
   assert (LOG_CS_OWN_WRITE_MODE (thread_p));
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
 
   /* Save the transaction index and find the transaction descriptor */
 

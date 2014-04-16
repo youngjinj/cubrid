@@ -55,18 +55,21 @@
 /* simple macro to calculate minimum bytes to contain given bits */
 #define BITS_TO_BYTES(bit_cnt)		(((bit_cnt) + 7) / 8)
 
-/* TO DO - use this function in btree to */
 /* move the data inside the record */
 #define HEAP_MOVE_INSIDE_RECORD(rec, dest_offset, src_offset)  \
   do {	\
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true && rec != NULL \
-	  && (dest_offset) >= 0 \
-  && (src_offset) >= 0); \
+  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true && (rec) != NULL \
+	  && (dest_offset) >= 0 && (src_offset) >= 0); \
+  assert (((rec)->length - (src_offset)) >= 0);  \
+  assert (((rec)->area_size <= 0) || ((rec)->area_size >= (rec)->length));  \
+  assert (((rec)->area_size <= 0) \
+	  || (((rec)->length + ((dest_offset) - (src_offset)))	\
+	      <= (rec)->area_size));  \
   if ((dest_offset) != (src_offset))  \
     { \
-    memmove (rec->data + (dest_offset), rec->data + (src_offset),	\
-    rec->length - (src_offset)); \
-    rec->length = rec->length + ((dest_offset) - (src_offset)); \
+    memmove ((rec)->data + (dest_offset), (rec)->data + (src_offset),	\
+	     (rec)->length - (src_offset)); \
+    (rec)->length = (rec)->length + ((dest_offset) - (src_offset)); \
     } \
   }while (0)
 
