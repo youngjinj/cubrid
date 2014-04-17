@@ -925,8 +925,6 @@ static int btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p,
 					       int *which_action);
 #endif /* SERVER_MODE */
 
-#if !defined(NDEBUG)
-
 static BTREE_SEARCH
 btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
 				  BTID_INT * btid_int, RECDES * key_recdes,
@@ -990,6 +988,8 @@ static int btree_find_overflow_page (THREAD_ENTRY * thread_p,
 				     PAGE_PTR * ovfl_page,
 				     RECDES * ovfl_copy_rec,
 				     int *ovfl_rec_offset, int oid_size);
+
+#if !defined(NDEBUG)
 
 #define MOD_FACTOR	20000
 

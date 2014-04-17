@@ -3007,6 +3007,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	case S_DOESNT_EXIST:
 	case S_DOESNT_FIT:
 	case S_SUCCESS_CHN_UPTODATE:
+	case S_SNAPSHOT_NOT_SATISFIED:
 	  return SORT_ERROR_OCCURRED;
 
 	case S_SUCCESS:
