@@ -3456,6 +3456,7 @@ ws_chn (MOBJ obj)
 LOCK
 ws_get_lock (MOP mop)
 {
+  mop = ws_mvcc_latest_version (mop);
   return (mop->lock);
 }
 

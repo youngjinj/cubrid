@@ -2212,6 +2212,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
   int max_key_len;
   int rec_length;
   BTREE_OVERFLOW_HEADER *ovf_header = NULL;
+  MVCCID null_mvccid = MVCCID_NULL;
 
   int fixed_mvccid_size = 0;
   MVCC_REC_HEADER mvcc_rec_header, *p_mvcc_rec_header = NULL;
@@ -2500,9 +2501,9 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	      load_args->new_pos += OR_OID_SIZE;
 	      if (mvcc_Enabled && load_args->overflowing)
 		{
-		  OR_PUT_BIGINT (load_args->new_pos, MVCCID_NULL);
+		  OR_PUT_BIGINT (load_args->new_pos, &null_mvccid);
 		  load_args->new_pos += OR_MVCCID_SIZE;
-		  OR_PUT_BIGINT (load_args->new_pos, MVCCID_NULL);
+		  OR_PUT_BIGINT (load_args->new_pos, &null_mvccid);
 		  load_args->new_pos += OR_MVCCID_SIZE;
 
 		  load_args->out_recdes.length += fixed_mvccid_size;
