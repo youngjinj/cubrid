@@ -9364,7 +9364,7 @@ logpb_backup (THREAD_ENTRY * thread_p, int num_perm_vols,
 				 * backup process starts
 				 */
 #if defined(SERVER_MODE)
-  LOG_PAGEID saved_run_nxchkpt_atpageid;
+  LOG_PAGEID saved_run_nxchkpt_atpageid = NULL_PAGEID;
 #endif /* SERVER_MODE */
   FILE *backup_volinfo_fp = NULL;	/* Pointer to backup
 					 * information/directory file
@@ -10051,7 +10051,10 @@ error:
 
 #if defined(SERVER_MODE)
   LOG_CS_ENTER (thread_p);
-  log_Gl.run_nxchkpt_atpageid = saved_run_nxchkpt_atpageid;
+  if (saved_run_nxchkpt_atpageid != NULL_PAGEID)
+    {
+      log_Gl.run_nxchkpt_atpageid = saved_run_nxchkpt_atpageid;
+    }
   log_Gl.backup_in_progress = false;
   LOG_CS_EXIT (thread_p);
 #endif /* SERVER_MODE */
@@ -13282,15 +13285,16 @@ logpb_backup_level_info_to_string (char *buf, int buf_size,
 				   const LOG_HDR_BKUP_LEVEL_INFO * info)
 {
   char time_str[64];
+  time_t time_val = (time_t) info->bkup_attime;
 
-  if (info->bkup_attime == 0)
+  if (time_val == 0)
     {
       snprintf (buf, buf_size, "time: N/A");
       buf[buf_size - 1] = 0;
     }
   else
     {
-      ctime_r (&info->bkup_attime, time_str);
+      ctime_r (&time_val, time_str);
       /* ctime_r() will padding one '\n' character to buffer, we need truncate it */
       time_str[strlen (time_str) - 1] = 0;
       snprintf (buf, buf_size, "time: %s", time_str);

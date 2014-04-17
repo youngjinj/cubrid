@@ -2495,23 +2495,17 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		}		/* no space for the new OID */
 
 	      /* Insert the new oid to the current record and return */
-	      if (load_args->overflowing == true)
-		{
-		  btree_insert_oid_with_order (&load_args->out_recdes,
-					       &this_oid, &this_class_oid,
-					       load_args->btid->unique,
-					       p_mvcc_rec_header);
-		}
-	      else
-		{
-		  OR_PUT_OID (load_args->new_pos, &this_oid);
-		  load_args->out_recdes.length += OR_OID_SIZE;
-		}
-
+	      OR_PUT_OID (load_args->new_pos, &this_oid);
+	      load_args->out_recdes.length += OR_OID_SIZE;
 	      load_args->new_pos += OR_OID_SIZE;
-	      if (mvcc_Enabled == true && load_args->overflowing == true)
+	      if (mvcc_Enabled && load_args->overflowing)
 		{
-		  load_args->new_pos += fixed_mvccid_size;
+		  OR_PUT_BIGINT (load_args->new_pos, MVCCID_NULL);
+		  load_args->new_pos += OR_MVCCID_SIZE;
+		  OR_PUT_BIGINT (load_args->new_pos, MVCCID_NULL);
+		  load_args->new_pos += OR_MVCCID_SIZE;
+
+		  load_args->out_recdes.length += fixed_mvccid_size;
 		}
 	    }			/* same key */
 	  else
@@ -3373,6 +3367,38 @@ compare_driver (const void *first, const void *second, void *arg)
     }
 
   assert (c == DB_LT || c == DB_EQ || c == DB_GT);
+
+  /* compare OID for non-unique index 
+   */
+  if (c == DB_EQ && sort_args->unique_flag == false)
+    {
+      OID first_oid, second_oid;
+
+      mem1 = *(char **) first;
+      mem2 = *(char **) second;
+
+      /* Skip next link */
+      mem1 += sizeof (char *);
+      mem2 += sizeof (char *);
+
+      /* Skip value_has_null */
+      mem1 += OR_INT_SIZE;
+      mem2 += OR_INT_SIZE;
+
+      OR_GET_OID (mem1, &first_oid);
+      OR_GET_OID (mem2, &second_oid);
+
+      assert_release (!OID_EQ (&first_oid, &second_oid));
+
+      if (OID_LT (&first_oid, &second_oid))
+	{
+	  c = DB_LT;
+	}
+      else
+	{
+	  c = DB_GT;
+	}
+    }
 
   return c;
 }

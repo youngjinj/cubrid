@@ -945,6 +945,7 @@ static DB_VALUE *btree_insert (THREAD_ENTRY * thread_p, BTID * btid,
 			       *    So, we add the return value pkyn in order
 			       *    to decide to make a repl. log or not.
 			       */
+
 static BTREE_SEARCH btree_key_find_visible_row (THREAD_ENTRY * thread_p,
 						OID * key_oids,
 						int key_oids_cnt,
@@ -9748,9 +9749,11 @@ btree_merge_root (THREAD_ENTRY * thread_p, BTID_INT * btid, PAGE_PTR P,
   int ret = NO_ERROR;
   char recset_data_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
   LOG_DATA_ADDR addr;
-  int p_level, q_level, r_level;
   BTREE_ROOT_HEADER *root_header = NULL;
   int Q_end, R_start;
+#if !defined(NDEBUG)
+  int p_level, q_level, r_level;
+#endif
 
 #if !defined(NDEBUG)
   if (prm_get_integer_value (PRM_ID_ER_BTREE_DEBUG) & BTREE_DEBUG_DUMP_SIMPLE)
@@ -9962,7 +9965,7 @@ btree_merge_root (THREAD_ENTRY * thread_p, BTID_INT * btid, PAGE_PTR P,
   VPID_SET_NULL (&root_header->node.prev_vpid);
   VPID_SET_NULL (&root_header->node.next_vpid);
   btree_write_default_split_info (&(root_header->node.split_info));
-  root_header->node.node_level = p_level - 1;
+  root_header->node.node_level--;
 
   btree_node_header_redo_log (thread_p, &btid->sys_btid->vfid, P);
 
@@ -11731,6 +11734,7 @@ start_point:
 			  OID_SET_NULL (&saved_N_class_oid);
 			}
 
+		      OID_SET_NULL (&N_oid);
 		      goto curr_key_locking;
 		    }
 		}
@@ -17686,6 +17690,7 @@ start_point:
 	    }
 	  /* no need to lock next key during this call */
 	  next_key_granted_mode = NULL_LOCK;
+	  OID_SET_NULL (&N_oid);
 	  goto curr_key_locking;
 	}
 
@@ -18112,6 +18117,7 @@ curr_key_locking:
 		  /* compute prev_tot_hold_mode and curr_key_many_locks_needed
 		     again, since the current values could be inconsistent.
 		     keep the old current_lock value */
+		  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 		  prev_tot_hold_mode =
 		    lock_get_all_except_transaction (&C_oid, &C_class_oid,
 						     tran_index);
@@ -19861,7 +19867,8 @@ btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
       if (DB_VALUE_TYPE (&key_val_range->key1) == DB_TYPE_MIDXKEY)
 	{
 	  midxkey = DB_PULL_MIDXKEY (&key_val_range->key1);
-	  if (midxkey->domain == NULL || LOG_CHECK_LOG_APPLIER (thread_p))
+	  if (midxkey->domain == NULL || LOG_CHECK_LOG_APPLIER (thread_p)
+	      || LOG_CHECK_LOG_PREFETCHER (thread_p))
 	    {
 	      /*
 	       * The asc/desc properties in midxkey from log_applier may be
@@ -19878,7 +19885,8 @@ btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
       if (DB_VALUE_TYPE (&key_val_range->key2) == DB_TYPE_MIDXKEY)
 	{
 	  midxkey = DB_PULL_MIDXKEY (&key_val_range->key2);
-	  if (midxkey->domain == NULL || LOG_CHECK_LOG_APPLIER (thread_p))
+	  if (midxkey->domain == NULL || LOG_CHECK_LOG_APPLIER (thread_p)
+	      || LOG_CHECK_LOG_PREFETCHER (thread_p))
 	    {
 	      if (midxkey->domain)
 		{
@@ -24056,6 +24064,7 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	    }
 
 	  /* insert the value in the new overflow page */
+	  rec.type = REC_HOME;
 	  rec.length = 0;
 	  btree_append_oid (&rec, &recins->oid);
 	  if (mvcc_Enabled == true)

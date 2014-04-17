@@ -103,6 +103,10 @@ struct analytic_key_metadomain
   ANALYTIC_TYPE *source;
 };
 
+/* metadomain initializer */
+static ANALYTIC_KEY_METADOMAIN analitic_key_metadomain_Initializer =
+  { {0}, 0, 0, {NULL}, 0, {NULL}, false, 0, NULL };
+
 typedef enum
 { SORT_LIST_AFTER_ISCAN = 1,
   SORT_LIST_ORDERBY,
@@ -1374,7 +1378,7 @@ pt_plan_single_table_hq_iterations (PARSER_CONTEXT * parser,
 
   if (!plan && select_node->info.query.q.select.hint != PT_HINT_NONE)
     {
-      PT_NODE *ordered, *use_nl, *use_idx, *use_merge;
+      PT_NODE *ordered, *use_nl, *use_idx, *index_ss, *use_merge;
       PT_HINT_ENUM hint;
       const char *alias_print;
 
@@ -1391,6 +1395,9 @@ pt_plan_single_table_hq_iterations (PARSER_CONTEXT * parser,
       use_idx = select_node->info.query.q.select.use_idx;
       select_node->info.query.q.select.use_idx = NULL;
 
+      index_ss = select_node->info.query.q.select.index_ss;
+      select_node->info.query.q.select.index_ss = NULL;
+
       use_merge = select_node->info.query.q.select.use_merge;
       select_node->info.query.q.select.use_merge = NULL;
 
@@ -1405,6 +1412,7 @@ pt_plan_single_table_hq_iterations (PARSER_CONTEXT * parser,
       select_node->info.query.q.select.ordered = ordered;
       select_node->info.query.q.select.use_nl = use_nl;
       select_node->info.query.q.select.use_idx = use_idx;
+      select_node->info.query.q.select.index_ss = index_ss;
       select_node->info.query.q.select.use_merge = use_merge;
 
       select_node->alias_print = alias_print;
@@ -5158,37 +5166,40 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
 
   spec = pt_make_access_spec (scan_type, access, indexptr,
 			      where_key, where_pred, where_range);
-  if (spec)
+  if (spec == NULL)
     {
-      assert (class_ != NULL);
+      return NULL;
+    }
 
-      if (locator_fetch_class (class_, DB_FETCH_READ) == NULL)
-	{
-	  PT_ERRORc (parser, flat, er_msg ());
-	  return NULL;
-	}
+  assert (class_ != NULL);
 
-      hfid = sm_get_heap (class_);
-      if (hfid == NULL)
-	{
-	  return NULL;
-	}
+  if (locator_fetch_class (class_, DB_FETCH_READ) == NULL)
+    {
+      PT_ERRORc (parser, flat, er_msg ());
+      return NULL;
+    }
 
-      cls_oid = WS_OID (class_);
-      if (cls_oid == NULL || OID_ISNULL (cls_oid))
-	{
-	  return NULL;
-	}
+  hfid = sm_get_heap (class_);
+  if (hfid == NULL)
+    {
+      return NULL;
+    }
 
-      spec->parts = NULL;
-      spec->curent = NULL;
-      if (sm_partitioned_class_type (class_, &spec->pruning_type, NULL, NULL)
-	  != NO_ERROR)
-	{
-	  PT_ERRORc (parser, flat, er_msg ());
-	  return NULL;
-	}
-      spec->pruned = false;
+  cls_oid = WS_OID (class_);
+  if (cls_oid == NULL || OID_ISNULL (cls_oid))
+    {
+      return NULL;
+    }
+
+  spec->parts = NULL;
+  spec->curent = NULL;
+  if (sm_partitioned_class_type (class_, &spec->pruning_type, NULL, NULL)
+      != NO_ERROR)
+    {
+      PT_ERRORc (parser, flat, er_msg ());
+      return NULL;
+    }
+  spec->pruned = false;
 
       spec->s.cls_node.cls_regu_list_key = attr_list_key;
       spec->s.cls_node.cls_regu_list_pred = attr_list_pred;
@@ -5197,67 +5208,66 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
       spec->s.cls_node.cls_output_val_list = output_val_list;
       spec->s.cls_node.cls_regu_val_list = regu_val_list;
       spec->s.cls_node.hfid = *hfid;
-      spec->s.cls_node.cls_oid = *cls_oid;
+  spec->s.cls_node.cls_oid = *cls_oid;
 
-      spec->s.cls_node.num_attrs_key = pt_cnt_attrs (attr_list_key);
-      spec->s.cls_node.attrids_key =
-	regu_int_array_alloc (spec->s.cls_node.num_attrs_key);
+  spec->s.cls_node.num_attrs_key = pt_cnt_attrs (attr_list_key);
+  spec->s.cls_node.attrids_key =
+    regu_int_array_alloc (spec->s.cls_node.num_attrs_key);
 
 
-      assert_release (spec->s.cls_node.num_attrs_key != 0
-		      || (spec->s.cls_node.num_attrs_key == 0
-			  && attr_list_key == NULL));
+  assert_release (spec->s.cls_node.num_attrs_key != 0
+		  || (spec->s.cls_node.num_attrs_key == 0
+		      && attr_list_key == NULL));
 
-      attrnum = 0;
-      /* for multi-column index, need to modify attr_id */
-      pt_fill_in_attrid_array (attr_list_key,
-			       spec->s.cls_node.attrids_key, &attrnum);
-      spec->s.cls_node.cache_key = cache_key;
-      spec->s.cls_node.num_attrs_pred = pt_cnt_attrs (attr_list_pred);
-      spec->s.cls_node.attrids_pred =
-	regu_int_array_alloc (spec->s.cls_node.num_attrs_pred);
-      attrnum = 0;
-      pt_fill_in_attrid_array (attr_list_pred,
-			       spec->s.cls_node.attrids_pred, &attrnum);
-      spec->s.cls_node.cache_pred = cache_pred;
-      spec->s.cls_node.num_attrs_rest = pt_cnt_attrs (attr_list_rest);
-      spec->s.cls_node.attrids_rest =
-	regu_int_array_alloc (spec->s.cls_node.num_attrs_rest);
-      attrnum = 0;
-      pt_fill_in_attrid_array (attr_list_rest,
-			       spec->s.cls_node.attrids_rest, &attrnum);
-      spec->s.cls_node.cache_rest = cache_rest;
-      spec->s.cls_node.num_attrs_range = pt_cnt_attrs (attr_list_range);
-      spec->s.cls_node.attrids_range =
-	regu_int_array_alloc (spec->s.cls_node.num_attrs_range);
-      attrnum = 0;
-      pt_fill_in_attrid_array (attr_list_range,
-			       spec->s.cls_node.attrids_range, &attrnum);
-      spec->s.cls_node.cache_range = cache_range;
-      spec->s.cls_node.schema_type = schema_type;
-      spec->s.cls_node.cache_reserved = cache_recordinfo;
-      if (access == SEQUENTIAL_RECORD_INFO)
-	{
-	  spec->s.cls_node.num_attrs_reserved = HEAP_RECORD_INFO_COUNT;
-	}
-      else if (access == SEQUENTIAL_PAGE_SCAN)
-	{
-	  spec->s.cls_node.num_attrs_reserved = HEAP_PAGE_INFO_COUNT;
-	}
-      else if (access == INDEX_KEY_INFO)
-	{
-	  spec->s.cls_node.num_attrs_reserved = BTREE_KEY_INFO_COUNT;
-	}
-      else if (access == INDEX_NODE_INFO)
-	{
-	  spec->s.cls_node.num_attrs_reserved = BTREE_NODE_INFO_COUNT;
-	}
-      else
-	{
-	  spec->s.cls_node.num_attrs_reserved = 0;
-	}
-      spec->s.cls_node.cls_regu_list_reserved = reserved_val_list;
+  attrnum = 0;
+  /* for multi-column index, need to modify attr_id */
+  pt_fill_in_attrid_array (attr_list_key,
+			   spec->s.cls_node.attrids_key, &attrnum);
+  spec->s.cls_node.cache_key = cache_key;
+  spec->s.cls_node.num_attrs_pred = pt_cnt_attrs (attr_list_pred);
+  spec->s.cls_node.attrids_pred =
+    regu_int_array_alloc (spec->s.cls_node.num_attrs_pred);
+  attrnum = 0;
+  pt_fill_in_attrid_array (attr_list_pred,
+			   spec->s.cls_node.attrids_pred, &attrnum);
+  spec->s.cls_node.cache_pred = cache_pred;
+  spec->s.cls_node.num_attrs_rest = pt_cnt_attrs (attr_list_rest);
+  spec->s.cls_node.attrids_rest =
+    regu_int_array_alloc (spec->s.cls_node.num_attrs_rest);
+  attrnum = 0;
+  pt_fill_in_attrid_array (attr_list_rest,
+			   spec->s.cls_node.attrids_rest, &attrnum);
+  spec->s.cls_node.cache_rest = cache_rest;
+  spec->s.cls_node.num_attrs_range = pt_cnt_attrs (attr_list_range);
+  spec->s.cls_node.attrids_range =
+    regu_int_array_alloc (spec->s.cls_node.num_attrs_range);
+  attrnum = 0;
+  pt_fill_in_attrid_array (attr_list_range, spec->s.cls_node.attrids_range,
+			   &attrnum);
+  spec->s.cls_node.cache_range = cache_range;
+  spec->s.cls_node.schema_type = schema_type;
+  spec->s.cls_node.cache_reserved = cache_recordinfo;
+  if (access == SEQUENTIAL_RECORD_INFO)
+    {
+      spec->s.cls_node.num_attrs_reserved = HEAP_RECORD_INFO_COUNT;
     }
+  else if (access == SEQUENTIAL_PAGE_SCAN)
+    {
+      spec->s.cls_node.num_attrs_reserved = HEAP_PAGE_INFO_COUNT;
+    }
+  else if (access == INDEX_KEY_INFO)
+    {
+      spec->s.cls_node.num_attrs_reserved = BTREE_KEY_INFO_COUNT;
+    }
+  else if (access == INDEX_NODE_INFO)
+    {
+      spec->s.cls_node.num_attrs_reserved = BTREE_NODE_INFO_COUNT;
+    }
+  else
+    {
+      spec->s.cls_node.num_attrs_reserved = 0;
+    }
+  spec->s.cls_node.cls_regu_list_reserved = reserved_val_list;
 
   return spec;
 }
@@ -11587,6 +11597,7 @@ pt_to_rangelist_key (PARSER_CONTEXT * parser,
     {
       REGU_VARIABLE_LIST requ_list;
 
+      num_index_term = 0;	/* to make compiler be silent */
       for (i = 0; i < n_elem; i++)
 	{
 	  list_count1 = list_count2 = 0;
@@ -12170,10 +12181,10 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
 		  QO_PLAN * plan, QO_XASL_INDEX_INFO * qo_index_infop)
 {
   int nterms;
-  int rangelist_idx;
+  int rangelist_idx = -1;
   PT_NODE **term_exprs;
   PT_NODE *pt_expr;
-  PT_OP_TYPE op_type;
+  PT_OP_TYPE op_type = PT_LAST_OPCODE;
   INDX_INFO *indx_infop;
   QO_NODE_INDEX_ENTRY *ni_entryp;
   QO_INDEX_ENTRY *index_entryp;
@@ -15434,6 +15445,12 @@ pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
 
   assert (f1 != NULL && f2 != NULL);
 
+  if (lost_link_count != NULL)
+    {
+      /* initialize to default value in case of failure */
+      (*lost_link_count) = -1;
+    }
+
   /* determine larger key */
   if (f1->part_size < f2->part_size)
     {
@@ -15503,6 +15520,7 @@ pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
 
   /* build common metadomain */
   out->source = NULL;
+  out->links_count = 0;
   out->level = level;
   out->demoted = false;
   out->children[0] = f1;
@@ -15555,7 +15573,6 @@ pt_metadomains_compatible (ANALYTIC_KEY_METADOMAIN * f1,
     }
 
   /* build links */
-  out->links_count = 0;
   (*lost_link_count) = 0;
 
   for (i = 0; i < f1->links_count; i++)
@@ -16039,8 +16056,9 @@ pt_optimize_analytic_list (PARSER_CONTEXT * parser, ANALYTIC_INFO * info)
   /* compose every compatible metadomains from each possible prefix length */
   while (level > 0)
     {
-      ANALYTIC_KEY_METADOMAIN new, best;
-      int new_destroyed, best_destroyed = -1;
+      ANALYTIC_KEY_METADOMAIN new = analitic_key_metadomain_Initializer;
+      ANALYTIC_KEY_METADOMAIN best = analitic_key_metadomain_Initializer;
+      int new_destroyed = -1, best_destroyed = -1;
 
       /* compose best two compatible metadomains */
       for (i = 0; i < af_count; i++)
@@ -17788,6 +17806,12 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
 	{
 	  parser_free_tree (parser, select_node->info.query.q.select.use_idx);
 	  select_node->info.query.q.select.use_idx = NULL;
+	}
+      if (select_node->info.query.q.select.index_ss)
+	{
+	  parser_free_tree (parser,
+			    select_node->info.query.q.select.index_ss);
+	  select_node->info.query.q.select.index_ss = NULL;
 	}
       if (select_node->info.query.q.select.use_merge)
 	{

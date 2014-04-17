@@ -1026,7 +1026,7 @@ ws_mop (OID * oid, MOP class_mop)
 			    }
 			  /* temporary disable assert */
 			  /* assert (mop->class_mop == NULL
-			   *	     && mop->class_link == NULL);
+			   *         && mop->class_link == NULL);
 			   */
 			  mop->class_mop = mop->class_link = NULL;
 			  if (class_mop != NULL)
