@@ -1876,8 +1876,8 @@ static unsigned int prm_ha_prefetchlogdb_max_page_count_default = 1000;
 static unsigned int prm_ha_prefetchlogdb_max_page_count_lower = 0;
 static unsigned int prm_ha_prefetchlogdb_max_page_count_upper = INT_MAX;
 
-bool PRM_MVCC_ENABLED = false;
-static bool prm_mvcc_enabled_default = false;
+bool PRM_MVCC_ENABLED = true;
+static bool prm_mvcc_enabled_default = true;
 static unsigned int prm_mvcc_enabled_flag = 0;
 
 float PRM_MVCC_CLEAN_PAGE_RATIO = 0.8f;

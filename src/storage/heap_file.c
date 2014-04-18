@@ -12174,17 +12174,8 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
 		      RECDES * recdes, int ispeeking, int chn,
 		      MVCC_SNAPSHOT * mvcc_snapshot)
 {
-  RECDES chn_recdes;		/* Used when we need to compare the cache
-				 * coherency number and we are not peeking
-				 */
   SCAN_CODE scan;
   MVCC_REC_HEADER mvcc_header;
-
-  /*
-   * TODO:
-   * MVCC won't probably need chn (it has it's own system to determine if
-   * an object has been updated).
-   */
 
   /*
    * Don't retrieve the object when the object has the same cache
@@ -12192,9 +12183,15 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
    * valid cached object.
    */
 
-  if (ispeeking == PEEK)
+  scan = spage_get_record (pgptr, slotid, recdes, PEEK);
+  if (scan != S_SUCCESS)
     {
-      scan = spage_get_record (pgptr, slotid, recdes, PEEK);
+      return scan;
+    }
+
+  if (mvcc_Enabled)
+    {
+      /* For MVCC we need to obtain header and verify header */
       or_mvcc_get_header (recdes, &mvcc_header);
       if (scan == S_SUCCESS && mvcc_snapshot != NULL
 	  && mvcc_snapshot->snapshot_fnc != NULL)
@@ -12205,71 +12202,28 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
 	      return S_SNAPSHOT_NOT_SATISFIED;
 	    }
 	}
-
-      if (chn != NULL_CHN && scan == S_SUCCESS)
+      if (chn != NULL_CHN && (!MVCC_SHOULD_TEST_CHN (thread_p, &mvcc_header)
+			      || chn == MVCC_GET_CHN (&mvcc_header)))
 	{
-	  if (mvcc_Enabled)
-	    {
-	      /* With MVCC, usually the visibility test is enough to determine
-	       * that the record is also up-to-date. However there are special
-	       * cases that still need chn (details in the comment for
-	       * MVCC_IS_REC_CHN_VALID definition).
-	       */
-	      if (!MVCC_IS_REC_CHN_VALID (thread_p, &mvcc_header)
-		  || chn == MVCC_GET_CHN (&mvcc_header))
-		{
-		  scan = S_SUCCESS_CHN_UPTODATE;
-		}
-	    }
-	  else if (chn == or_chn (recdes))
-	    {
-	      scan = S_SUCCESS_CHN_UPTODATE;
-	    }
+	  /* Test chn if MVCC is disabled for record or if delete MVCCID
+	   * is invalid and the record is inserted by current transaction.
+	   */
+	  /* When testing chn is not required, the result is considered
+	   * up-to-date.
+	   */
+	  scan = S_SUCCESS_CHN_UPTODATE;
 	}
     }
-  else
+  else if (chn != NULL_CHN && chn == or_chn (recdes))
     {
-      scan = spage_get_record (pgptr, slotid, &chn_recdes, PEEK);
-      or_mvcc_get_header (&chn_recdes, &mvcc_header);
-      if (scan == S_SUCCESS && mvcc_snapshot != NULL
-	  && mvcc_snapshot->snapshot_fnc != NULL)
-	{
-	  if (mvcc_snapshot->snapshot_fnc (thread_p, &mvcc_header,
-					   mvcc_snapshot) != true)
-	    {
-	      return S_SNAPSHOT_NOT_SATISFIED;
-	    }
-	}
-      if (chn != NULL_CHN && scan == S_SUCCESS)
-	{
-	  if (mvcc_Enabled)
-	    {
-	      /* With MVCC, usually the visibility test is enough to determine
-	       * that the record is also up-to-date. However there are special
-	       * cases that still need chn (details in the comment for
-	       * MVCC_IS_REC_CHN_VALID definition).
-	       */
-	      if (!MVCC_IS_REC_CHN_VALID (thread_p, &mvcc_header)
-		  || chn == MVCC_GET_CHN (&mvcc_header))
-		{
-		  scan = S_SUCCESS_CHN_UPTODATE;
-		}
-	    }
-	  else if (chn == or_chn (recdes))
-	    {
-	      scan = S_SUCCESS_CHN_UPTODATE;
-	    }
-	}
-      if (scan != S_SUCCESS_CHN_UPTODATE)
-	{
-	  /*
-	   * Note that we could copy the recdes.data from chn_recdes.data, but
-	   * I don't think it is much difference here, and we will have to deal
-	   * with all not fit conditions and so on, so we decide to use
-	   * spage_get_record instead.
-	   */
-	  scan = spage_get_record (pgptr, slotid, recdes, COPY);
-	}
+      /* Non-MVCC should always test chn if it isn't null */
+      scan = S_SUCCESS_CHN_UPTODATE;
+    }
+  
+  if (ispeeking != PEEK && scan != S_SUCCESS_CHN_UPTODATE)
+    {
+      /* Copy record if requested and if the record is not up-to-date */
+      scan = spage_get_record (pgptr, slotid, recdes, COPY);
     }
 
   return scan;
@@ -13275,13 +13229,13 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 		  /* Normally, if a record is visible is also up to date.
 		   * There are special cases when in-place update is used and
 		   * CHN still must be verified (check comment on
-		   * MVCC_IS_REC_CHN_VALID definition).
+		   * MVCC_SHOULD_TEST_CHN definition).
 		   */
 		  /* If force_get_record is true, data will be obtained anyway
 		   * and there is no need to do other checks
 		   */
 		  if (!force_get_record
-		      && (!MVCC_IS_REC_CHN_VALID (thread_p, &mvcc_rec_header)
+		      && (!MVCC_SHOULD_TEST_CHN (thread_p, &mvcc_rec_header)
 			  || (old_chn != NULL_CHN
 			      && old_chn == MVCC_GET_CHN (&mvcc_rec_header))))
 		    {
