@@ -12174,6 +12174,9 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
 		      RECDES * recdes, int ispeeking, int chn,
 		      MVCC_SNAPSHOT * mvcc_snapshot)
 {
+  RECDES chn_recdes;		/* Used when we need to compare the cache
+				 * coherency number and we are not peeking
+				 */
   SCAN_CODE scan;
   MVCC_REC_HEADER mvcc_header;
 
@@ -12183,47 +12186,94 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
    * valid cached object.
    */
 
-  scan = spage_get_record (pgptr, slotid, recdes, PEEK);
-  if (scan != S_SUCCESS)
+  if (ispeeking == PEEK)
     {
-      return scan;
-    }
-
-  if (mvcc_Enabled)
-    {
-      /* For MVCC we need to obtain header and verify header */
-      or_mvcc_get_header (recdes, &mvcc_header);
-      if (scan == S_SUCCESS && mvcc_snapshot != NULL
-	  && mvcc_snapshot->snapshot_fnc != NULL)
+      scan = spage_get_record (pgptr, slotid, recdes, PEEK);
+      if (scan != S_SUCCESS)
 	{
-	  if (mvcc_snapshot->snapshot_fnc (thread_p, &mvcc_header,
-					   mvcc_snapshot) != true)
+	  return scan;
+	}
+
+      if (mvcc_Enabled)
+	{
+	  /* For MVCC we need to obtain header and verify header */
+	  or_mvcc_get_header (recdes, &mvcc_header);
+	  if (scan == S_SUCCESS && mvcc_snapshot != NULL
+	      && mvcc_snapshot->snapshot_fnc != NULL)
 	    {
-	      return S_SNAPSHOT_NOT_SATISFIED;
+	      if (mvcc_snapshot->snapshot_fnc (thread_p, &mvcc_header,
+					       mvcc_snapshot) != true)
+		{
+		  return S_SNAPSHOT_NOT_SATISFIED;
+		}
+	    }
+	  if (chn != NULL_CHN
+	      && (!MVCC_SHOULD_TEST_CHN (thread_p, &mvcc_header)
+		  || chn == MVCC_GET_CHN (&mvcc_header)))
+	    {
+	      /* Test chn if MVCC is disabled for record or if delete MVCCID
+	       * is invalid and the record is inserted by current transaction.
+	       */
+	      /* When testing chn is not required, the result is considered
+	       * up-to-date.
+	       */
+	      scan = S_SUCCESS_CHN_UPTODATE;
 	    }
 	}
-      if (chn != NULL_CHN && (!MVCC_SHOULD_TEST_CHN (thread_p, &mvcc_header)
-			      || chn == MVCC_GET_CHN (&mvcc_header)))
+      else if (chn != NULL_CHN && chn == or_chn (recdes))
 	{
-	  /* Test chn if MVCC is disabled for record or if delete MVCCID
-	   * is invalid and the record is inserted by current transaction.
-	   */
-	  /* When testing chn is not required, the result is considered
-	   * up-to-date.
-	   */
+	  /* Non-MVCC should always test chn if it isn't null */
 	  scan = S_SUCCESS_CHN_UPTODATE;
 	}
     }
-  else if (chn != NULL_CHN && chn == or_chn (recdes))
+  else
     {
-      /* Non-MVCC should always test chn if it isn't null */
-      scan = S_SUCCESS_CHN_UPTODATE;
-    }
-  
-  if (ispeeking != PEEK && scan != S_SUCCESS_CHN_UPTODATE)
-    {
-      /* Copy record if requested and if the record is not up-to-date */
-      scan = spage_get_record (pgptr, slotid, recdes, COPY);
+      scan = spage_get_record (pgptr, slotid, &chn_recdes, PEEK);
+      if (scan != S_SUCCESS)
+	{
+	  return scan;
+	}
+
+      if (mvcc_Enabled)
+	{
+	  /* For MVCC we need to obtain header and verify header */
+	  or_mvcc_get_header (&chn_recdes, &mvcc_header);
+	  if (scan == S_SUCCESS && mvcc_snapshot != NULL
+	      && mvcc_snapshot->snapshot_fnc != NULL)
+	    {
+	      if (mvcc_snapshot->snapshot_fnc (thread_p, &mvcc_header,
+					       mvcc_snapshot) != true)
+		{
+		  return S_SNAPSHOT_NOT_SATISFIED;
+		}
+	    }
+	  if (chn != NULL_CHN && (!MVCC_SHOULD_TEST_CHN (thread_p, &mvcc_header)
+				  || chn == MVCC_GET_CHN (&mvcc_header)))
+	    {
+	      /* Test chn if MVCC is disabled for record or if delete MVCCID
+	       * is invalid and the record is inserted by current transaction.
+	       */
+	      /* When testing chn is not required, the result is considered
+	       * up-to-date.
+	       */
+	      scan = S_SUCCESS_CHN_UPTODATE;
+	    }
+	}
+      else if (chn != NULL_CHN && chn == or_chn (&chn_recdes))
+	{
+	  /* Non-MVCC should always test chn if it isn't null */
+	  scan = S_SUCCESS_CHN_UPTODATE;
+	}
+      if (scan != S_SUCCESS_CHN_UPTODATE)
+	{
+	  /*
+	   * Note that we could copy the recdes.data from chn_recdes.data, but
+	   * I don't think it is much difference here, and we will have to deal
+	   * with all not fit conditions and so on, so we decide to use
+	   * spage_get_record instead.
+	   */
+	  scan = spage_get_record (pgptr, slotid, recdes, COPY);
+	}
     }
 
   return scan;
