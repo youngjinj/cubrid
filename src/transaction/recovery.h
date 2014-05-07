@@ -192,6 +192,8 @@ typedef enum
   RVHF_MVCC_DELETE_RELOCATION = 123,
   RVOVF_NEWPAGE_DELETE_RELOCATED = 124,
 
+  RVBT_MVCC_INCREMENTS_UPD = 125,
+
   RV_NOT_DEFINED = 999
 } LOG_RCVINDEX;
 
@@ -247,6 +249,7 @@ extern void rv_check_rvfuns (void);
              || ((idx) == RVBT_KEYVAL_DEL_OID_TRUNCATE)	   \
 	     || ((idx) == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID)	\
 	     || ((idx) == RVBT_KEYVAL_DEL_RECORD_MVCC_DELID)	\
+	     || ((idx) == RVBT_MVCC_INCREMENTS_UPD)   \
 ) ? true : false )
 
 #endif /* _RECOVERY_H_ */

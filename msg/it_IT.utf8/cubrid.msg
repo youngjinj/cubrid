@@ -1220,7 +1220,8 @@ $ LOADDB
 1151 The page %1$d of volume %2$d is not a slotted page.
 2000 MVCC row already deleted %1$d|%2$d|%3$d.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 Ultimo errore
+2002 MVCC can't get snapshot
+2003 Last Error
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Errore nel sottosistema di errore (linea %1$d):

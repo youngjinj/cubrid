@@ -4335,6 +4335,9 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 				      ws_dirty (new_mop);
 				    }
 
+				  /* preserve pruning type */
+				  new_mop->pruning_type = mop_toid->mop->pruning_type;
+
 				  /* Set MVCC link */
 				  mop_toid->mop->mvcc_link = new_mop;
 				  /* Mvcc is link is not yet permanent */

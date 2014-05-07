@@ -334,9 +334,11 @@ scan_init_iss (INDX_SCAN_ID * isidp)
  * return : void
  * isidp (in)	: index scan
  * oid_buf (in) : OID buffer
+ * mvcc_snapshot(in) : MVCC snapshot
  */
 void
-scan_init_index_scan (INDX_SCAN_ID * isidp, OID * oid_buf)
+scan_init_index_scan (INDX_SCAN_ID * isidp, OID * oid_buf,
+		      MVCC_SNAPSHOT * mvcc_snapshot)
 {
   if (isidp == NULL)
     {
@@ -354,7 +356,7 @@ scan_init_index_scan (INDX_SCAN_ID * isidp, OID * oid_buf)
   isidp->duplicate_key_locked = false;
   scan_init_iss (isidp);
   isidp->for_update = false;
-  isidp->scan_cache.mvcc_snapshot = NULL;
+  isidp->scan_cache.mvcc_snapshot = mvcc_snapshot;
 }
 
 /*
@@ -4205,7 +4207,7 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   REGU_VALUES_SCAN_ID *rvsidp = NULL;
   REGU_VALUE_LIST *regu_value_list = NULL;
   REGU_VARIABLE_LIST list_node = NULL;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
+  MVCC_SNAPSHOT * mvcc_snapshot = NULL;
 
   switch (scan_id->type)
     {
@@ -4214,9 +4216,13 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
     case S_HEAP_SCAN_RECORD_INFO:
       hsidp = &scan_id->s.hsid;
       UT_CAST_TO_NULL_HEAP_OID (&hsidp->hfid, &hsidp->curr_oid);
-      if (!OID_IS_ROOTOID (&hsidp->cls_oid))
+      if (mvcc_Enabled && !OID_IS_ROOTOID (&hsidp->cls_oid))
 	{
 	  mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+	  if (mvcc_snapshot == NULL)
+	    {
+	      goto exit_on_error;
+	    }
 	}
       if (scan_id->grouped)
 	{
@@ -4311,9 +4317,13 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
     case S_INDX_SCAN:
 
       isidp = &scan_id->s.isid;
-      if (!OID_IS_ROOTOID (&isidp->cls_oid))
+      if (mvcc_Enabled && !OID_IS_ROOTOID (&isidp->cls_oid))
 	{
 	  mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+	  if (mvcc_snapshot == NULL)
+	    {
+	      goto exit_on_error;
+	    }
 	}
 
       /* A new argument(is_indexscan = true) is appended */

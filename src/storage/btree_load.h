@@ -256,6 +256,10 @@ extern int btree_change_root_header_delta (THREAD_ENTRY * thread_p,
 					   VFID * vfid, PAGE_PTR page_ptr,
 					   int null_delta, int oid_delta,
 					   int key_delta);
+extern void btree_rv_mvcc_save_increments (OID * class_oid, BTID * btid,
+					   int key_delta, int oid_delta,
+					   int null_delta, RECDES * recdes);
+
 
 extern int btree_get_key_length (DB_VALUE *);
 extern int btree_write_record (THREAD_ENTRY * thread_p, BTID_INT * btid,

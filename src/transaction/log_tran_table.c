@@ -154,9 +154,12 @@ static LOG_MVCC_CLASS_UPDATE_STATS
 static LOG_MVCC_BTID_UNIQUE_STATS
   * logtb_mvcc_create_btid_unique_stats (THREAD_ENTRY * thread_p,
 					 LOG_MVCC_CLASS_UPDATE_STATS *
-					 class_stats, BTID * btid);
+					 class_stats, const BTID * btid);
 static int logtb_mvcc_reflect_unique_statistics (THREAD_ENTRY * thread_p);
 static int logtb_mvcc_load_global_statistics (THREAD_ENTRY * thread_p);
+static int logtb_create_unique_stats_from_repr (THREAD_ENTRY * thread_p,
+						LOG_MVCC_CLASS_UPDATE_STATS *
+						class_stats);
 
 /*
  * logtb_realloc_topops_stack - realloc stack of top system operations
@@ -3392,7 +3395,7 @@ logtb_mvcc_free_class_stats (LOG_MVCC_UPDATE_STATS * log_upd_stats,
 static LOG_MVCC_BTID_UNIQUE_STATS *
 logtb_mvcc_create_btid_unique_stats (THREAD_ENTRY * thread_p,
 				     LOG_MVCC_CLASS_UPDATE_STATS *
-				     class_stats, BTID * btid)
+				     class_stats, const BTID * btid)
 {
   LOG_MVCC_BTID_UNIQUE_STATS *unique_stats = NULL;
 
@@ -3421,10 +3424,6 @@ logtb_mvcc_create_btid_unique_stats (THREAD_ENTRY * thread_p,
 
   unique_stats->btid = *btid;
   unique_stats->deleted = false;
-
-  unique_stats->command_stats.num_keys = 0;
-  unique_stats->command_stats.num_oids = 0;
-  unique_stats->command_stats.num_nulls = 0;
 
   unique_stats->tran_stats.num_keys = 0;
   unique_stats->tran_stats.num_oids = 0;
@@ -3688,9 +3687,9 @@ logtb_mvcc_update_btid_unique_stats (THREAD_ENTRY * thread_p,
       return ER_FAILED;
     }
 
-  unique_stats->command_stats.num_keys += n_keys;
-  unique_stats->command_stats.num_oids += n_oids;
-  unique_stats->command_stats.num_nulls += n_nulls;
+  unique_stats->tran_stats.num_keys += n_keys;
+  unique_stats->tran_stats.num_oids += n_oids;
+  unique_stats->tran_stats.num_nulls += n_nulls;
 
   if (tdes->log_upd_stats.topop_id < 0)
     {
@@ -3711,13 +3710,15 @@ logtb_mvcc_update_btid_unique_stats (THREAD_ENTRY * thread_p,
  * n_keys(in)	    : number of keys to be added to statistics
  * n_oids(in)	    : number of oids to be added to statistics
  * n_nulls(in)	    : number of nulls to be added to statistics
+ * write_to_log	    : if true then new statistics wil be written to log
  *
  * Note: the statistics are searched and created if they not exist.
  */
 int
 logtb_mvcc_update_class_unique_stats (THREAD_ENTRY * thread_p,
 				      OID * class_oid, BTID * btid,
-				      int n_keys, int n_oids, int n_nulls)
+				      int n_keys, int n_oids, int n_nulls,
+				      bool write_to_log)
 {
   LOG_MVCC_CLASS_UPDATE_STATS *class_stats = NULL;
   int error = NO_ERROR;
@@ -3737,6 +3738,37 @@ logtb_mvcc_update_class_unique_stats (THREAD_ENTRY * thread_p,
   error =
     logtb_mvcc_update_btid_unique_stats (thread_p, class_stats, btid, n_keys,
 					 n_oids, n_nulls);
+
+  if (write_to_log)
+    {
+      char copy_rec_buf1[3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE +
+			 BTREE_MAX_ALIGN];
+      char copy_rec_buf[3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE +
+			BTREE_MAX_ALIGN];
+      RECDES copy_rec1, copy_rec;
+
+      /* copy_rec_buf1 is undo, copy_rec_buf is redo  */
+      copy_rec1.area_size = 3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE;
+
+      copy_rec1.data = PTR_ALIGN (copy_rec_buf1, BTREE_MAX_ALIGN);
+
+      copy_rec.area_size = 3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE;
+
+      copy_rec.data = PTR_ALIGN (copy_rec_buf, BTREE_MAX_ALIGN);
+
+      btree_rv_mvcc_save_increments (class_oid, btid, -n_keys, -n_oids,
+				     -n_nulls, &copy_rec1);
+
+      btree_rv_mvcc_save_increments (class_oid, btid, n_keys, n_oids, n_nulls,
+				     &copy_rec);
+
+
+      log_append_undoredo_data2 (thread_p, RVBT_MVCC_INCREMENTS_UPD,
+				 NULL,
+				 NULL, -1,
+				 copy_rec1.length, copy_rec.length,
+				 copy_rec1.data, copy_rec.data);
+    }
 
   return error;
 }
@@ -3855,6 +3887,13 @@ logtb_mvcc_load_global_statistics (THREAD_ENTRY * thread_p)
 		  error_code = ER_FAILED;
 		  goto cleanup;
 		}
+	      error_code =
+		logtb_create_unique_stats_from_repr (thread_p, new_entry);
+	      if (error_code != NO_ERROR)
+		{
+		  goto cleanup;
+		}
+
 	      for (idx2 = new_entry->n_btids - 1; idx2 >= 0; idx2--)
 		{
 		  unique_stats = &new_entry->unique_stats[idx2];
@@ -3874,6 +3913,12 @@ logtb_mvcc_load_global_statistics (THREAD_ENTRY * thread_p)
 		}
 	      new_entry->count_state = COS_LOADED;
 	    }
+	}
+
+      error_code = logtb_create_unique_stats_from_repr (thread_p, entry);
+      if (error_code != NO_ERROR)
+	{
+	  goto cleanup;
 	}
 
       for (idx = entry->n_btids - 1; idx >= 0; idx--)
@@ -3937,18 +3982,6 @@ logtb_mvcc_update_tran_class_stats (THREAD_ENTRY * thread_p,
 	    {
 	      unique_stats->deleted = false;
 	    }
-	  else
-	    {
-	      unique_stats->tran_stats.num_keys +=
-		unique_stats->command_stats.num_keys;
-	      unique_stats->tran_stats.num_nulls +=
-		unique_stats->command_stats.num_nulls;
-	      unique_stats->tran_stats.num_oids +=
-		unique_stats->command_stats.num_oids;
-	    }
-	  unique_stats->command_stats.num_keys = 0;
-	  unique_stats->command_stats.num_oids = 0;
-	  unique_stats->command_stats.num_nulls = 0;
 	}
     }
   return NO_ERROR;
@@ -4077,7 +4110,11 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
   snapshot->valid = true;
 
   /* load global statistics. This must take place here and no where else. */
-  error_code = logtb_mvcc_load_global_statistics (thread_p);
+  if (logtb_mvcc_load_global_statistics (thread_p) != NO_ERROR)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_MVCC_CANT_GET_SNAPSHOT, 0);
+      error_code = ER_MVCC_CANT_GET_SNAPSHOT;
+    }
 
   csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
 
@@ -4101,8 +4138,13 @@ xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
       /* Nothing to do */
       return;
     }
-  /* Invalidate snapshot */
-  tdes->mvcc_info->mvcc_snapshot.valid = false;
+  if (tdes->mvcc_info->mvcc_snapshot.valid)
+    {
+      /* Invalidate snapshot */
+      tdes->mvcc_info->mvcc_snapshot.valid = false;
+      logtb_mvcc_reset_count_optim_state (thread_p);
+    }
+
   return;
 }
 
@@ -4563,6 +4605,10 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 
   curr_mvcc_info->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
   p_mvcc_snapshot = &(curr_mvcc_info->mvcc_snapshot);
+  if (p_mvcc_snapshot->valid)
+    {
+      logtb_mvcc_reset_count_optim_state (thread_p);
+    }
   MVCC_CLEAR_SNAPSHOT_DATA (p_mvcc_snapshot);
 
   if (!committed)
@@ -4966,6 +5012,10 @@ logtb_release_mvcc_info (THREAD_ENTRY * thread_p)
 
   /* clean MVCC info */
   p_mvcc_snapshot = &(curr_mvcc_info->mvcc_snapshot);
+  if (p_mvcc_snapshot->valid)
+    {
+      logtb_mvcc_reset_count_optim_state (thread_p);
+    }
   MVCC_CLEAR_SNAPSHOT_DATA (p_mvcc_snapshot);
 
   curr_mvcc_info->transaction_lowest_active_mvccid =
@@ -5140,6 +5190,90 @@ logtb_mvcc_prepare_count_optim_classes (THREAD_ENTRY * thread_p,
     }
 
   return NO_ERROR;
+}
+
+/*
+ * logtb_mvcc_reset_count_optim_state - reset count optimization state for all
+ *					class statistics instances
+ *
+ * return:
+ *
+ * thread_p(in): thread entry
+ */
+void
+logtb_mvcc_reset_count_optim_state (THREAD_ENTRY * thread_p)
+{
+  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  LOG_MVCC_CLASS_UPDATE_STATS *class_stats =
+    tdes->log_upd_stats.crt_tran_entries;
+
+  while (class_stats != NULL)
+    {
+      class_stats->count_state = COS_NOT_LOADED;
+
+      class_stats = class_stats->next;
+    }
+}
+
+/*
+ * logtb_create_unique_stats_from_repr - create count optimization instances
+ *					 for all unique indexes of the given
+ *					 class
+ *
+ * return: error code
+ *
+ * thread_p(in)	  : thread entry 
+ * class_stats(in): class statistics instance for which count optimization
+ *		    unique statistics will be created.
+ */
+static int
+logtb_create_unique_stats_from_repr (THREAD_ENTRY * thread_p,
+				     LOG_MVCC_CLASS_UPDATE_STATS *
+				     class_stats)
+{
+  OR_CLASSREP *classrepr = NULL;
+  int error_code = NO_ERROR, idx, classrepr_cacheindex = -1;
+
+  /* get class representation to find the total number of indexes */
+  classrepr =
+    heap_classrepr_get (thread_p, &class_stats->class_oid, NULL, 0,
+			&classrepr_cacheindex, true);
+  if (classrepr == NULL)
+    {
+      goto exit_on_error;
+    }
+
+  for (idx = classrepr->n_indexes - 1; idx >= 0; idx--)
+    {
+      if (btree_is_unique_type (classrepr->indexes[idx].type))
+	{
+	  if (logtb_mvcc_find_btid_stats
+	      (thread_p, class_stats, &classrepr->indexes[idx].btid,
+	       true) == NULL)
+	    {
+	      error_code = ER_FAILED;
+	      goto exit_on_error;
+	    }
+	}
+    }
+
+  /* free class representation */
+  error_code = heap_classrepr_free (classrepr, &classrepr_cacheindex);
+  if (error_code != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
+  return NO_ERROR;
+
+exit_on_error:
+  if (classrepr != NULL)
+    {
+      (void) heap_classrepr_free (classrepr, &classrepr_cacheindex);
+    }
+
+  return (error_code == NO_ERROR
+	  && (error_code = er_errid ()) == NO_ERROR) ? ER_FAILED : error_code;
 }
 
 #if defined(ENABLE_UNUSED_FUNCTION)

@@ -837,6 +837,7 @@ ws_mvcc_updated_mop (OID * oid, OID * new_oid, MOP class_mop,
 {
   MOP mop = NULL, new_mop = NULL;
   int error_code = NO_ERROR;
+  int pruning_type = DB_NOT_PARTITIONED_CLASS;
 
   if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && !OID_ISNULL (new_oid)
       && !OID_EQ (oid, new_oid))
@@ -850,11 +851,14 @@ ws_mvcc_updated_mop (OID * oid, OID * new_oid, MOP class_mop,
 	}
       else
 	{
+	  pruning_type = mop->pruning_type;
 	  /* Decache old object */
 	  ws_decache (mop);
 
 	  new_mop = ws_mop (new_oid, class_mop);
 	  mop->mvcc_link = new_mop;
+
+	  new_mop->pruning_type = pruning_type;
 
 	  if (updated_by_me)
 	    {

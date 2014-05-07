@@ -815,7 +815,12 @@ struct rvfun RV_fun[] = {
    "RVOVF_NEWPAGE_DELETE_RELOCATED",
    NULL,
    overflow_rv_newpage_delete_relocated_redo,
-   NULL}
+   NULL},
+  {RVBT_MVCC_INCREMENTS_UPD,
+   "RVBT_MVCC_INCREMENTS_UPD",
+   btree_rv_mvcc_undo_redo_increments_update,
+   btree_rv_mvcc_undo_redo_increments_update,
+   NULL, NULL}
 };
 
 /*

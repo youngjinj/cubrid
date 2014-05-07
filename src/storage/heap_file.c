@@ -8938,8 +8938,14 @@ try_again:
 	    COPY_OID (new_oid, &mvcc_next_oid);
 	  }
 
-	pgbuf_unfix_and_init (thread_p, forward_addr.pgptr);
-	pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+	if (forward_addr.pgptr != NULL)
+	  {
+	    pgbuf_unfix_and_init (thread_p, forward_addr.pgptr);
+	  }
+	if (hdr_pgptr != NULL)
+	  {
+	    pgbuf_unfix_and_init (thread_p, hdr_pgptr);
+	  }
       }
       break;
 
@@ -12247,8 +12253,9 @@ heap_get_if_diff_chn (THREAD_ENTRY * thread_p, PAGE_PTR pgptr, INT16 slotid,
 		  return S_SNAPSHOT_NOT_SATISFIED;
 		}
 	    }
-	  if (chn != NULL_CHN && (!MVCC_SHOULD_TEST_CHN (thread_p, &mvcc_header)
-				  || chn == MVCC_GET_CHN (&mvcc_header)))
+	  if (chn != NULL_CHN
+	      && (!MVCC_SHOULD_TEST_CHN (thread_p, &mvcc_header)
+		  || chn == MVCC_GET_CHN (&mvcc_header)))
 	    {
 	      /* Test chn if MVCC is disabled for record or if delete MVCCID
 	       * is invalid and the record is inserted by current transaction.
@@ -15517,7 +15524,15 @@ heap_get_class_oid (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid)
     }
 
   heap_scancache_quick_start (&scan_cache);
-  scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+  if (mvcc_Enabled)
+    {
+      scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (scan_cache.mvcc_snapshot == NULL)
+	{
+	  return NULL;
+	}
+    }
+
   if (heap_get_with_class_oid (thread_p, class_oid, oid, &recdes,
 			       &scan_cache, PEEK) != S_SUCCESS)
     {
@@ -15590,7 +15605,15 @@ heap_get_class_name_alloc_if_diff (THREAD_ENTRY * thread_p,
   OID root_oid;
 
   heap_scancache_quick_start (&scan_cache);
-  scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+  if (mvcc_Enabled)
+    {
+      scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (scan_cache.mvcc_snapshot == NULL)
+	{
+	  return NULL;
+	}
+    }
+
   if (heap_get_with_class_oid (thread_p, &root_oid, class_oid, &recdes,
 			       &scan_cache, PEEK) == S_SUCCESS)
     {
@@ -15655,7 +15678,15 @@ heap_get_class_name_of_instance (THREAD_ENTRY * thread_p,
   OID class_oid;
 
   heap_scancache_quick_start (&scan_cache);
-  scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+  if (mvcc_Enabled)
+    {
+      scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (scan_cache.mvcc_snapshot == NULL)
+	{
+	  return NULL;
+	}
+    }
+
   if (heap_get_with_class_oid (thread_p, &class_oid, inst_oid, &recdes,
 			       &scan_cache, PEEK) == S_SUCCESS)
     {
@@ -17200,7 +17231,16 @@ heap_class_get_partition_info (THREAD_ENTRY * thread_p, const OID * class_oid,
       return ER_FAILED;
     }
 
-  scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+  if (mvcc_Enabled)
+    {
+      scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (scan_cache.mvcc_snapshot == NULL)
+	{
+	  error = er_errid ();
+	  return (error == NO_ERROR ? ER_FAILED : error);
+	}
+    }
+
   if (heap_get_with_class_oid (thread_p, &root_oid, class_oid, &recdes,
 			       &scan_cache, PEEK) != S_SUCCESS)
     {
@@ -22765,7 +22805,18 @@ xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
   HEAP_SCANCACHE scan_cache;
   RECDES recdes;
   SCAN_CODE r;
-  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
+
+
+  if (mvcc_Enabled)
+    {
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (mvcc_snapshot == NULL)
+	{
+	  int error = er_errid ();
+	  return (error == NO_ERROR ? ER_FAILED : error);
+	}
+    }
 
   OID_SET_NULL (&oid);
 
@@ -29728,18 +29779,25 @@ error:
 }
 
 /*
- * heap_rv_mvcc_undo_delete_relocated () - Undo MVCC delete relocation
+ * heap_rv_mvcc_undo_delete_relocated () - Undo MVCC delete relocated
  *   return: int
  *   rcv(in): Recovery structure 
  */
 int
 heap_rv_mvcc_undo_delete_relocated (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
-  return heap_rv_undo_insert (thread_p, rcv);
+  if (rcv->length == 0)
+    {
+      return heap_rv_undo_insert (thread_p, rcv);
+    }
+  else
+    {
+      return heap_rv_undoredo_update (thread_p, rcv);
+    }
 }
 
 /*
- * heap_rv_mvcc_redo_delete_relocated () - Redo MVCC delete relocation
+ * heap_rv_mvcc_redo_delete_relocated () - Redo MVCC delete relocated
  *   return: int
  *   rcv(in): Recovery structure 
  */
@@ -29879,7 +29937,7 @@ heap_rv_mvcc_undo_delete_relocation (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   VPID vpid;
 
   pgbuf_get_vpid (rcv->pgptr, &vpid);
-  assert (rcv->length == (sizeof (OID) + sizeof (INT16) + sizeof (chn)));
+  assert (rcv->length == (sizeof (OID) + sizeof (INT16) + sizeof (int)));
   mvcc_delete_oid = (OID *) rcv->data;
   rec_type = *(INT16 *) (rcv->data + sizeof (OID));
   chn = (int *) (rcv->data + sizeof (OID) + sizeof (INT16));

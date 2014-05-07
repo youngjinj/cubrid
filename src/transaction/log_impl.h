@@ -747,8 +747,6 @@ struct log_mvcc_btid_unique_stats
   BTID btid;			/* id of B-tree */
   bool deleted;			/* true if the B-tree was deleted */
 
-  LOG_UNIQUE_STATS command_stats;	/* statistics accumulated only during curremt
-					 * query */
   LOG_UNIQUE_STATS tran_stats;	/* statistics accumulated durin entire
 				 * transaction */
   LOG_UNIQUE_STATS global_stats;	/* statistics loaded from index */
@@ -2261,7 +2259,8 @@ extern LOG_MVCC_CLASS_UPDATE_STATS *logtb_mvcc_find_class_stats (THREAD_ENTRY
 extern int logtb_mvcc_update_class_unique_stats (THREAD_ENTRY * thread_p,
 						 OID * class_oid, BTID * btid,
 						 int n_keys, int n_oids,
-						 int n_nulls);
+						 int n_nulls,
+						 bool write_to_log);
 extern int logtb_mvcc_update_btid_unique_stats (THREAD_ENTRY * thread_p,
 						LOG_MVCC_CLASS_UPDATE_STATS *
 						class_stats, BTID * btid,
@@ -2285,4 +2284,5 @@ extern int logtb_mvcc_prepare_count_optim_classes (THREAD_ENTRY * thread_p,
 						   const char **classes,
 						   LC_PREFETCH_FLAGS * flags,
 						   int n_classes);
+extern void logtb_mvcc_reset_count_optim_state (THREAD_ENTRY * thread_p);
 #endif /* _LOG_IMPL_H_ */

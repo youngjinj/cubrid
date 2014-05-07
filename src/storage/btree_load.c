@@ -542,6 +542,46 @@ btree_rv_save_root_head (int max_key_len, int null_delta,
 }
 
 /*
+ * btree_rv_mvcc_save_increments () - Save unique_stats
+ *   return:
+ *   max_key_len(in):
+ *   null_delta(in):
+ *   oid_delta(in):
+ *   key_delta(in):
+ *   recdes(in):
+ *
+ * Note: Copy the unique statistics to the data area provided.
+ *
+ * Note: This is a UTILITY routine, but not an actual recovery routine.
+ */
+void
+btree_rv_mvcc_save_increments (OID * class_oid, BTID * btid,
+			       int key_delta, int oid_delta, int null_delta,
+			       RECDES * recdes)
+{
+  char *datap;
+
+  assert (recdes != NULL
+	  && recdes->area_size >=
+	  (3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE));
+  recdes->length = 3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE;
+  datap = (char *) recdes->data;
+
+  OR_PUT_OID (datap, class_oid);
+  datap += OR_OID_SIZE;
+  OR_PUT_BTID (datap, btid);
+  datap += OR_BTID_SIZE;
+  OR_PUT_INT (datap, key_delta);
+  datap += OR_INT_SIZE;
+  OR_PUT_INT (datap, oid_delta);
+  datap += OR_INT_SIZE;
+  OR_PUT_INT (datap, null_delta);
+  datap += OR_INT_SIZE;
+
+  recdes->length = CAST_STRLEN (datap - recdes->data);
+}
+
+/*
  * btree_get_next_overflow_vpid () -
  *
  *   return:
@@ -617,7 +657,16 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 #if !defined(NDEBUG)
   int track_id;
 #endif
-  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+  MVCC_SNAPSHOT * mvcc_snapshot = NULL;
+
+  if (mvcc_Enabled)
+    {
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (mvcc_snapshot == NULL)
+	{
+	  return NULL;
+	}
+    }
 
   /* Check for robustness */
   if (!btid || !hfids || !class_oids || !attr_ids || !key_type)
@@ -2887,7 +2936,17 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
   char midxkey_buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_midxkey_buf;
   int *prefix_lengthp;
   int result;
-  MVCC_SNAPSHOT *mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+  MVCC_SNAPSHOT * mvcc_snapshot = NULL;
+
+
+  if (mvcc_Enabled)
+    {
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (mvcc_snapshot == NULL)
+	{
+	  return SORT_ERROR_OCCURRED;
+	}
+    }
 
   DB_MAKE_NULL (&dbvalue);
 

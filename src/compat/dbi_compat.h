@@ -1468,8 +1468,9 @@
 
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001
+#define ER_MVCC_CANT_GET_SNAPSHOT		    -2002
 
-#define ER_LAST_ERROR                               -2002
+#define ER_LAST_ERROR                               -2003
 
 #define DB_TRUE 1
 #define DB_FALSE 0

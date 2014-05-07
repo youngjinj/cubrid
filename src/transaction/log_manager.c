@@ -138,7 +138,8 @@ static int rv;
    ((RCVI) == RVDK_LINK_PERM_VOLEXT)
 
 #define LOG_NEED_TO_SET_LSA(RCVI, PGPTR) \
-   ((RCVI) != RVDK_LINK_PERM_VOLEXT || !pgbuf_is_lsa_temporary(PGPTR))
+   (((RCVI) != RVDK_LINK_PERM_VOLEXT || !pgbuf_is_lsa_temporary(PGPTR))	\
+    && ((RCVI) != RVBT_MVCC_INCREMENTS_UPD))
 
 /* Assume that locator end with <path>/<meta_name>.<key_name> */
 #define LOCATOR_KEY(locator_) (strrchr (locator_, '.') + 1)
@@ -6892,29 +6893,10 @@ log_complete_system_op (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
     case LOG_RESULT_TOPOP_COMMIT:
     case LOG_RESULT_TOPOP_ABORT:
       state = log_complete_topop (thread_p, tdes, result);
-      if (tdes->log_upd_stats.topop_id == tdes->topops.last)
-	{
-	  if (result == LOG_RESULT_TOPOP_ABORT)
-	    {
-	      (void) logtb_mvcc_update_tran_class_stats (thread_p, true);
-	    }
-	  else
-	    {
-	      (void) logtb_mvcc_update_tran_class_stats (thread_p, false);
-	    }
-	}
       break;
 
     case LOG_RESULT_TOPOP_ATTACH_TO_OUTER:
       log_complete_topop_attach (tdes);
-      if (tdes->log_upd_stats.topop_id >= 0)
-	{
-	  tdes->log_upd_stats.topop_id = tdes->topops.last - 1;
-	  if (tdes->log_upd_stats.topop_id < 0)
-	    {
-	      (void) logtb_mvcc_update_tran_class_stats (thread_p, false);
-	    }
-	}
       break;
     }
 

@@ -2059,6 +2059,7 @@ access_object (OBJ_TEMPLATE * template_ptr, MOP * object, MOBJ * objptr)
     }
   else
     {
+      mop = ws_mvcc_latest_version (mop);
       mop->pruning_type = template_ptr->pruning_type;
       *object = mop;
       *objptr = obj;

@@ -1259,7 +1259,7 @@ static int qexec_init_agg_hierarchy_helpers (THREAD_ENTRY * thread_p,
 					     ACCESS_SPEC_TYPE * spec,
 					     AGGREGATE_TYPE * aggregate_list,
 					     HIERARCHY_AGGREGATE_HELPER **
-					     helpers);
+					     helpers, int *helpers_countp);
 static int qexec_evaluate_aggregates_optimize (THREAD_ENTRY * thread_p,
 					       AGGREGATE_TYPE * agg_list,
 					       ACCESS_SPEC_TYPE * spec,
@@ -10606,12 +10606,9 @@ qexec_process_unique_stats (THREAD_ENTRY * thread_p, OID * class_oid,
       if (class_stats != NULL)
 	{
 	  /* In MVCC, at this point, we will update only in-memory statistics */
-	  error =
-	    logtb_mvcc_update_btid_unique_stats (thread_p, class_stats,
-						 &unique_stat1->btid,
-						 unique_stat1->num_keys,
-						 unique_stat1->num_oids,
-						 unique_stat1->num_nulls);
+	  error = logtb_mvcc_update_class_unique_stats
+	    (thread_p, class_oid, &unique_stat1->btid, unique_stat1->num_keys,
+	     unique_stat1->num_oids, unique_stat1->num_nulls, true);
 	  if (error != NO_ERROR)
 	    {
 	      return error;
@@ -10700,15 +10697,17 @@ qexec_process_partition_unique_stats (THREAD_ENTRY * thread_p,
 	      if (class_stats != NULL)
 		{
 		  error =
-		    logtb_mvcc_update_btid_unique_stats (thread_p,
-							 class_stats,
-							 &unique_stat->btid,
-							 unique_stat->
-							 num_keys,
-							 unique_stat->
-							 num_oids,
-							 unique_stat->
-							 num_nulls);
+		    logtb_mvcc_update_class_unique_stats (thread_p,
+							  &scan_cache->
+							  scan_cache.
+							  class_oid,
+							  &unique_stat->btid,
+							  unique_stat->
+							  num_keys,
+							  unique_stat->
+							  num_oids,
+							  unique_stat->
+							  num_nulls, true);
 		  if (error != NO_ERROR)
 		    {
 		      return error;
@@ -12868,15 +12867,15 @@ qexec_execute_insert (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      if (mvcc_Enabled)
 		{
 		  error =
-		    logtb_mvcc_update_btid_unique_stats (thread_p,
-							 class_stats,
-							 &unique_stats->btid,
-							 unique_stats->
-							 num_keys,
-							 unique_stats->
-							 num_oids,
-							 unique_stats->
-							 num_nulls);
+		    logtb_mvcc_update_class_unique_stats (thread_p,
+							  &class_oid,
+							  &unique_stats->btid,
+							  unique_stats->
+							  num_keys,
+							  unique_stats->
+							  num_oids,
+							  unique_stats->
+							  num_nulls, true);
 		  if (error != NO_ERROR)
 		    {
 		      GOTO_EXIT_ON_ERROR;
@@ -13138,12 +13137,22 @@ qexec_execute_obj_fetch (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
       int cache_rest_end_needed = false;
       int scan_cache_end_needed = false;
       int status = NO_ERROR;
+      MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
       /* Start heap file scan operation */
       /* A new argument(is_indexscan = false) is appended */
+
+      if (mvcc_Enabled)
+	{
+	  mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+	  if (mvcc_snapshot == NULL)
+	    {
+	      goto exit_on_error;
+	    }
+	}
+
       (void) heap_scancache_start (thread_p, &scan_cache, NULL, NULL,
-				   true, false, LOCKHINT_NONE,
-				   logtb_get_mvcc_snapshot (thread_p));
+				   true, false, LOCKHINT_NONE, mvcc_snapshot);
       scan_cache_end_needed = true;
 
       /* fetch the object and the class oid */
@@ -13612,10 +13621,19 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   RECDES copy_recdes;
   bool scan_cache_inited = false;
   SCAN_CODE scan_code;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
   if (mvcc_Enabled == true)
     {
       OID_SET_NULL (&last_cached_class_oid);
+      if (mvcc_Enabled)
+	{
+	  mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+	  if (mvcc_snapshot == NULL)
+	    {
+	      goto exit_on_error;
+	    }
+	}
     }
   list = xasl->selected_upd_list;
 
@@ -13805,8 +13823,7 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		  (void) heap_scancache_start (thread_p, &scan_cache,
 					       class_hfid, class_oid, false,
 					       false, LOCKHINT_NONE,
-					       logtb_get_mvcc_snapshot
-					       (thread_p));
+					       mvcc_snapshot);
 		  scan_cache_inited = true;
 		  COPY_OID (&last_cached_class_oid, class_oid);
 		}
@@ -29017,7 +29034,8 @@ static int
 qexec_init_agg_hierarchy_helpers (THREAD_ENTRY * thread_p,
 				  ACCESS_SPEC_TYPE * spec,
 				  AGGREGATE_TYPE * aggregate_list,
-				  HIERARCHY_AGGREGATE_HELPER ** helpersp)
+				  HIERARCHY_AGGREGATE_HELPER ** helpersp,
+				  int *helpers_countp)
 {
   int agg_count = 0, part_count = 0, i;
   AGGREGATE_TYPE *agg = NULL;
@@ -29043,6 +29061,7 @@ qexec_init_agg_hierarchy_helpers (THREAD_ENTRY * thread_p,
   if (agg_count == 0)
     {
       *helpersp = NULL;
+      *helpers_countp = 0;
       return NO_ERROR;
     }
 
@@ -29106,6 +29125,7 @@ qexec_init_agg_hierarchy_helpers (THREAD_ENTRY * thread_p,
 
   partition_clear_pruning_context (&context);
   *helpersp = helpers;
+  *helpers_countp = agg_count;
   return NO_ERROR;
 
 error_return:
@@ -29128,6 +29148,7 @@ error_return:
   partition_clear_pruning_context (&context);
 
   *helpersp = NULL;
+  *helpers_countp = 0;
   return error;
 }
 
@@ -29148,16 +29169,16 @@ qexec_evaluate_partition_aggregates (THREAD_ENTRY * thread_p,
 				     bool * is_scan_needed)
 {
   int error = NO_ERROR;
-  int i = 0;
+  int i = 0, helpers_count = 0;
   HIERARCHY_AGGREGATE_HELPER *helpers = NULL;
   AGGREGATE_TYPE *agg_ptr = NULL;
   BTID root_btid;
   error = qexec_init_agg_hierarchy_helpers (thread_p, spec, agg_list,
-					    &helpers);
+					    &helpers, &helpers_count);
   if (error != NO_ERROR)
     {
       *is_scan_needed = true;
-      return error;
+      goto cleanup;
     }
   i = 0;
   for (agg_ptr = agg_list; agg_ptr; agg_ptr = agg_ptr->next)
@@ -29169,6 +29190,7 @@ qexec_evaluate_partition_aggregates (THREAD_ENTRY * thread_p,
 
       if (agg_ptr->function == PT_COUNT_STAR && *is_scan_needed)
 	{
+	  agg_ptr->flag_agg_optimize = false;
 	  i++;
 	  continue;
 	}
@@ -29188,15 +29210,8 @@ qexec_evaluate_partition_aggregates (THREAD_ENTRY * thread_p,
 cleanup:
   if (helpers != NULL)
     {
-      agg_ptr = agg_list;
-      i = 0;
-      while (agg_ptr != NULL)
+      for (i = 0; i < helpers_count; i++)
 	{
-	  if (!agg_ptr->flag_agg_optimize)
-	    {
-	      agg_ptr = agg_ptr->next;
-	      continue;
-	    }
 	  if (helpers[i].btids != NULL)
 	    {
 	      db_private_free (thread_p, helpers[i].btids);
@@ -29205,8 +29220,6 @@ cleanup:
 	    {
 	      db_private_free (thread_p, helpers[i].hfids);
 	    }
-	  agg_ptr = agg_ptr->next;
-	  i++;
 	}
       db_private_free (thread_p, helpers);
     }
@@ -29241,39 +29254,52 @@ qexec_evaluate_aggregates_optimize (THREAD_ENTRY * thread_p,
 	  *is_scan_needed = true;
 	  break;
 	}
-    }
 
-  /* If MVCC, we deal with a count optimization and the snapshot wasn't already
-   * taken then prepare current class for optimization and force a snapshot */
-  if (!*is_scan_needed && mvcc_Enabled && agg_list->function == PT_COUNT_STAR)
-    {
-      LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-      LOG_MVCC_CLASS_UPDATE_STATS *class_stats =
-	logtb_mvcc_find_class_stats (thread_p, &ACCESS_SPEC_CLS_OID (spec),
-				     true);
-      if (class_stats == NULL)
+      /* If MVCC, we deal with a count optimization and the snapshot wasn't already
+       * taken then prepare current class for optimization and force a snapshot */
+      if (!*is_scan_needed && mvcc_Enabled
+	  && agg_ptr->function == PT_COUNT_STAR)
 	{
-	  return ER_FAILED;
-	}
-
-      if (tdes->mvcc_info->mvcc_snapshot.valid)
-	{
-	  if (class_stats->count_state != COS_LOADED)
+	  LOG_TDES *tdes =
+	    LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+	  LOG_MVCC_CLASS_UPDATE_STATS *class_stats =
+	    logtb_mvcc_find_class_stats (thread_p,
+					 &ACCESS_SPEC_CLS_OID (spec), true);
+	  if (class_stats == NULL)
 	    {
+	      agg_ptr->flag_agg_optimize = false;
 	      *is_scan_needed = true;
+	      break;
 	    }
-	}
-      else
-	{
-	  if (logtb_mvcc_find_btid_stats
-	      (thread_p, class_stats, &agg_list->btid, true) == NULL)
+	  if (tdes->mvcc_info->mvcc_snapshot.valid)
 	    {
-	      return ER_FAILED;
+	      if (class_stats->count_state != COS_LOADED)
+		{
+		  agg_ptr->flag_agg_optimize = false;
+		  *is_scan_needed = true;
+		  break;
+		}
 	    }
-	  class_stats->count_state = COS_TO_LOAD;
-	  logtb_get_mvcc_snapshot (thread_p);
+	  else
+	    {
+	      if (logtb_mvcc_find_btid_stats
+		  (thread_p, class_stats, &agg_ptr->btid, true) == NULL)
+		{
+		  agg_ptr->flag_agg_optimize = false;
+		  *is_scan_needed = true;
+		  break;
+		}
+	      class_stats->count_state = COS_TO_LOAD;
+
+	      if (logtb_get_mvcc_snapshot (thread_p) == NULL)
+		{
+		  error = er_errid ();
+		  return (error == NO_ERROR ? ER_FAILED : error);
+		}
+	    }
 	}
     }
+
   if (spec->pruning_type == DB_PARTITIONED_CLASS)
     {
       /* evaluate aggregate across partition hierarchy */
