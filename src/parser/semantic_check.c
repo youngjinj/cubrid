@@ -14515,11 +14515,13 @@ pt_check_isolation_lvl (PARSER_CONTEXT * parser,
 	      break;
 
 	    case TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE:
+	      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
 	    case TRAN_COMMIT_CLASS_COMMIT_INSTANCE:
 	      node->info.isolation_lvl.schema = PT_READ_COMMITTED;
 	      break;
 
 	    case TRAN_REP_CLASS_UNCOMMIT_INSTANCE:
+	      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
 	    case TRAN_REP_CLASS_COMMIT_INSTANCE:
 	    case TRAN_REP_CLASS_REP_INSTANCE:
 	      node->info.isolation_lvl.schema = PT_REPEATABLE_READ;
@@ -14547,6 +14549,7 @@ pt_check_isolation_lvl (PARSER_CONTEXT * parser,
 
 	    case TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE:
 	    case TRAN_REP_CLASS_UNCOMMIT_INSTANCE:
+	      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
 	      node->info.isolation_lvl.instances = PT_READ_UNCOMMITTED;
 	      break;
 

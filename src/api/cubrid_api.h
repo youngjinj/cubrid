@@ -28,6 +28,19 @@
 #include <stdlib.h>
 #include "error_code.h"
 
+#define IS_VALID_ISOLATION_LEVEL(isolation_level) \
+  (prm_get_bool_value (PRM_ID_MVCC_ENABLED) \
+   ? ((isolation_level) == TRAN_COMMIT_CLASS_COMMIT_INSTANCE \
+	|| (isolation_level) == TRAN_REP_CLASS_COMMIT_INSTANCE \
+	|| (isolation_level) == TRAN_REP_CLASS_REP_INSTANCE \
+	|| (isolation_level) == TRAN_SERIALIZABLE)  \
+    : (TRAN_MINVALUE_ISOLATION <= (isolation_level) \
+       && (isolation_level) <= TRAN_MAXVALUE_ISOLATION))  \
+
+#define TRAN_DEFAULT_ISOLATION_LEVEL()	\
+  (prm_get_bool_value (PRM_ID_MVCC_ENABLED)  \
+   ? MVCC_TRAN_DEFAULT_ISOLATION : TRAN_DEFAULT_ISOLATION)
+
 typedef enum
 {
   TRAN_UNKNOWN_ISOLATION = 0x00,	/*        0  0000 */
@@ -53,7 +66,8 @@ typedef enum
   TRAN_DEGREE_3_CONSISTENCY = 0x06,	/* Alias of above */
   TRAN_NO_PHANTOM_READ = 0x06,	/* Alias of above */
 
-  TRAN_DEFAULT_ISOLATION = TRAN_REP_CLASS_UNCOMMIT_INSTANCE,
+  TRAN_DEFAULT_ISOLATION = TRAN_READ_UNCOMMITTED,
+  MVCC_TRAN_DEFAULT_ISOLATION = TRAN_READ_COMMITTED,
 
   TRAN_MINVALUE_ISOLATION = 0x01,	/* internal use only */
   TRAN_MAXVALUE_ISOLATION = 0x06	/* internal use only */

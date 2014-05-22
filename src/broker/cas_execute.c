@@ -695,8 +695,8 @@ ux_get_default_setting ()
 {
   ux_get_tran_setting (&cas_default_lock_timeout,
 		       &cas_default_isolation_level);
-  if (cas_default_isolation_level < TRAN_MINVALUE_ISOLATION
-      || cas_default_isolation_level > TRAN_MAXVALUE_ISOLATION)
+
+  if (!IS_VALID_ISOLATION_LEVEL (cas_default_isolation_level))
     {
       cas_default_isolation_level = 0;
     }

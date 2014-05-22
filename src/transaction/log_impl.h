@@ -57,7 +57,7 @@
 #define NUM_SYSTEM_TRANS 1
 #define NUM_NON_SYSTEM_TRANS (css_get_max_conn ())
 #define MAX_NTRANS \
-  (NUM_NON_SYSTEM_TRANS + NUM_SYSTEM_TRANS)
+  (NUM_NON_SYSTEM_TRANS + NUM_SYSTEM_TRANS + thread_get_vacuum_worker_count ())
 
 #if defined(SERVER_MODE)
 #define LOG_CS_ENTER(thread_p) \
@@ -102,9 +102,18 @@
 #endif /* SERVER_MODE */
 
 #if defined(SERVER_MODE)
-#define LOG_CS_OWN(thread_p) (csect_check_own (thread_p, CSECT_LOG) >= 1)
-#define LOG_CS_OWN_WRITE_MODE(thread_p) (csect_check_own (thread_p, CSECT_LOG) == 1)
-#define LOG_CS_OWN_READ_MODE(thread_p) (csect_check_own (thread_p, CSECT_LOG) == 2)
+/* TODO: Vacuum workers never hold CSECT_LOG lock. Investigate any possible
+ *	 unwanted consequences.
+ * NOTE: It is considered that a vacuum worker holds a "shared" lock.
+ */
+#define LOG_CS_OWN(thread_p) \
+  (thread_is_process_log_for_vacuum (thread_p) \
+   || csect_check_own (thread_p, CSECT_LOG) >= 1)
+#define LOG_CS_OWN_WRITE_MODE(thread_p) \
+  (csect_check_own (thread_p, CSECT_LOG) == 1)
+#define LOG_CS_OWN_READ_MODE(thread_p) \
+  (thread_is_process_log_for_vacuum (thread_p) \
+   || csect_check_own (thread_p, CSECT_LOG) == 2)
 
 #define LOG_ARCHIVE_CS_OWN(thread_p)                 \
         (csect_check (thread_p, CSECT_LOG_ARCHIVE) >= 1)
@@ -747,7 +756,7 @@ struct log_mvcc_btid_unique_stats
   BTID btid;			/* id of B-tree */
   bool deleted;			/* true if the B-tree was deleted */
 
-  LOG_UNIQUE_STATS tran_stats;	/* statistics accumulated durin entire
+  LOG_UNIQUE_STATS tran_stats;	/* statistics accumulated during entire
 				 * transaction */
   LOG_UNIQUE_STATS global_stats;	/* statistics loaded from index */
 };
@@ -794,6 +803,35 @@ struct log_mvcc_update_stats
   int topop_id;
 };
 
+/* LOG_DROPPED_CLS_BTID_ENTRY
+ * Structure used to track dropped classes during transaction. They will be
+ * passed to vacuum at commit.
+ */
+typedef struct log_dropped_cls_btid_entry LOG_DROPPED_CLS_BTID_ENTRY;
+struct log_dropped_cls_btid_entry
+{
+  union
+  {
+    OID class_oid;		/* OID of dropped class */
+    BTID btid;			/* BTID of dropped b-tree */
+  } id;
+  MVCCID mvccid;		/* transaction MVCCID */
+  LOG_DROPPED_CLS_BTID_ENTRY *next;	/* Pointer to next item in list */
+};
+
+/* LOG_DROPPED_CLASSES_INDEXES
+ * Tracker for all transaction dropped classes and indexes. All dropped
+ * classes and indexes must be passed to vacuum at commit.
+ */
+typedef struct log_dropped_classes_indexes LOG_DROPPED_CLASSES_INDEXES;
+struct log_dropped_classes_indexes
+{
+  LOG_DROPPED_CLS_BTID_ENTRY *dropped_classes;
+  LOG_DROPPED_CLS_BTID_ENTRY *dropped_indexes;
+  LOG_DROPPED_CLS_BTID_ENTRY *last_command_dropped_classes;
+  LOG_DROPPED_CLS_BTID_ENTRY *last_command_dropped_indexes;
+  LOG_DROPPED_CLS_BTID_ENTRY *free_dropped_cls_btid_entries;
+};
 
 typedef struct log_tdes LOG_TDES;
 struct log_tdes
@@ -919,6 +957,11 @@ struct log_tdes
 					 * deleted records during last
 					 * command/transaction
 					 */
+  LOG_DROPPED_CLASSES_INDEXES log_dropped_cls_btids;	/* Collects data about
+							 * dropped classes and
+							 * indexes during
+							 * command/transaction.
+							 */
 };
 
 typedef struct log_addr_tdesarea LOG_ADDR_TDESAREA;
@@ -1070,6 +1113,17 @@ struct log_header
   LOG_LSA eof_lsa;
 
   LOG_LSA smallest_lsa_at_last_chkpt;
+
+  LOG_LSA mvcc_op_log_lsa;	/* Used to link log entries for mvcc
+				 * operations. Vacuum will then process
+				 * these entries
+				 */
+  MVCCID last_block_oldest_mvccid;	/* Used to find the oldest MVCCID in a
+					 * block of log data.
+					 */
+  MVCCID last_block_newest_mvccid;	/* Used to find the newest MVCCID in a
+					 * block of log data.
+					 */
 };
 
 #define LOG_HEADER_INITIALIZER                   \
@@ -1116,7 +1170,13 @@ struct log_header
      /* eof_lsa */                               \
      {NULL_PAGEID, NULL_OFFSET},                 \
      /* smallest_lsa_at_last_chkpt */            \
-     {NULL_PAGEID, NULL_OFFSET}                  \
+     {NULL_PAGEID, NULL_OFFSET},                 \
+     /* mvcc_op_log_lsa */			 \
+     {NULL_PAGEID, NULL_OFFSET},                 \
+     /* last_block_oldest_mvccid */		 \
+     {MVCCID_NULL},				 \
+     /* last_block_newest_mvccid */		 \
+     {MVCCID_NULL}				 \
   }
 
 #define LOGWR_HEADER_INITIALIZER                 \
@@ -1294,8 +1354,8 @@ enum log_rectype
 					   This record is not generated no more.
 					   It's kept for backward compatibility.
 					 */
-  LOG_REPLICATION_DATA = 39,	/* Replicaion log for insert, delete or update */
-  LOG_REPLICATION_SCHEMA = 40,	/* Replicaion log for schema, index, trigger or system catalog updates */
+  LOG_REPLICATION_DATA = 39,	/* Replication log for insert, delete or update */
+  LOG_REPLICATION_SCHEMA = 40,	/* Replication log for schema, index, trigger or system catalog updates */
   LOG_UNLOCK_COMMIT = 41,	/* for repl_agent to guarantee the order of */
   LOG_UNLOCK_ABORT = 42,	/* transaction commit, we append the unlock info.
 				   before calling lock_unlock_all()
@@ -1315,6 +1375,31 @@ enum log_repl_flush
 				 *  and rollback
 				 */
 };
+
+/* Definitions used to identify MVCC log records. Used by log manager and
+ * vacuum.
+ */
+/* Is log record for a heap MVCC operation */
+#define LOG_IS_MVCC_HEAP_OPERATION(rcvindex) \
+  (((rcvindex) == RVHF_MVCC_DELETE) \
+   || ((rcvindex) == RVHF_MVCC_DELETE_RELOCATION) \
+   || ((rcvindex) == RVHF_MVCC_DELETE_RELOCATED) \
+   || ((rcvindex) == RVHF_MVCC_INSERT))
+/* Is log record for a b-tree MVCC operation */
+#define LOG_IS_MVCC_BTREE_OPERATION(rcvindex) \
+  ((rcvindex) == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID \
+   || (rcvindex) == RVBT_KEYVAL_MVCC_INS \
+   || (rcvindex) == RVBT_KEYVAL_MVCC_INS_LFRECORD_KEYINS \
+   || (rcvindex) == RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS)
+/* Is log record for a MVCC operation */
+#define LOG_IS_MVCC_OPERATION(rcvindex) \
+  (LOG_IS_MVCC_HEAP_OPERATION (rcvindex) \
+   || LOG_IS_MVCC_BTREE_OPERATION (rcvindex))
+/* Is log record for a change on vacuum data */
+#define LOG_IS_VACUUM_DATA_RECOVERY(rcvindex) \
+  ((rcvindex) == RVVAC_LOG_BLOCK_APPEND	  \
+   || (rcvindex) == RVVAC_LOG_BLOCK_REMOVE  \
+   || (rcvindex) == RVVAC_LOG_BLOCK_MODIFY)
 
 typedef struct log_repl LOG_REPL_RECORD;
 struct log_repl
@@ -2285,4 +2370,11 @@ extern int logtb_mvcc_prepare_count_optim_classes (THREAD_ENTRY * thread_p,
 						   LC_PREFETCH_FLAGS * flags,
 						   int n_classes);
 extern void logtb_mvcc_reset_count_optim_state (THREAD_ENTRY * thread_p);
+
+extern int logtb_dropped_class (THREAD_ENTRY * thread_p,
+				const OID * class_oid);
+extern int logtb_dropped_index (THREAD_ENTRY * thread_p, const BTID * btidp);
+extern void xlogtb_update_transaction_dropped_cls_btid (THREAD_ENTRY *
+							thread_p,
+							bool success);
 #endif /* _LOG_IMPL_H_ */

@@ -955,6 +955,10 @@ net_server_init (void)
   req_p = &net_Requests[NET_SERVER_INVALIDATE_MVCC_SNAPSHOT];
   req_p->processing_function = slogtb_invalidate_mvcc_snapshot;
   req_p->name = "NET_SERVER_INVALIDATE_MVCC_SNAPSHOT";
+
+  req_p = &net_Requests[NET_SERVER_UPDATE_DROP_CLS_BTID];
+  req_p->processing_function = slogtb_update_transaction_dropped_cls_btid;
+  req_p->name = "NET_SERVER_INVALIDATE_MVCC_SNAPSHOT";
 }
 
 #if defined(CUBRID_DEBUG)
@@ -1385,6 +1389,7 @@ net_server_start (const char *server_name)
     }
   sysprm_load_and_init (NULL, NULL);
   sysprm_set_er_log_file (server_name);
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
   if (thread_initialize_manager () != NO_ERROR)
     {
       PRINT_AND_LOG_ERR_MSG ("Failed to initialize thread manager\n");

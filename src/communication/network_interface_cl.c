@@ -11051,6 +11051,52 @@ cvacuum (int num_classes, OID * class_oids)
 }
 
 /*
+ * log_update_drop_cls_btid () - Notify server if classes/indexes were
+ *				 successfully dropped or not.
+ *
+ * return	: Error code.
+ * success (in) : True if classes/indexes were successfully dropped.
+ */
+int
+log_update_drop_cls_btid (bool success)
+{
+#if defined(CS_MODE)
+  int err = NO_ERROR;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_request;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *request, *reply;
+
+  if (!prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      /* MVCC enabled only */
+      return NO_ERROR;
+    }
+
+  request = OR_ALIGNED_BUF_START (a_request);
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  (void) or_pack_int (request, (int) success);
+
+  /* Send request to server */
+  err =
+    net_client_request (NET_SERVER_UPDATE_DROP_CLS_BTID,
+			request, OR_ALIGNED_BUF_SIZE (a_request),
+			reply, OR_ALIGNED_BUF_SIZE (a_reply),
+			NULL, 0, NULL, 0);
+
+  if (err == NO_ERROR)
+    {
+      (void) or_unpack_int (reply, &err);
+    }
+
+  return err;
+#else /* !CS_MODE */
+  xlogtb_update_transaction_dropped_cls_btid (NULL, success);
+  return NO_ERROR;
+#endif
+}
+
+/*
  * log_invalidate_mvcc_snapshot () - Invalidate MVCC Snapshot to avoid further
  *				     usage.
  *

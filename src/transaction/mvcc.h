@@ -139,12 +139,12 @@
 /* clear MVCC snapshot data - do not free active_ids since they are reused */
 #define MVCC_CLEAR_SNAPSHOT_DATA(snapshot) \
   do { \
-  (snapshot)->snapshot_fnc = NULL; \
-  (snapshot)->lowest_active_mvccid = MVCCID_NULL; \
-  (snapshot)->highest_completed_mvccid = MVCCID_NULL; \
-  (snapshot)->cnt_active_ids = 0; \
-  (snapshot)->valid = false;	\
-    } while (0)
+    (snapshot)->snapshot_fnc = NULL; \
+    (snapshot)->lowest_active_mvccid = MVCCID_NULL; \
+    (snapshot)->highest_completed_mvccid = MVCCID_NULL; \
+    (snapshot)->cnt_active_ids = 0; \
+    (snapshot)->valid = false;	\
+  } while (0)
 
 typedef struct mvcc_snapshot MVCC_SNAPSHOT;
 
@@ -203,25 +203,22 @@ enum mvcc_satisfies_delete_result
 {
   DELETE_RECORD_INVISIBLE,	/* invisible - created after scan started */
   DELETE_RECORD_CAN_DELETE,	/* is visible and valid - can be deleted */
-  DELETE_RECORD_DELETED,	/* deleted by committed transaction or
-				 * deleted by the current transaction
-				 */
-  DELETE_RECORD_IN_PROGRESS	/* deleted by other in progress transaction */
+  DELETE_RECORD_DELETED,	/* deleted by the current transaction */
+  DELETE_RECORD_IN_PROGRESS,	/* deleted by other in progress transaction */
+  DELETE_RECORD_SELF_DELETED	/* deleted by the current transaction */
 };				/* Heap record satisfies delete result */
 
 typedef enum mvcc_satisfies_vacuum_result MVCC_SATISFIES_VACUUM_RESULT;
 enum mvcc_satisfies_vacuum_result
 {
-  VACUUM_RECORD_DEAD,		/* record is dead and can be removed */
-  VACUUM_RECORD_ALIVE,		/* record is alive */
-  VACUUM_RECORD_RECENTLY_DELETED,	/* delete is in progress or it has
-					 * recently been committed and the
-					 * record is still visible to active
-					 * transactions
-					 */
-  VACUUM_RECORD_RECENTLY_INSERTED,	/* the inserter is still active or
-					 * has recently committed
-					 */
+  VACUUM_RECORD_REMOVE,		/* record can be removed completely */
+  VACUUM_RECORD_DELETE_INSID,	/* record insert MVCCID can be removed */
+  VACUUM_RECORD_CANNOT_VACUUM	/* record cannot be vacuumed because:
+				 * 1. it was already vacuumed.
+				 * 2. it was recently inserted.
+				 * 3. it was recently deleted and has no
+				 *    insert MVCCID.
+				 */
 };				/* Heap record satisfies vacuum result */
 
 extern bool mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
@@ -233,12 +230,6 @@ extern MVCC_SATISFIES_VACUUM_RESULT mvcc_satisfies_vacuum (THREAD_ENTRY *
 							   rec_header,
 							   MVCCID
 							   oldest_mvccid);
-extern int mvcc_chain_satisfies_vacuum (THREAD_ENTRY * thread_p,
-					PAGE_PTR * page_p, VPID page_vpid,
-					PGSLOTID slotid, bool reuse_oid,
-					bool vacuum_page_only,
-					VACUUM_PAGE_DATA * vacuum_data_p,
-					MVCCID oldest_active);
 extern MVCC_SATISFIES_DELETE_RESULT mvcc_satisfies_delete (THREAD_ENTRY *
 							   thread_p,
 							   MVCC_REC_HEADER *
@@ -249,13 +240,4 @@ extern bool mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
 				  MVCC_SNAPSHOT * snapshot);
 extern bool mvcc_id_precedes (MVCCID id1, MVCCID id2);
 extern bool mvcc_id_follow_or_equal (MVCCID id1, MVCCID id2);
-
-extern int mvcc_allocate_vacuum_data (THREAD_ENTRY * thread_p,
-				      VACUUM_PAGE_DATA * vacuum_data_p,
-				      int n_slots);
-extern void mvcc_init_vacuum_data (THREAD_ENTRY * thread_p,
-				   VACUUM_PAGE_DATA * vacuum_data_p,
-				   int n_slots);
-extern void mvcc_finalize_vacuum_data (THREAD_ENTRY * thread_p,
-				       VACUUM_PAGE_DATA * vacuum_data_p);
 #endif /* _MVCC_SNAPSHOT_H_ */

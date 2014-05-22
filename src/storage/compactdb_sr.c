@@ -200,6 +200,30 @@ process_object (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scancache,
       return -1;
     }
 
+  if (mvcc_Enabled)
+    {
+      SCAN_CODE scan_code;
+      RECDES copy_recdes;
+
+      copy_recdes.data = NULL;
+
+      scan_code =
+	heap_mvcc_get_version_for_delete (thread_p, &upd_scancache->hfid,
+					  oid, &upd_scancache->class_oid,
+					  &copy_recdes, upd_scancache,
+					  COPY, NULL);
+      if (scan_code != S_SUCCESS)
+	{
+	  if (er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+	    {
+	      er_clear ();
+	      return 0;
+	    }
+
+	  return -1;
+	}
+    }
+
   atts_id = (int *) db_private_alloc (thread_p,
 				      attr_info->num_values * sizeof (int));
   if (atts_id == NULL)
@@ -234,7 +258,7 @@ process_object (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scancache,
 				      NULL, NULL, false);
       if (error_code != NO_ERROR)
 	{
-	  if (error_code == ER_MVCC_ROW_ALREADY_DELETED)
+	  if (error_code == ER_MVCC_NOT_SATISFIED_REEVALUATION)
 	    {
 	      result = 0;
 	    }

@@ -64,8 +64,13 @@
 /* Is vpid NULL ? */
 #define VPID_ISNULL(vpid_ptr) ((vpid_ptr)->pageid == NULL_PAGEID)
 
+/* Get page VPID for OID */
 #define VPID_GET_FROM_OID(vpid_ptr, oid_ptr) \
   VPID_SET (vpid_ptr, (oid_ptr)->volid, (oid_ptr)->pageid);
+/* Check if OID's are on the same page */
+#define VPID_EQ_FOR_OIDS(oid_ptr1, oid_ptr2) \
+  (((oid_ptr1)->volid == (oid_ptr2)->volid)  \
+   && ((oid_ptr1)->pageid == (oid_ptr2)->pageid))
 
 #define pgbuf_unfix_and_init(thread_p, pgptr) \
   do { \
@@ -262,6 +267,8 @@ extern void pgbuf_invalidate_temporary_file (VOLID volid, PAGEID first_pageid,
 					     bool need_invalidate);
 extern bool pgbuf_check_page_ptype (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
 				    PAGE_TYPE ptype);
+extern bool pgbuf_check_page_type_no_error (THREAD_ENTRY * thread_p,
+					    PAGE_PTR pgptr, PAGE_TYPE ptype);
 extern DISK_ISVALID pgbuf_is_valid_page (THREAD_ENTRY * thread_p,
 					 const VPID * vpid, bool no_error,
 					 DISK_ISVALID (*fun) (const VPID *
@@ -272,5 +279,11 @@ extern DISK_ISVALID pgbuf_is_valid_page (THREAD_ENTRY * thread_p,
 #if defined(CUBRID_DEBUG)
 extern void pgbuf_dump_if_any_fixed (void);
 #endif
+
+extern int pgbuf_fix_when_other_is_fixed (THREAD_ENTRY * thread_p,
+					  VPID * vpid_to_fix, int newpage,
+					  PGBUF_LATCH_MODE mode,
+					  PAGE_PTR * page_to_fix,
+					  PAGE_PTR * page_fixed);
 
 #endif /* _PAGE_BUFFER_H_ */

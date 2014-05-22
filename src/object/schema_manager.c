@@ -15535,6 +15535,7 @@ sm_truncate_class (MOP class_mop)
   DB_CTMPL *ctmpl = NULL;
   SM_ATTRIBUTE *att = NULL;
   bool keep_pk = false;
+  bool is_index_dropped = false;
   int au_save = 0;
 
   assert (class_mop != NULL);
@@ -15635,6 +15636,7 @@ sm_truncate_class (MOP class_mop)
 	  goto error_exit;
 	}
 
+      is_index_dropped = true;
       for (saved = fk_save_info; saved != NULL; saved = saved->next)
 	{
 	  error = dbt_drop_constraint (ctmpl, saved->constraint_type,
@@ -15655,6 +15657,7 @@ sm_truncate_class (MOP class_mop)
 	}
     }
 
+  is_index_dropped = is_index_dropped || (unique_save_info != NULL);
   for (saved = unique_save_info; saved != NULL; saved = saved->next)
     {
       error = sm_drop_constraint (class_mop, saved->constraint_type,
@@ -15666,6 +15669,7 @@ sm_truncate_class (MOP class_mop)
 	}
     }
 
+  is_index_dropped = is_index_dropped || (index_save_info != NULL);
   for (saved = index_save_info; saved != NULL; saved = saved->next)
     {
       error = sm_drop_index (class_mop, saved->name);
@@ -15789,6 +15793,11 @@ sm_truncate_class (MOP class_mop)
       sm_free_constraint_info (&index_save_info);
     }
 
+  if (is_index_dropped)
+    {
+      log_update_drop_cls_btid (true);
+    }
+
   return NO_ERROR;
 
 error_exit:
@@ -15811,6 +15820,11 @@ error_exit:
   if (index_save_info != NULL)
     {
       sm_free_constraint_info (&index_save_info);
+    }
+
+  if (is_index_dropped)
+    {
+      log_update_drop_cls_btid (false);
     }
 
   return error;

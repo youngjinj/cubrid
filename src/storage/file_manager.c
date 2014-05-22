@@ -1607,7 +1607,7 @@ file_find_limits (PAGE_PTR ftb_pgptr, const FILE_ALLOCSET * allocset,
  * file_ftabvpid_alloc () - Allocate a set of file table pages
  *   return:
  *   hint_volid(in): Use this volume identifier as a hint for the allocation
- *   hint_pageid(in): Une this page in the hinted volume for allocation as
+ *   hint_pageid(in): Use this page in the hinted volume for allocation as
  *                    close as this page
  *   ftb_vpids(in): An array of num_ftb_pages VPID elements
  *   num_ftb_pages(in): Number of table pages to allocate

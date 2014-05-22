@@ -2334,7 +2334,7 @@ disk_expand_tmp (THREAD_ENTRY * thread_p, INT16 volid, INT32 min_pages,
   npages_toadd = ((vhdr->sys_lastpage - vhdr->page_alloctb_page1 + 1) *
 		  DISK_PAGE_BIT) - vhdr->total_pages;
 
-  /* Now adjust accrding to the requested numbers */
+  /* Now adjust according to the requested numbers */
   if (npages_toadd < min_pages)
     {
       /* This volume cannot be expanded with the given number of pages. */

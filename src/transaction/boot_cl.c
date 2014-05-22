@@ -1146,7 +1146,8 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
    * restarted.
    */
 
-  tran_isolation = TRAN_DEFAULT_ISOLATION;
+  tran_isolation = TRAN_DEFAULT_ISOLATION_LEVEL ();
+
   tran_lock_wait_msecs = TRAN_LOCK_INFINITE_WAIT;
 
   er_log_debug (ARG_FILE_LINE, "boot_restart_client: "
@@ -1288,10 +1289,11 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
    * If there is a need to change the isolation level and the lock wait,
    * do it at this moment
    */
+
   tran_isolation =
     (TRAN_ISOLATION) prm_get_integer_value (PRM_ID_LOG_ISOLATION_LEVEL);
   tran_lock_wait_msecs = prm_get_integer_value (PRM_ID_LK_TIMEOUT_SECS);
-  if (tran_isolation != TRAN_DEFAULT_ISOLATION)
+  if (tran_isolation != TRAN_DEFAULT_ISOLATION_LEVEL ())
     {
       error_code = tran_reset_isolation (tran_isolation, TM_TRAN_ASYNC_WS ());
       if (error_code != NO_ERROR)
@@ -1571,7 +1573,7 @@ boot_client_all_finalize (bool is_er_final)
 	      SERVER_SESSION_KEY_SIZE);
 
       boot_client (NULL_TRAN_INDEX, TRAN_LOCK_INFINITE_WAIT,
-		   TRAN_DEFAULT_ISOLATION);
+		   TRAN_DEFAULT_ISOLATION_LEVEL ());
       boot_Is_client_all_final = true;
     }
 

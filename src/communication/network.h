@@ -262,6 +262,7 @@ enum net_server_request
 
   NET_SERVER_VACUUM,
   NET_SERVER_INVALIDATE_MVCC_SNAPSHOT,
+  NET_SERVER_UPDATE_DROP_CLS_BTID,
   /*
    * This is the last entry. It is also used for the end of an
    * array of statistics information on client/server communication.

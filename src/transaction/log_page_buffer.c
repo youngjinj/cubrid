@@ -91,6 +91,7 @@
 #include "db.h"			/* for db_Connect_status */
 #include "log_compress.h"
 #include "event_log.h"
+#include "thread.h"
 
 #if !defined(SERVER_MODE)
 #define pthread_mutex_init(a, b)
@@ -196,7 +197,6 @@ static int rv;
       log_Gl.append.prev_lsa.offset)                                          \
    : ((char *)log_Gl.append.log_pgptr->area +                                 \
       log_Gl.append.prev_lsa.offset))
-
 
 /* LOG BUFFER STRUCTURE */
 
@@ -1902,6 +1902,10 @@ logpb_initialize_header (THREAD_ENTRY * thread_p, struct log_header *loghdr,
   LSA_SET_NULL (&loghdr->eof_lsa);
   LSA_SET_NULL (&loghdr->smallest_lsa_at_last_chkpt);
 
+  LSA_SET_NULL (&loghdr->mvcc_op_log_lsa);
+  loghdr->last_block_newest_mvccid = MVCCID_NULL;
+  loghdr->last_block_oldest_mvccid = MVCCID_NULL;
+
   return NO_ERROR;
 }
 
@@ -2061,9 +2065,10 @@ logpb_fetch_page (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
    *          logpb_flush_all_append_pages is cleared so there is no EOL
    *          in log page (in delayed_free_log_pgptr)
    */
-  if (pageid >= log_Gl.hdr.append_lsa.pageid	/* for case 1 */
-      || pageid >= log_Gl.append.prev_lsa.pageid)	/* for case 2 */
+  if ((pageid >= log_Gl.hdr.append_lsa.pageid)	/* for case 1 */
+      || (pageid >= log_Gl.append.prev_lsa.pageid))	/* for case 2 */
     {
+      assert (!thread_is_process_log_for_vacuum (thread_p));
       LOG_CS_ENTER (thread_p);
 
       assert (LSA_LE (&log_Gl.append.prev_lsa, &log_Gl.hdr.append_lsa));
@@ -2163,8 +2168,15 @@ logpb_copy_page (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
   assert (log_pgptr != NULL);
   assert (pageid != NULL_PAGEID);
 
-  LOG_CS_ENTER_READ_MODE (thread_p);
+  if (!thread_is_process_log_for_vacuum (thread_p))
+    {
+      /* TODO: Avoid any locks for vacuum workers. Investigate if any unwanted
+       *       consequences are possible.
+       */
+      LOG_CS_ENTER_READ_MODE (thread_p);
+    }
 
+  /* TODO: Can we use a latch free structure here? */
   csect_enter (thread_p, CSECT_LOG_PB, INF_WAIT);
 
   log_bufptr = (struct log_buffer *) mht_get (log_Pb.ht, &pageid);
@@ -2181,7 +2193,13 @@ logpb_copy_page (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
       ret_pgptr = logpb_read_page_from_file (thread_p, pageid, log_pgptr);
     }
 
-  LOG_CS_EXIT (thread_p);
+  if (!thread_is_process_log_for_vacuum (thread_p))
+    {
+      /* TODO: Avoid any locks for vacuum workers. Investigate if any unwanted
+       *       consequences are possible.
+       */
+      LOG_CS_EXIT (thread_p);
+    }
 
   return ret_pgptr;
 }
@@ -2218,6 +2236,12 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
   else
     {
       LOG_PHY_PAGEID phy_pageid;
+
+      if (thread_is_process_log_for_vacuum (thread_p))
+	{
+	  LOG_CS_ENTER_READ_MODE (thread_p);
+	}
+
       /*
        * Page is contained in the active log.
        * Find the corresponding physical page and read the page form disk.
@@ -2231,6 +2255,10 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
 	{
 	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
 		  ER_LOG_READ, 3, pageid, phy_pageid, log_Name_active);
+	  if (thread_is_process_log_for_vacuum (thread_p))
+	    {
+	      LOG_CS_EXIT (thread_p);
+	    }
 	  return NULL;
 	}
       else
@@ -2240,8 +2268,16 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
 	      /* Clean the buffer... since it may be corrupted */
 	      er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_LOG_PAGE_CORRUPTED, 1, pageid);
+	      if (thread_is_process_log_for_vacuum (thread_p))
+		{
+		  LOG_CS_EXIT (thread_p);
+		}
 	      return NULL;
 	    }
+	}
+      if (thread_is_process_log_for_vacuum (thread_p))
+	{
+	  LOG_CS_EXIT (thread_p);
 	}
     }
 
@@ -3201,7 +3237,12 @@ prior_lsa_gen_undoredo_record (THREAD_ENTRY * thread_p,
   char *data_ptr = NULL;
   char *udata = NULL, *rdata = NULL;
 
-  zip_undo = logpb_get_zip_undo (thread_p);
+  /* TODO: Temporarily disable zip for MVCC operations. The log lsa for
+   *       previous MVCC operation is added later (it is probably possible
+   *       to add it here, but first investigate.
+   */
+  zip_undo =
+    LOG_IS_MVCC_OPERATION (rcvindex) ? NULL : logpb_get_zip_undo (thread_p);
   zip_redo = logpb_get_zip_redo (thread_p);
 
   is_diff = false;
@@ -3350,7 +3391,12 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
   is_redo_zip = false;
   is_diff = false;
 
-  zip_undo = logpb_get_zip_undo (thread_p);
+  /* TODO: Temporarily disable zip for MVCC operations. The log lsa for
+   *       previous MVCC operation is added later (it is probably possible
+   *       to add it here, but first investigate.
+   */
+  zip_undo =
+    LOG_IS_MVCC_OPERATION (rcvindex) ? NULL : logpb_get_zip_undo (thread_p);
   zip_redo = logpb_get_zip_redo (thread_p);
 
   ulength = 0;
@@ -3537,7 +3583,12 @@ prior_lsa_gen_undo_record (THREAD_ENTRY * thread_p,
   LOG_ZIP *zip_undo;
 
   /* Log compress Process */
-  zip_undo = logpb_get_zip_undo (thread_p);
+  /* TODO: Temporarily disable zip for MVCC operations. The log lsa for
+   *       previous MVCC operation is added later (it is probably possible
+   *       to add it here, but first investigate.
+   */
+  zip_undo =
+    LOG_IS_MVCC_OPERATION (rcvindex) ? NULL : logpb_get_zip_undo (thread_p);
 
   if (log_zip_support && zip_undo && (length > 0))
     {
@@ -3614,7 +3665,12 @@ prior_lsa_gen_undo_record_from_crumbs (THREAD_ENTRY * thread_p,
   LOG_ZIP *zip_undo;
   char *data_ptr = NULL;
 
-  zip_undo = logpb_get_zip_undo (thread_p);
+  /* TODO: Temporarily disable zip for MVCC operations. The log lsa for
+   *       previous MVCC operation is added later (it is probably possible
+   *       to add it here, but first investigate.
+   */
+  zip_undo =
+    LOG_IS_MVCC_OPERATION (rcvindex) ? NULL : logpb_get_zip_undo (thread_p);
 
   for (i = 0; i < num_crumbs; i++)
     {
@@ -4494,6 +4550,67 @@ prior_lsa_next_record_internal (THREAD_ENTRY * thread_p,
   prior_lsa_start_append (thread_p, node, tdes);
 
   LSA_COPY (&start_lsa, &node->start_lsa);
+
+  /* Is this a valid MVCC operations:
+   * 1. node must be undoredo/undo type and must have undo data.
+   * 2. record index must the index of MVCC operations.
+   */
+  if (node->udata != NULL
+      && ((node->log_header.type == LOG_UNDOREDO_DATA
+	   && (LOG_IS_MVCC_OPERATION
+	       (((struct log_undoredo *) node->data_header)->data.rcvindex)))
+	  || (node->log_header.type == LOG_UNDO_DATA
+	      && (LOG_IS_MVCC_OPERATION
+		  (((struct log_undo *) node->data_header)->data.rcvindex)))))
+    {
+      /* Link the log record to previous MVCC delete/update log record */
+      /* Will be used by vacuum */
+      assert_release (node->ulength >= OR_LOG_LSA_ALIGNED_SIZE);
+      (void) or_pack_log_lsa (node->udata, &log_Gl.hdr.mvcc_op_log_lsa);
+
+      vacuum_er_log (VACUUM_ER_LOG_LOGGING,
+		     "VACUUM: thread(%d): log mvcc op at (%lld, %d) "
+		     "and create link with log_lsa(%lld, %d)\n",
+		     thread_get_current_entry_index (),
+		     (long long int) node->start_lsa.pageid,
+		     (int) node->start_lsa.offset,
+		     (long long int) log_Gl.hdr.mvcc_op_log_lsa.pageid,
+		     (int) log_Gl.hdr.mvcc_op_log_lsa.offset);
+
+      /* Check if the block of log data is changed */
+      if (!LSA_ISNULL (&log_Gl.hdr.mvcc_op_log_lsa)
+	  && (VACUUM_GET_LOG_BLOCKID (log_Gl.hdr.mvcc_op_log_lsa.pageid)
+	      != VACUUM_GET_LOG_BLOCKID (start_lsa.pageid)))
+	{
+	  /* Notify vacuum of a new block */
+	  vacuum_produce_log_block_data (thread_p,
+					 &log_Gl.hdr.mvcc_op_log_lsa,
+					 log_Gl.hdr.last_block_oldest_mvccid,
+					 log_Gl.hdr.last_block_newest_mvccid);
+	  log_Gl.hdr.last_block_oldest_mvccid = node->log_header.mvcc_id;
+	  log_Gl.hdr.last_block_newest_mvccid = node->log_header.mvcc_id;
+	}
+      else
+	{
+	  /* Same block, update the oldest and the newest met MVCCID's */
+	  if (log_Gl.hdr.last_block_newest_mvccid == MVCCID_NULL
+	      || mvcc_id_precedes (log_Gl.hdr.last_block_newest_mvccid,
+				   node->log_header.mvcc_id))
+	    {
+	      /* A newer MVCCID was found */
+	      log_Gl.hdr.last_block_newest_mvccid = node->log_header.mvcc_id;
+	    }
+	  if (log_Gl.hdr.last_block_oldest_mvccid == MVCCID_NULL
+	      || mvcc_id_precedes (node->log_header.mvcc_id,
+				   log_Gl.hdr.last_block_oldest_mvccid))
+	    {
+	      /* An older MVCCID was found */
+	      log_Gl.hdr.last_block_oldest_mvccid = node->log_header.mvcc_id;
+	    }
+	}
+      /* Replace last MVCC deleted/updated log record */
+      LSA_COPY (&log_Gl.hdr.mvcc_op_log_lsa, &start_lsa);
+    }
 
   LOG_PRIOR_LSA_APPEND_ADVANCE_WHEN_DOESNOT_FIT (node->data_header_length);
   LOG_PRIOR_LSA_APPEND_ADD_ALIGN (node->data_header_length);
@@ -6741,10 +6858,15 @@ logpb_set_unavailable_archive (int arv_num)
 {
   int *ptr;
   int size;
+  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (NULL);
 
-  assert (LOG_CS_OWN_WRITE_MODE (NULL)
-	  || (LOG_CS_OWN_READ_MODE (NULL)
-	      && LOG_ARCHIVE_CS_OWN_WRITE_MODE (NULL)));
+  if (!archive_cs_own_write)
+    {
+      /* TODO: Analyze and change the system of locks on archives. Vacuum
+       *       workers may be gravely affected by current CS.
+       */
+      LOG_ARCHIVE_CS_ENTER (NULL);
+    }
 
   if (log_Gl.archive.unav_archives == NULL)
     {
@@ -6752,7 +6874,7 @@ logpb_set_unavailable_archive (int arv_num)
       ptr = (int *) malloc (size);
       if (ptr == NULL)
 	{
-	  return;
+	  goto end;
 	}
       log_Gl.archive.max_unav = 10;
       log_Gl.archive.next_unav = 0;
@@ -6767,7 +6889,7 @@ logpb_set_unavailable_archive (int arv_num)
 	  ptr = (int *) realloc (log_Gl.archive.unav_archives, size);
 	  if (ptr == NULL)
 	    {
-	      return;
+	      goto end;
 	    }
 	  log_Gl.archive.max_unav += 10;
 	  log_Gl.archive.unav_archives = ptr;
@@ -6775,6 +6897,12 @@ logpb_set_unavailable_archive (int arv_num)
     }
 
   log_Gl.archive.unav_archives[log_Gl.archive.next_unav++] = arv_num;
+
+end:
+  if (!archive_cs_own_write)
+    {
+      LOG_ARCHIVE_CS_EXIT (NULL);
+    }
 }
 
 /*
@@ -6787,9 +6915,15 @@ logpb_set_unavailable_archive (int arv_num)
 void
 logpb_decache_archive_info (THREAD_ENTRY * thread_p)
 {
-  assert (LOG_CS_OWN_WRITE_MODE (NULL)
-	  || (LOG_CS_OWN_READ_MODE (NULL)
-	      && LOG_ARCHIVE_CS_OWN_WRITE_MODE (NULL)));
+  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
+
+  if (!archive_cs_own_write)
+    {
+      /* TODO: Analyze and change the system of locks on archives. Vacuum
+       *       workers may be gravely affected by current CS.
+       */
+      LOG_ARCHIVE_CS_ENTER (thread_p);
+    }
 
   if (log_Gl.archive.vdes != NULL_VOLDES)
     {
@@ -6801,6 +6935,11 @@ logpb_decache_archive_info (THREAD_ENTRY * thread_p)
       free_and_init (log_Gl.archive.unav_archives);
       log_Gl.archive.max_unav = 0;
       log_Gl.archive.next_unav = 0;
+    }
+
+  if (!archive_cs_own_write)
+    {
+      LOG_ARCHIVE_CS_EXIT (thread_p);
     }
 }
 
@@ -7352,6 +7491,7 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
   const char *catmsg;
   int error_code = NO_ERROR;
   int num_pages = 0;
+  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
 
   aligned_log_pgbuf = PTR_ALIGN (log_pgbuf, MAX_ALIGNMENT);
 
@@ -7371,13 +7511,17 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
       return;
     }
 
+  if (!archive_cs_own_write)
+    {
+      /* TODO: Analyze and change the system of locks on archives. Vacuum
+       *       workers may be gravely affected by current CS.
+       */
+      LOG_ARCHIVE_CS_ENTER (thread_p);
+    }
+
   bg_arv_info = &log_Gl.bg_archive_info;
   if (log_Gl.archive.vdes != NULL_VOLDES)
     {
-      assert (LOG_CS_OWN_WRITE_MODE (thread_p)
-	      || (LOG_CS_OWN_READ_MODE (thread_p)
-		  && LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p)));
-
       fileio_dismount (thread_p, log_Gl.archive.vdes);
       log_Gl.archive.vdes = NULL_VOLDES;
     }
@@ -7584,10 +7728,6 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
 
   /* Cast the archive information. May be used again */
 
-  assert (LOG_CS_OWN_WRITE_MODE (thread_p)
-	  || (LOG_CS_OWN_READ_MODE (thread_p)
-	      && LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p)));
-
   log_Gl.archive.hdr = *arvhdr;	/* Copy of structure */
   log_Gl.archive.vdes = vdes;
 
@@ -7693,6 +7833,11 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
 
   free_and_init (malloc_arv_hdr_pgptr);
 
+  if (!archive_cs_own_write)
+    {
+      LOG_ARCHIVE_CS_EXIT (thread_p);
+    }
+
   return;
 
   /* ********* */
@@ -7720,6 +7865,11 @@ error:
     }
 
   logpb_fatal_error (thread_p, true, ARG_FILE_LINE, "log_archive_active_log");
+
+  if (!archive_cs_own_write)
+    {
+      LOG_ARCHIVE_CS_EXIT (thread_p);
+    }
 }
 
 int
@@ -7728,6 +7878,8 @@ logpb_remove_archive_logs_exceed_limit (THREAD_ENTRY * thread_p,
 {
   int first_arv_num_to_delete = -1;
   int last_arv_num_to_delete = -1;
+  int min_arv_required_for_vacuum;
+  LOG_PAGEID vacuum_first_pageid = NULL_PAGEID;
 #if defined(SERVER_MODE)
   LOG_PAGEID min_copied_pageid;
   int min_copied_arv_num;
@@ -7801,6 +7953,21 @@ logpb_remove_archive_logs_exceed_limit (THREAD_ENTRY * thread_p,
 		 log_Gl.hdr.last_arv_num_for_syscrashes);
 	}
 
+      if (mvcc_Enabled)
+	{
+	  vacuum_first_pageid = vacuum_data_get_first_log_pageid (thread_p);
+	  if (vacuum_first_pageid != NULL_PAGEID)
+	    {
+	      min_arv_required_for_vacuum =
+		logpb_get_archive_number (thread_p, vacuum_first_pageid);
+	      if (min_arv_required_for_vacuum >= 0)
+		{
+		  last_arv_num_to_delete =
+		    MIN (last_arv_num_to_delete, min_arv_required_for_vacuum);
+		}
+	    }
+	}
+
       if (max_count > 0)
 	{
 	  /* check max count for deletion */
@@ -7849,6 +8016,8 @@ logpb_remove_archive_logs_exceed_limit (THREAD_ENTRY * thread_p,
  *       That these archives may be needed for media crash recovery.
  *       Therefore, it is important that the user copy these archives
  *       to tape. Check the log information file.
+ *
+ * TODO: Make sure the removed logs have been processed by vacuum.
  */
 void
 logpb_remove_archive_logs (THREAD_ENTRY * thread_p, const char *info_reason)
@@ -7859,16 +8028,21 @@ logpb_remove_archive_logs (THREAD_ENTRY * thread_p, const char *info_reason)
   LOG_LSA newflush_upto_lsa;	/* Next to be flush           */
   int first_deleted_arv_num;
   int last_deleted_arv_num;
+  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
 
   assert (LOG_CS_OWN_WRITE_MODE (thread_p));
+
+  if (!archive_cs_own_write)
+    {
+      /* TODO: Analyze and change the system of locks on archives. Vacuum
+       *       workers may be gravely affected by current CS.
+       */
+      LOG_ARCHIVE_CS_ENTER (thread_p);
+    }
 
   /* Close any log archives that are opened */
   if (log_Gl.archive.vdes != NULL_VOLDES)
     {
-      assert (LOG_CS_OWN_WRITE_MODE (thread_p)
-	      || (LOG_CS_OWN_READ_MODE (thread_p)
-		  && LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p)));
-
       fileio_dismount (thread_p, log_Gl.archive.vdes);
       log_Gl.archive.vdes = NULL_VOLDES;
     }
@@ -7916,6 +8090,10 @@ logpb_remove_archive_logs (THREAD_ENTRY * thread_p, const char *info_reason)
   if (log_Gl.hdr.last_deleted_arv_num + 1 > last_deleted_arv_num)
     {
       /* Nothing to remove */
+      if (!archive_cs_own_write)
+	{
+	  LOG_ARCHIVE_CS_EXIT (thread_p);
+	}
       return;
     }
 
@@ -7927,6 +8105,11 @@ logpb_remove_archive_logs (THREAD_ENTRY * thread_p, const char *info_reason)
 
       log_Gl.hdr.last_deleted_arv_num = last_deleted_arv_num;
       logpb_flush_header (thread_p);	/* to get rid of archives */
+    }
+
+  if (!archive_cs_own_write)
+    {
+      LOG_ARCHIVE_CS_EXIT (thread_p);
     }
 }
 
@@ -8665,6 +8848,18 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
       goto error_cannot_chkpt;
     }
 
+  if (mvcc_Enabled)
+    {
+      er_log_debug (ARG_FILE_LINE,
+		    "logpb_checkpoint: call vacuum_flush_data()\n");
+      if (vacuum_flush_data (thread_p, &newchkpt_lsa, &chkpt_redo_lsa,
+			     &tmp_chkpt.redo_lsa, false) != NO_ERROR)
+	{
+	  LOG_CS_ENTER (thread_p);
+	  goto error_cannot_chkpt;
+	}
+    }
+
   er_log_debug (ARG_FILE_LINE,
 		"logpb_checkpoint: call fileio_synchronize_all()\n");
   if (fileio_synchronize_all (thread_p, false) != NO_ERROR)
@@ -8786,7 +8981,7 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
    * Scan again if there were any top system operations in the process of
    * being committed.
    * NOTE that we checkpoint top system operations only when there are in the
-   * process of commit. Not knownledge of top system operations that are not
+   * process of commit. Not knowledge of top system operations that are not
    * in the process of commit is required since if there is a crash, the system
    * operation is aborted as part of the transaction.
    */
@@ -9023,16 +9218,21 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
 
       if (first_arv_num_not_needed != -1)
 	{
+	  bool archive_cs_own_write =
+	    LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
+	  if (!archive_cs_own_write)
+	    {
+	      /* TODO: Analyze and change the system of locks on archives. Vacuum
+	       *       workers may be gravely affected by current CS.
+	       */
+	      LOG_ARCHIVE_CS_ENTER (thread_p);
+	    }
 	  log_Gl.hdr.last_arv_num_for_syscrashes =
 	    last_arv_num_not_needed + 1;
 
 	  /* Close any log archives that are opened */
 	  if (log_Gl.archive.vdes != NULL_VOLDES)
 	    {
-	      assert (LOG_CS_OWN_WRITE_MODE (thread_p)
-		      || (LOG_CS_OWN_READ_MODE (thread_p)
-			  && LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p)));
-
 	      fileio_dismount (thread_p, log_Gl.archive.vdes);
 	      log_Gl.archive.vdes = NULL_VOLDES;
 	    }
@@ -9082,6 +9282,11 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
 	    }
 
 	  logpb_flush_header (thread_p);	/* Yes, one more time, to get rid of archives */
+
+	  if (!archive_cs_own_write)
+	    {
+	      LOG_ARCHIVE_CS_EXIT (thread_p);
+	    }
 	}
     }
 
@@ -12475,7 +12680,8 @@ logpb_fatal_error_internal (THREAD_ENTRY * thread_p, bool log_exit,
        * call on exit functions of the applications.
        */
       boot_donot_shutdown_client_at_exit ();
-      tran_cache_tran_settings (NULL_TRAN_INDEX, -1, TRAN_DEFAULT_ISOLATION);
+      tran_cache_tran_settings (NULL_TRAN_INDEX, -1,
+				TRAN_DEFAULT_ISOLATION_LEVEL ());
       db_Connect_status = DB_CONNECTION_STATUS_NOT_CONNECTED;
 #endif /* SERVER_MODE */
 
@@ -12941,6 +13147,16 @@ logpb_dump_log_header (FILE * outfp)
   fprintf (outfp, "\tbackup level 2 lsa : (%lld, %d)\n",
 	   (long long int) log_Gl.hdr.bkup_level2_lsa.pageid,
 	   log_Gl.hdr.bkup_level2_lsa.offset);
+
+  fprintf (outfp, "\tMVCC op lsa : (%lld, %d)\n",
+	   (long long int) log_Gl.hdr.mvcc_op_log_lsa.pageid,
+	   log_Gl.hdr.mvcc_op_log_lsa.offset);
+
+  fprintf (outfp, "\tLast block oldest MVCCID : (%d)\n",
+	   (int) log_Gl.hdr.last_block_oldest_mvccid);
+
+  fprintf (outfp, "\tLast block newest MVCCID : (%d)\n",
+	   (int) log_Gl.hdr.last_block_newest_mvccid);
 }
 
 /*

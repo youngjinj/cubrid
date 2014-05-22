@@ -5257,8 +5257,11 @@ lock_demote_shared_class_lock (THREAD_ENTRY * thread_p, int tran_index,
 		  demote = DEMOTE;
 		}
 	    }
-	  else if (entry_ptr->granted_mode == IS_LOCK
-		   && last->req_mode == IS_LOCK && entry_ptr->history != last)
+	  else if ((entry_ptr->granted_mode == IS_LOCK
+		    || entry_ptr->granted_mode == SCH_S_LOCK)
+		   && ((last->req_mode == IS_LOCK
+			|| last->req_mode == SCH_S_LOCK)
+		       && entry_ptr->history != last))
 	    {
 	      /* has > 1 IS_LOCK */
 	      demote = DECREMENT_COUNT;
@@ -5385,17 +5388,19 @@ lock_unlock_shared_class_lock (THREAD_ENTRY * thread_p, int tran_index,
 	  prev = last->prev;
 
 	  if ((last->req_mode == IS_LOCK
+	       || last->req_mode == SCH_S_LOCK
 	       || last->req_mode == S_LOCK
 	       || last->req_mode == SIX_LOCK)
 	      && (entry_ptr->granted_mode == IS_LOCK
+		  || entry_ptr->granted_mode == SCH_S_LOCK
 		  || entry_ptr->granted_mode == S_LOCK
 		  || entry_ptr->granted_mode == SIX_LOCK))
 	    {
 	      p = entry_ptr->history;
 	      while (p != last)
 		{
-		  if (p->req_mode == IS_LOCK || p->req_mode == S_LOCK
-		      || p->req_mode == SIX_LOCK)
+		  if (p->req_mode == IS_LOCK || p->req_mode == SCH_S_LOCK
+		      || p->req_mode == S_LOCK || p->req_mode == SIX_LOCK)
 		    {
 		      break;
 		    }
@@ -5429,6 +5434,7 @@ lock_unlock_shared_class_lock (THREAD_ENTRY * thread_p, int tran_index,
       else
 	{
 	  if (entry_ptr->granted_mode == IS_LOCK
+	      || entry_ptr->granted_mode == SCH_S_LOCK
 	      || entry_ptr->granted_mode == S_LOCK)
 	    {
 	      demote_unlock = UNLOCK;
@@ -5449,6 +5455,7 @@ lock_unlock_shared_class_lock (THREAD_ENTRY * thread_p, int tran_index,
 	  (void) lock_internal_demote_shared_class_lock (thread_p, entry_ptr);
 	}
       else if (entry_ptr->granted_mode == IS_LOCK
+	       || entry_ptr->granted_mode == SCH_S_LOCK
 	       || entry_ptr->granted_mode == S_LOCK
 	       || entry_ptr->granted_mode == SIX_LOCK)
 	{
@@ -8528,7 +8535,8 @@ lock_scan (THREAD_ENTRY * thread_p, const OID * class_oid, bool is_indexscan,
 	}
       else
 	{
-	  if (LK_UNCOMMITTED_READ_ISOLATION (isolation)
+	  if (mvcc_Enabled
+	      || LK_UNCOMMITTED_READ_ISOLATION (isolation)
 	      || (lock_hint & LOCKHINT_READ_UNCOMMITTED))
 	    {
 	      class_lock = IS_LOCK;
@@ -8540,11 +8548,11 @@ lock_scan (THREAD_ENTRY * thread_p, const OID * class_oid, bool is_indexscan,
 	}
     }
 
-  /* acquire the lock on the class */
-  /* NOTE that in case of acquiring a lock on a class object,
-   * the higher lock granule of the class object is not given.
+  /* in MVCC do not acquire instance/key locks when scan index,
+   * no matter isolation level
    */
-  if (is_indexscan && !LK_UNCOMMITTED_READ_ISOLATION (isolation)
+  if (mvcc_Enabled == false
+      && is_indexscan && !LK_UNCOMMITTED_READ_ISOLATION (isolation)
       && !(lock_hint & LOCKHINT_READ_UNCOMMITTED))
     {
       *scanid_bit = lock_alloc_scanid_bit (thread_p);
@@ -8555,6 +8563,11 @@ lock_scan (THREAD_ENTRY * thread_p, const OID * class_oid, bool is_indexscan,
 	  return LK_NOTGRANTED_DUE_ERROR;
 	}
     }
+
+  /* acquire the lock on the class */
+  /* NOTE that in case of acquiring a lock on a class object,
+   * the higher lock granule of the class object is not given.
+   */
   root_class_entry = lock_get_class_lock (oid_Root_class_oid, tran_index);
   granted = lock_internal_perform_lock_object (thread_p, tran_index,
 					       class_oid, (OID *) NULL,
@@ -8993,6 +9006,7 @@ lock_unlock_object (THREAD_ENTRY * thread_p, const OID * oid,
     case TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE:
       /* Share lock on instance was never acquired */
       /* remove shared class lock */
+      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
       if (OID_IS_ROOTOID (oid) || OID_IS_ROOTOID (class_oid))
 	lock_unlock_shared_class_lock (thread_p, tran_index, oid);
       if (!OID_IS_ROOTOID (oid))	/* intentional lock */
@@ -9124,6 +9138,7 @@ lock_unlock_objects_lock_set (THREAD_ENTRY * thread_p, LC_LOCKSET * lockset)
 	  /* Shared lock on an instance was never acquired */
 	  /* remove shared class lock */
 	  /* unlock the intentional lock if it is a shared lock */
+	  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
 	  if (OID_IS_ROOTOID (class_oid))
 	    {
 	      lock_unlock_shared_class_lock (thread_p, tran_index, oid);
@@ -9220,6 +9235,7 @@ lock_unlock_scan (THREAD_ENTRY * thread_p, const OID * class_oid,
       break;
 
     case TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE:
+      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
       if (scan_state == END_SCAN)
 	{
 	  lock_unlock_shared_class_lock (thread_p, tran_index, class_oid);
@@ -9294,8 +9310,9 @@ lock_unlock_classes_lock_hint (THREAD_ENTRY * thread_p,
     case TRAN_REP_CLASS_UNCOMMIT_INSTANCE:
       return;			/* nothing to do */
 
-    case TRAN_COMMIT_CLASS_COMMIT_INSTANCE:
     case TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE:
+      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
+    case TRAN_COMMIT_CLASS_COMMIT_INSTANCE:
       /* class: remove shared class locks */
       for (i = 0; i < lockhint->num_classes; i++)
 	{
@@ -9414,15 +9431,17 @@ lock_unlock_by_isolation_level (THREAD_ENTRY * thread_p)
     case TRAN_REP_CLASS_REP_INSTANCE:
       return;			/* Nothing to release */
 
-    case TRAN_REP_CLASS_COMMIT_INSTANCE:
     case TRAN_REP_CLASS_UNCOMMIT_INSTANCE:
+      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
+    case TRAN_REP_CLASS_COMMIT_INSTANCE:
       /* remove all shared instance locks, demote all shared class locks */
       lock_remove_all_inst_locks (thread_p, tran_index, (OID *) NULL, S_LOCK);
       lock_demote_all_shared_class_locks (thread_p, tran_index);
       return;
 
-    case TRAN_COMMIT_CLASS_COMMIT_INSTANCE:
     case TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE:
+      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
+    case TRAN_COMMIT_CLASS_COMMIT_INSTANCE:
       /* remove all shared instance locks, remove all shared class locks */
       lock_remove_all_inst_locks (thread_p, tran_index, (OID *) NULL, S_LOCK);
       lock_remove_all_class_locks (thread_p, tran_index, S_LOCK);

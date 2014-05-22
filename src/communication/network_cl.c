@@ -822,6 +822,8 @@ net_histo_setup_names (void)
   net_Req_buffer[NET_SERVER_VACUUM].name = "NET_SERVER_VACUUM";
   net_Req_buffer[NET_SERVER_INVALIDATE_MVCC_SNAPSHOT].name =
     "NET_SERVER_INVALIDATE_MVCC_SNAPSHOT";
+  net_Req_buffer[NET_SERVER_UPDATE_DROP_CLS_BTID].name =
+    "NET_SERVER_UPDATE_DROP_CLS_BTID";
 }
 
 /*

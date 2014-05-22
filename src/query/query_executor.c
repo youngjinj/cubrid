@@ -10086,20 +10086,25 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		    {
 		      btid_dup_key_locked = false;
 		    }
-		  if (locator_attribute_info_force
-		      (thread_p, internal_class->class_hfid,
-		       internal_class->oid, internal_class->btid,
-		       btid_dup_key_locked, NULL, NULL, 0,
-		       LC_FLUSH_DELETE, current_op_type,
-		       internal_class->scan_cache, &force_count, false,
-		       REPL_INFO_TYPE_STMT_NORMAL,
-		       DB_NOT_PARTITIONED_CLASS, NULL, NULL,
-		       &mvcc_reev_data, false) != NO_ERROR)
+		  error = locator_attribute_info_force
+		    (thread_p, internal_class->class_hfid,
+		     internal_class->oid, internal_class->btid,
+		     btid_dup_key_locked, NULL, NULL, 0,
+		     LC_FLUSH_DELETE, current_op_type,
+		     internal_class->scan_cache, &force_count, false,
+		     REPL_INFO_TYPE_STMT_NORMAL,
+		     DB_NOT_PARTITIONED_CLASS, NULL, NULL,
+		     &mvcc_reev_data, false);
+
+		  if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
+		    {
+		      error = NO_ERROR;
+		    }
+		  else if (error != NO_ERROR)
 		    {
 		      GOTO_EXIT_ON_ERROR;
 		    }
-
-		  if (force_count)
+		  else if (force_count)
 		    {
 		      xasl->list_id->tuple_cnt++;
 		    }
@@ -10293,14 +10298,21 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					      internal_class->needs_pruning,
 					      pcontext, NULL,
 					      &mvcc_reev_data, false);
-	      if (error != NO_ERROR && error != ER_HEAP_UNKNOWN_OBJECT
-		  && error != ER_MVCC_ROW_ALREADY_DELETED)
+	      if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
+		{
+		  error = NO_ERROR;
+		}
+	      else if (error != NO_ERROR && error != ER_HEAP_UNKNOWN_OBJECT)
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
 	      else
 		{
 		  /* either NO_ERROR or unknown object */
+		  if (error == ER_HEAP_UNKNOWN_OBJECT)
+		    {
+		      er_clear ();
+		    }
 		  force_count = 1;
 		  error = NO_ERROR;
 		}
@@ -11099,7 +11111,7 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 					      REPL_INFO_TYPE_STMT_NORMAL,
 					      DB_NOT_PARTITIONED_CLASS, NULL,
 					      NULL, &mvcc_reev_data, false);
-	      if (error == ER_MVCC_ROW_ALREADY_DELETED)
+	      if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
 		{
 		  error = NO_ERROR;
 		}
@@ -11107,8 +11119,7 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		{
 		  GOTO_EXIT_ON_ERROR;
 		}
-
-	      if (force_count)
+	      else if (force_count)
 		{
 		  xasl->list_id->tuple_cnt++;
 		}
@@ -11604,10 +11615,44 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 	  /* xbtree_find_unique () has set an U_LOCK on the instance. We need
 	   * to get an X_LOCK in order to perform the delete.
 	   */
-	  if (lock_object (thread_p, &unique_oid, &pruned_oid, X_LOCK,
-			   LK_UNCOND_LOCK) != LK_GRANTED)
+	  if (mvcc_Enabled)
 	    {
-	      goto error_exit;
+	      SCAN_CODE scan_code;
+	      RECDES copy_recdes;
+
+	      copy_recdes.data = NULL;
+
+	      /* TO DO - need to handle reevaluation */
+	      scan_code =
+		heap_mvcc_get_version_for_delete (thread_p, &pruned_hfid,
+						  &unique_oid, &class_oid,
+						  &copy_recdes,
+						  local_scan_cache, COPY,
+						  NULL);
+
+	      if (scan_code != S_SUCCESS)
+		{
+		  if (er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+		    {
+		      er_clear ();
+		      if (key_dbvalue == &dbvalue)
+			{
+			  pr_clear_value (&dbvalue);
+			  key_dbvalue = NULL;
+			}
+		      continue;
+		    }
+
+		  goto error_exit;
+		}
+	    }
+	  else
+	    {
+	      if (lock_object (thread_p, &unique_oid, &pruned_oid, X_LOCK,
+			       LK_UNCOND_LOCK) != LK_GRANTED)
+		{
+		  goto error_exit;
+		}
 	    }
 
 	  error_code = locator_delete_lob_force (thread_p, &pruned_oid,
@@ -11626,11 +11671,16 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 					  false, REPL_INFO_TYPE_STMT_NORMAL,
 					  DB_NOT_PARTITIONED_CLASS, NULL,
 					  NULL, NULL, false);
-	  if (error_code != NO_ERROR)
+
+	  if (error_code == ER_MVCC_NOT_SATISFIED_REEVALUATION)
+	    {
+	      error_code = NO_ERROR;
+	    }
+	  else if (error_code != NO_ERROR)
 	    {
 	      goto error_exit;
 	    }
-	  if (force_count != 0)
+	  else if (force_count != 0)
 	    {
 	      assert (force_count == 1);
 	      *removed_count += force_count;
@@ -12074,7 +12124,11 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
 					force_count, false, repl_info,
 					pruning_type, pcontext, NULL, NULL,
 					false);
-  if (error != NO_ERROR)
+  if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
+    {
+      error = NO_ERROR;
+    }
+  else if (error != NO_ERROR)
     {
       goto exit_on_error;
     }
@@ -13547,13 +13601,20 @@ qexec_execute_increment (THREAD_ENTRY * thread_p, OID * oid, OID * class_oid,
       value->do_increment = n_increment;
 
       force_count = 0;
-      if (locator_attribute_info_force (thread_p, class_hfid, oid, NULL,
-					false, &attr_info, &attrid, 1,
-					area_op, op_type, &scan_cache,
-					&force_count, false,
-					REPL_INFO_TYPE_STMT_NORMAL,
-					pruning_type, NULL, NULL,
-					NULL, false) != NO_ERROR)
+      error = locator_attribute_info_force (thread_p, class_hfid, oid, NULL,
+					    false, &attr_info, &attrid, 1,
+					    area_op, op_type, &scan_cache,
+					    &force_count, false,
+					    REPL_INFO_TYPE_STMT_NORMAL,
+					    pruning_type, NULL, NULL,
+					    NULL, false);
+      if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
+	{
+	  assert (force_count == 0);
+	  error = NO_ERROR;
+	}
+      else if (error != NO_ERROR)
+
 	{
 	  error = ER_FAILED;
 	  goto wrapup;
@@ -13610,8 +13671,7 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   CL_ATTR_ID attrid;
   int n_increment;
   int savepoint_used = 0;
-  OID *oid = NULL, *class_oid = NULL, class_oid_buf, mvcc_oid,
-    last_cached_class_oid;
+  OID *oid = NULL, *class_oid = NULL, class_oid_buf, last_cached_class_oid;
   HFID *class_hfid;
   int lock_ret;
   int tran_index;
@@ -13621,19 +13681,10 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   RECDES copy_recdes;
   bool scan_cache_inited = false;
   SCAN_CODE scan_code;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
   if (mvcc_Enabled == true)
     {
       OID_SET_NULL (&last_cached_class_oid);
-      if (mvcc_Enabled)
-	{
-	  mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
-	  if (mvcc_snapshot == NULL)
-	    {
-	      goto exit_on_error;
-	    }
-	}
     }
   list = xasl->selected_upd_list;
 
@@ -13772,45 +13823,8 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		}
 	    }
 
-	  lock_ret = lock_object (thread_p, oid, class_oid, X_LOCK,
-				  LK_UNCOND_LOCK);
-	  switch (lock_ret)
-	    {
-	    case LK_GRANTED:
-	      /* normal case */
-	      break;
-
-	    case LK_NOTGRANTED_DUE_ABORTED:
-	      /* error, deadlock or something */
-	      goto exit_on_error;
-
-	    case LK_NOTGRANTED_DUE_TIMEOUT:
-	      /* ignore lock timeout for click counter,
-	         and skip this increment operation */
-	      er_log_debug (ARG_FILE_LINE,
-			    "qexec_execute_selupd_list: lock(X_LOCK) timed out "
-			    "for OID { %d %d %d } class OID { %d %d %d }\n",
-			    oid->pageid, oid->slotid, oid->volid,
-			    class_oid->pageid, class_oid->slotid,
-			    class_oid->volid);
-	      er_clear ();
-	      continue;
-
-	    default:
-	      /* simply, skip this increment operation */
-	      er_log_debug (ARG_FILE_LINE,
-			    "qexec_execute_selupd_list: skip for OID "
-			    "{ %d %d %d } class OID { %d %d %d } lock_ret %d\n",
-			    oid->pageid, oid->slotid, oid->volid,
-			    class_oid->pageid, class_oid->slotid,
-			    class_oid->volid, lock_ret);
-	      continue;
-	    }
-
 	  if (mvcc_Enabled == true)
 	    {
-	      /* starting with the second position we need last version */
-
 	      if (!OID_EQ (&last_cached_class_oid, class_oid)
 		  && scan_cache_inited == true)
 		{
@@ -13822,27 +13836,92 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		{
 		  (void) heap_scancache_start (thread_p, &scan_cache,
 					       class_hfid, class_oid, false,
-					       false, LOCKHINT_NONE,
-					       mvcc_snapshot);
+					       false, LOCKHINT_NONE, NULL);
 		  scan_cache_inited = true;
 		  COPY_OID (&last_cached_class_oid, class_oid);
 		}
-
+	      /* need to handle reevaluation */
 	      copy_recdes.data = NULL;
-	      scan_code = heap_get_last (thread_p, oid, &copy_recdes,
-					 &scan_cache, COPY, NULL_CHN,
-					 &mvcc_oid);
-	      if (scan_code = S_SUCCESS)
+	      scan_code =
+		heap_mvcc_get_version_for_delete (thread_p, class_hfid, oid,
+						  class_oid, &copy_recdes,
+						  &scan_cache, COPY, NULL);
+	      if (scan_code != S_SUCCESS)
 		{
-		  if (!OID_ISNULL (&mvcc_oid))
+		  int er_id = er_errid ();
+		  if (er_id == ER_LK_UNILATERALLY_ABORTED)
 		    {
-		      oid = &mvcc_oid;
+		      /* error, deadlock or something */
+		      goto exit_on_error;
 		    }
+		  else if (er_id == ER_LK_OBJECT_DL_TIMEOUT_SIMPLE_MSG
+			   || er_id == ER_LK_OBJECT_DL_TIMEOUT_CLASS_MSG
+			   || er_id == ER_LK_OBJECT_DL_TIMEOUT_CLASSOF_MSG)
+		    {
+		      /* ignore lock timeout for click counter,
+		         and skip this increment operation */
+		      er_log_debug (ARG_FILE_LINE,
+				    "qexec_execute_selupd_list: lock(X_LOCK) timed out "
+				    "for OID { %d %d %d } class OID { %d %d %d }\n",
+				    oid->pageid, oid->slotid, oid->volid,
+				    class_oid->pageid, class_oid->slotid,
+				    class_oid->volid);
+		      er_clear ();
+		      continue;
+		    }
+		  else
+		    {
+		      if (er_id != NO_ERROR)
+			{
+			  er_clear ();
+			}
+		      /* simply, skip this increment operation */
+		      er_log_debug (ARG_FILE_LINE,
+				    "qexec_execute_selupd_list: skip for OID "
+				    "{ %d %d %d } class OID { %d %d %d } error_id %d\n",
+				    oid->pageid, oid->slotid, oid->volid,
+				    class_oid->pageid, class_oid->slotid,
+				    class_oid->volid, er_id);
 
+		      continue;
+		    }
 		}
-	      else
+	    }
+	  else
+	    {
+	      lock_ret = lock_object (thread_p, oid, class_oid, X_LOCK,
+				      LK_UNCOND_LOCK);
+	      switch (lock_ret)
 		{
+		case LK_GRANTED:
+		  /* normal case */
+		  break;
+
+		case LK_NOTGRANTED_DUE_ABORTED:
+		  /* error, deadlock or something */
 		  goto exit_on_error;
+
+		case LK_NOTGRANTED_DUE_TIMEOUT:
+		  /* ignore lock timeout for click counter,
+		     and skip this increment operation */
+		  er_log_debug (ARG_FILE_LINE,
+				"qexec_execute_selupd_list: lock(X_LOCK) timed out "
+				"for OID { %d %d %d } class OID { %d %d %d }\n",
+				oid->pageid, oid->slotid, oid->volid,
+				class_oid->pageid, class_oid->slotid,
+				class_oid->volid);
+		  er_clear ();
+		  continue;
+
+		default:
+		  /* simply, skip this increment operation */
+		  er_log_debug (ARG_FILE_LINE,
+				"qexec_execute_selupd_list: skip for OID "
+				"{ %d %d %d } class OID { %d %d %d } lock_ret %d\n",
+				oid->pageid, oid->slotid, oid->volid,
+				class_oid->pageid, class_oid->slotid,
+				class_oid->volid, lock_ret);
+		  continue;
 		}
 	    }
 

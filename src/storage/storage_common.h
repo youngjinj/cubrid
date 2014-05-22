@@ -318,7 +318,7 @@ struct lorecdes
 
 #define DISK_VOLPURPOSE DB_VOLPURPOSE
 
-/* Types ans defines of transaction managment */
+/* Types ans defines of transaction management */
 
 typedef int TRANID;		/* Transaction identifier      */
 
@@ -326,7 +326,7 @@ typedef int TRANID;		/* Transaction identifier      */
 #define NULL_TRAN_INDEX (-1)
 #define MVCCID_NULL (0)
 
-#define MVCCID_FREE	      ((MVCCID) 3)	/* visible for all transactions */
+#define MVCCID_ALL_VISIBLE    ((MVCCID) 3)	/* visible for all transactions */
 #define MVCCID_FIRST	      ((MVCCID) 4)
 
 /* is MVCC ID valid? */
@@ -545,7 +545,6 @@ typedef enum
   HEAP_PAGE_INFO_OFFSET_TO_FREE_AREA,
   HEAP_PAGE_INFO_IS_SAVING,
   HEAP_PAGE_INFO_UPDATE_BEST,
-  HEAP_PAGE_INFO_LAST_MVCCID,
 
   /* leave this last */
   HEAP_PAGE_INFO_COUNT,

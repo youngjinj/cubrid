@@ -97,7 +97,6 @@ static const char *css_Csect_name[] = {
   "LOG_PB",
   "LOG_ARCHIVE",
   "ACCESS_STATUS",
-  "VACUUM_STATS",
   "MVCC_ACTIVE_TRANS"
 };
 

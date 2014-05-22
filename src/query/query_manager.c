@@ -1875,7 +1875,6 @@ xqmgr_execute_query (THREAD_ENTRY * thread_p,
   bool cached_result;
   bool saved_is_stats_on;
   bool xasl_trace;
-  bool error_flag = false;
 
   cached_result = false;
   query_p = NULL;
@@ -2338,8 +2337,6 @@ end:
 
 exit_on_error:
 
-  error_flag = true;
-
   /* end the use of the cached result if any when an error occurred */
   if (cached_result)
     {
@@ -2485,7 +2482,6 @@ xqmgr_prepare_and_execute_query (THREAD_ENTRY * thread_p,
   QMGR_TRAN_ENTRY *tran_entry_p;
   bool saved_is_stats_on;
   bool xasl_trace;
-  bool error_flag = false;
 
   query_p = NULL;
   *query_id_p = -1;
@@ -2726,10 +2722,8 @@ end:
 
 exit_on_error:
 
-  error_flag = true;
-
   /*
-   * free the query entry when error occurrs. note that the query_id should be
+   * free the query entry when error occurs. note that the query_id should be
    * set to 0 so as to upper levels can detect the error.
    */
   if (query_p)

@@ -511,6 +511,8 @@
 
 /* MVCC */
 #define OR_MVCCID_SIZE			OR_BIGINT_SIZE
+#define OR_PUT_MVCCID			OR_PUT_BIGINT
+#define OR_GET_MVCCID			OR_GET_BIGINT
 
 /* In case MVCC is enabled and chn is needed it will be saved instead of
  * delete MVCC id.
@@ -583,7 +585,7 @@
   do { \
     if (((mvcc_flags) & OR_MVCC_FLAG_VALID_INSID) == 0) \
       {	\
-	*valp = MVCCID_FREE;  \
+	*valp = MVCCID_ALL_VISIBLE;  \
       }	\
     else  \
       {	\
@@ -1351,6 +1353,7 @@ extern int or_packed_put_varchar (OR_BUF * buf, char *string, int charlen);
 extern int or_put_align32 (OR_BUF * buf);
 extern int or_put_offset (OR_BUF * buf, int num);
 extern int or_put_offset_internal (OR_BUF * buf, int num, int offset_size);
+extern int or_put_mvccid (OR_BUF * buf, MVCCID mvccid);
 
 /* Data unpacking functions */
 extern int or_get_byte (OR_BUF * buf, int *error);
@@ -1370,6 +1373,7 @@ extern int or_get_oid (OR_BUF * buf, OID * oid);
 extern int or_get_loid (OR_BUF * buf, LOID * loid);
 extern int or_get_offset (OR_BUF * buf, int *error);
 extern int or_get_offset_internal (OR_BUF * buf, int *error, int offset_size);
+extern int or_get_mvccid (OR_BUF * buf, MVCCID * mvccid);
 
 extern int or_skip_varchar_remainder (OR_BUF * buf, int charlen, int align);
 extern int or_skip_varchar (OR_BUF * buf, int align);
@@ -1465,8 +1469,10 @@ extern char *or_unpack_mem_value (char *buf, DB_VALUE * value);
 extern int or_packed_enumeration_size (const DB_ENUMERATION * e);
 extern int or_put_enumeration (OR_BUF * buf, const DB_ENUMERATION * e);
 extern int or_get_enumeration (OR_BUF * buf, DB_ENUMERATION * e);
-extern int or_header_size_from_flags (char mvcc_flags);
 extern int or_header_size (char *ptr);
 extern int or_mvcc_header_size_from_flags (char mvcc_flags);
+
+extern char *or_pack_mvccid (char *ptr, const MVCCID mvccid);
+extern char *or_unpack_mvccid (char *ptr, MVCCID * mvccid);
 
 #endif /* _OBJECT_REPRESENTATION_H_ */

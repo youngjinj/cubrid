@@ -4501,7 +4501,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	{
 #if !defined (SERVER_MODE)
 	  need_mvcc_update = false;
-#else
+#else /* SERVER_MODE */
 	  if (heap_get_pages_for_mvcc_chain_read (thread_p, &oid, &pgptr,
 						  &forward_pgptr,
 						  &ignore_record) != NO_ERROR)
@@ -4545,7 +4545,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	    {
 	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
 	    }
-#endif
+#endif /* SERVER_MODE */
 	}
       if (need_mvcc_update == false)
 	{

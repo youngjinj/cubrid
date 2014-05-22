@@ -737,6 +737,9 @@ static void pgbuf_set_dirty_buffer_ptr (THREAD_ENTRY * thread_p,
 					PGBUF_BCB * bufptr);
 static int pgbuf_compare_victim_list (const void *p1, const void *p2);
 static void pgbuf_wakeup_flush_thread (THREAD_ENTRY * thread_p);
+static bool pgbuf_check_page_ptype_internal (THREAD_ENTRY * thread_p,
+					     PAGE_PTR pgptr, PAGE_TYPE ptype,
+					     bool no_error);
 
 /*
  * pgbuf_hash_vpid () - Hash a volume_page identifier
@@ -5175,7 +5178,7 @@ pgbuf_block_bcb (THREAD_ENTRY * thread_p, PGBUF_BCB * bufptr,
   else
     {
       /*
-       * We do not quarantee that there is no deadlock between page latches.
+       * We do not guarantee that there is no deadlock between page latches.
        * So, we made a decision that when read/write buffer fix request is
        * not granted immediately, block the request with timed sleep method.
        * That is, unless the request is not waken up by other threads within
@@ -7826,7 +7829,7 @@ pgbuf_get_check_page_validation (THREAD_ENTRY * thread_p,
  *         1) disk_isvalid_page
  *         2) given fun2 is any
  *       The function is a NOOP if we are not running with full debugging
- *       capacbilities.
+ *       capabilities.
  */
 DISK_ISVALID
 pgbuf_is_valid_page (THREAD_ENTRY * thread_p, const VPID * vpid,
@@ -7922,7 +7925,40 @@ pgbuf_is_valid_page_ptr (const PAGE_PTR pgptr)
 }
 
 /*
- * pgbuf_check_page_ptype () -
+ * pgbuf_check_page_type () - Check the page type is as expected. If it isn't
+ *			      an assert will be hit.
+ *
+ * return	 : True if the page type is as expected.
+ * thread_p (in) : Thread entry.
+ * pgptr (in)	 : Pointer to buffer page.
+ * ptype (in)	 : Expected page type.
+ */
+bool
+pgbuf_check_page_ptype (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
+			PAGE_TYPE ptype)
+{
+  return pgbuf_check_page_ptype_internal (thread_p, pgptr, ptype, false);
+}
+
+/*
+ * pgbuf_check_page_type_no_error () - Return if the page type is the expected
+ *				       type given as argument. No assert is
+ *				       hit if not.
+ *
+ * return	 : True if the page type is as expected.
+ * thread_p (in) : Thread entry.
+ * pgptr (in)	 : Pointer to buffer page.
+ * ptype (in)	 : Expected page type.
+ */
+bool
+pgbuf_check_page_type_no_error (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
+				PAGE_TYPE ptype)
+{
+  return pgbuf_check_page_ptype_internal (thread_p, pgptr, ptype, true);
+}
+
+/*
+ * pgbuf_check_page_ptype_internal () -
  *   return: true/false
  *   bufptr(in): pointer to buffer page
  *   ptype(in): page type
@@ -7930,9 +7966,9 @@ pgbuf_is_valid_page_ptr (const PAGE_PTR pgptr)
  * Note: Verify if the given page's ptype is valid.
  *       This function is used for debugging purposes.
  */
-bool
-pgbuf_check_page_ptype (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
-			PAGE_TYPE ptype)
+static bool
+pgbuf_check_page_ptype_internal (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
+				 PAGE_TYPE ptype, bool no_error)
 {
   PGBUF_BCB *bufptr;
 
@@ -7975,7 +8011,7 @@ pgbuf_check_page_ptype (THREAD_ENTRY * thread_p, PAGE_PTR pgptr,
       if (bufptr->iopage_buffer->iopage.prv.ptype != PAGE_UNKNOWN
 	  && bufptr->iopage_buffer->iopage.prv.ptype != ptype)
 	{
-	  assert_release (false);
+	  assert_release (no_error);
 	  return false;
 	}
     }
@@ -8636,4 +8672,67 @@ pgbuf_wakeup_flush_thread (THREAD_ENTRY * thread_p)
   pgbuf_flush_victim_candidate (thread_p,
 				prm_get_float_value
 				(PRM_ID_PB_BUFFER_FLUSH_RATIO));
+}
+
+/*
+ * pgbuf_fix_when_other_is_fixed () - Function should be called when a second
+ *				      page needs to be fixed while holding
+ *				      latch on the first page. A conditional
+ *				      latch is attempted in order to avoid
+ *				      unfixing first page. If that fails,
+ *				      the first page is unfixed and an
+ *				      unconditional latch if requested.
+ *
+ * return	       : Error code.
+ * thread_p (in)       : Thread entry.
+ * vpid_to_fix (in)    : VPID of page to be fixed.
+ * newpage (in)       : old/new page.
+ * mode (in)	       : Latch mode.
+ * page_to_fix (out)   : Page to be fixed.
+ * page_fixed (in/out) : Page already fixed. Will be unfixed and set to NULL
+ *			 if conditional latch fails. If a NULL argument is
+ *			 given, an unconditional latch is requested directly.
+ *
+ * NOTE: This function should be used to avoid dead-locks when trying
+ *	 to obtain latch on a new page while holding latch on another page.
+ */
+int
+pgbuf_fix_when_other_is_fixed (THREAD_ENTRY * thread_p, VPID * vpid_to_fix,
+			       int newpage, PGBUF_LATCH_MODE mode,
+			       PAGE_PTR * page_to_fix, PAGE_PTR * page_fixed)
+{
+  assert ((vpid_to_fix != NULL) && (page_to_fix != NULL)
+	  && (*page_to_fix == NULL));
+
+  if (page_fixed == NULL || *page_fixed == NULL)
+    {
+      /* Fix page using an unconditional latch directly */
+      *page_to_fix =
+	pgbuf_fix (thread_p, vpid_to_fix, newpage, mode,
+		   PGBUF_UNCONDITIONAL_LATCH);
+    }
+  else
+    {
+      /* Try conditional latch on page to fix */
+      *page_to_fix =
+	pgbuf_fix (thread_p, vpid_to_fix, newpage, mode,
+		   PGBUF_CONDITIONAL_LATCH);
+      if (*page_to_fix == NULL)
+	{
+	  /* If conditional latch failed, unfix other page and fix new page
+	   * using an unconditional latch.
+	   */
+	  pgbuf_unfix_and_init (thread_p, *page_fixed);
+	  *page_to_fix =
+	    pgbuf_fix (thread_p, vpid_to_fix, newpage, mode,
+		       PGBUF_UNCONDITIONAL_LATCH);
+	}
+    }
+  if (*page_to_fix == NULL)
+    {
+      /* Fix failed */
+      return ER_FAILED;
+    }
+  /* Fix successful */
+  return NO_ERROR;
 }

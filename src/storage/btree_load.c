@@ -657,7 +657,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 #if !defined(NDEBUG)
   int track_id;
 #endif
-  MVCC_SNAPSHOT * mvcc_snapshot = NULL;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
   if (mvcc_Enabled)
     {
@@ -2261,7 +2261,6 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
   int max_key_len;
   int rec_length;
   BTREE_OVERFLOW_HEADER *ovf_header = NULL;
-  MVCCID null_mvccid = MVCCID_NULL;
 
   int fixed_mvccid_size = 0;
   MVCC_REC_HEADER mvcc_rec_header, *p_mvcc_rec_header = NULL;
@@ -2544,18 +2543,29 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 						    load_args->ovf.pgptr);
 		}		/* no space for the new OID */
 
-	      /* Insert the new oid to the current record and return */
-	      OR_PUT_OID (load_args->new_pos, &this_oid);
-	      load_args->out_recdes.length += OR_OID_SIZE;
-	      load_args->new_pos += OR_OID_SIZE;
 	      if (mvcc_Enabled && load_args->overflowing)
 		{
-		  OR_PUT_BIGINT (load_args->new_pos, &null_mvccid);
-		  load_args->new_pos += OR_MVCCID_SIZE;
-		  OR_PUT_BIGINT (load_args->new_pos, &null_mvccid);
-		  load_args->new_pos += OR_MVCCID_SIZE;
+		  /* Insert new OID and MVCC insert/delete ID's to the current
+		   * record and return.
+		   */
+		  btree_set_mvcc_flags_into_oid (p_mvcc_rec_header,
+						 &this_oid);
+		  OR_PUT_OID (load_args->new_pos, &this_oid);
+		  load_args->out_recdes.length += OR_OID_SIZE;
+		  load_args->new_pos += OR_OID_SIZE;
+		  load_args->out_recdes.length +=
+		    btree_packed_mvccinfo_size (p_mvcc_rec_header);
+		  load_args->new_pos =
+		    btree_pack_mvccinfo (load_args->new_pos,
+					 p_mvcc_rec_header);
+		}
+	      else
+		{
+		  /* Insert the new oid to the current record and return */
+		  OR_PUT_OID (load_args->new_pos, &this_oid);
+		  load_args->out_recdes.length += OR_OID_SIZE;
+		  load_args->new_pos += OR_OID_SIZE;
 
-		  load_args->out_recdes.length += fixed_mvccid_size;
 		}
 	    }			/* same key */
 	  else
@@ -2812,6 +2822,7 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
   HEAP_SCANCACHE upd_scancache;
   int ret = NO_ERROR;
 
+  /* TO DO - adapt this function to MVCC */
   DB_MAKE_NULL (&val);
   OID_SET_NULL (&unique_oid);
 
@@ -2882,7 +2893,7 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
 					  NULL, NULL, false);
       if (ret != NO_ERROR)
 	{
-	  if (ret == ER_MVCC_ROW_ALREADY_DELETED)
+	  if (ret == ER_MVCC_NOT_SATISFIED_REEVALUATION)
 	    {
 	      ret = NO_ERROR;
 	    }
@@ -2936,7 +2947,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
   char midxkey_buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_midxkey_buf;
   int *prefix_lengthp;
   int result;
-  MVCC_SNAPSHOT * mvcc_snapshot = NULL;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
 
   if (mvcc_Enabled)

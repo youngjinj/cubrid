@@ -5201,13 +5201,13 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
     }
   spec->pruned = false;
 
-      spec->s.cls_node.cls_regu_list_key = attr_list_key;
-      spec->s.cls_node.cls_regu_list_pred = attr_list_pred;
-      spec->s.cls_node.cls_regu_list_rest = attr_list_rest;
-      spec->s.cls_node.cls_regu_list_range = attr_list_range;
-      spec->s.cls_node.cls_output_val_list = output_val_list;
-      spec->s.cls_node.cls_regu_val_list = regu_val_list;
-      spec->s.cls_node.hfid = *hfid;
+  spec->s.cls_node.cls_regu_list_key = attr_list_key;
+  spec->s.cls_node.cls_regu_list_pred = attr_list_pred;
+  spec->s.cls_node.cls_regu_list_rest = attr_list_rest;
+  spec->s.cls_node.cls_regu_list_range = attr_list_range;
+  spec->s.cls_node.cls_output_val_list = output_val_list;
+  spec->s.cls_node.cls_regu_val_list = regu_val_list;
+  spec->s.cls_node.hfid = *hfid;
   spec->s.cls_node.cls_oid = *cls_oid;
 
   spec->s.cls_node.num_attrs_key = pt_cnt_attrs (attr_list_key);
@@ -26743,8 +26743,6 @@ pt_reserved_id_to_valuelist_index (PARSER_CONTEXT * parser,
       return HEAP_PAGE_INFO_IS_SAVING;
     case RESERVED_P_UPDATE_BEST:
       return HEAP_PAGE_INFO_UPDATE_BEST;
-    case RESERVED_P_LAST_MVCCID:
-      return HEAP_PAGE_INFO_LAST_MVCCID;
 
       /* Key info names */
     case RESERVED_KEY_VOLUMEID:

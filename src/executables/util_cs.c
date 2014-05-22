@@ -1630,7 +1630,15 @@ lockdb (UTIL_FUNCTION_ARG * arg)
       goto error_exit;
     }
 
-  (void) db_set_isolation (TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE);
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+    {
+      (void) db_set_isolation (TRAN_COMMIT_CLASS_COMMIT_INSTANCE);
+    }
+  else
+    {
+      (void) db_set_isolation (TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE);
+    }
+
   lock_dump (outfp);
   db_shutdown ();
 

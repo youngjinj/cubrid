@@ -646,7 +646,7 @@ or_mvcc_get_insid (OR_BUF * buf, int mvcc_flags, int *error)
 
   if (!(mvcc_flags & OR_MVCC_FLAG_VALID_INSID))
     {
-      return MVCCID_FREE;
+      return MVCCID_ALL_VISIBLE;
     }
   else if ((buf->ptr + OR_MVCCID_SIZE) > buf->endptr)
     {
@@ -926,7 +926,6 @@ or_mvcc_set_header (RECDES * record, MVCC_REC_HEADER * mvcc_rec_header)
 				       mvcc_rec_header->repid,
 				       repid_and_flag_bits &
 				       OR_BOUND_BIT_FLAG,
-				       //OR_GET_BOUND_BIT_FLAG (record->data),
 				       OR_GET_OFFSET_SIZE (record->data));
   if (error != NO_ERROR)
     {
@@ -7979,6 +7978,99 @@ or_unpack_ptr (char *ptr, UINTPTR * ptrval)
 
   *ptrval = OR_GET_PTR (ptr);
   return (ptr + OR_PTR_SIZE);
+}
+
+/*
+ * MVCCID:
+ */
+/*
+ * or_put_mvccid () - Put an MVCCID to OR Buffer.
+ *
+ * return      : Error code.
+ * buf (in)    : OR Buffer
+ * mvccid (in) : MVCCID
+ */
+int
+or_put_mvccid (OR_BUF * buf, MVCCID mvccid)
+{
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+
+  if ((buf->ptr + OR_MVCCID_SIZE) > buf->endptr)
+    {
+      return (or_overflow (buf));
+    }
+  else
+    {
+      OR_PUT_MVCCID (buf->ptr, &mvccid);
+      buf->ptr += OR_MVCCID_SIZE;
+    }
+  return NO_ERROR;
+}
+
+/*
+ * or_get_mvccid - get bigint value from or buffer
+ *    return: bigint value read
+ *    buf(in/out): or buffer
+ *    error(out): NO_ERROR or error code
+ */
+/*
+ * or_get_mvccid () - Get an MVCCID from OR Buffer.
+ *
+ * return	: MVCCID
+ * buf (in/out) : OR Buffer.
+ * error (out)  : Error code.
+ */
+int
+or_get_mvccid (OR_BUF * buf, MVCCID * mvccid)
+{
+  assert (mvccid != NULL);
+  ASSERT_ALIGN (buf->ptr, INT_ALIGNMENT);
+
+  *mvccid = MVCCID_NULL;
+
+  if ((buf->ptr + OR_MVCCID_SIZE) > buf->endptr)
+    {
+      return or_underflow (buf);
+    }
+  else
+    {
+      OR_GET_MVCCID (buf->ptr, mvccid);
+      buf->ptr += OR_MVCCID_SIZE;
+    }
+  return NO_ERROR;
+}
+
+/*
+ * or_pack_mvccid () - Pack an MVCCID at the give pointer.
+ *
+ * return      : Pointer after the packed MVCCID.
+ * ptr (in)    : Pointer where to pack the MVCCID.
+ * mvccid (in) : MVCCID to pack.
+ */
+char *
+or_pack_mvccid (char *ptr, const MVCCID mvccid)
+{
+  ASSERT_ALIGN (ptr, INT_ALIGNMENT);
+
+  OR_PUT_MVCCID (ptr, &mvccid);
+  return (((char *) ptr) + OR_MVCCID_SIZE);
+}
+
+/*
+ * or_unpack_mvccid () - Unpack an MVCCID from the give pointer.
+ *
+ * return	: Pointer after the packed MVCCID.
+ * ptr (in)	: Pointer where the MVCCID is packed.
+ * mvccid (out) : MVCCID value.
+ */
+char *
+or_unpack_mvccid (char *ptr, MVCCID * mvccid)
+{
+  ASSERT_ALIGN (ptr, INT_ALIGNMENT);
+  assert (mvccid != NULL);
+
+  OR_GET_MVCCID (ptr, mvccid);
+  return (((char *) ptr) + OR_MVCCID_SIZE);
 }
 
 /*

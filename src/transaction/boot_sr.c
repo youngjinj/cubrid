@@ -129,6 +129,9 @@ struct boot_dbparm
   VOLID last_volid;		/* Next volume identifier */
   VOLID temp_last_volid;	/* Next temporary volume identifier. This goes
 				 * from a higher number to a lower number */
+  VFID vacuum_data_vfid;	/* Vacuum data file identifier */
+  VFID dropped_classes_vfid;	/* Vacuum dropped classes file identifier */
+  VFID dropped_indexes_vfid;	/* Vacuum dropped indexes file identifier */
 };
 
 #if defined(SERVER_MODE)
@@ -2718,6 +2721,8 @@ xboot_initialize_server (THREAD_ENTRY * thread_p,
   sysprm_load_and_init (boot_Db_full_name, NULL);
 #endif /* SERVER_MODE */
 
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+
   /* If the server is already restarted, shutdown the server */
   if (BO_IS_SERVER_RESTARTED ())
     {
@@ -3259,6 +3264,8 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       return ER_BO_CANT_LOAD_SYSPRM;
     }
 
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+
   if (common_ha_mode != prm_get_integer_value (PRM_ID_HA_MODE)
       && prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF)
     {
@@ -3319,7 +3326,9 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 #if defined(DIAG_DEVEL)
   init_diag_mgr (server_name, thread_num_worker_threads (), NULL);
 #endif /* DIAG_DEVEL */
-#endif /* SERVER_MODE */
+#else /* !SERVER_MODE */
+  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
+#endif /* !SERVER_MODE */
 
   mnt_server_init (MAX_NTRANS);
 
@@ -3365,14 +3374,6 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       return error_code;
     }
   error_code = heap_manager_initialize ();
-  if (error_code != NO_ERROR)
-    {
-      cfg_free_directory (dir);
-      return error_code;
-    }
-
-  /* Initialize the vacuum statistics table */
-  error_code = vacuum_initialize (thread_p);
   if (error_code != NO_ERROR)
     {
       cfg_free_directory (dir);
@@ -3543,6 +3544,26 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       goto error;
     }
 
+  if (mvcc_Enabled)
+    {
+      /* Load vacuum info from disk and initialize vacuum routine */
+      error_code =
+	vacuum_load_from_disk (thread_p, &boot_Db_parm->vacuum_data_vfid,
+			       &boot_Db_parm->dropped_classes_vfid,
+			       &boot_Db_parm->dropped_indexes_vfid);
+      if (error_code != NO_ERROR)
+	{
+	  fileio_dismount_all (thread_p);
+	  goto error;
+	}
+      error_code = vacuum_initialize (thread_p);
+      if (error_code != NO_ERROR)
+	{
+	  fileio_dismount_all (thread_p);
+	  goto error;
+	}
+    }
+
   /*
    * Now restart the recovery manager and execute any recovery actions
    */
@@ -3553,12 +3574,12 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
   /*
    * Allocate a temporary transaction index to finish further system related
    * changes such as removal of temporary volumes and modifications of
-   * system paramter
+   * system parameter
    */
 
   tran_index = logtb_assign_tran_index (thread_p, NULL_TRANID, TRAN_ACTIVE,
 					NULL, NULL, TRAN_LOCK_INFINITE_WAIT,
-					TRAN_DEFAULT_ISOLATION);
+					TRAN_DEFAULT_ISOLATION_LEVEL ());
   if (tran_index == NULL_TRAN_INDEX)
     {
       fileio_dismount_all (thread_p);
@@ -3877,7 +3898,10 @@ xboot_shutdown_server (THREAD_ENTRY * thread_p, bool is_er_final)
       (void) qexec_finalize_filter_pred_cache (thread_p);
       session_states_finalize (thread_p);
 
-      vacuum_finalize (thread_p);
+      if (mvcc_Enabled)
+	{
+	  vacuum_finalize (thread_p);
+	}
 
       (void) boot_remove_all_temp_volumes (thread_p);
       log_final (thread_p);
@@ -5646,7 +5670,11 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
   VOLID db_volid = NULL_VOLID;
   RECDES recdes;
   int error_code;
+  int vacuum_data_npages;
   DBDEF_VOL_EXT_INFO ext_info;
+  VFID vacuum_data_vfid, dropped_classes_vfid, dropped_indexes_vfid;
+  VPID vacuum_data_vpid, dropped_classes_vpid, dropped_indexes_vpid;
+  bool ignore_old;
 
   assert (client_credential != NULL);
 
@@ -5727,6 +5755,10 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
   OID_SET_NULL (&boot_Db_parm->rootclass_oid);
   oid_set_root (&boot_Db_parm->rootclass_oid);
 
+  VFID_SET_NULL (&boot_Db_parm->vacuum_data_vfid);
+  VFID_SET_NULL (&boot_Db_parm->dropped_classes_vfid);
+  VFID_SET_NULL (&boot_Db_parm->dropped_indexes_vfid);
+
   /* Create the needed files */
   if (file_tracker_create (thread_p, &boot_Db_parm->trk_vfid) == NULL
       || xheap_create (thread_p, &boot_Db_parm->hfid, NULL, false) < 0
@@ -5768,6 +5800,40 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
 		   &recdes, NULL) != boot_Db_parm_oid)
     {
       goto error;
+    }
+
+  if (mvcc_Enabled)
+    {
+      /* TODO: Compute vacuum data npages */
+      vacuum_data_npages = prm_get_integer_value (PRM_ID_VACUUM_DATA_PAGES);
+      /* Create files required for vacuum */
+      if (file_create
+	  (thread_p, &vacuum_data_vfid, vacuum_data_npages, FILE_HEAP, NULL,
+	   &vacuum_data_vpid, -vacuum_data_npages) == NULL
+	  || file_create (thread_p, &dropped_classes_vfid, 1, FILE_HEAP, NULL,
+			  &dropped_classes_vpid, 1) == NULL
+	  || file_create (thread_p, &dropped_indexes_vfid, 1, FILE_HEAP, NULL,
+			  &dropped_indexes_vpid, 1) == NULL)
+	{
+	  goto error;
+	}
+      /* Save VFID's in boot_Db_parm */
+      VFID_COPY (&boot_Db_parm->vacuum_data_vfid, &vacuum_data_vfid);
+      VFID_COPY (&boot_Db_parm->dropped_classes_vfid, &dropped_classes_vfid);
+      VFID_COPY (&boot_Db_parm->dropped_indexes_vfid, &dropped_indexes_vfid);
+      if (heap_update (thread_p, &boot_Db_parm->hfid,
+		       &boot_Db_parm->rootclass_oid, boot_Db_parm_oid,
+		       &recdes, NULL, &ignore_old, NULL,
+		       false) != boot_Db_parm_oid)
+	{
+	  goto error;
+	}
+      if (vacuum_init_vacuum_files (thread_p, &vacuum_data_vfid,
+				    &dropped_classes_vfid,
+				    &dropped_indexes_vfid) != NO_ERROR)
+	{
+	  goto error;
+	}
     }
 
   /*

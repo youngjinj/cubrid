@@ -1218,10 +1218,12 @@ $ LOADDB
 1149 Cannot find the page %1$d of volume %2$d.
 1150 Context requires compatible collations.
 1151 The page %1$d of volume %2$d is not a slotted page.
-2000 MVCC row already deleted %1$d|%2$d|%3$d.
+2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
-2003 Last Error
+2003 Isolation level value in MVCC must be 2, 4, 5 or 6.
+2004 Serializable conflict due to concurent update
+2005 Last Error
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Error in error subsystem (line %1$d):

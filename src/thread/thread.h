@@ -73,7 +73,14 @@ typedef void THREAD_ENTRY;
 #define thread_get_sort_stats_active(thread_p) (false)
 #define thread_set_sort_stats_active(thread_p, flag)
 
+#define thread_is_process_log_for_vacuum(thread_p) false
+#define thread_is_vacuum_worker(thread_p) false
+#define thread_set_is_process_log_phase(thread_p, is_process_log_phase)
+#define thread_get_vacuum_worker_count() (0)
+
 #else /* !SERVER_MODE */
+
+#define THREAD_VACUUM_WORKERS_COUNT 10
 
 #if defined(HPUX)
 #define thread_set_thread_entry_info(entry)
@@ -380,9 +387,16 @@ extern void thread_wakeup_checkpoint_thread (void);
 extern void thread_wakeup_purge_archive_logs_thread (void);
 extern void thread_wakeup_oob_handler_thread (void);
 extern void thread_wakeup_auto_volume_expansion_thread (void);
-extern void thread_wakeup_auto_vacuum_thread (void);
+extern void thread_wakeup_vacuum_master_thread (void);
+extern bool thread_wakeup_vacuum_worker_thread (void *arg);
 
 extern bool thread_is_page_flush_thread_available (void);
+
+extern bool thread_is_process_log_for_vacuum (THREAD_ENTRY * thread_p);
+extern bool thread_is_vacuum_worker (THREAD_ENTRY * thread_p);
+extern void thread_set_is_process_log_phase (THREAD_ENTRY * thread_p,
+					     bool is_process_log_phase);
+extern int thread_get_vacuum_worker_count (void);
 
 extern bool thread_auto_volume_expansion_thread_is_running (void);
 

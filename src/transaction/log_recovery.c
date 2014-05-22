@@ -215,6 +215,10 @@ static int log_recovery_find_first_postpone (THREAD_ENTRY * thread_p,
 					     LOG_LSA *
 					     start_postpone_lsa,
 					     LOG_TDES * tdes);
+
+static void log_recovery_vacuum_data_buffer (THREAD_ENTRY * thread_p,
+					     LOG_LSA * mvcc_op_lsa,
+					     MVCCID mvccid);
 /*
  * CRASH RECOVERY PROCESS
  */
@@ -259,6 +263,7 @@ log_rv_undo_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
 				 * returned to this state
 				 */
   bool is_zip = false;
+  int error_code = NO_ERROR;
   LOG_SET_CURRENT_TRAN_INDEX (thread_p, tdes->tran_index);
 
   /*
@@ -347,7 +352,29 @@ log_rv_undo_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
 	  log_append_compensate (thread_p, rcvindex, rcv_vpid,
 				 rcv->offset, rcv->pgptr, rcv->length,
 				 rcv->data, tdes);
-	  (void) (*RV_fun[rcvindex].undofun) (thread_p, rcv);
+	  error_code = (*RV_fun[rcvindex].undofun) (thread_p, rcv);
+	  if (error_code != NO_ERROR)
+	    {
+	      VPID vpid;
+	      if (rcv->pgptr != NULL)
+		{
+		  pgbuf_get_vpid (rcv->pgptr, &vpid);
+		}
+	      else
+		{
+		  VPID_SET_NULL (&vpid);
+		}
+	      logpb_fatal_error (thread_p, true, ARG_FILE_LINE,
+				 "log_rvredo_rec: Error applying redo record "
+				 "at log_lsa=(%lld, %d), "
+				 "rcv = {mvccid=%lld, vpid=(%d, %d), "
+				 "offset = %d, data_length = %d}",
+				 (long long int) rcv_undo_lsa->pageid,
+				 (int) rcv_undo_lsa->offset,
+				 (long long int) rcv->mvcc_id,
+				 (int) vpid.pageid, (int) vpid.volid,
+				 (int) rcv->offset, (int) rcv->length);
+	    }
 	}
       else
 	{
@@ -473,6 +500,7 @@ log_rv_redo_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
 {
   char *area = NULL;
   bool is_zip = false;
+  int error_code;
 
   /* Note the the data page rcv->pgptr has been fetched by the caller */
 
@@ -534,7 +562,29 @@ log_rv_redo_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
     {
       if (!ignore_redofunc)
 	{
-	  (void) (*redofun) (thread_p, rcv);
+	  error_code = (*redofun) (thread_p, rcv);
+	  if (error_code != NO_ERROR)
+	    {
+	      VPID vpid;
+	      if (rcv->pgptr != NULL)
+		{
+		  pgbuf_get_vpid (rcv->pgptr, &vpid);
+		}
+	      else
+		{
+		  VPID_SET_NULL (&vpid);
+		}
+	      logpb_fatal_error (thread_p, true, ARG_FILE_LINE,
+				 "log_rvredo_rec: Error applying redo record "
+				 "at log_lsa=(%lld, %d), "
+				 "rcv = {mvccid=%lld, vpid=(%d, %d), "
+				 "offset = %d, data_length = %d}",
+				 (long long int) rcv_lsa_ptr->pageid,
+				 (int) rcv_lsa_ptr->offset,
+				 (long long int) rcv->mvcc_id,
+				 (int) vpid.pageid, (int) vpid.volid,
+				 (int) rcv->offset, (int) rcv->length);
+	    }
 	}
     }
   else
@@ -3362,6 +3412,7 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
   LOG_LSA *rcv_page_lsaptr;	/* LSA of data page for log
 				 * record to redo
 				 */
+  LOG_LSA rcv_vacuum_data_lsa;
   LOG_TDES *tdes;		/* Transaction descriptor       */
   int num_particps;		/* Number of participating sites */
   int particp_id_length;	/* Length of particp_ids block  */
@@ -3373,6 +3424,7 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
   LOG_ZIP *undo_unzip_ptr = NULL;
   LOG_ZIP *redo_unzip_ptr = NULL;
   bool is_diff_rec;
+  LOG_PAGEID last_vacuum_data_pageid = NULL_PAGEID;
 
   aligned_log_pgbuf = PTR_ALIGN (log_pgbuf, MAX_ALIGNMENT);
 
@@ -3413,6 +3465,22 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
       logpb_fatal_error (thread_p, true, ARG_FILE_LINE, "log_recovery_redo");
       return;
     }
+
+  if (mvcc_Enabled)
+    {
+      /* Get the identifier for the last saved block in vacuum data. Data about
+       * blocks after this must be recovered.
+       */
+      last_vacuum_data_pageid = vacuum_data_get_last_log_pageid (thread_p);
+    }
+  /* Reset mvcc_op_log_lsa as it may not point to the last mvcc operation.
+   * It will be recovered.
+   * NOTE: We will lose one link from the chain of MVCC operations, but that
+   * is not relevant. The lost link is between the last entry in a block and
+   * the first entry of a following block. The lost link will not affect the
+   * vacuum process.
+   */
+  LSA_SET_NULL (&log_Gl.hdr.mvcc_op_log_lsa);
 
   while (!LSA_ISNULL (&lsa))
     {
@@ -3521,6 +3589,9 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 
 	      /* REDO the record if needed */
 	      LSA_COPY (&rcv_lsa, &log_lsa);
+	      _er_log_debug (ARG_FILE_LINE,
+			     "log_recovery_redo - case undoredo, rcv_lsa=(%lld, %d)",
+			     (long long int) rcv_lsa.pageid, (int) rcv_lsa.offset);
 
 	      /* Get the DATA HEADER */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER),
@@ -3531,6 +3602,8 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	      undoredo =
 		(struct log_undoredo *) ((char *) log_pgptr->area +
 					 log_lsa.offset);
+
+	      assert (!LOG_IS_VACUUM_DATA_RECOVERY (undoredo->data.rcvindex));
 
 	      /* Do we need to redo anything ? */
 
@@ -3588,6 +3661,10 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	      rcvindex = undoredo->data.rcvindex;
 	      rcv.length = undoredo->rlength;
 	      rcv.offset = undoredo->data.offset;
+
+	      _er_log_debug (ARG_FILE_LINE,
+			     "log_recovery_redo - case undoredo - rcvindex = %d",
+			     rcvindex);
 
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (struct log_undoredo),
 				  &log_lsa, log_pgptr);
@@ -3689,10 +3766,22 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 		{
 		  pgbuf_unfix (thread_p, rcv.pgptr);
 		}
+
+	      if (LOG_IS_MVCC_OPERATION (rcvindex)
+		  && (rcv_lsa.pageid > last_vacuum_data_pageid))
+		{
+		  /* Recover vacuum data */
+		  log_recovery_vacuum_data_buffer (thread_p, &rcv_lsa,
+						   log_rec->mvcc_id);
+		}
 	      break;
 
 	    case LOG_REDO_DATA:
 	      LSA_COPY (&rcv_lsa, &log_lsa);
+
+	      _er_log_debug (ARG_FILE_LINE,
+			     "log_recovery_redo - case redo: rcv_lsa=(%lld, %d)",
+			     (long long int) rcv_lsa.pageid, (int) rcv_lsa.offset);
 
 	      /* Get the DATA HEADER */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER),
@@ -3706,6 +3795,18 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 				     log_lsa.offset);
 
 	      /* Do we need to redo anything ? */
+
+	      /* For vacuum data records check vacuum data lsa */
+	      if (LOG_IS_VACUUM_DATA_RECOVERY (redo->data.rcvindex))
+		{
+		  vacuum_get_vacuum_data_lsa (thread_p, &rcv_vacuum_data_lsa);
+		  if (LSA_LE (&rcv_lsa, &rcv_vacuum_data_lsa)
+		      && (end_redo_lsa == NULL || LSA_ISNULL (end_redo_lsa)
+			  || LSA_LE (&rcv_vacuum_data_lsa, end_redo_lsa)))
+		    {
+		      break;
+		    }
+		}
 
 	      /*
 	       * Fetch the page for physical log records and check if redo
@@ -3759,6 +3860,10 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	      rcvindex = redo->data.rcvindex;
 	      rcv.length = redo->length;
 	      rcv.offset = redo->data.offset;
+
+	      _er_log_debug (ARG_FILE_LINE,
+			     "log_recovery_redo - case redo: rcvindex=%d",
+			     rcvindex);
 
 	      /* GET AFTER DATA */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (struct log_redo),
@@ -3814,10 +3919,19 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 		{
 		  pgbuf_unfix (thread_p, rcv.pgptr);
 		}
+
+	      if (LOG_IS_VACUUM_DATA_RECOVERY (rcvindex))
+		{
+		  vacuum_set_vacuum_data_lsa (thread_p, &rcv_lsa);
+		}
 	      break;
 
 	    case LOG_DBEXTERN_REDO_DATA:
 	      LSA_COPY (&rcv_lsa, &log_lsa);
+
+	      _er_log_debug (ARG_FILE_LINE,
+			     "log_recovery_redo - case dbextern_redo: rcv_lsa=(%lld, %d)",
+			     (long long int) rcv_lsa.pageid, (int) rcv_lsa.offset);
 
 	      /* Get the DATA HEADER */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER),
@@ -3836,6 +3950,12 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 
 	      rcvindex = dbout_redo->rcvindex;
 	      rcv.length = dbout_redo->length;
+
+	      _er_log_debug (ARG_FILE_LINE,
+			     "log_recovery_redo - case dbextern_redo: rcvindex=%d",
+			     rcvindex);
+
+	      assert (!LOG_IS_VACUUM_DATA_RECOVERY (rcvindex));
 
 	      /* GET AFTER DATA */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (struct log_dbout_redo),
@@ -3870,6 +3990,8 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	      run_posp =
 		(struct log_run_postpone *) ((char *) log_pgptr->area +
 					     log_lsa.offset);
+
+	      assert (!LOG_IS_VACUUM_DATA_RECOVERY (run_posp->data.rcvindex));
 
 	      /* Do we need to redo anything ? */
 
@@ -3979,6 +4101,10 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	      compensate =
 		(struct log_compensate *) ((char *) log_pgptr->area +
 					   log_lsa.offset);
+
+	      assert (!LOG_IS_VACUUM_DATA_RECOVERY (compensate->data.
+						    rcvindex));
+
 	      /* Do we need to redo anything ? */
 
 	      /*
@@ -4294,8 +4420,33 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 		}
 	      break;
 
-	    case LOG_CLIENT_NAME:
 	    case LOG_UNDO_DATA:
+	      /* Must detect MVCC operations and recover vacuum data buffer.
+	       * The found operation is not actually redone/undone, but it
+	       * has information that can be used for vacuum.
+	       */
+	      if (!mvcc_Enabled || log_lsa.pageid <= last_vacuum_data_pageid)
+		{
+		  /* No need to recover vacuum information from this page */
+		  break;
+		}
+	      LSA_COPY (&rcv_lsa, &log_lsa);
+	      LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER),
+				  &log_lsa, log_pgptr);
+	      LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p,
+						sizeof (struct log_undo),
+						&log_lsa, log_pgptr);
+	      /* Only MVCC operations are relevant for vacuum */
+	      if (LOG_IS_MVCC_OPERATION
+		  (((struct log_undo *) ((char *) log_pgptr->area +
+					 log_lsa.offset))->data.rcvindex))
+		{
+		  log_recovery_vacuum_data_buffer (thread_p, &rcv_lsa,
+						   log_rec->mvcc_id);
+		}
+	      break;
+
+	    case LOG_CLIENT_NAME:
 	    case LOG_LCOMPENSATE:
 	    case LOG_DUMMY_HEAD_POSTPONE:
 	    case LOG_POSTPONE:
@@ -4360,6 +4511,12 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
   log_zip_free (undo_unzip_ptr);
   log_zip_free (redo_unzip_ptr);
 
+  if (mvcc_Enabled)
+    {
+      /* Add any non-duplicate block data to vacuum */
+      vacuum_consume_buffer_log_blocks (thread_p, true);
+    }
+
   /* Now finish all postpone operations */
   log_recovery_finish_all_postpone (thread_p);
 
@@ -4393,7 +4550,7 @@ log_recovery_finish_all_postpone (THREAD_ENTRY * thread_p)
   LOG_TDES *tdes;		/* Transaction descriptor */
   LOG_LSA first_postpone_to_apply;
 
-  /* Finish committig transactions with unfinished postpone actions */
+  /* Finish committing transactions with unfinished postpone actions */
 
   save_tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 
@@ -6248,4 +6405,56 @@ end:
     }
 
   return NO_ERROR;
+}
+
+/*
+ * log_recovery_vacuum_data_buffer () - Recover vacuum data buffer. If the
+ *					server crashed, some block data saved
+ *					temporarily in a buffer may be lost.
+ *
+ * return			: Void.
+ * thread_p (in)		: Thread entry.
+ * mvcc_op_lsa (in)		: LSA of current MVCC operation.
+ * mvccid (in)			: MVCCID of current MVCC operation.
+ */
+static void
+log_recovery_vacuum_data_buffer (THREAD_ENTRY * thread_p,
+				 LOG_LSA * mvcc_op_lsa, MVCCID mvccid)
+{
+  assert (mvcc_Enabled);
+  /* Recover vacuum data information */
+  if (LSA_ISNULL (&log_Gl.hdr.mvcc_op_log_lsa)
+      || (VACUUM_GET_LOG_BLOCKID (log_Gl.hdr.mvcc_op_log_lsa.pageid)
+	  != VACUUM_GET_LOG_BLOCKID (mvcc_op_lsa->pageid)))
+    {
+      /* A new block is started */
+      if (!LSA_ISNULL (&log_Gl.hdr.mvcc_op_log_lsa))
+	{
+	  /* Save previous block data */
+	  vacuum_produce_log_block_data (thread_p,
+					 &log_Gl.hdr.mvcc_op_log_lsa,
+					 log_Gl.hdr.last_block_oldest_mvccid,
+					 log_Gl.hdr.last_block_newest_mvccid);
+	}
+      LSA_COPY (&log_Gl.hdr.mvcc_op_log_lsa, mvcc_op_lsa);
+      log_Gl.hdr.last_block_newest_mvccid = mvccid;
+      log_Gl.hdr.last_block_oldest_mvccid = mvccid;
+    }
+  else
+    {
+      /* New MVCC log record belongs to the same block as
+       * previous MVCC log record.
+       */
+      LSA_COPY (&log_Gl.hdr.mvcc_op_log_lsa, mvcc_op_lsa);
+      if (log_Gl.hdr.last_block_newest_mvccid == MVCCID_NULL
+	  || mvcc_id_precedes (log_Gl.hdr.last_block_newest_mvccid, mvccid))
+	{
+	  log_Gl.hdr.last_block_newest_mvccid = mvccid;
+	}
+      if (log_Gl.hdr.last_block_oldest_mvccid == MVCCID_NULL
+	  || mvcc_id_precedes (mvccid, log_Gl.hdr.last_block_oldest_mvccid))
+	{
+	  log_Gl.hdr.last_block_oldest_mvccid = mvccid;
+	}
+    }
 }

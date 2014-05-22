@@ -78,10 +78,11 @@ enum
 /* Slot's record has been deleted from heap file but has to be deleted from
  * index entries too (MVCC context).
  */
+/* This may be not required anymore with the new vacuum system */
   REC_DEAD = 8,
 
 /* unused reserved record type */
-  REC_RESERVED_TYPE_9 = 9,
+  REC_MVCC_NEXT_VERSION = 9,
   REC_RESERVED_TYPE_10 = 10,
   REC_RESERVED_TYPE_11 = 11,
   REC_RESERVED_TYPE_12 = 12,
@@ -89,7 +90,7 @@ enum
   REC_RESERVED_TYPE_14 = 14,
   REC_RESERVED_TYPE_15 = 15,
 /* 4bit record type max */
-  REC_4BIT_USED_TYPE_MAX = REC_DEAD,
+  REC_4BIT_USED_TYPE_MAX = REC_MVCC_NEXT_VERSION,
   REC_4BIT_TYPE_MAX = REC_RESERVED_TYPE_15
 };
 
@@ -135,7 +136,6 @@ struct spage_header
    * affected by the compiler.
    */
   unsigned int reserved_bits:30;
-  MVCCID last_mvcc_id;
 };
 
 /* 4-byte disk storage slot design */
@@ -270,20 +270,6 @@ extern SCAN_CODE spage_slots_next_scan (THREAD_ENTRY * thread_p, int cursor,
 					void *ctx);
 extern int spage_slots_end_scan (THREAD_ENTRY * thread_p, void **ctx);
 
-extern int spage_vacuum_page (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
-			      VPID page_vpid,
-			      VACUUM_PAGE_DATA * page_clean_p,
-			      MVCCID lowest_active_mvccid,
-			      bool vacuum_page_only);
-extern int spage_execute_vacuum_page (THREAD_ENTRY * thread_p,
-				      PAGE_PTR page_p, bool has_index,
-				      VACUUM_PAGE_DATA * vacuum_data_p);
-extern bool spage_should_vacuum_page (PAGE_PTR page_ptr,
-				      MVCCID oldest_active);
-extern void spage_mark_page_for_vacuum (THREAD_ENTRY * thread_p,
-					PAGE_PTR page_ptr, MVCCID mvcc_id);
-extern void spage_mark_page_as_vacuumed (THREAD_ENTRY * thread_p,
-					 PAGE_PTR page_ptr);
-extern int spage_mark_deleted_after_vacuum (THREAD_ENTRY * thread_p,
-					    PAGE_PTR page_p, PGSLOTID slotid);
+extern int spage_vacuum_slot (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+			      PGSLOTID slotid, OID * next_version);
 #endif /* _SLOTTED_PAGE_H_ */

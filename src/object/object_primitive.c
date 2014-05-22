@@ -5564,24 +5564,50 @@ peekmem_elo (OR_BUF * buf, DB_ELO * elo)
   /* size */
   elo->size = or_get_bigint (buf, &rc);
 
+  if (rc != NO_ERROR)
+    {
+      assert (false);
+      goto error;
+    }
+
   /* loid */
   rc = or_get_loid (buf, &elo->loid);
+  if (rc != NO_ERROR)
+    {
+      assert (false);
+      goto error;
+    }
 
   /* locator */
   locator_len = or_get_int (buf, &rc);
+  if (rc != NO_ERROR)
+    {
+      assert (false);
+      goto error;
+    }
   if (locator_len > 0)
     {
       elo->locator = buf->ptr;
     }
   else
     {
-      assert (0);
-      elo->locator = NULL;
+      assert (false);
+      goto error;
     }
-  or_advance (buf, locator_len);
+  rc = or_advance (buf, locator_len);
+  if (rc != NO_ERROR)
+    {
+      assert (false);
+      goto error;
+    }
 
   /* meta_data */
   meta_data_len = or_get_int (buf, &rc);
+  if (rc != NO_ERROR)
+    {
+      assert (false);
+      goto error;
+    }
   if (meta_data_len > 0)
     {
       elo->meta_data = buf->ptr;
@@ -5590,10 +5616,26 @@ peekmem_elo (OR_BUF * buf, DB_ELO * elo)
     {
       elo->meta_data = NULL;
     }
-  or_advance (buf, meta_data_len);
+  rc = or_advance (buf, meta_data_len);
+  if (rc != NO_ERROR)
+    {
+      assert (false);
+      goto error;
+    }
 
   /* type */
   elo->type = or_get_int (buf, &rc);
+  if (rc != NO_ERROR)
+    {
+      assert (false);
+      goto error;
+    }
+
+error:
+  elo->locator = NULL;
+  elo->meta_data = NULL;
+  elo->size = 0;
+  elo->type = ELO_NULL;
 }
 
 static void

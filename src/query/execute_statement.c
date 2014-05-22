@@ -2846,7 +2846,8 @@ do_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
        */
 
       /* disable data replication log for schema replication log types in HA mode */
-      if (prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false
+	  && prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF
 	  && is_schema_repl_log_statment (statement))
 	{
 	  need_schema_replication = true;
@@ -3260,7 +3261,8 @@ do_execute_statement (PARSER_CONTEXT * parser, PT_NODE * statement)
      process them; for any other node, return an error */
 
   /* disable data replication log for schema replication log types in HA mode */
-  if (prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF
+  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false
+      && prm_get_integer_value (PRM_ID_HA_MODE) != HA_MODE_OFF
       && is_schema_repl_log_statment (statement))
     {
       need_schema_replication = true;
@@ -4732,6 +4734,7 @@ map_iso_levels (PARSER_CONTEXT * parser, PT_NODE * statement,
     case PT_READ_COMMITTED:
       if (instances == PT_READ_UNCOMMITTED)
 	{
+	  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
 	  *tran_isolation = TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE;
 	}
       else if (instances == PT_READ_COMMITTED)
@@ -4784,13 +4787,22 @@ set_iso_level (PARSER_CONTEXT * parser,
   switch (isolvl)
     {
     case 1:
-      *tran_isolation = TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE;
-      fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-				       MSGCAT_SET_PARSER_RUNTIME,
-				       MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
-      fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-				       MSGCAT_SET_PARSER_RUNTIME,
-				       MSGCAT_RUNTIME_READCOM_S_READUNC_I));
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
+		     MSGCAT_MVCC_RUNTIME_XACT_ISO_LVL_MSG);
+	  error = ER_GENERIC_ERROR;
+	}
+      else
+	{
+	  *tran_isolation = TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE;
+	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
+					   MSGCAT_SET_PARSER_RUNTIME,
+					   MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
+	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
+					   MSGCAT_SET_PARSER_RUNTIME,
+					   MSGCAT_RUNTIME_READCOM_S_READUNC_I));
+	}
       break;
     case 2:
       *tran_isolation = TRAN_COMMIT_CLASS_COMMIT_INSTANCE;
@@ -4802,13 +4814,22 @@ set_iso_level (PARSER_CONTEXT * parser,
 				       MSGCAT_RUNTIME_READCOM_S_READCOM_I));
       break;
     case 3:
-      *tran_isolation = TRAN_REP_CLASS_UNCOMMIT_INSTANCE;
-      fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-				       MSGCAT_SET_PARSER_RUNTIME,
-				       MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
-      fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-				       MSGCAT_SET_PARSER_RUNTIME,
-				       MSGCAT_RUNTIME_REPREAD_S_READUNC_I));
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
+		     MSGCAT_MVCC_RUNTIME_XACT_ISO_LVL_MSG);
+	  error = ER_GENERIC_ERROR;
+	}
+      else
+	{
+	  *tran_isolation = TRAN_REP_CLASS_UNCOMMIT_INSTANCE;
+	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
+					   MSGCAT_SET_PARSER_RUNTIME,
+					   MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
+	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
+					   MSGCAT_SET_PARSER_RUNTIME,
+					   MSGCAT_RUNTIME_REPREAD_S_READUNC_I));
+	}
       break;
     case 4:
       *tran_isolation = TRAN_REP_CLASS_COMMIT_INSTANCE;
@@ -4850,8 +4871,16 @@ set_iso_level (PARSER_CONTEXT * parser,
 	}
       /* fall through */
     default:
-      PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
-		 MSGCAT_RUNTIME_XACT_ISO_LVL_MSG);
+      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
+	{
+	  PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
+		     MSGCAT_MVCC_RUNTIME_XACT_ISO_LVL_MSG);
+	}
+      else
+	{
+	  PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
+		     MSGCAT_RUNTIME_XACT_ISO_LVL_MSG);
+	}
       error = ER_GENERIC_ERROR;
     }
 

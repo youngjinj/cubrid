@@ -136,8 +136,6 @@ PT_RESERVED_NAME pt_Reserved_name_table[] = {
   {"p_is_saving", RESERVED_P_IS_SAVING, DB_TYPE_INTEGER}
   ,
   {"p_update_best", RESERVED_P_UPDATE_BEST, DB_TYPE_INTEGER}
-  ,
-  {"p_last_mvccid", RESERVED_P_LAST_MVCCID, DB_TYPE_INTEGER}
 
   /* key info attributes */
   ,

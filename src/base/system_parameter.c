@@ -568,16 +568,18 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_HA_PREFETCHLOGDB_MAX_PAGE_COUNT "ha_prefetchlogdb_max_page_count"
 
 #define PRM_NAME_MVCC_ENABLED "mvcc_enabled"
-#define PRM_NAME_MVCC_CLEAN_PAGE_RATIO "mvcc_clean_page_ratio"
 
-#define PRM_NAME_AUTO_VACUUM_ENABLED "auto_vacuum_enabled"
-#define PRM_NAME_AUTO_VACUUM_INTERVAL "auto_vacuum_interval_in_secs"
-#define PRM_NAME_AUTO_VACUUM_THRESHOLD "auto_vacuum_default_threshold"
-#define PRM_NAME_AUTO_VACUUM_RATIO "auto_vacuum_default_ratio"
+#define PRM_NAME_VACUUM_MASTER_WAKEUP_INTERVAL "vacuum_master_interval_in_secs"
+
+#define PRM_NAME_VACUUM_DATA_PAGES "vacuum_data_pages"
+#define PRM_NAME_VACUUM_LOG_BLOCK_PAGES "vacuum_log_block_pages"
+#define PRM_NAME_VACUUM_WORKER_COUNT "vacuum_worker_count"
+
+#define PRM_NAME_DISABLE_VACUUM "vacuum_disable"
+
+#define PRM_NAME_ER_LOG_VACUUM "er_log_vacuum"
 
 #define PRM_NAME_OBJECT_PRINT_FORMAT_OID "print_object_as_oid"
-
-#define PRM_NAME_SCAN_HEAP_PAGE_VACUUM_ENABLED "scan_heap_page_vacuum_enabled"
 
 /*
  * Note about ERROR_LIST and INTEGER_LIST type
@@ -936,6 +938,12 @@ static int prm_log_isolation_level_lower =
   TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE;
 static int prm_log_isolation_level_upper = TRAN_SERIALIZABLE;
 static unsigned int prm_log_isolation_level_flag = 0;
+
+int PRM_MVCC_LOG_ISOLATION_LEVEL = TRAN_REP_CLASS_COMMIT_INSTANCE;
+static int prm_mvcc_log_isolation_level_default =
+  TRAN_REP_CLASS_COMMIT_INSTANCE;
+static int prm_mvcc_log_isolation_level_lower =
+  TRAN_COMMIT_CLASS_COMMIT_INSTANCE;
 
 static unsigned int prm_log_media_failure_support_flag = 0;
 
@@ -1880,35 +1888,36 @@ bool PRM_MVCC_ENABLED = true;
 static bool prm_mvcc_enabled_default = true;
 static unsigned int prm_mvcc_enabled_flag = 0;
 
-float PRM_MVCC_CLEAN_PAGE_RATIO = 0.8f;
-static float prm_mvcc_clean_page_ratio_default = 0.8f;
-static float prm_mvcc_clean_page_ratio_lower = 0.1f;
-static float prm_mvcc_clean_page_ratio_upper = 0.95f;
-static unsigned int prm_mvcc_clean_page_ratio_flag = 0;
+int PRM_VACUUM_MASTER_WAKEUP_INTERVAL = 1;
+static int prm_vacuum_master_wakeup_interval_default = 1;
+static int prm_vacuum_master_wakeup_interval_lower = 1;
+static unsigned int prm_vacuum_master_wakeup_interval_flag = 0;
 
-bool PRM_AUTO_VACUUM_ENABLED = false;
-static bool prm_auto_vacuum_enabled_default = false;
-static unsigned int prm_auto_vacuum_enabled_flag = 0;
+int PRM_VACUUM_DATA_PAGES = 10;
+static int prm_vacuum_data_pages_default = 10;
+static int prm_vacuum_data_pages_lower = 10;
+static int prm_vacuum_data_pages_upper = 10000;
+static unsigned int prm_vacuum_data_pages_flag = 0;
 
-int PRM_AUTO_VACUUM_INTERVAL = 300;
-static int prm_auto_vacuum_interval_default = 300;
-static int prm_auto_vacuum_interval_lower = 30;
-static unsigned int prm_auto_vacuum_interval_flag = 0;
+int PRM_VACUUM_LOG_BLOCK_PAGES = 16;
+static int prm_vacuum_log_block_pages_default = 16;
+static int prm_vacuum_log_block_pages_lower = 4;
+static int prm_vacuum_log_block_pages_upper = 1024;
+static unsigned int prm_vacuum_log_block_pages_flag = 0;
 
-int PRM_AUTO_VACUUM_THRESHOLD = 100;
-static int prm_auto_vacuum_threshold_default = 100;
-static int prm_auto_vacuum_threshold_lower = 10;
-static unsigned int prm_auto_vacuum_threshold_flag = 0;
+int PRM_VACUUM_WORKER_COUNT = 10;
+static int prm_vacuum_worker_count_default = 10;
+static int prm_vacuum_worker_count_lower = 1;
+static int prm_vacuum_worker_count_upper = 100;
+static unsigned int prm_vacuum_worker_count_flag = 0;
 
-float PRM_AUTO_VACUUM_RATIO = 0.1f;
-static float prm_auto_vacuum_ratio_default = 0.1f;
-static float prm_auto_vacuum_ratio_lower = 0.05f;
-static float prm_auto_vacuum_ratio_upper = 0.8f;
-static unsigned int prm_auto_vacuum_ratio_flag = 0;
+int PRM_ER_LOG_VACUUM = 0;
+static int prm_er_log_vacuum_default = 0;
+static unsigned int prm_er_log_vacuum_flag = 0;
 
-bool PRM_SCAN_HEAP_PAGE_VACUUM_ENABLED = false;
-static bool prm_scan_heap_page_vacuum_enabled_default = false;
-static unsigned int prm_scan_heap_page_vacuum_enabled_flag = 0;
+bool PRM_DISABLE_VACUUM = false;
+static bool prm_disable_vacuum_default = false;
+static unsigned int prm_disable_vacuum_flag = 0;
 
 bool PRM_OBJECT_PRINT_FORMAT_OID = false;
 static bool prm_object_print_format_oid_default = false;
@@ -4539,67 +4548,67 @@ static SYSPRM_PARAM prm_Def[] = {
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
-  {PRM_NAME_MVCC_CLEAN_PAGE_RATIO,
+  {PRM_NAME_VACUUM_MASTER_WAKEUP_INTERVAL,
+   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+   PRM_INTEGER,
+   (void *) &prm_vacuum_master_wakeup_interval_flag,
+   (void *) &prm_vacuum_master_wakeup_interval_default,
+   (void *) &PRM_VACUUM_MASTER_WAKEUP_INTERVAL,
+   (void *) NULL,
+   (void *) &prm_vacuum_master_wakeup_interval_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_VACUUM_DATA_PAGES,
    (PRM_FOR_SERVER),
-   PRM_FLOAT,
-   (void *) &prm_mvcc_clean_page_ratio_flag,
-   (void *) &prm_mvcc_clean_page_ratio_default,
-   (void *) &PRM_MVCC_CLEAN_PAGE_RATIO,
-   (void *) &prm_mvcc_clean_page_ratio_upper,
-   (void *) &prm_mvcc_clean_page_ratio_lower,
-   (char *) NULL,
-   (DUP_PRM_FUNC) NULL,
-   (DUP_PRM_FUNC) NULL},
-  {PRM_NAME_AUTO_VACUUM_ENABLED,
-   (PRM_FOR_SERVER | PRM_USER_CHANGE),
-   PRM_BOOLEAN,
-   (void *) &prm_auto_vacuum_enabled_flag,
-   (void *) &prm_auto_vacuum_enabled_default,
-   (void *) &PRM_AUTO_VACUUM_ENABLED,
-   (void *) NULL,
-   (void *) NULL,
-   (char *) NULL,
-   (DUP_PRM_FUNC) NULL,
-   (DUP_PRM_FUNC) NULL},
-  {PRM_NAME_AUTO_VACUUM_INTERVAL,
-   (PRM_FOR_SERVER | PRM_USER_CHANGE),
    PRM_INTEGER,
-   (void *) &prm_auto_vacuum_interval_flag,
-   (void *) &prm_auto_vacuum_interval_default,
-   (void *) &PRM_AUTO_VACUUM_INTERVAL,
-   (void *) NULL,
-   (void *) &prm_auto_vacuum_interval_lower,
+   (void *) &prm_vacuum_data_pages_flag,
+   (void *) &prm_vacuum_data_pages_default,
+   (void *) &PRM_VACUUM_DATA_PAGES,
+   (void *) &prm_vacuum_data_pages_upper,
+   (void *) &prm_vacuum_data_pages_lower,
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
-  {PRM_NAME_AUTO_VACUUM_THRESHOLD,
-   (PRM_FOR_SERVER | PRM_USER_CHANGE),
+  {PRM_NAME_VACUUM_LOG_BLOCK_PAGES,
+   (PRM_FOR_SERVER),
    PRM_INTEGER,
-   (void *) &prm_auto_vacuum_threshold_flag,
-   (void *) &prm_auto_vacuum_threshold_default,
-   (void *) &PRM_AUTO_VACUUM_THRESHOLD,
+   (void *) &prm_vacuum_log_block_pages_flag,
+   (void *) &prm_vacuum_log_block_pages_default,
+   (void *) &PRM_VACUUM_LOG_BLOCK_PAGES,
+   (void *) &prm_vacuum_log_block_pages_upper,
+   (void *) &prm_vacuum_log_block_pages_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_VACUUM_WORKER_COUNT,
+   (PRM_FOR_SERVER),
+   PRM_INTEGER,
+   (void *) &prm_vacuum_worker_count_flag,
+   (void *) &prm_vacuum_worker_count_default,
+   (void *) &PRM_VACUUM_WORKER_COUNT,
+   (void *) &prm_vacuum_worker_count_upper,
+   (void *) &prm_vacuum_worker_count_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_NAME_ER_LOG_VACUUM,
+   (PRM_FOR_SERVER),
+   PRM_INTEGER,
+   (void *) &prm_er_log_vacuum_flag,
+   (void *) &prm_er_log_vacuum_default,
+   (void *) &PRM_ER_LOG_VACUUM,
    (void *) NULL,
-   (void *) &prm_auto_vacuum_threshold_lower,
+   (void *) NULL,
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
-  {PRM_NAME_AUTO_VACUUM_RATIO,
-   (PRM_FOR_SERVER | PRM_USER_CHANGE),
-   PRM_FLOAT,
-   (void *) &prm_auto_vacuum_ratio_flag,
-   (void *) &prm_auto_vacuum_ratio_default,
-   (void *) &PRM_AUTO_VACUUM_RATIO,
-   (void *) &prm_auto_vacuum_ratio_upper,
-   (void *) &prm_auto_vacuum_ratio_lower,
-   (char *) NULL,
-   (DUP_PRM_FUNC) NULL,
-   (DUP_PRM_FUNC) NULL},
-  {PRM_NAME_SCAN_HEAP_PAGE_VACUUM_ENABLED,
-   (PRM_FOR_SERVER | PRM_USER_CHANGE | PRM_HIDDEN),
+  {PRM_NAME_DISABLE_VACUUM,
+   (PRM_FOR_SERVER | PRM_FOR_CLIENT | PRM_FORCE_SERVER),
    PRM_BOOLEAN,
-   (void *) &prm_scan_heap_page_vacuum_enabled_flag,
-   (void *) &prm_scan_heap_page_vacuum_enabled_default,
-   (void *) &PRM_SCAN_HEAP_PAGE_VACUUM_ENABLED,
+   (void *) &prm_disable_vacuum_flag,
+   (void *) &prm_disable_vacuum_default,
+   (void *) &PRM_DISABLE_VACUUM,
    (void *) NULL,
    (void *) NULL,
    (char *) NULL,
@@ -5571,6 +5580,18 @@ prm_load_by_section (INI_TABLE * ini, const char *section,
 		  return error;
 		}
 	    }
+	}
+
+      if (strcasecmp (PRM_NAME_MVCC_ENABLED, prm->name) == 0)
+	{
+	  if (PRM_LOG_ISOLATION_LEVEL == TRAN_REP_CLASS_UNCOMMIT_INSTANCE)
+	    {
+	      PRM_LOG_ISOLATION_LEVEL = PRM_MVCC_LOG_ISOLATION_LEVEL;
+	    }
+
+	  prm_log_isolation_level_default =
+	    prm_mvcc_log_isolation_level_default;
+	  prm_log_isolation_level_lower = prm_mvcc_log_isolation_level_lower;
 	}
 
       error = prm_set (prm, value, true);

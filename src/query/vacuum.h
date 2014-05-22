@@ -28,57 +28,119 @@
 #include "thread.h"
 #include "storage_common.h"
 #include "recovery.h"
+#include "system_parameter.h"
 
-/* VACUUM_PAGE_DATA
- * Structures is used by VACUUM to collect data on a heap page. The cleaning
- * process is executed based on this data.
+/* Vacuum logging function (can only be used when SERVER_MODE is defined).
  */
-typedef struct vacuum_page_data VACUUM_PAGE_DATA;
-struct vacuum_page_data
-{
-  PGSLOTID *dead_slots;		/* array of ids for dead slots */
-  PGSLOTID *relocated_slots;	/* relocated slots */
-  OID *relocations;		/* destination for each slot in
-				 * relocated_slots.
-				 */
-  VPID *ovfl_pages;		/* array of ids for overflow pages */
+#define VACUUM_ER_LOG_NONE		0	/* No logging */
+#define VACUUM_ER_LOG_ERROR		1	/* Log vacuum errors */
+#define VACUUM_ER_LOG_WARNING		2	/* Log vacuum warnings */
+#define VACUUM_ER_LOG_LOGGING		4	/* Log adding MVCC op log
+						 * entries.
+						 */
+#define VACUUM_ER_LOG_BTREE		8	/* Log vacuum b-trees */
+#define VACUUM_ER_LOG_HEAP		16	/* Log vacuum heap */
+#define VACUUM_ER_LOG_DROPPED_CLASSES	32	/* Log dropped classes */
+#define VACUUM_ER_LOG_DROPPED_INDEXES	64	/* Log dropped indexes */
+#define VACUUM_ER_LOG_VACUUM_DATA	128	/* Log vacuum data */
+#define VACUUM_ER_LOG_WORKER		256	/* Log vacuum worker specific
+						 * activity.
+						 */
+#define VACUUM_ER_LOG_MASTER		512	/* Log vacuum master specific
+						 * activity.
+						 */
+#define VACUUM_ER_LOG_RECOVERY		1024	/* Log recovery of vacuum data
+						 * and dropped classes/indexes
+						 */
 
-  int *visited;			/* Each slot entry is initialized as
-				 * NOT_VISITED and then replaced with
-				 * VISITED_DEAD or VISITED_ALIVE.
-				 */
+#define VACUUM_ER_LOG_DROPPED_CLS_BTID	\
+  (VACUUM_ER_LOG_DROPPED_CLASSES + VACUUM_ER_LOG_DROPPED_INDEXES)	/* Log dropped classes/indexes */
+#define VACUUM_ER_LOG_VERBOSE		0xFFFFFFFF	/* Log all activity
+							 * related to vacuum.
+							 */
+#define VACUUM_IS_ER_LOG_LEVEL_SET(er_log_level) \
+  (mvcc_Enabled \
+   && ((prm_get_integer_value (PRM_ID_ER_LOG_VACUUM) & (er_log_level)) != 0))
+#if defined(SERVER_MODE)
+#define vacuum_er_log(er_log_level, ...) \
+  if (VACUUM_IS_ER_LOG_LEVEL_SET (er_log_level)) \
+    _er_log_debug (ARG_FILE_LINE, __VA_ARGS__)
+#else
+#define vacuum_er_log(er_log_level, ...)
+#endif
 
-  short n_dead;			/* number of dead slots */
-  short n_ovfl_pages;		/* number of overflow pages */
-  short n_relocations;		/* number of relocated slots */
+typedef INT64 VACUUM_LOG_BLOCKID;
+#define VACUUM_NULL_LOG_BLOCKID -1
+#define VACUUM_LOG_PAGES_PER_BLOCK    16
 
-  short n_vacuumed_records;	/* number of records with vacuumed data during
-				 * current vacuum phase.
-				 */
+#define VACUUM_GET_LOG_BLOCKID(page_id) \
+  (((page_id) != NULL_PAGEID) ? \
+   (page_id) / VACUUM_LOG_PAGES_PER_BLOCK : \
+   VACUUM_NULL_LOG_BLOCKID)
 
-  bool vacuum_needed;		/* Is set to true if any records are deleted
-				 * from current page and compacting would
-				 * be useful.
-				 */
-  bool all_visible;		/* It is true if all records on a page are
-				 * visible to all transactions after a
-				 * vacuum execution.
-				 */
-};
-
-extern int vacuum_stats_table_update_entry (THREAD_ENTRY * thread_p,
-					    const OID * class_oid,
-					    HFID * hfid, int n_inserted,
-					    int n_deleted);
-extern int vacuum_stats_table_remove_entry (OID * class_oid);
+extern int vacuum_init_vacuum_files (THREAD_ENTRY * thread_p,
+				     VFID * vacuum_data_vfid,
+				     VFID * dropped_classes_vfid,
+				     VFID * dropped_indexes_vfid);
+extern int vacuum_load_from_disk (THREAD_ENTRY * thread_p,
+				  VFID * vacuum_data_vfid,
+				  VFID * dropped_classes_vfid,
+				  VFID * dropped_indexes_vfid);
 extern int vacuum_initialize (THREAD_ENTRY * thread_p);
 extern void vacuum_finalize (THREAD_ENTRY * thread_p);
+extern int vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
+			      LOG_LSA * prev_chkpt_lsa,
+			      LOG_LSA * oldest_not_flushed_lsa,
+			      bool is_vacuum_data_locked);
+extern void vacuum_produce_log_block_data (THREAD_ENTRY * thread_p,
+					   LOG_LSA * start_lsa,
+					   MVCCID oldest_mvccid,
+					   MVCCID newest_mvccid);
+extern void vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
+					      bool ignore_duplicates);
+extern LOG_PAGEID vacuum_data_get_first_log_pageid (THREAD_ENTRY * thread_p);
+extern LOG_PAGEID vacuum_data_get_last_log_pageid (THREAD_ENTRY * thread_p);
 
-extern int vacuum_rv_redo_remove_oids (THREAD_ENTRY * thread_p,
-				       LOG_RCV * rcv);
+extern int vacuum_rv_redo_remove_oids_from_heap_page (THREAD_ENTRY * thread_p,
+						      LOG_RCV * rcv);
+extern int vacuum_rv_redo_remove_data_entries (THREAD_ENTRY * thread_p,
+					LOG_RCV * rcv);
+extern int vacuum_rv_redo_append_block_data (THREAD_ENTRY * thread_p,
+					     LOG_RCV * rcv);
+extern int vacuum_rv_redo_update_block_data (THREAD_ENTRY * thread_p,
+					     LOG_RCV * rcv);
+
+extern void vacuum_set_vacuum_data_lsa (THREAD_ENTRY * thread_p,
+					LOG_LSA * vacuum_data_lsa);
+extern void vacuum_get_vacuum_data_lsa (THREAD_ENTRY * thread_p,
+					LOG_LSA * vacuum_data_lsa);
+
+extern int vacuum_add_dropped_class (THREAD_ENTRY * thread_p, OID * class_oid,
+				     MVCCID mvccid);
+extern int vacuum_add_dropped_index (THREAD_ENTRY * thread_p, BTID * btidp,
+				     MVCCID mvccid);
+extern bool vacuum_is_class_dropped (THREAD_ENTRY * thread_p, OID * class_oid,
+				     MVCCID mvccid);
+extern bool vacuum_is_index_dropped (THREAD_ENTRY * thread_p, BTID * btid,
+				     MVCCID mvccid);
+extern int vacuum_rv_redo_add_dropped_cls_btid (THREAD_ENTRY * thread_p,
+						LOG_RCV * rcv);
+extern int vacuum_rv_redo_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p,
+						    LOG_RCV * rcv);
+extern int vacuum_rv_set_next_page_dropped_cls_btid (THREAD_ENTRY * thread_p,
+						     LOG_RCV * rcv);
 
 extern int xvacuum (THREAD_ENTRY * thread_p, int num_classes,
 		    OID * class_oids);
+extern int vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
+						     void * entries);
+extern int vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
+						     void * entries);
 
-extern void auto_vacuum_start (void);
+#if defined (SERVER_MODE)
+extern void vacuum_master_start (void);
+extern void vacuum_start_new_job (THREAD_ENTRY * thread_p,
+				  VACUUM_LOG_BLOCKID blockid);
+#endif /* SERVER_MODE */
+
 #endif /* _VACUUM_ */

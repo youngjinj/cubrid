@@ -3233,10 +3233,13 @@ locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
     }
 
   isolation = TM_TRAN_ISOLATION ();
-  if ((current_lock == S_LOCK || current_lock == IS_LOCK)
+  if ((current_lock == S_LOCK || current_lock == IS_LOCK
+       || current_lock == SCH_S_LOCK)
       && (isolation == TRAN_COMMIT_CLASS_COMMIT_INSTANCE
 	  || isolation == TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE))
     {
+      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false
+	      || isolation != TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE);
       found = locator_find_class_by_oid (class_mop, classname,
 					 &class_oid, lock);
       goto end;
@@ -4336,7 +4339,8 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 				    }
 
 				  /* preserve pruning type */
-				  new_mop->pruning_type = mop_toid->mop->pruning_type;
+				  new_mop->pruning_type =
+				    mop_toid->mop->pruning_type;
 
 				  /* Set MVCC link */
 				  mop_toid->mop->mvcc_link = new_mop;
@@ -6543,9 +6547,13 @@ locator_lockhint_classes (int num_classes, const char **many_classnames,
 	  if (class_mop == NULL || current_lock == NULL_LOCK
 	      || ((isolation == TRAN_COMMIT_CLASS_COMMIT_INSTANCE
 		   || isolation == TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE)
-		  && (current_lock == S_LOCK || current_lock == IS_LOCK))
+		  && (current_lock == S_LOCK || current_lock == IS_LOCK
+		      || current_lock == SCH_S_LOCK))
 	      || current_lock != conv_lock)
 	    {
+	      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false
+		      || (isolation != TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
+			  && isolation != TRAN_REP_CLASS_UNCOMMIT_INSTANCE));
 	      need_call_server = true;
 	      continue;
 	    }

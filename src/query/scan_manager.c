@@ -4207,7 +4207,7 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
   REGU_VALUES_SCAN_ID *rvsidp = NULL;
   REGU_VALUE_LIST *regu_value_list = NULL;
   REGU_VARIABLE_LIST list_node = NULL;
-  MVCC_SNAPSHOT * mvcc_snapshot = NULL;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
 
   switch (scan_id->type)
     {
@@ -5320,10 +5320,14 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 						  &hsidp->scan_range.
 						  scan_cache, scan_id->fixed,
 						  &mvcc_reev_data);
-	      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
-		  || (sp_scan == S_SUCCESS
-		      && mvcc_reev_data.filter_result == V_FALSE))
+	      if (sp_scan == S_SUCCESS
+		  && mvcc_reev_data.filter_result == V_FALSE)
 		{
+		  continue;
+		}
+	      else if (er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+		{
+		  er_clear ();
 		  continue;
 		}
 	    }
@@ -5369,10 +5373,14 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 							  &hsidp->scan_cache,
 							  scan_id->fixed,
 							  &mvcc_reev_data);
-		      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
-			  || (sp_scan == S_SUCCESS
-			      && mvcc_reev_data.filter_result == V_FALSE))
+		      if (sp_scan == S_SUCCESS
+			  && mvcc_reev_data.filter_result == V_FALSE)
 			{
+			  continue;
+			}
+		      else if (er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+			{
+			  er_clear ();
 			  continue;
 			}
 		    }
@@ -5423,10 +5431,14 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 							  &hsidp->scan_cache,
 							  scan_id->fixed,
 							  &mvcc_reev_data);
-		      if ((sp_scan == S_SNAPSHOT_NOT_SATISFIED)
-			  || (sp_scan == S_SUCCESS
-			      && mvcc_reev_data.filter_result == V_FALSE))
+		      if (sp_scan == S_SUCCESS
+			  && mvcc_reev_data.filter_result == V_FALSE)
 			{
+			  continue;
+			}
+		      else if (er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+			{
+			  er_clear ();
 			  continue;
 			}
 		    }
@@ -6119,6 +6131,25 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
       sp_scan =
 	heap_get (thread_p, isidp->curr_oidp, &recdes, &isidp->scan_cache,
 		  scan_id->fixed, NULL_CHN);
+
+      if (sp_scan == S_SNAPSHOT_NOT_SATISFIED)
+	{
+	  if (SCAN_IS_INDEX_COVERED (isidp))
+	    {
+	      /* goto the next tuple */
+	      if (!isidp->multi_range_opt.use)
+		{
+		  if (qfile_scan_list_next
+		      (thread_p, isidp->indx_cov.lsid, &tplrec,
+		       PEEK) != S_SUCCESS)
+		    {
+		      return S_ERROR;
+		    }
+		}
+	    }
+
+	  return S_DOESNT_EXIST;	/* not qualified, continue to the next tuple */
+	}
     }
   else
     {
@@ -6186,6 +6217,27 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 	      break;
 	    }
 	}
+    }
+
+  if (mvcc_Enabled && sp_scan == S_DOESNT_EXIST
+      && er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+    {
+      er_clear ();
+      if (SCAN_IS_INDEX_COVERED (isidp))
+	{
+	  /* goto the next tuple */
+	  if (!isidp->multi_range_opt.use)
+	    {
+	      if (qfile_scan_list_next
+		  (thread_p, isidp->indx_cov.lsid, &tplrec,
+		   PEEK) != S_SUCCESS)
+		{
+		  return S_ERROR;
+		}
+	    }
+	}
+
+      return S_DOESNT_EXIST;	/* not qualified, continue to the next tuple */
     }
 
   if (sp_scan != S_SUCCESS && sp_scan != S_SNAPSHOT_NOT_SATISFIED)
@@ -6263,25 +6315,6 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 	}
 
       return S_ERROR;
-    }
-
-  if (sp_scan == S_SNAPSHOT_NOT_SATISFIED)
-    {
-      if (SCAN_IS_INDEX_COVERED (isidp))
-	{
-	  /* goto the next tuple */
-	  if (!isidp->multi_range_opt.use)
-	    {
-	      if (qfile_scan_list_next
-		  (thread_p, isidp->indx_cov.lsid, &tplrec,
-		   PEEK) != S_SUCCESS)
-		{
-		  return S_ERROR;
-		}
-	    }
-	}
-
-      return S_DOESNT_EXIST;	/* not qualified, continue to the next tuple */
     }
 
   if (mvcc_Enabled == false || !scan_id->mvcc_select_lock_needed)

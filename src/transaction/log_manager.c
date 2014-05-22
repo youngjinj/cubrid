@@ -138,8 +138,9 @@ static int rv;
    ((RCVI) == RVDK_LINK_PERM_VOLEXT)
 
 #define LOG_NEED_TO_SET_LSA(RCVI, PGPTR) \
-   (((RCVI) != RVDK_LINK_PERM_VOLEXT || !pgbuf_is_lsa_temporary(PGPTR))	\
-    && ((RCVI) != RVBT_MVCC_INCREMENTS_UPD))
+   (!LOG_IS_VACUUM_DATA_RECOVERY (RCVI) \
+    && ((RCVI) != RVBT_MVCC_INCREMENTS_UPD) \
+    && ((RCVI) != RVDK_LINK_PERM_VOLEXT || !pgbuf_is_lsa_temporary(PGPTR)))
 
 /* Assume that locator end with <path>/<meta_name>.<key_name> */
 #define LOCATOR_KEY(locator_) (strrchr (locator_, '.') + 1)
@@ -1111,7 +1112,6 @@ log_initialize (THREAD_ENTRY * thread_p, const char *db_fullname,
 				  false);
 
   log_No_logging = prm_get_bool_value (PRM_ID_LOG_NO_LOGGING);
-  mvcc_Enabled = prm_get_bool_value (PRM_ID_MVCC_ENABLED);
 #if !defined(NDEBUG)
   if (prm_get_bool_value (PRM_ID_LOG_TRACE_DEBUG) && log_No_logging)
     {
@@ -1428,6 +1428,10 @@ log_initialize_internal (THREAD_ENTRY * thread_p, const char *db_fullname,
 
   log_Gl.mvcc_table.highest_completed_mvccid = log_Gl.hdr.mvcc_next_id;
   MVCCID_BACKWARD (log_Gl.mvcc_table.highest_completed_mvccid);
+
+  LSA_SET_NULL (&log_Gl.hdr.mvcc_op_log_lsa);
+  log_Gl.hdr.last_block_newest_mvccid = MVCCID_NULL;
+  log_Gl.hdr.last_block_oldest_mvccid = MVCCID_NULL;
   /*
    * Was the database system shut down or was it involved in a crash ?
    */
@@ -2695,6 +2699,15 @@ log_append_redo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex,
 	  assert (false);
 	  return;
 	}
+    }
+
+  /*
+   * Vacuum data may occupy many pages but has only one log lsa. Check if this
+   * is a change on vacuum data and pass start_lsa to be recorded.
+   */
+  if (LOG_IS_VACUUM_DATA_RECOVERY (rcvindex))
+    {
+      vacuum_set_vacuum_data_lsa (thread_p, &start_lsa);
     }
 
   if (!LOG_CHECK_LOG_APPLIER (thread_p)
@@ -4451,6 +4464,11 @@ log_can_skip_undo_logging (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex,
       return false;
     }
 
+  if (thread_is_vacuum_worker (thread_p))
+    {
+      return true;
+    }
+
   /*
    * Operation level undo can be skipped on temporary pages. For example,
    * those of temporary files.
@@ -4529,6 +4547,11 @@ log_can_skip_redo_logging (LOG_RCVINDEX rcvindex,
    * See also canskip_undo.
    */
   if (LOG_ISUNSAFE_TO_SKIP_RCVINDEX (rcvindex))
+    {
+      return false;
+    }
+
+  if (LOG_IS_VACUUM_DATA_RECOVERY (rcvindex))
     {
       return false;
     }
