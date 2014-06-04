@@ -204,6 +204,7 @@ struct btree_scan
     (bts)->oid_pos = 0;					\
     (bts)->restart_scan = 0;                    	\
     (bts)->common_prefix = COMMON_PREFIX_UNKNOWN;	\
+    (bts)->clear_cur_key = false;			\
   } while (0)
 
 #define BTREE_END_OF_SCAN(bts) \

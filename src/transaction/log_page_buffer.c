@@ -2223,6 +2223,20 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
   assert (pageid != NULL_PAGEID);
   assert (LOG_CS_OWN (thread_p));
 
+  if (thread_is_process_log_for_vacuum (thread_p))
+    {
+      /* This is added here to block others from creating new archive
+       * or mounting/dismounting archives while the vacuum workers is
+       * trying to fetch its page from file.
+       */
+      /* This was first done only for active pages. This allowed other
+       * transaction create a new archive from active log after calling
+       * logpb_is_page_in_archive. Therefore the logpb_to_physical_pageid
+       * became flawed.
+       */
+      LOG_CS_ENTER_READ_MODE (thread_p);
+    }
+
   if (logpb_is_page_in_archive (pageid)
       && (LOG_ISRESTARTED () == false
 	  || (pageid + LOGPB_ACTIVE_NPAGES) <= log_Gl.hdr.append_lsa.pageid))
@@ -2230,17 +2244,12 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
       if (logpb_fetch_from_archive (thread_p, pageid,
 				    log_pgptr, NULL, NULL, true) == NULL)
 	{
-	  return NULL;
+	  goto error;
 	}
     }
   else
     {
       LOG_PHY_PAGEID phy_pageid;
-
-      if (thread_is_process_log_for_vacuum (thread_p))
-	{
-	  LOG_CS_ENTER_READ_MODE (thread_p);
-	}
 
       /*
        * Page is contained in the active log.
@@ -2259,7 +2268,7 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
 	    {
 	      LOG_CS_EXIT (thread_p);
 	    }
-	  return NULL;
+	  goto error;
 	}
       else
 	{
@@ -2272,17 +2281,24 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
 		{
 		  LOG_CS_EXIT (thread_p);
 		}
-	      return NULL;
+	      goto error;
 	    }
-	}
-      if (thread_is_process_log_for_vacuum (thread_p))
-	{
-	  LOG_CS_EXIT (thread_p);
 	}
     }
 
+  if (thread_is_process_log_for_vacuum (thread_p))
+    {
+      LOG_CS_EXIT (thread_p);
+    }
   /* keep old function's usage */
   return log_pgptr;
+
+error:
+  if (thread_is_process_log_for_vacuum (thread_p))
+    {
+      LOG_CS_EXIT (thread_p);
+    }
+  return NULL;
 }
 
 /*
@@ -3129,8 +3145,8 @@ prior_lsa_copy_undo_crumbs_to_node (LOG_PRIOR_NODE * node,
   int i, length;
   char *ptr;
 
-  assert ((num_crumbs == 0 && crumbs == NULL)
-	  || (num_crumbs != 0 && crumbs != NULL));
+  /* Safe guard: either num_crumbs is 0 or crumbs array is not NULL */
+  assert (num_crumbs == 0 || crumbs != NULL);
 
   for (i = 0, length = 0; i < num_crumbs; i++)
     {
@@ -3177,8 +3193,8 @@ prior_lsa_copy_redo_crumbs_to_node (LOG_PRIOR_NODE * node,
   int i, length;
   char *ptr;
 
-  assert ((num_crumbs == 0 && crumbs == NULL)
-	  || (num_crumbs != 0 && crumbs != NULL));
+  /* Safe guard: either num_crumbs is 0 or crumbs array is not NULL */
+  assert (num_crumbs == 0 || crumbs != NULL);
   for (i = 0, length = 0; i < num_crumbs; i++)
     {
       length += crumbs[i].length;

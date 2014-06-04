@@ -7942,27 +7942,14 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
        */
       if (mvcc_Enabled)
 	{
-	  OID updated_oid;
-	  /* oid has been already locked in select phase, */
-
-	  scan_cache->mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
-	  if (scan_cache->mvcc_snapshot == NULL)
-	    {
-	      error_code = er_errid ();
-	      return (error_code == NO_ERROR ? ER_FAILED : error_code);
-	    }
-
+	  /* The oid has been already locked in select phase, however need to
+	   * get the last object that may differ by the current one in case that
+	   * transaction updates same OID many times during command execution
+	   */
 	  scan =
-	    heap_get_last (thread_p, oid, &copy_recdes, scan_cache, COPY,
-			   NULL_CHN, &updated_oid);
-
-	  if (scan == S_SUCCESS)
-	    {
-	      if (!OID_ISNULL (&updated_oid))
-		{
-		  COPY_OID (oid, &updated_oid);
-		}
-	    }
+	    heap_mvcc_get_version_for_delete (thread_p, hfid, oid, &class_oid,
+					      &copy_recdes, scan_cache, COPY,
+					      NULL);
 	}
       else
 	{
@@ -9152,7 +9139,9 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
        * after UPDATE that must be reflected in B-tree because vacuum can delete
        * old key. So, in this case we must update index even if no attribute
        * that is part of index was updated */
-      if ((att_id != NULL) && (use_mvcc == false))
+      if ((att_id != NULL)
+	  && ((use_mvcc == false)
+	      || (index->type == BTREE_PRIMARY_KEY && index->fk != NULL)))
 	{
 	  found_btid = false;	/* guess as not found */
 
@@ -9167,7 +9156,11 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		}
 	    }
 
-	  if (!found_btid && !index->filter_predicate)
+	  /* in MVCC, in case of BTREE_PRIMARY_KEY having FK need to update PK
+	   * index but skip foreign key restrictions checking
+	   */
+	  if (!found_btid && !index->filter_predicate
+	      && (index->type != BTREE_PRIMARY_KEY || index->fk == NULL))
 	    {
 	      continue;		/* skip and go ahead */
 	    }
@@ -9456,8 +9449,9 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 	  CUBRID_IDX_UPDATE_END (classname, index->btname, 0);
 #endif /* ENABLE_SYSTEMTAP */
 
+	  /* In MVCC need to check for specified update attributes */
 	  if (!locator_Dont_check_foreign_key
-	      && index->type == BTREE_PRIMARY_KEY && index->fk)
+	      && index->type == BTREE_PRIMARY_KEY && index->fk && found_btid)
 	    {
 	      error_code = locator_check_primary_key_update (thread_p,
 							     index, old_key);

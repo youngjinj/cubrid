@@ -21839,7 +21839,7 @@ heap_mvcc_log_delete (THREAD_ENTRY * thread_p, INT32 undo_chn,
 {
 #define HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS 3
 #define HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS 2
-  
+
   int n_undo_crumbs = 0, n_redo_crumbs = 0;
   LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS];
   LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS];
@@ -29327,7 +29327,8 @@ heap_mvcc_log_delete_relocation (THREAD_ENTRY * thread_p,
 
   int n_undo_crumbs = 0, n_redo_crumbs = 0;
   LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS];
-  LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS];
+  LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS],
+    *p_redo_crumbs = NULL;
   char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
 
   assert (p_addr != NULL);
@@ -29363,7 +29364,9 @@ heap_mvcc_log_delete_relocation (THREAD_ENTRY * thread_p,
 
       /* Add record data */
       redo_crumbs[n_redo_crumbs].length = p_redo_recdes->length;
-      redo_crumbs[n_redo_crumbs].data = p_redo_recdes->data;
+      redo_crumbs[n_redo_crumbs++].data = p_redo_recdes->data;
+
+      p_redo_crumbs = redo_crumbs;
     }
 
   /* Safe guard */
@@ -29372,7 +29375,7 @@ heap_mvcc_log_delete_relocation (THREAD_ENTRY * thread_p,
   /* Append log crumbs */
   log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATION, p_addr,
 			      n_undo_crumbs, n_redo_crumbs,
-			      undo_crumbs, redo_crumbs);
+			      undo_crumbs, p_redo_crumbs);
 }
 
 /*

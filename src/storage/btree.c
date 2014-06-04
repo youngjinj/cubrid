@@ -19064,7 +19064,7 @@ btree_reflect_unique_statistics (THREAD_ENTRY * thread_p,
     {
       assert_release (BTREE_IS_UNIQUE (root_header->unique_pk));
 
-      if (logtb_is_current_active (thread_p))
+      if (!only_active_tran || logtb_is_current_active (thread_p))
 	{
 	  /* update header information */
 	  ret = btree_change_root_header_delta (thread_p,

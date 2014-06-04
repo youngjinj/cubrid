@@ -4107,6 +4107,7 @@ vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, DROPPED_TYPE type)
 
   /* Clean each page of dropped entries */
   VPID_COPY (&vpid, VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
+  VPID_COPY (&last_non_empty_page_vpid, VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
   while (!VPID_ISNULL (&vpid))
     {
       /* Reset n_removed_entries */

@@ -24082,6 +24082,8 @@ qexec_analytic_start_group (THREAD_ENTRY * thread_p,
       func_state->curr_sort_key_tuple_count = 0;
     }
 
+  return NO_ERROR;
+
 exit_on_error:
   assert (er_errid () != NO_ERROR);
   return er_errid ();
