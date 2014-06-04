@@ -1260,7 +1260,7 @@ retry:
 
   pthread_mutex_unlock (&boot_Auto_addvol_job.lock);
 
-#else
+#else /* !SERVER_MODE */
   ext_info.extend_npages = ext_info.max_npages;
 
   volid = boot_xadd_volume_extension (thread_p, &ext_info);
@@ -1271,7 +1271,7 @@ retry:
 	      ER_BO_NOTIFY_AUTO_VOLEXT, 2,
 	      fileio_get_volume_label (volid, PEEK), ext_info.extend_npages);
     }
-#endif
+#endif /* !SERVER_MODE */
 
   return volid;
 }

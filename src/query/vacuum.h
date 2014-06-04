@@ -104,7 +104,7 @@ extern LOG_PAGEID vacuum_data_get_last_log_pageid (THREAD_ENTRY * thread_p);
 extern int vacuum_rv_redo_remove_oids_from_heap_page (THREAD_ENTRY * thread_p,
 						      LOG_RCV * rcv);
 extern int vacuum_rv_redo_remove_data_entries (THREAD_ENTRY * thread_p,
-					LOG_RCV * rcv);
+					       LOG_RCV * rcv);
 extern int vacuum_rv_redo_append_block_data (THREAD_ENTRY * thread_p,
 					     LOG_RCV * rcv);
 extern int vacuum_rv_redo_update_block_data (THREAD_ENTRY * thread_p,

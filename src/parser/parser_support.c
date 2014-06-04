@@ -1218,6 +1218,41 @@ pt_is_analytic_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 }
 
 /*
+ * pt_has_non_idx_sarg_coll_pre () - pre function for determining if a tree has
+ *				     contains a node with a collation that
+ *				     renders it unusable for key range/filter
+ *   returns: input node
+ *   parser(in): parser to use
+ *   tree(in): tree node to analyze
+ *   arg(out): integer, will be set to "1" if node is found unfit
+ *   continue_walk(out): to be set to PT_STOP_WALK where necessary
+ */
+PT_NODE *
+pt_has_non_idx_sarg_coll_pre (PARSER_CONTEXT * parser, PT_NODE * tree,
+			      void *arg, int *continue_walk)
+{
+  int *mark = (int *) arg;
+
+  assert (tree != NULL);
+  assert (arg != NULL);
+  assert (continue_walk != NULL);
+
+  if (PT_HAS_COLLATION (tree->type_enum) && (tree->data_type != NULL))
+    {
+      int collation_id = tree->data_type->info.data_type.collation_id;
+      LANG_COLLATION *lang_coll = lang_get_collation (collation_id);
+
+      if (!lang_coll->options.allow_index_opt)
+	{
+	  *mark = 1;
+	  *continue_walk = PT_STOP_WALK;
+	}
+    }
+
+  return tree;
+}
+
+/*
  * pt_is_inst_or_orderby_num_node_post () -
  *   return:
  *   parser(in):
@@ -2793,9 +2828,12 @@ pt_column_updatable (PARSER_CONTEXT * parser, PT_NODE * statement)
 int
 pt_has_error (const PARSER_CONTEXT * parser)
 {
-  if (parser)
+  if (parser && parser->error_msgs != NULL)
     {
-      return (parser->error_msgs != NULL);
+#if 0				/* TODO */
+      assert (er_errid () != NO_ERROR);
+#endif
+      return 1;
     }
 
   return 0;
@@ -6831,8 +6869,16 @@ pt_get_select_query_columns (PARSER_CONTEXT * parser, PT_NODE * create_select,
   temp_copy = pt_compile (parser, temp_copy);
   if (temp_copy == NULL || pt_has_error (parser))
     {
+#if 0
+      assert (er_errid () != NO_ERROR);
+#endif
       error = er_errid ();
       pt_report_to_ersys_with_statement (parser, PT_SEMANTIC, temp_copy);
+      if (error == NO_ERROR)
+	{
+	  assert (er_errid () != NO_ERROR);
+	  error = er_errid ();
+	}
       goto error_exit;
     }
 
@@ -6843,6 +6889,7 @@ pt_get_select_query_columns (PARSER_CONTEXT * parser, PT_NODE * create_select,
 
   if (qtype == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error_exit;
     }
@@ -6851,6 +6898,7 @@ pt_get_select_query_columns (PARSER_CONTEXT * parser, PT_NODE * create_select,
     pt_fillin_type_size (parser, temp_copy, qtype, DB_NO_OIDS, true, true);
   if (qtype == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error_exit;
     }
@@ -9408,6 +9456,7 @@ pt_help_show_create_table (PARSER_CONTEXT * parser, PT_NODE * table_name)
     {
       int error;
 
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       assert (error != NO_ERROR);
       if (error == ER_AU_SELECT_FAILURE)

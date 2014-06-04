@@ -79,12 +79,16 @@ namespace dbgw
 
   trait<ClientResultSet>::sp _AsyncWorkerJobResult::getResultSet()
   {
-    return m_pResultSet;
+    trait<ClientResultSet>::sp pResultSet = m_pResultSet;
+    m_pResultSet.reset();
+    return pResultSet;
   }
 
   trait<ClientResultSet>::spvector _AsyncWorkerJobResult::getResultSetList()
   {
-    return m_resultSetList;
+    trait<ClientResultSet>::spvector resultSetList(m_resultSetList);
+    m_resultSetList.clear();
+    return resultSetList;
   }
 
   trait<Lob>::sp _AsyncWorkerJobResult::getLob()
@@ -132,6 +136,11 @@ namespace dbgw
     {
       system::_MutexAutoLock lock(&m_mutex);
 
+      if (m_status == DBGW_ASYNC_JOB_STATUS_CANCEL)
+        {
+          return;
+        }
+
       m_status = DBGW_ASYNC_JOB_STATUS_BUSY;
 
       lock.unlock();
@@ -144,7 +153,11 @@ namespace dbgw
         {
           m_status = DBGW_ASYNC_JOB_STATUS_DONE;
 
-          notify(pJobResult);
+          m_pWaiter->bindJobResult(pJobResult);
+          pJobResult.reset();
+          lock.unlock();
+
+          notify();
         }
     }
 
@@ -152,17 +165,25 @@ namespace dbgw
     {
       system::_MutexAutoLock lock(&m_mutex);
 
-      if (m_status == DBGW_ASYNC_JOB_STATUS_BUSY)
+      if (m_status == DBGW_ASYNC_JOB_STATUS_BUSY
+          || m_status == DBGW_ASYNC_JOB_STATUS_IDLE)
         {
           m_status = DBGW_ASYNC_JOB_STATUS_CANCEL;
 
-          ExecuteTimeoutExecption e(m_pWaiter->getTimeOutMilSec());
-          DBGW_LOG_ERROR(e.what());
+          if (m_pWaiter)
+            {
+              ExecuteTimeoutExecption e(m_pWaiter->getTimeOutMilSec());
+              DBGW_LOG_ERROR(e.what());
 
-          trait<_AsyncWorkerJobResult>::sp pJobResult(
-              new _AsyncWorkerJobResult(e));
+              trait<_AsyncWorkerJobResult>::sp pJobResult(
+                  new _AsyncWorkerJobResult(e));
 
-          notify(pJobResult);
+              m_pWaiter->bindJobResult(pJobResult);
+              pJobResult.reset();
+              lock.unlock();
+
+              notify();
+            }
         }
     }
 
@@ -171,6 +192,13 @@ namespace dbgw
       system::_MutexAutoLock lock(&m_mutex);
 
       return m_status == DBGW_ASYNC_JOB_STATUS_DONE;
+    }
+
+    bool isCancel()
+    {
+      system::_MutexAutoLock lock(&m_mutex);
+
+      return m_status == DBGW_ASYNC_JOB_STATUS_CANCEL;
     }
 
     void bindWaiter(trait<_AsyncWaiter>::sp pWaiter)
@@ -238,41 +266,40 @@ namespace dbgw
     }
 
   private:
-    void notify(trait<_AsyncWorkerJobResult>::sp pJobResult)
+    void notify()
     {
+      m_pWaiter->notify();
+
       if (m_status == DBGW_ASYNC_JOB_STATUS_DONE)
         {
+          if (m_pExecHandler != NULL && needReleaseExecutor)
+            {
+              m_pExecHandler->release(false);
+            }
+          m_pExecHandler.reset();
+
           if (m_pWorker != NULL)
             {
               m_pWorker->changeWorkerState(DBGW_WORKER_STATE_IDLE,
                   m_pSelf->shared_from_this());
               m_pWorker->release(false);
             }
-
-          if (m_pExecHandler != NULL && needReleaseExecutor)
-            {
-              m_pExecHandler->release(false);
-            }
         }
       else if (m_status == DBGW_ASYNC_JOB_STATUS_CANCEL)
         {
+          if (m_pExecHandler != NULL && needReleaseExecutor)
+            {
+              m_pExecHandler->release(true);
+            }
+          m_pExecHandler.reset();
+
           if (m_pWorker != NULL)
             {
               m_pWorker->changeWorkerState(DBGW_WORKER_STATE_TIMEOUT,
                   m_pSelf->shared_from_this());
               m_pWorker->release(true);
             }
-
-          if (m_pExecHandler != NULL && needReleaseExecutor)
-            {
-              m_pExecHandler->release(true);
-            }
         }
-
-      m_pWaiter->bindJobResult(pJobResult);
-
-      m_pWaiter->notify();
-      m_pExecHandler.reset();
     }
 
   private:
@@ -323,6 +350,11 @@ namespace dbgw
   bool _AsyncWorkerJob::isDone()
   {
     return m_pImpl->isDone();
+  }
+
+  bool _AsyncWorkerJob::isCancel()
+  {
+    return m_pImpl->isCancel();
   }
 
   void _AsyncWorkerJob::bindWaiter(trait<_AsyncWaiter>::sp pWaiter)
@@ -645,9 +677,22 @@ namespace dbgw
           m_cond.notify();
           lock.unlock();
 
-          pWaiter->wait();
+          if (pJob->isDone())
+            {
+              return pWaiter->getJobResult();
+            }
+          else if (pJob->isCancel())
+            {
+              ExecuteTimeoutExecption e(pJob->getTimeOutMilSec());
+              DBGW_LOG_ERROR(e.what());
+              throw e;
+            }
+          else
+            {
+              pWaiter->wait();
+            }
 
-          if (pJob->isDone() == false)
+          if (pJob->isCancel())
             {
               ExecuteTimeoutExecption e(pJob->getTimeOutMilSec());
               DBGW_LOG_ERROR(e.what());
@@ -885,6 +930,8 @@ namespace dbgw
                       }
                     else
                       {
+                        // max connection error occurred.
+                        // we will try again.
                         pWorker->release(false);
                         SLEEP_MILISEC(0, 10);
                         continue;

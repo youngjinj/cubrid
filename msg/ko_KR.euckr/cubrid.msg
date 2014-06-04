@@ -1223,7 +1223,7 @@ $ LOADDB
 2002 MVCC can't get snapshot
 2003 Isolation level value in MVCC must be 2, 4, 5 or 6.
 2004 Serializable conflict due to concurent update
-2005 Last Error
+2005 마지막 에러
 
 $set 6 MSGCAT_SET_INTERNAL
 1 에러 서브 시스템에 에러 발생(라인 %1$d):

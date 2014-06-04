@@ -566,6 +566,7 @@ classobj_copy_props (DB_SEQ * properties, MOP filter_class,
 
   if (*new_properties == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -1696,6 +1697,7 @@ classobj_put_foreign_key_ref (DB_SEQ ** properties,
   if (classobj_get_prop (*properties, SM_PROPERTY_PRIMARY_KEY, &prop_val) <=
       0)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -1761,6 +1763,7 @@ classobj_put_foreign_key_ref (DB_SEQ ** properties,
   if (classobj_put_prop (*properties, SM_PROPERTY_PRIMARY_KEY, &prop_val) ==
       0)
     {
+      assert (er_errid () != NO_ERROR);
       err = er_errid ();
       goto end;
     }
@@ -1953,6 +1956,7 @@ classobj_drop_foreign_key_ref (DB_SEQ ** properties, BTID * btid)
   if (classobj_get_prop (*properties, SM_PROPERTY_PRIMARY_KEY, &prop_val) <=
       0)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -2048,6 +2052,7 @@ classobj_drop_foreign_key_ref (DB_SEQ ** properties, BTID * btid)
   if (classobj_put_prop (*properties, SM_PROPERTY_PRIMARY_KEY, &prop_val) ==
       0)
     {
+      assert (er_errid () != NO_ERROR);
       err = er_errid ();
       goto end;
     }
@@ -3737,6 +3742,7 @@ other_error:
 
   classobj_free_class_constraints (constraints);
 
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -3886,8 +3892,8 @@ memory_error:
       db_ws_free (ws_name);
     }
 
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
-
 }
 
 /*
@@ -4378,6 +4384,7 @@ classobj_populate_class_properties (DB_SET ** properties,
   property_type = classobj_map_constraint_to_property (type);
   if (property_type == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
 
@@ -4673,6 +4680,7 @@ memory_error:
   /* Could try to free the partially allocated things.  If we get
      here then we're out of virtual memory, a few leaks aren't
      going to matter much. */
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -4773,6 +4781,7 @@ memory_error:
   /* Could try to free the previously copied attribute list. We're
      out of virtual memory at this point.  A few leaks aren't going
      to matter. */
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -5387,6 +5396,8 @@ classobj_init_method (SM_METHOD * src, SM_METHOD * dest, int copy)
 
 memory_error:
   classobj_clear_method (dest);
+
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -5476,6 +5487,7 @@ classobj_copy_methlist (SM_METHOD * methlist, MOP filter_class,
 
 memory_error:
   /* could free the partially constructed method list */
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -5642,6 +5654,7 @@ classobj_copy_reslist (SM_RESOLUTION * src, SM_NAME_SPACE resspace,
 
 memory_error:
   /* could free the partially constructed resolution list */
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -5849,6 +5862,7 @@ classobj_copy_methfiles (SM_METHOD_FILE * files, MOP filter_class,
   return NO_ERROR;
 
 memory_error:
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -6599,6 +6613,7 @@ classobj_copy_constraint_like (DB_CTMPL * ctemplate,
   att_names = classobj_point_at_att_names (constraint, &count);
   if (att_names == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -6607,6 +6622,7 @@ classobj_copy_constraint_like (DB_CTMPL * ctemplate,
 					       constraint->asc_desc, NULL);
   if (auto_cons_name == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error_exit;
     }
@@ -6622,6 +6638,7 @@ classobj_copy_constraint_like (DB_CTMPL * ctemplate,
 						       NULL);
       if (new_cons_name == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error_exit;
 	}
@@ -6657,6 +6674,7 @@ classobj_copy_constraint_like (DB_CTMPL * ctemplate,
       ref_clsop = ws_mop (&(constraint->fk_info->ref_class_oid), NULL);
       if (ref_clsop == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error_exit;
 	}
@@ -7559,6 +7577,7 @@ memory_error:
      been preserved but a nested schema update may now be
      in an inconsistent state.
    */
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -8650,5 +8669,6 @@ structure_error:
   pr_clear_value (&avalue);
   pr_clear_value (&bvalue);
 
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }

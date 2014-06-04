@@ -642,6 +642,7 @@ catcls_find_btid_of_class_name (THREAD_ENTRY * thread_p, BTID * btid_p)
       repr_p = catalog_get_representation (thread_p, index_class_p, repr_id);
       if (repr_p == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error;
 	}
@@ -706,6 +707,7 @@ catcls_find_oid_by_class_name (THREAD_ENTRY * thread_p, const char *name_p,
   if (error == BTREE_ERROR_OCCURRED)
     {
       pr_clear_value (&key_val);
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       return ((error == NO_ERROR) ? ER_FAILED : error);
     }
@@ -764,6 +766,8 @@ catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p,
       if (catcls_find_oid_by_class_name (thread_p, name_p, oid_p) != NO_ERROR)
 	{
 	  free_and_init (name_p);
+
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -1067,6 +1071,7 @@ catcls_get_or_value_from_class (THREAD_ENTRY * thread_p, OR_BUF * buf_p,
 					   DB_GET_STRING (&attrs[10].value),
 					   &class_oid) != NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -2620,6 +2625,7 @@ catcls_get_object_set (THREAD_ENTRY * thread_p, OR_BUF * buf_p,
   oid_set_p = set_create_sequence (count);
   if (oid_set_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -2815,6 +2821,7 @@ catcls_reorder_attributes_by_repr (THREAD_ENTRY * thread_p,
       repr_p = catalog_get_representation (thread_p, class_oid_p, repr_id);
       if (repr_p == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error;
 	}
@@ -3337,6 +3344,7 @@ catcls_put_or_value_into_record (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
       repr_p = catalog_get_representation (thread_p, class_oid_p, repr_id);
       if (repr_p == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  return error;
 	}
@@ -3419,6 +3427,7 @@ catcls_get_or_value_from_record (THREAD_ENTRY * thread_p, RECDES * record_p,
   repr_p = catalog_get_representation (thread_p, class_oid_p, repr_id);
   if (repr_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3495,6 +3504,7 @@ catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   oid_set_p = set_create_sequence (n_subset);
   if (oid_set_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3503,6 +3513,7 @@ catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   cls_info_p = catalog_get_class_info (thread_p, class_oid_p);
   if (cls_info_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3512,6 +3523,7 @@ catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
 				   MULTI_ROW_UPDATE, NULL) != NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3596,6 +3608,7 @@ catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p)
   cls_info_p = catalog_get_class_info (thread_p, class_oid_p);
   if (cls_info_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3604,6 +3617,7 @@ catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p)
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p, class_oid_p,
 				   MULTI_ROW_DELETE, NULL) != NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3703,6 +3717,7 @@ catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   cls_info_p = catalog_get_class_info (thread_p, class_oid_p);
   if (cls_info_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3850,6 +3865,7 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   if (heap_assign_address_with_class_oid (thread_p, hfid_p, class_oid_p,
 					  oid_p, 0) != NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3935,6 +3951,7 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 				   scan_p, false, false, hfid_p, NULL) !=
       NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3943,6 +3960,7 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
       (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
        false) == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -4001,6 +4019,7 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
   if (lock_object (thread_p, oid_p, class_oid_p, X_LOCK, LK_UNCOND_LOCK) !=
       LK_GRANTED)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -4010,6 +4029,7 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
   if (heap_get (thread_p, oid_p, &record, scan_p, COPY, NULL_CHN) !=
       S_SUCCESS)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -4017,6 +4037,7 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
   value_p = catcls_get_or_value_from_record (thread_p, &record, class_oid_p);
   if (value_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -4039,12 +4060,14 @@ catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid_p,
 				   scan_p, false, false, hfid_p, NULL) !=
       NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
 
   if (heap_delete (thread_p, hfid_p, class_oid_p, oid_p, scan_p) == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -4109,6 +4132,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
       if (lock_object (thread_p, oid_p, class_oid_p, X_LOCK, LK_UNCOND_LOCK)
 	  != LK_GRANTED)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error;
 	}
@@ -4119,6 +4143,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   if (heap_get (thread_p, oid_p, &old_record, scan_p, COPY, NULL_CHN) !=
       S_SUCCESS)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -4128,6 +4153,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
     catcls_get_or_value_from_record (thread_p, &old_record, class_oid_p);
   if (old_value_p == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -4217,6 +4243,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 				false,
 				REPL_INFO_TYPE_STMT_NORMAL) != NO_ERROR)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error;
 	}
@@ -4225,6 +4252,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 	  (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
 	   true) == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error;
 	}

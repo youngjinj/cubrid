@@ -844,6 +844,7 @@ au_extend_class_caches (int *index)
 	  new_entry = au_make_class_cache (new_max);
 	  if (new_entry == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else
@@ -922,6 +923,7 @@ au_find_user_cache_index (DB_OBJECT * user, int *index, int check_it)
 	  class_mop = sm_get_class (user);
 	  if (class_mop == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 	  else if (class_mop != Au_user_class)
@@ -1455,6 +1457,7 @@ au_set_new_auth (MOP au_obj, MOP grantor, MOP user, MOP class_mop,
       au_obj = db_create_internal (au_class);
       if (au_obj == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -1468,6 +1471,7 @@ au_set_new_auth (MOP au_obj, MOP grantor, MOP user, MOP class_mop,
   db_class = sm_find_class (CT_CLASS_NAME);
   if (db_class == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -1476,6 +1480,7 @@ au_set_new_auth (MOP au_obj, MOP grantor, MOP user, MOP class_mop,
 				   AU_FETCH_READ);
   if (db_class_inst == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -1640,6 +1645,7 @@ au_update_new_auth (MOP grantor, MOP user, MOP class_mop,
 				    (DB_AUTH) index);
 	  if (au_obj == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 
@@ -1685,6 +1691,7 @@ au_delete_new_auth (MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type)
 				    (DB_AUTH) index);
 	  if (au_obj == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 
@@ -2388,11 +2395,13 @@ au_set_password_internal (MOP user, const char *password, int encode,
 			}
 		      else
 			{
+			  assert (er_errid () != NO_ERROR);
 			  error = er_errid ();
 			}
 		    }
 		  else
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      error = er_errid ();
 		    }
 		}
@@ -2655,6 +2664,7 @@ au_compute_groups (MOP member, char *name)
   session = db_open_buffer (qstr);
   if (!session)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto ret;
     }
@@ -2664,6 +2674,7 @@ au_compute_groups (MOP member, char *name)
   stmt_id = db_compile_statement (session);
   if (stmt_id != 1)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto ret;
     }
@@ -2713,6 +2724,7 @@ au_compute_groups (MOP member, char *name)
 		}
 	      else
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		}
 	      if (error == NO_ERROR)
@@ -2909,6 +2921,7 @@ au_add_member_method (MOP user, DB_VALUE * returnval, DB_VALUE * memval)
 	  member = au_find_user (db_get_string (memval));
 	  if (member == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      goto error;
 	    }
@@ -3067,6 +3080,7 @@ au_drop_member_method (MOP user, DB_VALUE * returnval, DB_VALUE * memval)
 	  member = au_find_user (db_get_string (memval));
 	  if (member == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      goto error;
 	    }
@@ -3195,6 +3209,7 @@ au_drop_user (MOP user)
       stmt_id = db_compile_statement (session);
       if (stmt_id != 1)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  db_close_session (session);
 	  goto error;
@@ -3247,6 +3262,7 @@ au_drop_user (MOP user)
 			    "[d].[direct_groups] = [d].[direct_groups] - ? where ? in [d].[direct_groups];");
   if (session == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3267,6 +3283,7 @@ au_drop_user (MOP user)
 	    }
 	  else
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	}
@@ -3288,6 +3305,7 @@ au_drop_user (MOP user)
     db_open_buffer ("select [d] from [db_user] [d] where ? in [d].[groups];");
   if (session == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error;
     }
@@ -3339,6 +3357,7 @@ au_drop_user (MOP user)
 		    }
 		  else
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      error = er_errid ();
 		    }
 
@@ -3359,6 +3378,7 @@ au_drop_user (MOP user)
     }
   else
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
 
@@ -3991,14 +4011,20 @@ check_grant_option (MOP classop, SM_CLASS * sm_class, DB_AUTH type)
     {
       cache = au_install_class_cache (sm_class);
       if (cache == NULL)
-	return er_errid ();
+	{
+	  assert (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
     }
   cache_bits = cache->data[Au_cache_index];
 
   if (cache_bits == AU_CACHE_INVALID)
     {
       if (update_cache (classop, sm_class, cache))
-	return er_errid ();
+	{
+	  assert (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
       cache_bits = cache->data[Au_cache_index];
     }
 
@@ -4310,6 +4336,7 @@ collect_class_grants (MOP class_mop, DB_AUTH type, MOP revoked_auth,
 	  if (au_get_object (user, "authorization", &auth) != NO_ERROR)
 	    {
 	      /* If this is the "deleted object" error, ignore it */
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      if (error == ER_HEAP_UNKNOWN_OBJECT)
 		{
@@ -4331,6 +4358,7 @@ collect_class_grants (MOP class_mop, DB_AUTH type, MOP revoked_auth,
 		  if (set_get_element (grants, GRANT_ENTRY_CLASS (j),
 				       &element))
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      error = er_errid ();
 		      break;
 		    }
@@ -4341,6 +4369,7 @@ collect_class_grants (MOP class_mop, DB_AUTH type, MOP revoked_auth,
 		      if (set_get_element (grants, GRANT_ENTRY_CACHE (j),
 					   &element))
 			{
+			  assert (er_errid () != NO_ERROR);
 			  error = er_errid ();
 			  break;
 			}
@@ -4352,6 +4381,7 @@ collect_class_grants (MOP class_mop, DB_AUTH type, MOP revoked_auth,
 			    (AU_GRANT *) db_ws_alloc (sizeof (AU_GRANT));
 			  if (new_grant == NULL)
 			    {
+			      assert (er_errid () != NO_ERROR);
 			      error = er_errid ();
 			      break;
 			    }
@@ -4367,6 +4397,7 @@ collect_class_grants (MOP class_mop, DB_AUTH type, MOP revoked_auth,
 			  if (set_get_element (grants, GRANT_ENTRY_SOURCE (j),
 					       &element))
 			    {
+			      assert (er_errid () != NO_ERROR);
 			      error = er_errid ();
 			    }
 			  else
@@ -5002,6 +5033,8 @@ au_change_serial_owner (MOP * object, MOP new_owner)
 
 exit_on_error:
   AU_ENABLE (au_save);
+
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -5216,6 +5249,7 @@ au_get_owner_method (MOP obj, DB_VALUE * returnval, DB_VALUE * class_)
 	    }
 	  else
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	}
@@ -5626,7 +5660,10 @@ check_authorization (MOP classobj, SM_CLASS * sm_class, DB_AUTH type)
 	{
 	  cache = au_install_class_cache (sm_class);
 	  if (cache == NULL)
-	    return er_errid ();
+	    {
+	      assert (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
 	}
       bits = cache->data[Au_cache_index];
 
@@ -5760,6 +5797,7 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
   if (class_ == NULL)
     {
       /* does it make sense to check WS_IS_DELETED here ? */
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       /* !!! do we need to mask the error here ? */
 
@@ -5996,6 +6034,7 @@ fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE fetchmode)
   if (obj == NULL)
     {
       /* does it make sense to check WS_IS_DELETED here ? */
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
 
       /*
@@ -6210,9 +6249,12 @@ au_perform_login (const char *name, const char *password,
 		  pass = NULL;
 		  if (!DB_IS_NULL (&value) && db_get_object (&value) != NULL)
 		    {
-		      if (obj_get
-			  (db_get_object (&value), "password", &value))
-			return er_errid ();
+		      if (obj_get (db_get_object (&value),
+				   "password", &value))
+			{
+			  assert (er_errid () != NO_ERROR);
+			  return er_errid ();
+			}
 		      if (IS_STRING (&value))
 			{
 			  if (DB_IS_NULL (&value))
@@ -6989,8 +7031,12 @@ add_class_grant (CLASS_AUTH * auth, MOP source, MOP user, int cache)
       if (source != user)
 	{
 	  gu = find_or_add_user (auth, user);
-	  if ((g = make_class_grant (gu, cache)) == NULL)
-	    return er_errid ();
+	  g = make_class_grant (gu, cache);
+	  if (g == NULL)
+	    {
+	      assert (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
 	  g->next = u->grants;
 	  u->grants = g;
 	}
@@ -7886,7 +7932,7 @@ au_link_static_methods (void)
 }
 
 /*
- * au_install() - This is used to initilize the authorization system in a
+ * au_install() - This is used to initialize the authorization system in a
  *                freshly created database.
  *                It should only be called within the createdb tool.
  *   return: error code
@@ -8227,6 +8273,7 @@ au_get_class_privilege (DB_OBJECT * mop, unsigned int *auth)
 	  cache = au_install_class_cache (class_);
 	  if (cache == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 	}

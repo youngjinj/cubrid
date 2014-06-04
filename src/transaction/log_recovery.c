@@ -3591,7 +3591,8 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	      LSA_COPY (&rcv_lsa, &log_lsa);
 	      _er_log_debug (ARG_FILE_LINE,
 			     "log_recovery_redo - case undoredo, rcv_lsa=(%lld, %d)",
-			     (long long int) rcv_lsa.pageid, (int) rcv_lsa.offset);
+			     (long long int) rcv_lsa.pageid,
+			     (int) rcv_lsa.offset);
 
 	      /* Get the DATA HEADER */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER),
@@ -3781,7 +3782,8 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 
 	      _er_log_debug (ARG_FILE_LINE,
 			     "log_recovery_redo - case redo: rcv_lsa=(%lld, %d)",
-			     (long long int) rcv_lsa.pageid, (int) rcv_lsa.offset);
+			     (long long int) rcv_lsa.pageid,
+			     (int) rcv_lsa.offset);
 
 	      /* Get the DATA HEADER */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER),
@@ -3931,7 +3933,8 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 
 	      _er_log_debug (ARG_FILE_LINE,
 			     "log_recovery_redo - case dbextern_redo: rcv_lsa=(%lld, %d)",
-			     (long long int) rcv_lsa.pageid, (int) rcv_lsa.offset);
+			     (long long int) rcv_lsa.pageid,
+			     (int) rcv_lsa.offset);
 
 	      /* Get the DATA HEADER */
 	      LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER),

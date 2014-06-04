@@ -4632,6 +4632,7 @@ mr_getmem_object (void *memptr, TP_DOMAIN * domain,
 	    }
 	  else
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      (void) db_make_object (value, NULL);
 	    }
@@ -5631,6 +5632,8 @@ peekmem_elo (OR_BUF * buf, DB_ELO * elo)
       goto error;
     }
 
+  return;
+
 error:
   elo->locator = NULL;
   elo->meta_data = NULL;
@@ -6593,6 +6596,7 @@ mr_getmem_set (void *memptr, TP_DOMAIN * domain, DB_VALUE * value, bool copy)
 	}
       else
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  (void) db_make_set (value, NULL);
 	}
@@ -6684,6 +6688,7 @@ mr_setval_set_internal (DB_VALUE * dest, const DB_VALUE * src,
 
 err_set:
   /* couldn't allocate storage for set */
+  assert (er_errid () != NO_ERROR);
   error = er_errid ();
   switch (set_type)
     {
@@ -7156,6 +7161,7 @@ mr_getmem_multiset (void *memptr, TP_DOMAIN * domain,
 	}
       else
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  (void) db_make_multiset (value, NULL);
 	}
@@ -7206,6 +7212,7 @@ mr_getmem_sequence (void *memptr, TP_DOMAIN * domain,
 	}
       else
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  (void) db_make_sequence (value, NULL);
 	}
@@ -7327,6 +7334,8 @@ mr_setval_midxkey (DB_VALUE * dest, const DB_VALUE * src, bool copy)
       if (dst_idx.buf == NULL)
 	{
 	  db_value_domain_init (dest, DB_TYPE_MIDXKEY, src_precision, 0);
+
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -7387,6 +7396,7 @@ mr_index_readval_midxkey (OR_BUF * buf, DB_VALUE * value,
 
   if (size <= 0)
     {
+      assert (false);
       return ER_FAILED;
     }
 
@@ -7901,6 +7911,7 @@ mr_index_lengthmem_midxkey (void *memptr, TP_DOMAIN * domain)
 
   bitptr = buf;
   buf += adv_size;
+  assert (CAST_BUFLEN (buf - bitptr) > 0);
 
   for (i = 0, dom = domain->setdomain; i < idx_ncols; i++, dom = dom->next)
     {
@@ -8935,8 +8946,8 @@ pr_midxkey_add_prefix (DB_VALUE * result, DB_VALUE * prefix,
   assert (DB_VALUE_TYPE (prefix) == DB_TYPE_MIDXKEY);
   assert (DB_VALUE_TYPE (postfix) == DB_TYPE_MIDXKEY);
 
-  midx_prefix = (DB_MIDXKEY *) & (prefix->data.midxkey);
-  midx_postfix = (DB_MIDXKEY *) & (postfix->data.midxkey);
+  midx_prefix = DB_PULL_MIDXKEY (prefix);
+  midx_postfix = DB_PULL_MIDXKEY (postfix);
 
   offset_prefix = pr_midxkey_get_element_offset (midx_prefix, n_prefix);
   offset_postfix = pr_midxkey_get_element_offset (midx_postfix, n_prefix);
@@ -8992,7 +9003,7 @@ pr_midxkey_remove_prefix (DB_VALUE * key, int prefix)
   DB_MIDXKEY *midx_key;
   int start, offset, size;
 
-  midx_key = (DB_MIDXKEY *) & (key->data.midxkey);
+  midx_key = DB_PULL_MIDXKEY (key);
 
   start = pr_midxkey_get_element_offset (midx_key, 0);
   offset = pr_midxkey_get_element_offset (midx_key, prefix);
@@ -9028,8 +9039,10 @@ pr_midxkey_common_prefix (DB_VALUE * key1, DB_VALUE * key2)
   assert (DB_VALUE_TYPE (key1) == DB_TYPE_MIDXKEY);
   assert (DB_VALUE_TYPE (key2) == DB_TYPE_MIDXKEY);
 
-  midx_lf_key = (DB_MIDXKEY *) & (key1->data.midxkey);
-  midx_uf_key = (DB_MIDXKEY *) & (key2->data.midxkey);
+  diff_column = 0;		/* init */
+
+  midx_lf_key = DB_PULL_MIDXKEY (key1);
+  midx_uf_key = DB_PULL_MIDXKEY (key2);
 
   ret = pr_midxkey_compare (midx_lf_key, midx_uf_key,
 			    0, 1, -1,
@@ -9224,8 +9237,8 @@ pr_midxkey_unique_prefix (const DB_VALUE * db_midxkey1,
   assert (db_midxkey2 != (DB_VALUE *) NULL);
   assert (db_result != (DB_VALUE *) NULL);
 
-  midxkey1 = (DB_MIDXKEY *) (&(db_midxkey1->data.midxkey));
-  midxkey2 = (DB_MIDXKEY *) (&(db_midxkey2->data.midxkey));
+  midxkey1 = DB_PULL_MIDXKEY (db_midxkey1);
+  midxkey2 = DB_PULL_MIDXKEY (db_midxkey2);
 
   assert (midxkey1->size != -1);
   assert (midxkey2->size != -1);
@@ -9244,7 +9257,7 @@ pr_midxkey_unique_prefix (const DB_VALUE * db_midxkey1,
   assert (c == DB_LT);
   if (c != DB_LT)
     {
-      return er_errid () == NO_ERROR ? ER_FAILED : er_errid ();
+      return (er_errid () == NO_ERROR) ? ER_FAILED : er_errid ();
     }
 
   if (size1 == midxkey1->size || size2 == midxkey2->size
@@ -9274,6 +9287,7 @@ pr_midxkey_unique_prefix (const DB_VALUE * db_midxkey1,
       if (result_midxkey.buf == NULL)
 	{
 	  /* will already be set by memory mgr */
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -10015,6 +10029,7 @@ mr_setmem_string (void *memptr, TP_DOMAIN * domain, DB_VALUE * value)
       new_ = (char *) db_private_alloc (NULL, new_length);
       if (new_ == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -10079,7 +10094,10 @@ mr_getmem_string (void *memptr, TP_DOMAIN * domain, DB_VALUE * value,
 	  /* return it with a NULL terminator */
 	  new_ = (char *) db_private_alloc (NULL, mem_length + 1);
 	  if (new_ == NULL)
-	    error = er_errid ();
+	    {
+	      assert (er_errid () != NO_ERROR);
+	      error = er_errid ();
+	    }
 	  else
 	    {
 	      memcpy (new_, cur, mem_length);
@@ -10323,6 +10341,7 @@ mr_setval_string (DB_VALUE * dest, const DB_VALUE * src, bool copy)
 	  if (new_ == NULL)
 	    {
 	      db_value_domain_init (dest, DB_TYPE_VARCHAR, src_precision, 0);
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else
@@ -10917,6 +10936,7 @@ mr_getmem_char (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy)
       new_ = db_private_alloc (NULL, mem_length + 1);
       if (new_ == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
       memcpy (new_, (char *) mem, mem_length);
@@ -11090,6 +11110,7 @@ mr_setval_char (DB_VALUE * dest, const DB_VALUE * src, bool copy)
 	      new_ = db_private_alloc (NULL, src_length + 1);
 	      if (new_ == NULL)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		}
 	      else
@@ -11757,7 +11778,10 @@ mr_getmem_nchar (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy)
     {
       new_ = db_private_alloc (NULL, mem_length + 1);
       if (new_ == NULL)
-	return er_errid ();
+	{
+	  assert (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
       memcpy (new_, (char *) mem, mem_length);
       /* make sure that all outgoing strings are NULL terminated */
       new_[mem_length] = '\0';
@@ -11917,7 +11941,10 @@ mr_setval_nchar (DB_VALUE * dest, const DB_VALUE * src, bool copy)
 	      /* make sure the copy gets a NULL terminator */
 	      new_ = db_private_alloc (NULL, src_length + 1);
 	      if (new_ == NULL)
-		error = er_errid ();
+		{
+		  assert (er_errid () != NO_ERROR);
+		  error = er_errid ();
+		}
 	      else
 		{
 		  memcpy (new_, src_string, src_length);
@@ -12618,6 +12645,7 @@ mr_setmem_varnchar (void *memptr, TP_DOMAIN * domain, DB_VALUE * value)
       new_ = db_private_alloc (NULL, new_length);
       if (new_ == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -12683,6 +12711,7 @@ mr_getmem_varnchar (void *memptr, TP_DOMAIN * domain, DB_VALUE * value,
 	  new_ = db_private_alloc (NULL, mem_length + 1);
 	  if (new_ == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else
@@ -12905,6 +12934,7 @@ mr_setval_varnchar (DB_VALUE * dest, const DB_VALUE * src, bool copy)
 	  if (new_ == NULL)
 	    {
 	      db_value_domain_init (dest, DB_TYPE_VARNCHAR, src_precision, 0);
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else
@@ -13470,6 +13500,7 @@ mr_initmem_bit (void *memptr, TP_DOMAIN * domain)
   int mem_length;
 
   assert (!IS_FLOATING_PRECISION (domain->precision));
+  assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
 
   mem_length = STR_SIZE (domain->precision, TP_DOMAIN_CODESET (domain));
   memset (memptr, 0, mem_length);
@@ -13516,6 +13547,7 @@ mr_setmem_bit (void *memptr, TP_DOMAIN * domain, DB_VALUE * value)
    * really isn't necessary for this operation.
    * Calculate the maximum number of bytes we have available here.
    */
+  assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
   mem_length = STR_SIZE (domain->precision, TP_DOMAIN_CODESET (domain));
 
   if (mem_length < src_length)
@@ -13551,6 +13583,7 @@ mr_getmem_bit (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy)
   int mem_length;
   char *new_;
 
+  assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
   mem_length = STR_SIZE (domain->precision, TP_DOMAIN_CODESET (domain));
 
   if (!copy)
@@ -13559,7 +13592,10 @@ mr_getmem_bit (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy)
     {
       new_ = db_private_alloc (NULL, mem_length + 1);
       if (new_ == NULL)
-	return er_errid ();
+	{
+	  assert (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
       memcpy (new_, (char *) mem, mem_length);
     }
 
@@ -13574,6 +13610,7 @@ static int
 mr_data_lengthmem_bit (void *memptr, TP_DOMAIN * domain, int disk)
 {
   assert (!IS_FLOATING_PRECISION (domain->precision));
+  assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
 
   /* There is no difference between the disk & memory sizes. */
   return STR_SIZE (domain->precision, TP_DOMAIN_CODESET (domain));
@@ -13584,6 +13621,7 @@ mr_data_writemem_bit (OR_BUF * buf, void *mem, TP_DOMAIN * domain)
 {
   int mem_length;
 
+  assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
   mem_length = STR_SIZE (domain->precision, TP_DOMAIN_CODESET (domain));
 
   /*
@@ -13609,6 +13647,7 @@ mr_data_readmem_bit (OR_BUF * buf, void *mem, TP_DOMAIN * domain, int size)
 	}
       else
 	{
+	  assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
 	  mem_length = STR_SIZE (domain->precision,
 				 TP_DOMAIN_CODESET (domain));
 	  or_advance (buf, mem_length);
@@ -13616,6 +13655,7 @@ mr_data_readmem_bit (OR_BUF * buf, void *mem, TP_DOMAIN * domain, int size)
     }
   else
     {
+      assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
       mem_length = STR_SIZE (domain->precision, TP_DOMAIN_CODESET (domain));
       if (size != -1 && mem_length > size)
 	{
@@ -13684,7 +13724,10 @@ mr_setval_bit (DB_VALUE * dest, const DB_VALUE * src, bool copy)
 	      /* make sure the copy gets a NULL terminator */
 	      new_ = db_private_alloc (NULL, src_length + 1);
 	      if (new_ == NULL)
-		error = er_errid ();
+		{
+		  assert (er_errid () != NO_ERROR);
+		  error = er_errid ();
+		}
 	      else
 		{
 		  memcpy (new_, src_string, src_length);
@@ -13703,6 +13746,7 @@ mr_index_lengthmem_bit (void *memptr, TP_DOMAIN * domain)
   int mem_length;
 
   assert (!IS_FLOATING_PRECISION (domain->precision) || memptr != NULL);
+  assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
 
   if (!IS_FLOATING_PRECISION (domain->precision))
     {
@@ -13740,6 +13784,7 @@ mr_data_lengthval_bit (DB_VALUE * value, int disk)
   src_precision = db_value_precision (value);
   if (!IS_FLOATING_PRECISION (src_precision))
     {
+      assert (db_get_string_codeset (value) == INTL_CODESET_RAW_BITS);
       packed_length = STR_SIZE (src_precision, db_get_string_codeset (value));
     }
   else
@@ -13799,7 +13844,7 @@ mr_writeval_bit_internal (OR_BUF * buf, DB_VALUE * value, int align)
 
   if (!IS_FLOATING_PRECISION (src_precision))
     {
-      /* Would have to check for charset conversion here ! */
+      assert (db_get_string_codeset (value) == INTL_CODESET_RAW_BITS);
       packed_length = STR_SIZE (src_precision, db_get_string_codeset (value));
 
       if (packed_length < src_length)
@@ -13955,6 +14000,7 @@ mr_readval_bit_internal (OR_BUF * buf, DB_VALUE * value,
     }
   else
     {
+      assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
       mem_length = STR_SIZE (domain->precision, TP_DOMAIN_CODESET (domain));
 
       if (disk_size != -1 && mem_length > disk_size)
@@ -14088,6 +14134,7 @@ mr_cmpdisk_bit_internal (void *mem1, void *mem2, TP_DOMAIN * domain,
     }
   else
     {
+      assert (TP_DOMAIN_CODESET (domain) == INTL_CODESET_RAW_BITS);
       mem_length1 = mem_length2 = STR_SIZE (domain->precision,
 					    TP_DOMAIN_CODESET (domain));
     }
@@ -14227,7 +14274,10 @@ mr_setmem_varbit (void *memptr, TP_DOMAIN * domain, DB_VALUE * value)
       new_length = src_length + sizeof (int);
       new_ = db_private_alloc (NULL, new_length);
       if (new_ == NULL)
-	error = er_errid ();
+	{
+	  assert (er_errid () != NO_ERROR);
+	  error = er_errid ();
+	}
       else
 	{
 	  if (cur != NULL)
@@ -14279,7 +14329,10 @@ mr_getmem_varbit (void *memptr, TP_DOMAIN * domain,
 	  new_ = (char *)
 	    db_private_alloc (NULL, BITS_TO_BYTES (mem_bit_length) + 1);
 	  if (new_ == NULL)
-	    error = er_errid ();
+	    {
+	      assert (er_errid () != NO_ERROR);
+	      error = er_errid ();
+	    }
 	  else
 	    {
 	      memcpy (new_, cur, BITS_TO_BYTES (mem_bit_length));
@@ -14503,6 +14556,7 @@ mr_setval_varbit (DB_VALUE * dest, const DB_VALUE * src, bool copy)
 	  if (new_ == NULL)
 	    {
 	      db_value_domain_init (dest, DB_TYPE_VARBIT, src_precision, 0);
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else
@@ -14943,6 +14997,7 @@ mr_setval_enumeration (DB_VALUE * dest, const DB_VALUE * src, bool copy)
 	  str = db_private_alloc (NULL, DB_GET_ENUM_STRING_SIZE (src) + 1);
 	  if (str == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 	  memcpy (str, DB_GET_ENUM_STRING (src),

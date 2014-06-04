@@ -1464,7 +1464,10 @@
 #define ER_ALL_FILTER_PRED_CACHE_ENTRIES_ARE_FIXED  -1148
 
 #define ER_DIAG_PAGE_NOT_FOUND                      -1149
-#define ER_DIAG_NOT_SPAGE                           -1150
+
+#define ER_QSTR_INCOMPATIBLE_COLLATIONS		    -1150
+
+#define ER_DIAG_NOT_SPAGE                           -1151
 
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001

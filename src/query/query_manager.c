@@ -3395,6 +3395,8 @@ qmgr_get_old_page (THREAD_ENTRY * thread_p, VPID * vpid_p,
 
       if (vpid_p->pageid >= 0 && vpid_p->pageid <= tfile_vfid_p->membuf_last)
 	{
+	  page_p = tfile_vfid_p->membuf[vpid_p->pageid];
+
 	  /* interrupt check */
 #if defined (SERVER_MODE)
 	  if (thread_get_check_interrupt (thread_p) == true
@@ -3404,12 +3406,6 @@ qmgr_get_old_page (THREAD_ENTRY * thread_p, VPID * vpid_p,
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_INTERRUPTED, 0);
 	      page_p = NULL;
 	    }
-	  else
-	    {
-	      page_p = tfile_vfid_p->membuf[vpid_p->pageid];
-	    }
-#else
-	  page_p = tfile_vfid_p->membuf[vpid_p->pageid];
 #endif
 	}
       else
@@ -5054,6 +5050,7 @@ qmgr_set_query_error (THREAD_ENTRY * thread_p, QUERY_ID query_id)
 	  return;
 	}
 
+      assert (er_errid () != NO_ERROR);
       query_p->errid = er_errid ();
       if (query_p->errid != NO_ERROR)
 	{

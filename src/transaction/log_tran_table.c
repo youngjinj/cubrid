@@ -4458,12 +4458,14 @@ logtb_notify_vacuum_dropped_entries (THREAD_ENTRY * thread_p, bool abort)
 	  NULL);
 
   if (vacuum_produce_log_block_dropped_classes (thread_p,
-		       tdes->log_dropped_cls_btids.dropped_classes) != NO_ERROR)
+						tdes->log_dropped_cls_btids.
+						dropped_classes) != NO_ERROR)
     {
       return ER_FAILED;
     }
   if (vacuum_produce_log_block_dropped_indexes (thread_p,
-		       tdes->log_dropped_cls_btids.dropped_indexes) != NO_ERROR)
+						tdes->log_dropped_cls_btids.
+						dropped_indexes) != NO_ERROR)
     {
       return ER_FAILED;
     }

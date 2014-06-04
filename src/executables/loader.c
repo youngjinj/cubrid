@@ -1400,6 +1400,7 @@ clist_init (void)
     {
       if (ml_ext_add (&internal_classes, class_, NULL))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -1408,6 +1409,7 @@ clist_init (void)
     {
       if (ml_ext_add (&internal_classes, class_, NULL))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -1416,6 +1418,7 @@ clist_init (void)
     {
       if (ml_ext_add (&internal_classes, class_, NULL))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -1424,6 +1427,7 @@ clist_init (void)
     {
       if (ml_ext_add (&internal_classes, class_, NULL))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -3605,7 +3609,10 @@ ldr_assign_all_perm_oids (void)
 
   oidset = locator_make_oid_set ();
   if (oidset == NULL)
-    err = er_errid ();
+    {
+      assert (er_errid () != NO_ERROR);
+      err = er_errid ();
+    }
   else
     {
       i = 0;
@@ -3693,6 +3700,7 @@ find_instance (LDR_CONTEXT * context, DB_OBJECT * class_, OID * oid, int id)
   if (table == NULL)
     {
       OID_SET_NULL (oid);
+      assert (er_errid () != NO_ERROR);
       err = er_errid ();
     }
   else
@@ -4041,6 +4049,7 @@ ldr_collection_db_collection (LDR_CONTEXT * context,
 
       if (context->collection == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  err = er_errid ();
 	}
       else
@@ -5864,6 +5873,7 @@ ldr_init (bool verbose)
 
   if (ldr_init_loader (ldr_Current_context))
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -5871,11 +5881,13 @@ ldr_init (bool verbose)
 
   if (otable_init ())
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
   if (clist_init ())
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 

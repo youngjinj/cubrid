@@ -1692,9 +1692,20 @@ parser_c_hint ()
   if (i < (CSQL_MAXNAME - 1) && (c = input_internal ()) == '+')
     {				/* hint */
       buff[i++] = '+';
-      while ((c = input_internal ()) != '*' && c != 0 && c != -1)
+      while ((c = input_internal ()) != 0 && c != -1)
 	{
-	  if (i >= (CSQL_MAXNAME - 1))
+	  if (c == '*')
+	    {
+	      /* peek and check next char */
+	      c1 = input_internal ();
+	      if (c1 == '/')
+		{
+		  break;
+		}
+	      unput (c1);
+	    }
+
+          if (i >= (CSQL_MAXNAME - 1))
 	    {
 	      i ++;
 	      goto consume_comment;
@@ -1703,11 +1714,6 @@ parser_c_hint ()
 	  buff[i++] = c;
 	}
 
-      if ((c1 = input_internal ()) != '/' && c != 0 && c != -1)
-	{
-	  unput (c1);
-	  goto consume_comment;
-	}
 
       buff[i] = 0;
 

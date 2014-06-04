@@ -1879,6 +1879,7 @@ mq_substitute_subquery_in_statement (PARSER_CONTEXT * parser,
   PT_NODE *derived_table, *derived_spec, *derived_class;
   bool is_pushable_query, is_outer_joined;
   bool is_only_spec, rewrite_as_derived;
+  bool is_index_ss, is_index_ls;
 
   result = tmp_result = NULL;	/* init */
   class_spec = NULL;
@@ -2048,6 +2049,12 @@ mq_substitute_subquery_in_statement (PARSER_CONTEXT * parser,
 				 query_spec->info.query.q.select.index_ss),
 				derived_table->info.query.q.select.index_ss);
 
+	  derived_table->info.query.q.select.index_ls =
+	    parser_append_node (parser_copy_tree_list
+				(parser,
+				 query_spec->info.query.q.select.index_ls),
+				derived_table->info.query.q.select.index_ls);
+
 	  derived_table->info.query.q.select.use_merge =
 	    parser_append_node (parser_copy_tree_list
 				(parser,
@@ -2128,6 +2135,11 @@ mq_substitute_subquery_in_statement (PARSER_CONTEXT * parser,
 	  /* expand vclass_query in parent statement */
 	  if (tmp_result->node_type == PT_SELECT)
 	    {
+	      is_index_ss =
+		tmp_result->info.query.q.select.hint & PT_HINT_INDEX_SS;
+	      is_index_ls =
+		tmp_result->info.query.q.select.hint & PT_HINT_INDEX_LS;
+
 	      /* merge HINT of vclass spec */
 	      tmp_result->info.query.q.select.hint = (PT_HINT_ENUM)
 		(tmp_result->info.query.q.select.hint |
@@ -2151,12 +2163,29 @@ mq_substitute_subquery_in_statement (PARSER_CONTEXT * parser,
 				     query_spec->info.query.q.select.use_idx),
 				    tmp_result->info.query.q.select.use_idx);
 
-	      tmp_result->info.query.q.select.index_ss =
-		parser_append_node (parser_copy_tree_list
-				    (parser,
-				     query_spec->info.query.q.select.
-				     index_ss),
-				    tmp_result->info.query.q.select.index_ss);
+	      if (!is_index_ss
+		  || tmp_result->info.query.q.select.index_ss != NULL)
+		{
+		  tmp_result->info.query.q.select.index_ss =
+		    parser_append_node (parser_copy_tree_list
+					(parser,
+					 query_spec->info.query.q.select.
+					 index_ss),
+					tmp_result->info.query.q.select.
+					index_ss);
+		}
+
+	      if (!is_index_ls
+		  || tmp_result->info.query.q.select.index_ls != NULL)
+		{
+		  tmp_result->info.query.q.select.index_ls =
+		    parser_append_node (parser_copy_tree_list
+					(parser,
+					 query_spec->info.query.q.select.
+					 index_ls),
+					tmp_result->info.query.q.select.
+					index_ls);
+		}
 
 	      tmp_result->info.query.q.select.use_merge =
 		parser_append_node (parser_copy_tree_list
@@ -3932,6 +3961,10 @@ mq_rewrite_aggregate_as_derived (PARSER_CONTEXT * parser, PT_NODE * agg_sel)
   derived->info.query.q.select.index_ss =
     agg_sel->info.query.q.select.index_ss;
   agg_sel->info.query.q.select.index_ss = NULL;
+
+  derived->info.query.q.select.index_ls =
+    agg_sel->info.query.q.select.index_ls;
+  agg_sel->info.query.q.select.index_ls = NULL;
 
   derived->info.query.q.select.use_merge =
     agg_sel->info.query.q.select.use_merge;
@@ -11186,6 +11219,8 @@ mq_get_attribute (DB_OBJECT * vclass_object, const char *attr_name,
       if (parser == NULL)
 	{
 	  AU_ENABLE (save);
+
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -11305,6 +11340,7 @@ mq_update_attribute (DB_OBJECT * vclass_object, const char *attr_name,
       parser = parser_create_parser ();
       if (parser == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -11481,6 +11517,7 @@ mq_get_expression (DB_OBJECT * object, const char *expr, DB_VALUE * value)
       parser = parser_create_parser ();
       if (parser == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }

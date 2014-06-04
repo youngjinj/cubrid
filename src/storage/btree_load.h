@@ -78,15 +78,15 @@
 
 #define HEADER 0		/* Header (Oth) record of the page  */
 
+#if !defined(NDEBUG)
 #define BTREE_INVALID_INDEX_ID(btid) \
  ((btid)->vfid.fileid == NULL_FILEID || (btid)->vfid.volid == NULL_VOLID ||\
   (btid)->root_pageid == NULL_PAGEID)
+#endif
 
 /*
  * Overflow key related defines
  */
-
-#define SPHEADSIZE 48		/* Assume reserved for slotted page header info */
 
 /* We never want to store keys larger than an eighth of the pagesize
  * directly on the btree page since this will make the btree too deep.
@@ -95,7 +95,6 @@
  * turned back on).
  */
 #define BTREE_MAX_KEYLEN_INPAGE ((int)(DB_PAGESIZE / 8))
-#define BTREE_MAX_SEPARATOR_KEYLEN_INPAGE ((int)(DB_PAGESIZE / 8))
 /* in MVCC BTREE_MAX_OIDLEN_INPAGE include MVCC fields too */
 #define BTREE_MAX_OIDLEN_INPAGE ((int)(DB_PAGESIZE / 8))
 
@@ -110,11 +109,8 @@ typedef enum
 extern int btree_node_number_of_keys (PAGE_PTR page_ptr);
 extern int btree_get_next_overflow_vpid (PAGE_PTR page_ptr, VPID * vpid);
 
-#define BTREE_GET_KEY_LEN_IN_PAGE(node_type, key_len) \
-  ((((node_type) == BTREE_LEAF_NODE && (key_len) >= BTREE_MAX_KEYLEN_INPAGE) \
-    ||((node_type) == BTREE_NON_LEAF_NODE  \
-      && (key_len) >= BTREE_MAX_SEPARATOR_KEYLEN_INPAGE)) \
-    ? DISK_VPID_SIZE : (key_len))
+#define BTREE_GET_KEY_LEN_IN_PAGE(key_len) \
+  (((key_len) >= BTREE_MAX_KEYLEN_INPAGE) ? DISK_VPID_SIZE : (key_len))
 
 /* for notification log messages */
 #define BTREE_SET_CREATED_OVERFLOW_KEY_NOTIFICATION(THREAD,KEY,OID,C_OID,BTID,BTNM) \
@@ -168,7 +164,7 @@ struct btree_root_header
   int num_nulls;		/* Number of NULLs (they aren't stored) */
   int num_keys;			/* Number of unique keys in the Btree */
   OID topclass_oid;		/* topclass oid or NULL OID(non unique index) */
-  int unique;			/* unique or non-unique */
+  int unique_pk;		/* unique or non-unique, is primary key */
   int reverse_reserved;		/* reverse or normal *//* not used */
   int rev_level;		/* Btree revision level */
   VFID ovfid;			/* Overflow file */
@@ -274,11 +270,6 @@ extern void btree_read_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			       void *rec_header, int node_type,
 			       bool * clear_key, int *offset, int copy,
 			       BTREE_SCAN * bts);
-extern void btree_read_record_helper (THREAD_ENTRY * thread_p,
-				      BTID_INT * btid, RECDES * Rec,
-				      DB_VALUE * key, void *rec_header,
-				      int node_type, bool * clear_key,
-				      int *offset, int copy);
 extern TP_DOMAIN *btree_generate_prefix_domain (BTID_INT * btid);
 extern int btree_glean_root_header_info (THREAD_ENTRY * thread_p,
 					 BTREE_ROOT_HEADER * root_header,
@@ -286,8 +277,10 @@ extern int btree_glean_root_header_info (THREAD_ENTRY * thread_p,
 extern DISK_ISVALID btree_verify_tree (THREAD_ENTRY * thread_p,
 				       const OID * class_oid_p,
 				       BTID_INT * btid, const char *btname);
-extern int btree_get_prefix (const DB_VALUE * key1, const DB_VALUE * key2,
-			     DB_VALUE * prefix_key, TP_DOMAIN * key_domain);
+extern int btree_get_prefix_separator (const DB_VALUE * key1,
+				       const DB_VALUE * key2,
+				       DB_VALUE * prefix_key,
+				       TP_DOMAIN * key_domain);
 extern int btree_compare_key (DB_VALUE * key1, DB_VALUE * key2,
 			      TP_DOMAIN * key_domain,
 			      int do_coercion, int total_order,
@@ -299,9 +292,5 @@ extern int btree_get_asc_desc (THREAD_ENTRY * thread_p, BTID * btid,
 			       int col_idx, int *asc_desc);
 
 extern void btree_dump_key (FILE * fp, DB_VALUE * key);
-
-extern int btree_insert_oid_with_order (RECDES * rec, OID * oid,
-					OID * class_oid, bool is_unique,
-					MVCC_REC_HEADER * p_mvcc_rec_header);
 
 #endif /* _BTREE_LOAD_H_ */

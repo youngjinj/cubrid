@@ -47,7 +47,7 @@
 typedef struct sort_args SORT_ARGS;
 struct sort_args
 {				/* Collection of information required for "sr_index_sort" */
-  int unique_flag;
+  int unique_pk;
   int not_null_flag;
   HFID *hfids;			/* Array of HFIDs for the class(es) */
   OID *class_ids;		/* Array of class OIDs              */
@@ -176,7 +176,7 @@ static void print_list (const BTREE_NODE * this_list);
 #endif /* defined(CUBRID_DEBUG) */
 static int btree_pack_root_header (RECDES * Rec, BTREE_ROOT_HEADER * header,
 				   TP_DOMAIN * key_type);
-static void btree_rv_save_root_head (int max_key_len, int null_delta,
+static void btree_rv_save_root_head (int null_delta,
 				     int oid_delta, int key_delta,
 				     RECDES * recdes);
 
@@ -191,6 +191,7 @@ BTREE_NODE_HEADER *
 btree_get_node_header (PAGE_PTR page_ptr)
 {
   RECDES header_record;
+  BTREE_NODE_HEADER *header = NULL;
 
   assert (page_ptr != NULL);
 
@@ -204,7 +205,14 @@ btree_get_node_header (PAGE_PTR page_ptr)
       return NULL;
     }
 
-  return (BTREE_NODE_HEADER *) header_record.data;
+  header = (BTREE_NODE_HEADER *) header_record.data;
+  if (header != NULL)
+    {
+      assert (header->node_level > 0);
+      assert (header->max_key_len >= 0);
+    }
+
+  return header;
 }
 
 /*
@@ -218,6 +226,7 @@ BTREE_ROOT_HEADER *
 btree_get_root_header (PAGE_PTR page_ptr)
 {
   RECDES header_record;
+  BTREE_ROOT_HEADER *root_header = NULL;
 
   assert (page_ptr != NULL);
 
@@ -231,7 +240,14 @@ btree_get_root_header (PAGE_PTR page_ptr)
       return NULL;
     }
 
-  return (BTREE_ROOT_HEADER *) header_record.data;
+  root_header = (BTREE_ROOT_HEADER *) header_record.data;
+  if (root_header != NULL)
+    {
+      assert (root_header->node.node_level > 0);
+      assert (root_header->node.max_key_len >= 0);
+    }
+
+  return root_header;
 }
 
 /*
@@ -277,6 +293,10 @@ btree_init_node_header (THREAD_ENTRY * thread_p, VFID * vfid,
 {
   RECDES rec;
   char rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
+
+  assert (header != NULL);
+  assert (header->node_level > 0);
+  assert (header->max_key_len >= 0);
 
   /* create header record */
   rec.area_size = DB_PAGESIZE;
@@ -366,11 +386,11 @@ btree_change_root_header_delta (THREAD_ENTRY * thread_p, VFID * vfid,
 				int oid_delta, int key_delta)
 {
   RECDES rec, delta_rec;
-  char delta_rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
+  char delta_rec_buf[(3 * OR_INT_SIZE) + BTREE_MAX_ALIGN];
   BTREE_ROOT_HEADER *root_header = NULL;
 
   delta_rec.data = NULL;
-  delta_rec.area_size = DB_PAGESIZE;
+  delta_rec.area_size = 3 * OR_INT_SIZE;
   delta_rec.data = PTR_ALIGN (delta_rec_buf, BTREE_MAX_ALIGN);
 
   if (spage_get_record (page_ptr, HEADER, &rec, PEEK) != S_SUCCESS)
@@ -384,8 +404,7 @@ btree_change_root_header_delta (THREAD_ENTRY * thread_p, VFID * vfid,
   root_header->num_keys += key_delta;
 
   /* save root head for undo purposes */
-  btree_rv_save_root_head (root_header->node.max_key_len,
-			   -null_delta, -oid_delta, -key_delta, &delta_rec);
+  btree_rv_save_root_head (-null_delta, -oid_delta, -key_delta, &delta_rec);
 
   log_append_undoredo_data2 (thread_p, RVBT_ROOTHEADER_UPD,
 			     vfid, page_ptr, HEADER,
@@ -422,8 +441,8 @@ btree_pack_root_header (RECDES * rec, BTREE_ROOT_HEADER * root_header,
 
   rc = or_put_domain (&buf, key_type, 0, 0);
 
-  rec->type = REC_HOME;
   rec->length = fixed_size + CAST_BUFLEN (buf.ptr - buf.buffer);
+  rec->type = REC_HOME;
 
   if (rc != NO_ERROR && er_errid () == NO_ERROR)
     {
@@ -455,6 +474,10 @@ btree_init_root_header (THREAD_ENTRY * thread_p, VFID * vfid,
 {
   RECDES rec;
   char copy_rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
+
+  assert (root_header != NULL);
+  assert (root_header->node.node_level > 0);
+  assert (root_header->node.max_key_len >= 0);
 
   rec.area_size = DB_PAGESIZE;
   rec.data = PTR_ALIGN (copy_rec_buf, BTREE_MAX_ALIGN);
@@ -495,9 +518,9 @@ btree_init_overflow_header (THREAD_ENTRY * thread_p,
 
   rec.area_size = DB_PAGESIZE;
   rec.data = PTR_ALIGN (copy_rec_buf, BTREE_MAX_ALIGN);
-  rec.type = REC_HOME;
-  rec.length = sizeof (BTREE_OVERFLOW_HEADER);
   memcpy (rec.data, ovf_header, sizeof (BTREE_OVERFLOW_HEADER));
+  rec.length = sizeof (BTREE_OVERFLOW_HEADER);
+  rec.type = REC_HOME;
 
   /* insert the root header information into the root page */
   if (spage_insert_at (thread_p, page_ptr, HEADER, &rec) != SP_SUCCESS)
@@ -511,26 +534,25 @@ btree_init_overflow_header (THREAD_ENTRY * thread_p,
 /*
  * btree_rv_save_root_head () - Save root head stats FOR LOGICAL LOG PURPOSES
  *   return:
- *   max_key_len(in):
  *   null_delta(in):
  *   oid_delta(in):
  *   key_delta(in):
- *   recdes(in):
+ *   recdes(out):
  *
  * Note: Copy the root header statistics to the data area provided.
  *
  * Note: This is a UTILITY routine, but not an actual recovery routine.
  */
 static void
-btree_rv_save_root_head (int max_key_len, int null_delta,
-			 int oid_delta, int key_delta, RECDES * recdes)
+btree_rv_save_root_head (int null_delta, int oid_delta, int key_delta,
+			 RECDES * recdes)
 {
   char *datap;
 
+  assert (recdes->area_size >= 3 * OR_INT_SIZE);
+
   recdes->length = 0;
   datap = (char *) recdes->data;
-  OR_PUT_INT (datap, max_key_len);
-  datap += OR_INT_SIZE;
   OR_PUT_INT (datap, null_delta);
   datap += OR_INT_SIZE;
   OR_PUT_INT (datap, oid_delta);
@@ -620,7 +642,7 @@ btree_get_next_overflow_vpid (PAGE_PTR page_ptr, VPID * vpid)
  *                 will be created.
  *   hfids(in): Identifier of the heap file containing the instances of the
  *	        class
- *   unique_flag(in):
+ *   unique_pk(in):
  *   not_null_flag(in):
  *   fk_refcls_oid(in):
  *   fk_refcls_pk_btid(in):
@@ -632,7 +654,7 @@ BTID *
 xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 		   TP_DOMAIN * key_type, OID * class_oids, int n_classes,
 		   int n_attrs, int *attr_ids, int *attrs_prefix_length,
-		   HFID * hfids, int unique_flag, int not_null_flag,
+		   HFID * hfids, int unique_pk, int not_null_flag,
 		   OID * fk_refcls_oid, BTID * fk_refcls_pk_btid,
 		   int cache_attr_id, const char *fk_name, char *pred_stream,
 		   int pred_stream_size, char *func_pred_stream,
@@ -701,7 +723,15 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 #endif
 
   btid_int.sys_btid = btid;
-  btid_int.unique = unique_flag;
+  btid_int.unique_pk = unique_pk;
+#if !defined(NDEBUG)
+  if (unique_pk)
+    {
+      assert (BTREE_IS_UNIQUE (btid_int.unique_pk));
+      assert (BTREE_IS_PRIMARY_KEY (btid_int.unique_pk)
+	      || !BTREE_IS_PRIMARY_KEY (btid_int.unique_pk));
+    }
+#endif
   btid_int.key_type = key_type;
   VFID_SET_NULL (&btid_int.ovfid);
   btid_int.rev_level = BTREE_CURRENT_REV_LEVEL;
@@ -728,7 +758,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   save_volid = btid->vfid.volid;
 
   /* Initialize the fields of sorting argument structures */
-  sort_args->unique_flag = unique_flag;
+  sort_args->unique_pk = unique_pk;
   sort_args->not_null_flag = not_null_flag;
   sort_args->hfids = hfids;
   sort_args->class_ids = class_oids;
@@ -936,7 +966,6 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   /* Just to make sure that there were entries to put into the tree */
   if (load_args->leaf.pgptr != NULL)
     {
-
       /* Save the last leaf record */
 
       if (btree_save_last_leafrec (thread_p, load_args) != NO_ERROR)
@@ -973,9 +1002,10 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 	  goto error;
 	}
 
-#if defined(BTREE_DEBUG)
-      (void) btree_verify_tree (thread_p, &btid_int, NULL, NULL);
-#endif /* BTREE_DEBUG */
+#if !defined(NDEBUG)
+      (void) btree_verify_tree (thread_p, &btdes.class_oid, &btid_int,
+				bt_name);
+#endif
 
     }
   else
@@ -992,7 +1022,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 
       btid->vfid.volid = save_volid;
       xbtree_add_index (thread_p, btid, key_type, &class_oids[0], attr_ids[0],
-			unique_flag, sort_args->n_oids, sort_args->n_nulls,
+			unique_pk, sort_args->n_oids, sort_args->n_nulls,
 			load_args->n_keys);
     }
 
@@ -1164,6 +1194,8 @@ btree_save_last_leafrec (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args)
 	  goto exit_on_error;
 	}
 
+      assert (slotid > 0);
+
       /* Save the current overflow page */
       btree_log_page (thread_p, &load_args->btid->sys_btid->vfid,
 		      load_args->ovf.pgptr);
@@ -1212,6 +1244,8 @@ btree_save_last_leafrec (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args)
 	{
 	  goto exit_on_error;
 	}
+
+      assert (slotid > 0);
 
       /* Update the node header information for this record */
       if (load_args->cur_key_len >= BTREE_MAX_KEYLEN_INPAGE)
@@ -1300,7 +1334,7 @@ btree_connect_page (THREAD_ENTRY * thread_p, DB_VALUE * key, int max_key_len,
 
   nleaf_rec.pnt = *pageid;
   key_len = btree_get_key_length (key);
-  if (key_len < BTREE_MAX_SEPARATOR_KEYLEN_INPAGE)
+  if (key_len < BTREE_MAX_KEYLEN_INPAGE)
     {
       nleaf_rec.key_len = key_len;
       key_type = BTREE_NORMAL_KEY;
@@ -1379,6 +1413,8 @@ btree_connect_page (THREAD_ENTRY * thread_p, DB_VALUE * key, int max_key_len,
     {
       return NULL;
     }
+
+  assert (slotid > 0);
 
   /* Update the node header information for this record */
   if (load_args->nleaf.hdr.max_key_len < max_key_len)
@@ -1510,6 +1546,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 				     PAGE_BTREE);
 
       key_cnt = btree_node_number_of_keys (load_args->leaf.pgptr);
+      assert (key_cnt > 0);
 
       /* obtain the header information for the leaf page */
       header = btree_get_node_header (load_args->leaf.pgptr);
@@ -1568,7 +1605,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 	   * in pathological cases like char(4)
 	   */
 	  new_max = btree_get_key_length (&prefix_key);
-	  new_max = BTREE_GET_KEY_LEN_IN_PAGE (BTREE_NON_LEAF_NODE, new_max);
+	  new_max = BTREE_GET_KEY_LEN_IN_PAGE (new_max);
 	  max_key_len = MAX (new_max, max_key_len);
 
 	  assert (node_level == 2);
@@ -1587,6 +1624,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 	  btree_clear_key_value (&clear_last_key, &last_key);
 
 	  /* Learn the last key of the leaf page */
+	  assert (key_cnt > 0);
 	  if (spage_get_record (load_args->leaf.pgptr, key_cnt,
 				&temp_recdes, PEEK) != S_SUCCESS)
 	    {
@@ -1600,8 +1638,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 	}
       else
 	{
-	  max_key_len = BTREE_GET_KEY_LEN_IN_PAGE (BTREE_NON_LEAF_NODE,
-						   max_key_len);
+	  max_key_len = BTREE_GET_KEY_LEN_IN_PAGE (max_key_len);
 
 	  /* Insert this key to the parent level */
 	  assert (node_level == 2);
@@ -1718,8 +1755,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 			     BTREE_NON_LEAF_NODE, &clear_first_key,
 			     &first_key_offset, PEEK_KEY_VALUE, NULL);
 
-	  max_key_len = BTREE_GET_KEY_LEN_IN_PAGE (BTREE_NON_LEAF_NODE,
-						   max_key_len);
+	  max_key_len = BTREE_GET_KEY_LEN_IN_PAGE (max_key_len);
 
 	  /* set level to non-leaf page
 	   * nleaf page could be changed in btree_connect_page */
@@ -1802,19 +1838,23 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
   root_header->node.split_info.pivot = 0.0f;
   root_header->node.split_info.index = 0;
 
-  if (load_args->btid->unique)
+  if (load_args->btid->unique_pk)
     {
       root_header->num_nulls = n_nulls;
       root_header->num_oids = n_oids;
       root_header->num_keys = n_keys;
-      root_header->unique = load_args->btid->unique;
+      root_header->unique_pk = load_args->btid->unique_pk;
+
+      assert (BTREE_IS_UNIQUE (root_header->unique_pk));
+      assert (BTREE_IS_PRIMARY_KEY (root_header->unique_pk)
+	      || !BTREE_IS_PRIMARY_KEY (root_header->unique_pk));
     }
   else
     {
       root_header->num_nulls = -1;
       root_header->num_oids = -1;
       root_header->num_keys = -1;
-      root_header->unique = false;
+      root_header->unique_pk = 0;
     }
 
   COPY_OID (&(root_header->topclass_oid), &load_args->btid->topclass_oid);
@@ -2132,9 +2172,6 @@ btree_proceed_leaf (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args)
 
   *header = new_leafhdr;	/* update header */
 
-  pgbuf_set_dirty (thread_p, new_leafpgptr, DONT_FREE);
-
-
   /* current leaf update header */
   /* make the current leaf page point to the new one */
   load_args->leaf.hdr.next_vpid = new_leafpgid;
@@ -2241,6 +2278,7 @@ static int
 btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		       void *arg)
 {
+  int ret = NO_ERROR;
   LOAD_ARGS *load_args;
   DB_VALUE this_key;		/* Key value in this sorted item
 				   (specified with in_recdes) */
@@ -2295,16 +2333,18 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
       assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
 
       /* Instance level uniqueness checking */
-      if (BTREE_IS_UNIQUE (load_args->btid))
+      if (BTREE_IS_UNIQUE (load_args->btid->unique_pk))
 	{			/* unique index */
 	  /* extract class OID */
-	  if (or_get_oid (&buf, &this_class_oid) != NO_ERROR)
+	  ret = or_get_oid (&buf, &this_class_oid);
+	  if (ret != NO_ERROR)
 	    {
 	      goto error;
 	    }
 	}
 
-      if (or_get_oid (&buf, &this_oid) != NO_ERROR)
+      ret = or_get_oid (&buf, &this_oid);
+      if (ret != NO_ERROR)
 	{
 	  goto error;
 	}
@@ -2319,12 +2359,13 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  key_size = CAST_STRLEN (buf.endptr - buf.ptr);
 	}
 
-      if ((*(load_args->btid->key_type->type->data_readval)) (&buf, &this_key,
-							      load_args->
-							      btid->key_type,
-							      key_size, copy,
-							      NULL,
-							      0) != NO_ERROR)
+      ret =
+	(*(load_args->btid->key_type->type->data_readval)) (&buf, &this_key,
+							    load_args->btid->
+							    key_type,
+							    key_size, copy,
+							    NULL, 0);
+      if (ret != NO_ERROR)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_TF_CORRUPTED, 0);
 	  goto error;
@@ -2333,7 +2374,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
       /* Find out if this is the first call to this function */
       if (VPID_ISNULL (&(load_args->leaf.vpid)))
 	{
-	  /* This is the first call to this function; so, initilize some fields
+	  /* This is the first call to this function; so, initialize some fields
 	     in the LOAD_ARGS structure */
 
 	  (load_args->n_keys)++;	/* Increment the key counter */
@@ -2357,17 +2398,15 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  assert (load_args->ovf.pgptr == NULL);
 
 	  /* Create the first record of the current page in main memory */
-	  if (btree_first_oid (thread_p, &this_key, &this_class_oid,
-			       &this_oid, load_args) != NO_ERROR)
+	  ret = btree_first_oid (thread_p, &this_key, &this_class_oid,
+				 &this_oid, load_args);
+	  if (ret != NO_ERROR)
 	    {
 	      goto error;
 	    }
 
-	  max_key_len =
-	    BTREE_GET_KEY_LEN_IN_PAGE (BTREE_LEAF_NODE,
-				       load_args->cur_key_len);
-
-	  load_args->max_recsize = BTREE_MAX_OIDLEN_INPAGE + max_key_len;
+	  max_key_len = BTREE_GET_KEY_LEN_IN_PAGE (load_args->cur_key_len);
+	  load_args->max_recsize = max_key_len + BTREE_MAX_OIDLEN_INPAGE;
 	}
       else
 	{			/* This is not the first call to this function */
@@ -2399,7 +2438,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	      /* This key (retrieved key) is the same with the current one. */
 
 	      /* instance level uniqueness checking */
-	      if (BTREE_IS_UNIQUE (load_args->btid))
+	      if (BTREE_IS_UNIQUE (load_args->btid->unique_pk))
 		{		/* unique index */
 		  BTREE_SET_UNIQUE_VIOLATION_ERROR (thread_p, &this_key,
 						    &this_oid,
@@ -2407,6 +2446,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 						    load_args->btid->
 						    sys_btid,
 						    load_args->bt_name);
+		  ret = ER_BTREE_UNIQUE_FAILED;
 		  goto error;
 		}
 
@@ -2428,6 +2468,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 			{
 			  goto error;
 			}
+
+		      assert (slotid > 0);
 
 		      /* Allocate the new overflow page */
 		      new_ovfpgptr =
@@ -2500,7 +2542,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		      /* Connect the new overflow page to the leaf page */
 		      btree_leaf_new_overflow_oids_vpid
 			(&load_args->out_recdes, &load_args->ovf.vpid,
-			 load_args->btid->unique, &this_class_oid);
+			 load_args->btid->unique_pk, &this_class_oid);
 
 		      /* Try to Store the record into the current leaf page */
 		      sp_success = spage_insert (thread_p,
@@ -2511,6 +2553,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 			{
 			  goto error;
 			}
+
+		      assert (slotid > 0);
 
 		      /* Update the node header information for this record */
 		      if (load_args->cur_key_len >= BTREE_MAX_KEYLEN_INPAGE)
@@ -2606,6 +2650,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		      goto error;
 		    }
 
+		  assert (slotid > 0);
+
 		  /* Update the node header information for this record */
 		  if (load_args->cur_key_len >= BTREE_MAX_KEYLEN_INPAGE)
 		    {
@@ -2638,6 +2684,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		      goto error;
 		    }
 
+		  assert (slotid > 0);
+
 		  /* Save the current overflow page */
 		  btree_log_page (thread_p, &load_args->btid->sys_btid->vfid,
 				  load_args->ovf.pgptr);
@@ -2648,16 +2696,16 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		}		/* Current page is an overflow page */
 
 	      /* Create the first part of the next record in main memory */
-	      if (btree_first_oid (thread_p, &this_key, &this_class_oid,
-				   &this_oid, load_args) != NO_ERROR)
+	      ret = btree_first_oid (thread_p, &this_key, &this_class_oid,
+				     &this_oid, load_args);
+	      if (ret != NO_ERROR)
 		{
 		  goto error;
 		}
 
-	      max_key_len = BTREE_GET_KEY_LEN_IN_PAGE (BTREE_LEAF_NODE,
-						       load_args->
-						       cur_key_len);
-	      load_args->max_recsize = BTREE_MAX_OIDLEN_INPAGE + max_key_len;
+	      max_key_len =
+		BTREE_GET_KEY_LEN_IN_PAGE (load_args->cur_key_len);
+	      load_args->max_recsize = max_key_len + BTREE_MAX_OIDLEN_INPAGE;
 	    }			/* different key */
 	}
 
@@ -2678,7 +2726,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 
     }
 
-  return NO_ERROR;
+  assert (ret == NO_ERROR);
+  return ret;
 
 error:
   if (load_args->leaf.pgptr)
@@ -2695,11 +2744,9 @@ error:
     }
   btree_clear_key_value (&copy, &this_key);
 
-  if (er_errid () == NO_ERROR)
-    {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-    }
-  return er_errid ();
+  assert (er_errid () != NO_ERROR);
+  return (ret == NO_ERROR
+	  && (ret = er_errid ()) == NO_ERROR) ? ER_FAILED : ret;
 }
 
 #if defined(CUBRID_DEBUG)
@@ -2966,7 +3013,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
   sort_args = (SORT_ARGS *) arg;
   prev_oid = sort_args->cur_oid;
 
-  if (sort_args->unique_flag)
+  if (BTREE_IS_UNIQUE (sort_args->unique_pk))
     {
       oid_size = 2 * OR_OID_SIZE;
     }
@@ -3168,7 +3215,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	}
 
       value_has_null = 0;	/* init */
-      if (db_value_is_null (dbvalue_ptr)
+      if (DB_IS_NULL (dbvalue_ptr)
 	  || btree_multicol_key_has_null (dbvalue_ptr))
 	{
 	  value_has_null = 1;	/* found null columns */
@@ -3186,7 +3233,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	  return SORT_ERROR_OCCURRED;
 	}
 
-      if (db_value_is_null (dbvalue_ptr)
+      if (DB_IS_NULL (dbvalue_ptr)
 	  || btree_multicol_key_is_null (dbvalue_ptr))
 	{
 	  sort_args->n_oids++;	/* Increment the OID counter */
@@ -3232,7 +3279,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	  or_advance (&buf, (OR_INT_SIZE - OR_BYTE_SIZE));
 	  assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
 
-	  if (sort_args->unique_flag)
+	  if (BTREE_IS_UNIQUE (sort_args->unique_pk))
 	    {
 	      if (or_put_oid (&buf, &sort_args->class_ids[cur_class]) !=
 		  NO_ERROR)
@@ -3322,7 +3369,7 @@ compare_driver (const void *first, const void *second, void *arg)
   assert (PTR_ALIGN (mem2, INT_ALIGNMENT) == mem2);
 
   /* Skip the oids */
-  if (sort_args->unique_flag)
+  if (BTREE_IS_UNIQUE (sort_args->unique_pk))
     {				/* unique index */
       mem1 += (2 * OR_OID_SIZE);
       mem2 += (2 * OR_OID_SIZE);
@@ -3441,9 +3488,11 @@ compare_driver (const void *first, const void *second, void *arg)
 
   /* compare OID for non-unique index 
    */
-  if (c == DB_EQ && sort_args->unique_flag == false)
+  if (c == DB_EQ && !BTREE_IS_UNIQUE (sort_args->unique_pk))
     {
       OID first_oid, second_oid;
+
+      assert (!BTREE_IS_PRIMARY_KEY (sort_args->unique_pk));
 
       mem1 = *(char **) first;
       mem2 = *(char **) second;

@@ -9668,15 +9668,15 @@ loop:
       /* wait until checkpoint process is finished */
 
       /* interrupt check */
-#if defined(SERVER_MODE)
       if (thread_get_check_interrupt (thread_p) == true)
-#endif /* SERVER_MODE */
-	if (logtb_is_interrupted (thread_p, true, &continue_check) == true)
-	  {
-	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_INTERRUPTED, 0);
-	    error_code = ER_INTERRUPTED;
-	    goto error;
-	  }
+	{
+	  if (logtb_is_interrupted (thread_p, true, &continue_check) == true)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_INTERRUPTED, 0);
+	      error_code = ER_INTERRUPTED;
+	      goto error;
+	    }
+	}
 
       thread_sleep (1000);	/* 1000 msec */
       goto loop;
@@ -13050,6 +13050,7 @@ logpb_background_archiving (THREAD_ENTRY * thread_p)
 						   num_pages, log_pgptr);
       if (num_pages <= 0)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error_code = er_errid ();
 	  goto error;
 	}

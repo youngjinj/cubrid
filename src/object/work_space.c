@@ -2857,6 +2857,7 @@ ws_init (void)
   Null_object = ws_make_mop (NULL);
   if (Null_object == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return (er_errid ());
     }
 
@@ -4946,6 +4947,7 @@ nlist_add (DB_NAMELIST ** list, const char *name, NLSEARCHER fcn,
   new_ = (DB_NAMELIST *) db_ws_alloc (sizeof (DB_NAMELIST));
   if (new_ == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -4953,6 +4955,8 @@ nlist_add (DB_NAMELIST ** list, const char *name, NLSEARCHER fcn,
   if (new_->name == NULL)
     {
       db_ws_free (new_);
+
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -5015,6 +5019,7 @@ nlist_append (DB_NAMELIST ** list, const char *name, NLSEARCHER fcn,
 
   if (new_ == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -5023,6 +5028,8 @@ nlist_append (DB_NAMELIST ** list, const char *name, NLSEARCHER fcn,
   if (new_->name == NULL)
     {
       db_ws_free (new_);
+
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -5089,6 +5096,7 @@ nlist_find_or_append (DB_NAMELIST ** list, const char *name,
 	  new_ = (DB_NAMELIST *) db_ws_alloc (sizeof (DB_NAMELIST));
 	  if (new_ == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 
@@ -5096,6 +5104,8 @@ nlist_find_or_append (DB_NAMELIST ** list, const char *name,
 	  if (new_->name == NULL)
 	    {
 	      db_ws_free (new_);
+
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 
@@ -5301,6 +5311,7 @@ ml_add (DB_OBJLIST ** list, MOP mop, int *added_ptr)
   new_ = (DB_OBJLIST *) db_ws_alloc (sizeof (DB_OBJLIST));
   if (new_ == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
   new_->op = mop;
@@ -5355,6 +5366,7 @@ ml_append (DB_OBJLIST ** list, MOP mop, int *added_ptr)
   new_ = (DB_OBJLIST *) db_ws_alloc (sizeof (DB_OBJLIST));
   if (new_ == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
   new_->op = mop;
@@ -5675,6 +5687,7 @@ ml_ext_add (DB_OBJLIST ** list, MOP mop, int *added_ptr)
       new_ = (DB_OBJLIST *) area_alloc (Objlist_area);
       if (new_ == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -5772,58 +5785,6 @@ ws_set_error_into_error_link (LC_COPYAREA_ONEOBJ * obj)
 
   flush_err->error_link = ws_Error_link;
   ws_Error_link = flush_err;
-
-  return;
-}
-
-/*
- * ws_get_error_from_error_link() -
- *    return: void
- */
-WS_FLUSH_ERR *
-ws_get_error_from_error_link (void)
-{
-  WS_FLUSH_ERR *flush_err;
-
-  flush_err = ws_Error_link;
-  if (flush_err == NULL)
-    {
-      return NULL;
-    }
-
-  ws_Error_link = flush_err->error_link;
-  flush_err->error_link = NULL;
-
-  return flush_err;
-}
-
-/*
- * ws_clear_all_errors_of_error_link() -
- *    return: void
- */
-void
-ws_clear_all_errors_of_error_link (void)
-{
-  WS_FLUSH_ERR *flush_err, *next;
-
-  for (flush_err = ws_Error_link; flush_err; flush_err = next)
-    {
-      next = flush_err->error_link;
-      free_and_init (flush_err);
-    }
-  ws_Error_link = NULL;
-
-  return;
-}
-
-/*
- * ws_free_flush_error() -
- *    return: void
- */
-void
-ws_free_flush_error (WS_FLUSH_ERR * flush_err)
-{
-  free_and_init (flush_err);
 
   return;
 }
@@ -5988,4 +5949,56 @@ ws_is_same_object (MOP mop1, MOP mop2)
   mop1 = ws_mvcc_latest_version (mop1);
   mop2 = ws_mvcc_latest_version (mop2);
   return (mop1 == mop2);
+}
+
+/*
+ * ws_get_error_from_error_link() -
+ *    return: void
+ */
+WS_FLUSH_ERR *
+ws_get_error_from_error_link (void)
+{
+  WS_FLUSH_ERR *flush_err;
+
+  flush_err = ws_Error_link;
+  if (flush_err == NULL)
+    {
+      return NULL;
+    }
+
+  ws_Error_link = flush_err->error_link;
+  flush_err->error_link = NULL;
+
+  return flush_err;
+}
+
+/*
+ * ws_clear_all_errors_of_error_link() -
+ *    return: void
+ */
+void
+ws_clear_all_errors_of_error_link (void)
+{
+  WS_FLUSH_ERR *flush_err, *next;
+
+  for (flush_err = ws_Error_link; flush_err; flush_err = next)
+    {
+      next = flush_err->error_link;
+      free_and_init (flush_err);
+    }
+  ws_Error_link = NULL;
+
+  return;
+}
+
+/*
+ * ws_free_flush_error() -
+ *    return: void
+ */
+void
+ws_free_flush_error (WS_FLUSH_ERR * flush_err)
+{
+  free_and_init (flush_err);
+
+  return;
 }

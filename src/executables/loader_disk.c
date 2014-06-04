@@ -115,6 +115,7 @@ disk_init (void)
   Diskrec = alloc_recdes (DB_PAGESIZE * 4);
   if (Diskrec == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
   return error;
@@ -267,6 +268,7 @@ disk_reserve_instance (MOP classop, OID * oid)
   class_ = (SM_CLASS *) locator_fetch_class (classop, DB_FETCH_READ);
   if (class_ == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
   else
@@ -275,6 +277,7 @@ disk_reserve_instance (MOP classop, OID * oid)
       hfid = get_class_heap (classop, class_);
       if (hfid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -327,6 +330,7 @@ update_indexes (OID * class_oid, OID * obj_oid, RECDES * rec)
 				   false, NULL,	/* 8th arg -> make repl. log or not */
 				   NULL) != NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
 
@@ -371,6 +375,7 @@ disk_insert_instance (MOP classop, DESC_OBJ * obj, OID * oid)
       hfid = get_class_heap (classop, obj->class_);
       if (hfid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -379,6 +384,7 @@ disk_insert_instance (MOP classop, DESC_OBJ * obj, OID * oid)
 	  if (heap_insert (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL)
 	      == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else if (has_indexes)
@@ -427,6 +433,7 @@ disk_update_instance (MOP classop, DESC_OBJ * obj, OID * oid)
       hfid = get_class_heap (classop, obj->class_);
       if (hfid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -434,6 +441,7 @@ disk_update_instance (MOP classop, DESC_OBJ * obj, OID * oid)
 	    (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL, &oldflag, NULL,
 	     false) != oid)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -500,6 +508,7 @@ disk_insert_instance_using_mobj (MOP classop, MOBJ classobj,
       Diskrec = alloc_recdes (newsize);
       if (Diskrec == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  break;
 	}
@@ -515,6 +524,7 @@ disk_insert_instance_using_mobj (MOP classop, MOBJ classobj,
       hfid = get_class_heap (classop, (SM_CLASS *) classop->object);
       if (hfid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -523,6 +533,7 @@ disk_insert_instance_using_mobj (MOP classop, MOBJ classobj,
 	  if (heap_insert (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL)
 	      == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else if (has_indexes)
@@ -580,6 +591,7 @@ disk_update_instance_using_mobj (MOP classop, MOBJ classobj,
       Diskrec = alloc_recdes (newsize);
       if (Diskrec == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  break;
 	}
@@ -594,6 +606,7 @@ disk_update_instance_using_mobj (MOP classop, MOBJ classobj,
       hfid = get_class_heap (classop, (SM_CLASS *) classop->object);
       if (hfid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else
@@ -601,6 +614,7 @@ disk_update_instance_using_mobj (MOP classop, MOBJ classobj,
 	    (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL, &oldflag, NULL,
 	     false) != oid)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       else

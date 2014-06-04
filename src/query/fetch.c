@@ -254,6 +254,14 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 	      goto error;
 	    }
 	}
+      if (arithptr->thirdptr != NULL)
+	{
+	  if (fetch_peek_dbval (thread_p, arithptr->thirdptr, vd, NULL,
+				obj_oid, tpl, &peek_third) != NO_ERROR)
+	    {
+	      goto error;
+	    }
+	}
       break;
 
     case T_SUBSTRING_INDEX:
@@ -1459,6 +1467,25 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
       break;
 
     case T_TRIM:
+      if (REGU_VARIABLE_IS_FLAGED (regu_var, REGU_VARIABLE_INFER_COLLATION)
+	  && !DB_IS_NULL (peek_left))
+	{
+	  TP_DOMAIN_STATUS status =
+	    tp_value_change_coll_and_codeset (peek_right, peek_right,
+					      DB_GET_STRING_COLLATION
+					      (peek_left),
+					      DB_GET_STRING_CODESET
+					      (peek_left));
+
+	  if (status != DOMAIN_COMPATIBLE)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_TP_CANT_COERCE, 2,
+		      pr_type_name (DB_VALUE_TYPE (peek_right)),
+		      pr_type_name (DB_VALUE_TYPE (peek_left)));
+	      goto error;
+	    }
+	}
       if (DB_IS_NULL (peek_left))
 	{
 	  PRIM_SET_NULL (arithptr->value);
@@ -1472,6 +1499,25 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
       break;
 
     case T_LTRIM:
+      if (REGU_VARIABLE_IS_FLAGED (regu_var, REGU_VARIABLE_INFER_COLLATION)
+	  && !DB_IS_NULL (peek_left))
+	{
+	  TP_DOMAIN_STATUS status =
+	    tp_value_change_coll_and_codeset (peek_right, peek_right,
+					      DB_GET_STRING_COLLATION
+					      (peek_left),
+					      DB_GET_STRING_CODESET
+					      (peek_left));
+
+	  if (status != DOMAIN_COMPATIBLE)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_TP_CANT_COERCE, 2,
+		      pr_type_name (DB_VALUE_TYPE (peek_right)),
+		      pr_type_name (DB_VALUE_TYPE (peek_left)));
+	      goto error;
+	    }
+	}
       if (DB_IS_NULL (peek_left))
 	{
 	  PRIM_SET_NULL (arithptr->value);
@@ -1485,6 +1531,25 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
       break;
 
     case T_RTRIM:
+      if (REGU_VARIABLE_IS_FLAGED (regu_var, REGU_VARIABLE_INFER_COLLATION)
+	  && !DB_IS_NULL (peek_left))
+	{
+	  TP_DOMAIN_STATUS status =
+	    tp_value_change_coll_and_codeset (peek_right, peek_right,
+					      DB_GET_STRING_COLLATION
+					      (peek_left),
+					      DB_GET_STRING_CODESET
+					      (peek_left));
+
+	  if (status != DOMAIN_COMPATIBLE)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_TP_CANT_COERCE, 2,
+		      pr_type_name (DB_VALUE_TYPE (peek_right)),
+		      pr_type_name (DB_VALUE_TYPE (peek_left)));
+	      goto error;
+	    }
+	}
       if (DB_IS_NULL (peek_left))
 	{
 	  PRIM_SET_NULL (arithptr->value);
@@ -1502,14 +1567,34 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 	{
 	  PRIM_SET_NULL (arithptr->value);
 	}
-      else if (db_from_unixtime (peek_left, peek_right, arithptr->value)
-	       != NO_ERROR)
+      else if (db_from_unixtime (peek_left, peek_right, peek_third,
+				 arithptr->value,
+				 arithptr->domain) != NO_ERROR)
 	{
 	  goto error;
 	}
       break;
 
     case T_LPAD:
+      if (REGU_VARIABLE_IS_FLAGED (regu_var, REGU_VARIABLE_INFER_COLLATION)
+	  && !DB_IS_NULL (peek_left))
+	{
+	  TP_DOMAIN_STATUS status =
+	    tp_value_change_coll_and_codeset (peek_third, peek_third,
+					      DB_GET_STRING_COLLATION
+					      (peek_left),
+					      DB_GET_STRING_CODESET
+					      (peek_left));
+
+	  if (status != DOMAIN_COMPATIBLE)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_TP_CANT_COERCE, 2,
+		      pr_type_name (DB_VALUE_TYPE (peek_third)),
+		      pr_type_name (DB_VALUE_TYPE (peek_left)));
+	      goto error;
+	    }
+	}
       if (DB_IS_NULL (peek_left))
 	{
 	  PRIM_SET_NULL (arithptr->value);
@@ -1522,6 +1607,25 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
       break;
 
     case T_RPAD:
+      if (REGU_VARIABLE_IS_FLAGED (regu_var, REGU_VARIABLE_INFER_COLLATION)
+	  && !DB_IS_NULL (peek_left))
+	{
+	  TP_DOMAIN_STATUS status =
+	    tp_value_change_coll_and_codeset (peek_third, peek_third,
+					      DB_GET_STRING_COLLATION
+					      (peek_left),
+					      DB_GET_STRING_CODESET
+					      (peek_left));
+
+	  if (status != DOMAIN_COMPATIBLE)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_TP_CANT_COERCE, 2,
+		      pr_type_name (DB_VALUE_TYPE (peek_third)),
+		      pr_type_name (DB_VALUE_TYPE (peek_left)));
+	      goto error;
+	    }
+	}
       if (DB_IS_NULL (peek_left))
 	{
 	  PRIM_SET_NULL (arithptr->value);
@@ -1534,6 +1638,25 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
       break;
 
     case T_REPLACE:
+      if (REGU_VARIABLE_IS_FLAGED (regu_var, REGU_VARIABLE_INFER_COLLATION)
+	  && !DB_IS_NULL (peek_left))
+	{
+	  TP_DOMAIN_STATUS status =
+	    tp_value_change_coll_and_codeset (peek_third, peek_third,
+					      DB_GET_STRING_COLLATION
+					      (peek_left),
+					      DB_GET_STRING_CODESET
+					      (peek_left));
+
+	  if (status != DOMAIN_COMPATIBLE)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_TP_CANT_COERCE, 2,
+		      pr_type_name (DB_VALUE_TYPE (peek_third)),
+		      pr_type_name (DB_VALUE_TYPE (peek_left)));
+	      goto error;
+	    }
+	}
       if (DB_IS_NULL (peek_left))
 	{
 	  PRIM_SET_NULL (arithptr->value);
@@ -1546,6 +1669,25 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
       break;
 
     case T_TRANSLATE:
+      if (REGU_VARIABLE_IS_FLAGED (regu_var, REGU_VARIABLE_INFER_COLLATION)
+	  && !DB_IS_NULL (peek_left))
+	{
+	  TP_DOMAIN_STATUS status =
+	    tp_value_change_coll_and_codeset (peek_third, peek_third,
+					      DB_GET_STRING_COLLATION
+					      (peek_left),
+					      DB_GET_STRING_CODESET
+					      (peek_left));
+
+	  if (status != DOMAIN_COMPATIBLE)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_TP_CANT_COERCE, 2,
+		      pr_type_name (DB_VALUE_TYPE (peek_third)),
+		      pr_type_name (DB_VALUE_TYPE (peek_left)));
+	      goto error;
+	    }
+	}
       if (DB_IS_NULL (peek_left))
 	{
 	  PRIM_SET_NULL (arithptr->value);

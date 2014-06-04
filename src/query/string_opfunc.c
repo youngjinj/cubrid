@@ -860,6 +860,7 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
       else
 	{
 	  /* will already be set by memory mgr */
+	  assert (er_errid () != NO_ERROR);
 	  error_status = er_errid ();
 	}
     }
@@ -1129,6 +1130,7 @@ db_string_unique_prefix (const DB_VALUE * db_string1,
 	  else
 	    {
 	      /* will already be set by memory mgr */
+	      assert (er_errid () != NO_ERROR);
 	      error_status = er_errid ();
 	    }
 	}
@@ -1563,7 +1565,6 @@ db_string_chr (DB_VALUE * res, DB_VALUE * dbval1, DB_VALUE * dbval2)
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
       err_status = ER_GENERIC_ERROR;
       goto exit;
-      break;
     }				/* switch */
 
   /* bi, dtmp and itmp have the default value set to 0, so temp_bigint will
@@ -1916,6 +1917,7 @@ db_string_space (DB_VALUE const *count, DB_VALUE * result)
 	}
       else
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -2698,7 +2700,7 @@ db_string_sha_one (DB_VALUE const *src, DB_VALUE * result)
       if (QSTR_IS_ANY_CHAR (val_type))
 	{
 	  error_status =
-	    sha_one (NULL, DB_PULL_STRING (src), DB_GET_STRING_LENGTH (src),
+	    sha_one (NULL, DB_PULL_STRING (src), DB_GET_STRING_SIZE (src),
 		     &result_strp, &result_len);
 	  if (error_status != NO_ERROR)
 	    {
@@ -2707,8 +2709,8 @@ db_string_sha_one (DB_VALUE const *src, DB_VALUE * result)
 
 	  qstr_make_typed_string (DB_TYPE_CHAR, result, result_len,
 				  result_strp, result_len,
-				  LANG_COERCIBLE_CODESET,
-				  LANG_COERCIBLE_COLL);
+				  DB_GET_STRING_CODESET (src),
+				  DB_GET_STRING_COLLATION (src));
 	  result->need_clear = true;
 	}
       else
@@ -2728,7 +2730,7 @@ error:
     }
   else
     {
-      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+      if (er_errid () == NO_ERROR)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
 	}
@@ -2799,8 +2801,9 @@ db_string_sha_two (DB_VALUE const *src, DB_VALUE const *hash_len,
 	}
 
       qstr_make_typed_string (DB_TYPE_VARCHAR, result, result_len,
-			      result_strp, result_len, LANG_COERCIBLE_CODESET,
-			      LANG_COERCIBLE_COLL);
+			      result_strp, result_len,
+			      DB_GET_STRING_CODESET (src),
+			      DB_GET_STRING_COLLATION (src));
       result->need_clear = true;
     }
   else
@@ -2819,7 +2822,7 @@ error:
     }
   else
     {
-      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+      if (er_errid () == NO_ERROR)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
 	}
@@ -2870,8 +2873,9 @@ db_string_aes_encrypt (DB_VALUE const *src, DB_VALUE const *key,
 	}
 
       qstr_make_typed_string (DB_TYPE_VARCHAR, result, result_len,
-			      result_strp, result_len, LANG_COERCIBLE_CODESET,
-			      LANG_COERCIBLE_COLL);
+			      result_strp, result_len,
+			      DB_GET_STRING_CODESET (src),
+			      DB_GET_STRING_COLLATION (src));
       result->need_clear = true;
     }
   else
@@ -2890,7 +2894,7 @@ error:
     }
   else
     {
-      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+      if (er_errid () == NO_ERROR)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
 	}
@@ -2948,8 +2952,9 @@ db_string_aes_decrypt (DB_VALUE const *src, DB_VALUE const *key,
 	}
 
       qstr_make_typed_string (DB_TYPE_VARCHAR, result, result_len,
-			      result_strp, result_len, LANG_COERCIBLE_CODESET,
-			      LANG_COERCIBLE_COLL);
+			      result_strp, result_len,
+			      DB_GET_STRING_CODESET (src),
+			      DB_GET_STRING_COLLATION (src));
       result->need_clear = true;
     }
   else
@@ -2968,7 +2973,7 @@ error:
     }
   else
     {
-      if (error_status != ER_ENCRYPTION_LIB_FAILED)
+      if (er_errid () == NO_ERROR)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
 	}
@@ -4045,6 +4050,7 @@ qstr_trim (MISC_OPERAND trim_operand,
     db_private_alloc (NULL, (size_t) trail_trimmed_size + 1);
   if (*result == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_status = er_errid ();
       return error_status;
     }
@@ -4403,6 +4409,7 @@ qstr_pad (MISC_OPERAND pad_operand,
     (unsigned char *) db_private_alloc (NULL, (size_t) alloc_size + 1);
   if (*result == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_status = er_errid ();
       return error_status;
     }
@@ -5017,6 +5024,7 @@ db_string_limit_size_string (DB_VALUE * src_string, DB_VALUE * result,
   return error_status;
 
 mem_error:
+  assert (er_errid () != NO_ERROR);
   error_status = er_errid ();
   return error_status;
 
@@ -5072,8 +5080,6 @@ db_string_fix_string_size (DB_VALUE * src_string)
 			  DB_GET_STRING_CODESET (src_string),
 			  DB_GET_STRING_COLLATION (src_string));
   src_string->need_clear = save_need_clear;
-
-  assert (error_status == NO_ERROR);
 
   return error_status;
 }
@@ -5931,6 +5937,7 @@ loop:
     db_private_alloc (NULL, (size_t) * result_size + 1);
   if (*result_ptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_status = er_errid ();
       return error_status;
     }
@@ -6045,7 +6052,8 @@ db_bit_string_coerce (const DB_VALUE * src_string,
 	  qstr_make_typed_string (dest_type,
 				  dest_string,
 				  DB_VALUE_PRECISION (dest_string),
-				  (char *) dest, dest_length, 0, 0);
+				  (char *) dest, dest_length,
+				  INTL_CODESET_RAW_BITS, 0);
 	  dest_string->need_clear = true;
 	}
     }
@@ -6919,6 +6927,7 @@ db_string_convert (const DB_VALUE * src_string, DB_VALUE * dest_string)
    *  Error handling
    */
 mem_error:
+  assert (er_errid () != NO_ERROR);
   error_status = er_errid ();
   return error_status;
 }
@@ -8113,6 +8122,7 @@ qstr_grow_string (DB_VALUE * src_string, DB_VALUE * result, int new_size)
   r = (unsigned char *) db_private_alloc (NULL, (size_t) result_size + 1);
   if (r == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
   memset (r, 0, (size_t) result_size + 1);
@@ -8664,6 +8674,7 @@ size_error:
    * Error handler
    */
 mem_error:
+  assert (er_errid () != NO_ERROR);
   error_status = er_errid ();
   return error_status;
 }
@@ -8909,6 +8920,7 @@ size_error:
    *  Error handling
    */
 mem_error:
+  assert (er_errid () != NO_ERROR);
   error_status = er_errid ();
   return error_status;
 }
@@ -9218,6 +9230,7 @@ qstr_bit_coerce (const unsigned char *src,
   *dest = (unsigned char *) db_private_alloc (NULL, dest_size + 1);
   if (*dest == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_status = er_errid ();
     }
   else
@@ -9371,6 +9384,7 @@ qstr_coerce (const unsigned char *src,
   *dest = (unsigned char *) db_private_alloc (NULL, alloc_size + 1);
   if (*dest == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_status = er_errid ();
     }
   else
@@ -9668,6 +9682,7 @@ qstr_bit_position (const unsigned char *sub_string,
 						       (size_t) sub_size + 1);
       if (tmp_string == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error_status = er_errid ();
 	}
       else
@@ -9846,6 +9861,7 @@ qstr_substring (const unsigned char *src,
   *r = (unsigned char *) db_private_alloc (NULL, (size_t) ((*r_size) + 1));
   if (*r == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_status = er_errid ();
     }
   else
@@ -9932,6 +9948,7 @@ qstr_bit_substring (const unsigned char *src,
   *r = (unsigned char *) db_private_alloc (NULL, (size_t) sub_size + 1);
   if (*r == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_status = er_errid ();
     }
   else
@@ -10485,8 +10502,8 @@ db_get_date_dayofyear (const DB_VALUE * src_date, DB_VALUE * result)
       return NO_ERROR;
     }
   /* get the date/time information from src_date */
-  retval = db_get_datetime_from_dbvalue
-    (src_date, &year, &month, &day, &hour, &minute, &second, &ms, NULL);
+  retval = db_get_datetime_from_dbvalue (src_date, &year, &month, &day,
+					 &hour, &minute, &second, &ms, NULL);
   if (retval != NO_ERROR
       || (year == 0 && month == 0 && day == 0
 	  && hour == 0 && minute == 0 && second == 0 && ms == 0))
@@ -10539,8 +10556,8 @@ db_get_date_weekday (const DB_VALUE * src_date, const int mode,
     }
 
   /* get the date/time information from src_date */
-  retval = db_get_datetime_from_dbvalue
-    (src_date, &year, &month, &day, &hour, &minute, &second, &ms, NULL);
+  retval = db_get_datetime_from_dbvalue (src_date, &year, &month, &day,
+					 &hour, &minute, &second, &ms, NULL);
   if (retval != NO_ERROR
       || (year == 0 && month == 0 && day == 0
 	  && hour == 0 && minute == 0 && second == 0 && ms == 0))
@@ -10615,8 +10632,8 @@ db_get_date_quarter (const DB_VALUE * src_date, DB_VALUE * result)
       return NO_ERROR;
     }
   /* get the date/time information from src_date */
-  retval = db_get_datetime_from_dbvalue
-    (src_date, &year, &month, &day, &hour, &minute, &second, &ms, &endp);
+  retval = db_get_datetime_from_dbvalue (src_date, &year, &month, &day,
+					 &hour, &minute, &second, &ms, &endp);
   if (retval != NO_ERROR || (endp && *endp && !char_isspace (*endp)))
     {
       er_clear ();
@@ -10680,8 +10697,8 @@ db_get_date_totaldays (const DB_VALUE * src_date, DB_VALUE * result)
     }
 
   /* get the date/time information from src_date */
-  retval = db_get_datetime_from_dbvalue
-    (src_date, &year, &month, &day, &hour, &minute, &second, &ms, NULL);
+  retval = db_get_datetime_from_dbvalue (src_date, &year, &month, &day,
+					 &hour, &minute, &second, &ms, NULL);
   if (retval != NO_ERROR
       || (year == 0 && month == 0 && day == 0
 	  && hour == 0 && minute == 0 && second == 0 && ms == 0))
@@ -11171,8 +11188,8 @@ db_get_date_week (const DB_VALUE * src_date, const DB_VALUE * mode,
     }
 
   /* get the date/time information from src_date */
-  retval = db_get_datetime_from_dbvalue
-    (src_date, &year, &month, &day, &hour, &minute, &second, &ms, NULL);
+  retval = db_get_datetime_from_dbvalue (src_date, &year, &month, &day,
+					 &hour, &minute, &second, &ms, NULL);
   if (retval != NO_ERROR
       || (year == 0 && month == 0 && day == 0
 	  && hour == 0 && minute == 0 && second == 0 && ms == 0))
@@ -11237,9 +11254,8 @@ db_get_date_item (const DB_VALUE * src_date, const int item_type,
     }
 
   /* get the date/time information from src_date */
-  if (db_get_datetime_from_dbvalue
-      (src_date, &year, &month, &day, &hour, &minute, &second, &ms,
-       NULL) != NO_ERROR)
+  if (db_get_datetime_from_dbvalue (src_date, &year, &month, &day, &hour,
+				    &minute, &second, &ms, NULL) != NO_ERROR)
     {
       /* This function should return NULL if src_date is an invalid parameter.
          Clear the error generated by the function call and return null.
@@ -11296,8 +11312,8 @@ db_get_time_item (const DB_VALUE * src_date, const int item_type,
       return NO_ERROR;
     }
 
-  if (db_get_time_from_dbvalue
-      (src_date, &hour, &minute, &second, &millisecond) != NO_ERROR)
+  if (db_get_time_from_dbvalue (src_date, &hour, &minute, &second,
+				&millisecond) != NO_ERROR)
     {
       er_clear ();
       DB_MAKE_NULL (result);
@@ -11386,7 +11402,17 @@ db_time_format (const DB_VALUE * time_value, const DB_VALUE * format,
   assert (DB_VALUE_TYPE (date_lang) == DB_TYPE_INTEGER);
   date_lang_id = lang_get_lang_id_from_flag (DB_GET_INT (date_lang), &dummy,
 					     &dummy);
-  codeset = (domain != NULL) ? TP_DOMAIN_CODESET (domain) : INTL_CODESET_NONE;
+  if (domain != NULL && domain->collation_flag != TP_DOMAIN_COLL_LEAVE)
+    {
+      codeset = TP_DOMAIN_CODESET (domain);
+      res_collation = TP_DOMAIN_COLLATION (domain);
+    }
+  else
+    {
+      codeset = DB_GET_STRING_CODESET (format);
+      res_collation = DB_GET_STRING_COLLATION (format);
+    }
+
   lld = lang_get_specific_locale (date_lang_id, codeset);
   if (lld == NULL)
     {
@@ -11396,9 +11422,6 @@ db_time_format (const DB_VALUE * time_value, const DB_VALUE * format,
 	      lang_charset_name (codeset));
       goto error;
     }
-  codeset = lld->codeset;
-  res_collation = (domain != NULL) ? TP_DOMAIN_COLLATION (domain)
-    : LANG_GET_BINARY_COLLATION (codeset);
 
   res_type = DB_VALUE_DOMAIN_TYPE (time_value);
 
@@ -16674,6 +16697,7 @@ number_to_char (const DB_VALUE * src_value,
       if (res_string == NULL)
 	{
 	  db_private_free_and_init (NULL, cs);
+	  assert (er_errid () != NO_ERROR);
 	  error_status = er_errid ();
 	  goto exit;
 	}
@@ -20787,7 +20811,17 @@ db_date_format (const DB_VALUE * date_value, const DB_VALUE * format,
   assert (DB_VALUE_TYPE (date_lang) == DB_TYPE_INTEGER);
   date_lang_id = lang_get_lang_id_from_flag (DB_GET_INT (date_lang), &dummy,
 					     &dummy);
-  codeset = (domain != NULL) ? TP_DOMAIN_CODESET (domain) : INTL_CODESET_NONE;
+  if (domain != NULL && domain->collation_flag != TP_DOMAIN_COLL_LEAVE)
+    {
+      codeset = TP_DOMAIN_CODESET (domain);
+      res_collation = TP_DOMAIN_COLLATION (domain);
+    }
+  else
+    {
+      codeset = DB_GET_STRING_CODESET (format);
+      res_collation = DB_GET_STRING_COLLATION (format);
+    }
+
   lld = lang_get_specific_locale (date_lang_id, codeset);
   if (lld == NULL)
     {
@@ -20797,9 +20831,6 @@ db_date_format (const DB_VALUE * date_value, const DB_VALUE * format,
 	      lang_charset_name (codeset));
       return error_status;
     }
-  codeset = lld->codeset;
-  res_collation = (domain != NULL) ? TP_DOMAIN_COLLATION (domain)
-    : LANG_GET_BINARY_COLLATION (codeset);
 
   res_type = DB_VALUE_DOMAIN_TYPE (date_value);
 
@@ -22318,8 +22349,18 @@ db_time_dbval (DB_VALUE * result, const DB_VALUE * datetime_value,
     {
     case DB_TYPE_VARNCHAR:
     case DB_TYPE_NCHAR:
-      DB_MAKE_VARNCHAR (result, 12, res_s, strlen (res_s),
-			LANG_COERCIBLE_CODESET, LANG_COERCIBLE_COLL);
+      DB_MAKE_VARNCHAR (result, TP_FLOATING_PRECISION_VALUE, res_s,
+			strlen (res_s),
+			DB_GET_STRING_CODESET (datetime_value),
+			DB_GET_STRING_COLLATION (datetime_value));
+      break;
+
+    case DB_TYPE_VARCHAR:
+    case DB_TYPE_CHAR:
+      DB_MAKE_VARCHAR (result, TP_FLOATING_PRECISION_VALUE, res_s,
+		       strlen (res_s),
+		       DB_GET_STRING_CODESET (datetime_value),
+		       DB_GET_STRING_COLLATION (datetime_value));
       break;
 
     default:
@@ -22392,8 +22433,21 @@ db_date_dbval (DB_VALUE * result, const DB_VALUE * date_value,
 
   sprintf (res_s, "%02d/%02d/%04d", m, d, y);
 
-  codeset = TP_DOMAIN_CODESET (domain);
-  collation_id = TP_DOMAIN_COLLATION (domain);
+  if (domain != NULL)
+    {
+      codeset = TP_DOMAIN_CODESET (domain);
+      collation_id = TP_DOMAIN_COLLATION (domain);
+    }
+  else if (TP_IS_STRING_TYPE (DB_VALUE_TYPE (date_value)))
+    {
+      codeset = DB_GET_STRING_CODESET (date_value);
+      collation_id = DB_GET_STRING_COLLATION (date_value);
+    }
+  else
+    {
+      codeset = LANG_SYS_CODESET;
+      collation_id = LANG_SYS_COLLATION;
+    }
 
   if (QSTR_IS_NATIONAL_CHAR (type))
     {
@@ -22538,7 +22592,8 @@ error:
 
 int
 db_from_unixtime (const DB_VALUE * src_value, const DB_VALUE * format,
-		  DB_VALUE * result)
+		  const DB_VALUE * date_lang, DB_VALUE * result,
+		  const TP_DOMAIN * domain)
 {
   time_t unix_timestamp;
   DB_TYPE format_type;
@@ -22586,13 +22641,18 @@ db_from_unixtime (const DB_VALUE * src_value, const DB_VALUE * format,
     case DB_TYPE_VARNCHAR:
       {
 	DB_VALUE ts_val;
-	DB_VALUE date_lang;
+	DB_VALUE default_date_lang;
 
 	DB_MAKE_TIMESTAMP (&ts_val, unix_timestamp);
-	/* use date_lang for en_US */
-	DB_MAKE_INTEGER (&date_lang, 0);
-	error_status = db_date_format (&ts_val, format, &date_lang, result,
-				       NULL);
+	if (date_lang == NULL || DB_IS_NULL (date_lang))
+	  {
+	    /* use date_lang for en_US */
+	    DB_MAKE_INTEGER (&default_date_lang, 0);
+	    date_lang = &default_date_lang;
+	  }
+
+	error_status = db_date_format (&ts_val, format, date_lang, result,
+				       domain);
 	if (error_status != NO_ERROR)
 	  {
 	    goto error;
@@ -22611,7 +22671,10 @@ error:
     {
       return NO_ERROR;
     }
-  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+  if (er_errid () == NO_ERROR)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
+    }
   return error_status;
 }
 
@@ -23980,6 +24043,7 @@ db_get_like_optimization_bounds (const DB_VALUE * const pattern,
   result = db_private_alloc (NULL, alloc_size + 1);
   if (result == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_code = er_errid ();
       goto error_exit;
     }
@@ -24153,6 +24217,7 @@ db_compress_like_pattern (const DB_VALUE * const pattern,
   result = db_private_alloc (NULL, alloc_size + 1);
   if (result == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error_code = er_errid ();
       goto error_exit;
     }
@@ -25009,7 +25074,10 @@ error:
       return NO_ERROR;
     }
 
-  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 0);
+  if (er_errid () == NO_ERROR)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 0);
+    }
   return error_code;
 }
 
@@ -25365,7 +25433,10 @@ error:
       return NO_ERROR;
     }
 
-  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 0);
+  if (er_errid () == NO_ERROR)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 0);
+    }
   return error_code;
 }
 
@@ -26093,7 +26164,6 @@ db_string_to_base64 (DB_VALUE const *src, DB_VALUE * result)
 
 	  return NO_ERROR;
 	}
-
     }
   else				/* val_type != QSTR_IS_ANY_CHAR  */
     {
@@ -26104,13 +26174,13 @@ db_string_to_base64 (DB_VALUE const *src, DB_VALUE * result)
   if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
     {
       DB_MAKE_NULL (result);
+      er_clear ();		/* forget previous error */
       return NO_ERROR;
     }
   else
     {
       return error_status;
     }
-
 }
 
 /*
@@ -26173,12 +26243,10 @@ db_string_from_base64 (DB_VALUE const *src, DB_VALUE * result)
 
       switch (err)
 	{
-
 	case BASE64_EMPTY_INPUT:
 	  db_string_make_empty_typed_string (NULL, result, DB_TYPE_VARCHAR, 0,
 					     DB_GET_STRING_CODESET (src),
 					     DB_GET_STRING_COLLATION (src));
-	  error_status = NO_ERROR;
 	  break;
 
 	case NO_ERROR:
@@ -26187,22 +26255,23 @@ db_string_from_base64 (DB_VALUE const *src, DB_VALUE * result)
 				  DB_GET_STRING_CODESET (src),
 				  DB_GET_STRING_COLLATION (src));
 	  result->need_clear = true;
-	  error_status = NO_ERROR;
 	  break;
 
 	case BASE64_INVALID_INPUT:
 	  error_status = ER_QSTR_INVALID_FORMAT;	/* reset error code */
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
 	  goto error_handling;
 
 	default:
-	  error_status = ER_FAILED;
+	  assert (er_errid () != NO_ERROR);
+	  error_status = err;
 	  goto error_handling;
 	}
-
     }
   else				/* val_type != QSTR_IS_ANY_CHAR  */
     {
       error_status = ER_QSTR_INVALID_DATA_TYPE;	/* reset error code */
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
       goto error_handling;
     }
 
@@ -26214,11 +26283,11 @@ error_handling:
   if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
     {
       DB_MAKE_NULL (result);
+      er_clear ();		/* forget previous error */
       return NO_ERROR;
     }
   else
     {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_status, 0);
       return error_status;
     }
 }

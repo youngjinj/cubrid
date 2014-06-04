@@ -2206,6 +2206,7 @@ db_get_query_result_format (DB_QUERY_RESULT * result,
   *type_list = db_cp_query_type (result->query_type, true);
   if (*type_list == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       retval = er_errid ();
       return (retval);
     }
@@ -2637,6 +2638,7 @@ db_query_seek_tuple (DB_QUERY_RESULT * result, int offset, int seek_mode)
 	tplpos = db_query_get_tplpos (result);
 	if (tplpos == NULL)
 	  {
+	    assert (er_errid () != NO_ERROR);
 	    return er_errid ();
 	  }
 
@@ -2691,7 +2693,15 @@ db_query_seek_tuple (DB_QUERY_RESULT * result, int offset, int seek_mode)
 		    db_query_set_tplpos (result, tplpos);
 		  }
 		db_query_free_tplpos (tplpos);
-		return (scan != DB_CURSOR_END) ? er_errid () : scan;
+		if (scan != DB_CURSOR_END)
+		  {
+		    assert (er_errid () != NO_ERROR);
+		    return er_errid ();
+		  }
+		else
+		  {
+		    return scan;
+		  }
 	      }
 	    rel_n = rel1;
 	  }
@@ -2706,7 +2716,15 @@ db_query_seek_tuple (DB_QUERY_RESULT * result, int offset, int seek_mode)
 		    db_query_set_tplpos (result, tplpos);
 		  }
 		db_query_free_tplpos (tplpos);
-		return (scan != DB_CURSOR_END) ? er_errid () : scan;
+		if (scan != DB_CURSOR_END)
+		  {
+		    assert (er_errid () != NO_ERROR);
+		    return er_errid ();
+		  }
+		else
+		  {
+		    return scan;
+		  }
 	      }
 	    rel_n = rel3;
 	  }
@@ -2729,7 +2747,15 @@ db_query_seek_tuple (DB_QUERY_RESULT * result, int offset, int seek_mode)
 			db_query_set_tplpos (result, tplpos);
 		      }
 		    db_query_free_tplpos (tplpos);
-		    return (scan != DB_CURSOR_END) ? er_errid () : scan;
+		    if (scan != DB_CURSOR_END)
+		      {
+			assert (er_errid () != NO_ERROR);
+			return er_errid ();
+		      }
+		    else
+		      {
+			return scan;
+		      }
 		  }
 	      }
 	  }
@@ -2745,7 +2771,15 @@ db_query_seek_tuple (DB_QUERY_RESULT * result, int offset, int seek_mode)
 			db_query_set_tplpos (result, tplpos);
 		      }
 		    db_query_free_tplpos (tplpos);
-		    return (scan != DB_CURSOR_END) ? er_errid () : scan;
+		    if (scan != DB_CURSOR_END)
+		      {
+			assert (er_errid () != NO_ERROR);
+			return er_errid ();
+		      }
+		    else
+		      {
+			return scan;
+		      }
 		  }
 	      }
 	  }
@@ -3207,6 +3241,7 @@ db_query_get_tuple_valuelist (DB_QUERY_RESULT * result, int size,
       for (k = 0, valp = value_list; k < size; k++, valp++)
 	if ((db_query_get_tuple_value (result, k, valp)) < 0)
 	  {
+	    assert (er_errid () != NO_ERROR);
 	    retval = er_errid ();
 	    return (retval);
 	  }
@@ -3762,6 +3797,7 @@ db_query_end_internal (DB_QUERY_RESULT * result, bool notify_server)
 	    {
 	      if (qmgr_end_query (result->res.s.query_id) != NO_ERROR)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		}
 	    }

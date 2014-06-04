@@ -63,6 +63,14 @@ namespace dbgw
 
   _ExecutorStatement::~_ExecutorStatement()
   {
+    if (m_pCallableStatement)
+      {
+        m_pCallableStatement->close();
+      }
+    else if (m_pStatement)
+      {
+        m_pStatement->close();
+      }
   }
 
   void _ExecutorStatement::init(const trait<_BoundQuery>::sp pQuery)

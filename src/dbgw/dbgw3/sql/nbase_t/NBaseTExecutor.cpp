@@ -263,13 +263,7 @@ namespace dbgw
     private:
       void freeResult()
       {
-        if (m_type == NBASE_SQL_TYPE_SELECT)
-          {
-            m_type = NBASE_SQL_TYPE_OTHERS;
-
-            nbase_free_result(m_result);
-          }
-
+        m_type = NBASE_SQL_TYPE_OTHERS;
         m_resultStream.str("");
       }
 
@@ -312,6 +306,7 @@ namespace dbgw
       int doExecuteUpdate(const char *szSql)
       {
         int nResult = NE_SUCCESS;
+        nquery_res result;
 
         do
           {
@@ -321,7 +316,7 @@ namespace dbgw
 
                 nResult = nbase_query_opts(m_csAddr.c_str(), m_csPort,
                     m_keyspace.c_str(), m_ckey.c_str(), szSql, m_nTimeoutMilSec,
-                    NBASE_RESULT_FORMAT_JSON, &m_result);
+                    NBASE_RESULT_FORMAT_JSON, &result);
 
                 if (nResult == nbase_t::NE_RPC || nResult == nbase_t::NE_CONN
                     || nResult == nbase_t::NE_UPGRADE)
@@ -336,7 +331,7 @@ namespace dbgw
               {
                 nResult = nbase_query_opts_with_tx(&m_tx, m_keyspace.c_str(),
                     m_ckey.c_str(), szSql, m_nTimeoutMilSec,
-                    NBASE_RESULT_FORMAT_JSON, &m_result);
+                    NBASE_RESULT_FORMAT_JSON, &result);
               }
 
             break;
@@ -360,6 +355,8 @@ namespace dbgw
           }
         else
           {
+            nbase_free_result(result);
+
             m_type = NBASE_SQL_TYPE_OTHERS;
 
             return nResult;
@@ -481,7 +478,6 @@ namespace dbgw
       unsigned short m_csPort;
       nbase_mgmt *m_pMgmt;
       nbase_tx m_tx;
-      nquery_res m_result;
       int m_nTimeoutMilSec;
       bool m_bAutocommit;
       NBASE_SQL_TYPE m_type;

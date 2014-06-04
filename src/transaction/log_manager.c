@@ -11059,6 +11059,7 @@ log_active_log_header_start_scan (THREAD_ENTRY * thread_p, int show_type,
 
   if (ctx == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }
@@ -11402,6 +11403,7 @@ log_archive_log_header_start_scan (THREAD_ENTRY * thread_p, int show_type,
     db_private_alloc (thread_p, sizeof (ARCHIVE_LOG_HEADER_SCAN_CTX));
   if (ctx == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }

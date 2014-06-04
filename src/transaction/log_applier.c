@@ -85,10 +85,10 @@
 #define LA_MAX_TOLERABLE_DELAY                  2
 #define LA_REINIT_COMMIT_INTERVAL               10
 
-#define LA_WS_CULL_MOPS_PER_APPLY 		(100000)
-#define LA_WS_CULL_MOPS_INTERVAL		(180)
-#define LA_WS_CULL_MOPS_PER_APPLY_MIN		(100)
-#define LA_WS_CULL_MOPS_INTERVAL_MIN		(2)
+#define LA_WS_CULL_MOPS_PER_APPLY               (100000)
+#define LA_WS_CULL_MOPS_INTERVAL                (180)
+#define LA_WS_CULL_MOPS_PER_APPLY_MIN           (100)
+#define LA_WS_CULL_MOPS_INTERVAL_MIN            (2)
 
 #define LA_LOG_IS_IN_ARCHIVE(pageid) \
   ((pageid) < la_Info.act_log.log_hdr->nxarv_pageid)
@@ -101,7 +101,7 @@
   do { \
     if ((offset)+(length) >= LA_LOGAREA_SIZE) { \
       if (((pgptr) = la_get_page(++(pageid))) == NULL) { \
-	result = ER_IO_READ; \
+        result = ER_IO_READ; \
       } \
       (offset) = 0; \
     } \
@@ -112,7 +112,7 @@
     (offset) = DB_ALIGN((offset), MAX_ALIGNMENT); \
     while ((offset) >= LA_LOGAREA_SIZE) { \
       if (((log_pgptr) = la_get_page(++(pageid))) == NULL) { \
-	result = ER_IO_READ; \
+        result = ER_IO_READ; \
       } \
       (offset) -= LA_LOGAREA_SIZE; \
       (offset) = DB_ALIGN((offset), MAX_ALIGNMENT); \
@@ -242,9 +242,9 @@ struct la_info
   LOG_LSA final_lsa;		/* last processed log lsa */
   LOG_LSA committed_lsa;	/* last committed commit log lsa */
   LOG_LSA committed_rep_lsa;	/* last committed replication log lsa */
-  LOG_LSA last_committed_lsa;	/* last committed commit log lsa 
+  LOG_LSA last_committed_lsa;	/* last committed commit log lsa
 				 * at the beginning of the applylogdb */
-  LOG_LSA last_committed_rep_lsa;	/* last committed replication log lsa 
+  LOG_LSA last_committed_rep_lsa;	/* last committed replication log lsa
 					 * at the beginning of the applylogdb */
 
   LA_APPLY **repl_lists;
@@ -278,7 +278,7 @@ struct la_info
   /* db_ha_apply_info */
   LOG_LSA append_lsa;		/* append lsa of active log header */
   LOG_LSA eof_lsa;		/* eof lsa of active log header */
-  LOG_LSA required_lsa;		/* start lsa of the first transaction 
+  LOG_LSA required_lsa;		/* start lsa of the first transaction
 				 * to be applied */
   unsigned long insert_counter;
   unsigned long update_counter;
@@ -335,7 +335,7 @@ struct la_ha_apply_info
   LOG_LSA append_lsa;		/* append lsa of active log header */
   LOG_LSA eof_lsa;		/* eof lsa of active log header */
   LOG_LSA final_lsa;		/* last processed log lsa */
-  LOG_LSA required_lsa;		/* start lsa of the first transaction 
+  LOG_LSA required_lsa;		/* start lsa of the first transaction
 				 * to be applied */
   DB_DATETIME log_record_time;
   DB_DATETIME log_commit_time;
@@ -357,6 +357,7 @@ enum lp_op
   LP_OP_SYNC,
   LP_OP_IGNORE
 };
+#define LP_HA_APPLIED_INFO_REFRESH_TIME         (50)	/* msec */
 
 typedef struct lp_info LP_INFO;
 struct lp_info
@@ -367,6 +368,7 @@ struct lp_info
   int page_distance;		/* gap between applier's final_lsa and prefetcher's final_lsa */
   LP_OP op;
   bool need_rollback;
+  struct timeval last_ha_applied_info_time;
 };
 
 /* Global variable for LA */
@@ -1529,13 +1531,13 @@ la_find_required_lsa (LOG_LSA * required_lsa)
 }
 
 /*
- * la_get_ha_apply_info() - 
+ * la_get_ha_apply_info() -
  *   returns  : error code, if execution failed
  *              number of affected objects, if a success
  *
  * log_path(in) :
  * prefix_name(in) :
- * ha_apply_info(out) : 
+ * ha_apply_info(out) :
  * Note:
  */
 static int
@@ -1557,6 +1559,7 @@ la_get_ha_apply_info (const char *log_path, const char *prefix_name,
 
   if (db_find_class (CT_HA_APPLY_INFO_NAME) == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -1999,7 +2002,7 @@ la_update_ha_apply_info_log_record_time (time_t new_time)
 }
 
 /*
- * la_get_last_ha_applied_info() - get last applied info 
+ * la_get_last_ha_applied_info() - get last applied info
  *   return: NO_ERROR or error code
  *
  * Note:
@@ -3107,10 +3110,10 @@ la_make_repl_item (LOG_PAGE * log_pgptr, int log_type, int tranid,
     {
     case LOG_REPLICATION_DATA:
       ptr = or_unpack_string (area, &item->class_name);
-      ptr = or_unpack_mem_value (ptr, &item->key);	/* 
-							 * domain is only 
-							 * used to pack/unpack 
-							 * primary key DB value 
+      ptr = or_unpack_mem_value (ptr, &item->key);	/*
+							 * domain is only
+							 * used to pack/unpack
+							 * primary key DB value
 							 */
       item->item_type = repl_log->rcvindex;
 
@@ -4127,6 +4130,7 @@ la_get_log_data (LOG_RECORD_HEADER * lrec,
 			    is_overflow, rec_type, data, &length);
       if (*data == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
     }
@@ -4421,6 +4425,7 @@ la_get_next_update_log (LOG_RECORD_HEADER * prev_lrec,
 						rec_type, data, &length);
 			  if (*data == NULL)
 			    {
+			      assert (er_errid () != NO_ERROR);
 			      error = er_errid ();
 			    }
 			}
@@ -4785,6 +4790,7 @@ la_apply_delete_log (LA_ITEM * item)
   class_obj = db_find_class (item->class_name);
   if (class_obj == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
   else
@@ -4874,6 +4880,7 @@ la_apply_update_log (LA_ITEM * item)
   pgptr = la_get_page (old_pageid);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -4929,6 +4936,7 @@ la_apply_update_log (LA_ITEM * item)
       er_log_debug (ARG_FILE_LINE,
 		    "apply_update : cannot find class %s key %s\n",
 		    item->class_name, buf);
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error_rtn;
     }
@@ -4950,6 +4958,8 @@ la_apply_update_log (LA_ITEM * item)
   if (inst_tp == NULL)
     {
       AU_RESTORE (au_save);
+
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error_rtn;
     }
@@ -5016,6 +5026,7 @@ error_rtn:
 
   if (error == NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
 
@@ -5097,6 +5108,7 @@ la_apply_update_log_server_side (LA_ITEM * item)
   pgptr = la_get_page (old_pageid);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -5139,6 +5151,7 @@ la_apply_update_log_server_side (LA_ITEM * item)
   class_obj = db_find_class (item->class_name);
   if (class_obj == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -5149,8 +5162,8 @@ la_apply_update_log_server_side (LA_ITEM * item)
 
   error = obj_repl_update_object (class_obj, &item->key, &recdes);
 
-  /* 
-   * regardless of the success or failure of obj_repl_update_object, 
+  /*
+   * regardless of the success or failure of obj_repl_update_object,
    * we should write sql log.
    */
   if (la_enable_sql_logging)
@@ -5297,6 +5310,7 @@ la_apply_insert_log (LA_ITEM * item)
   pgptr = la_get_page (old_pageid);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -5368,6 +5382,8 @@ la_apply_insert_log (LA_ITEM * item)
   if (inst_tp == NULL)
     {
       AU_RESTORE (au_save);
+
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto error_rtn;
     }
@@ -5435,6 +5451,7 @@ error_rtn:
 
   if (error == NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
 
@@ -5627,9 +5644,9 @@ la_apply_schema_log (LA_ITEM * item)
     case CUBRID_STMT_REMOVE_TRIGGER:
     case CUBRID_STMT_SET_TRIGGER:
 
-      /* 
+      /*
        * When we create the schema objects, the object's owner must be changed
-       * to the appropriate owner. 
+       * to the appropriate owner.
        * Special alter statement, non partitioned -> partitioned is the same.
        */
       if ((item->item_type == CUBRID_STMT_CREATE_CLASS
@@ -5649,6 +5666,7 @@ la_apply_schema_log (LA_ITEM * item)
 		}
 	      else
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		}
 
@@ -5708,6 +5726,7 @@ la_apply_schema_log (LA_ITEM * item)
 
       if (la_update_query_execute (ddl, false) < 0)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  error_msg = er_msg ();
 	  if (error == ER_NET_CANT_CONNECT_SERVER
@@ -5923,6 +5942,7 @@ la_apply_repl_log (int tranid, int rectype, LOG_LSA * commit_lsa,
 		  goto end;
 		}
 
+	      assert (er_errid () != NO_ERROR);
 	      errid = er_errid ();
 
 	      help_sprint_value (&item->key, buf, 255);
@@ -6234,6 +6254,8 @@ la_log_record_process (LOG_RECORD_HEADER * lrec,
       if (apply == NULL)
 	{
 	  la_applier_need_shutdown = true;
+
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  if (error != NO_ERROR)
 	    {
@@ -6466,7 +6488,14 @@ la_log_record_process (LOG_RECORD_HEADER * lrec,
 	}
       else if (la_is_repl_lists_empty ())
 	{
-	  la_update_ha_apply_info_log_record_time (ha_server_state->at_time);
+	  (void) la_update_ha_apply_info_log_record_time (ha_server_state->
+							  at_time);
+	  error = la_log_commit (true);
+	  if (error != NO_ERROR)
+	    {
+	      return error;
+	    }
+	  (void) la_log_commit (true);
 	}
       break;
 
@@ -6780,7 +6809,7 @@ la_get_mem_size (void)
       vsize = (unsigned long) entry.pi_dvm * (sysconf (_SC_PAGESIZE) / ONE_K);
     }
 #else
-#	error
+#       error
 #endif
   return vsize;
 }
@@ -7625,6 +7654,7 @@ lp_prefetch_log_file (const char *database_name, const char *log_path)
     {
       if (la_apply_pre () == false)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  la_applier_need_shutdown = true;
 	  break;
@@ -7659,9 +7689,9 @@ lp_prefetch_log_file (const char *database_name, const char *log_path)
 	  if (lp_Info.need_rollback)
 	    {
 	      /**
-	       * we rollback transaction to unlock class.
-	       * if we don't do this, log applier will be hang when ddl is executed.
-	       */
+               * we rollback transaction to unlock class.
+               * if we don't do this, log applier will be hang when ddl is executed.
+               */
 	      lp_Info.need_rollback = false;
 	      db_abort_transaction ();
 	    }
@@ -7703,6 +7733,7 @@ lp_init (const char *log_path)
     prm_get_integer_value (PRM_ID_HA_PREFETCHLOGDB_PAGE_DISTANCE);
   lp_Info.need_rollback = false;
   lp_Info.op = LP_OP_PREFETCH;
+  memset (&lp_Info.last_ha_applied_info_time, 0, sizeof (struct timeval));
 }
 
 static int
@@ -7946,6 +7977,11 @@ lp_adjust_prefetcher_speed (void)
 
   while (la_applier_need_shutdown == false)
     {
+      if (LSA_EQ (&lp_Info.final_lsa, &la_Info.eof_lsa))
+	{
+	  LA_SLEEP (0, 50000);
+	}
+
       error = lp_get_ha_applied_info (false);
       if (error != NO_ERROR)
 	{
@@ -7968,7 +8004,7 @@ lp_adjust_prefetcher_speed (void)
 	    }
 	  else
 	    {
-	      LA_SLEEP (0, 10);
+	      LA_SLEEP (0, 50000);
 	      continue;
 	    }
 	}
@@ -8087,12 +8123,12 @@ lp_process_log_record (struct log_header *final_log_hdr,
 	  if (error == ER_NET_CANT_CONNECT_SERVER
 	      || error == ER_OBJ_NO_CONNECT)
 	    {
-	      la_shutdown (BOOT_CLIENT_LOG_PREFETCHER);
+	      la_applier_need_shutdown = true;
 	      return ER_NET_CANT_CONNECT_SERVER;
 	    }
 	  else if (error == ER_HA_LA_EXCEED_MAX_MEM_SIZE)
 	    {
-	      la_shutdown (BOOT_CLIENT_LOG_PREFETCHER);
+	      la_applier_need_shutdown = true;
 	      return error;
 	    }
 
@@ -8241,6 +8277,7 @@ lp_prefetch_update_or_delete (LA_ITEM * item)
   class_obj = db_find_class (item->class_name);
   if (class_obj == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       return error;
     }
@@ -8266,6 +8303,7 @@ lp_prefetch_insert (LA_ITEM * item)
   pgptr = la_get_page (old_pageid);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -8296,6 +8334,7 @@ lp_prefetch_insert (LA_ITEM * item)
   class_obj = db_find_class (item->class_name);
   if (class_obj == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       return error;
     }
@@ -8313,6 +8352,21 @@ lp_get_ha_applied_info (bool is_first)
   LA_ACT_LOG *act_log;
   LA_HA_APPLY_INFO apply_info;
   act_log = &la_Info.act_log;
+  struct timeval curtime;
+  int diff_msec;
+
+  gettimeofday (&curtime, NULL);
+  diff_msec =
+    (curtime.tv_sec -
+     lp_Info.last_ha_applied_info_time.tv_sec) * 1000 +
+    (curtime.tv_usec / 1000 -
+     lp_Info.last_ha_applied_info_time.tv_usec / 1000);
+
+  if (lp_Info.last_ha_applied_info_time.tv_sec != 0
+      && diff_msec > 0 && diff_msec < LP_HA_APPLIED_INFO_REFRESH_TIME)
+    {
+      return NO_ERROR;
+    }
 
   error =
     la_get_ha_apply_info (la_Info.log_path, act_log->log_hdr->prefix_name,
@@ -8327,6 +8381,7 @@ lp_get_ha_applied_info (bool is_first)
       return ER_FAILED;
 
     }
+
   LSA_COPY (&la_Info.committed_lsa, &apply_info.committed_lsa);
   LSA_COPY (&la_Info.committed_rep_lsa, &apply_info.committed_rep_lsa);
   LSA_COPY (&la_Info.append_lsa, &apply_info.append_lsa);
@@ -8369,6 +8424,9 @@ lp_get_ha_applied_info (bool is_first)
 
   LSA_COPY (&la_Info.last_committed_lsa, &la_Info.committed_lsa);
   LSA_COPY (&la_Info.last_committed_rep_lsa, &la_Info.committed_rep_lsa);
+
+  memcpy (&lp_Info.last_ha_applied_info_time, &curtime,
+	  sizeof (struct timeval));
 
   return error;
 }
@@ -8776,6 +8834,7 @@ la_apply_log_file (const char *database_name, const char *log_path,
       /* get next LSA to be processed */
       if (la_apply_pre () == false)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  la_applier_need_shutdown = true;
 	  break;
@@ -9251,7 +9310,7 @@ la_apply_log_file (const char *database_name, const char *log_path,
 	      usleep (100 * 1000);
 	      continue;
 	    }
-	}			/* while (!LSA_ISNULL (&la_Info.final_lsa)  
+	}			/* while (!LSA_ISNULL (&la_Info.final_lsa)
 				 * && la_applier_need_shutdown == false)   */
     }
   while (la_applier_need_shutdown == false);

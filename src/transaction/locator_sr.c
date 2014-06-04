@@ -4528,6 +4528,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 
 	      if (oid_cnt < 0)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
 		    {
@@ -4915,6 +4916,7 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
 
 	  if (oid_cnt < 0)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error_code = er_errid ();
 	      if (error_code == NO_ERROR)
 		{
@@ -5225,6 +5227,7 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 
 	      if (oid_cnt < 0)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
 		    {
@@ -5497,6 +5500,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 			   IX_LOCK, LK_UNCOND_LOCK);
 	  if (granted != LK_GRANTED)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error_code = er_errid ();
 	      if (error_code == NO_ERROR)
 		{
@@ -5521,6 +5525,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 						 has_func_idx);
 	      if (ins_cache == NULL)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
 		    {
@@ -5567,6 +5572,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
        * Problems inserting the object...Maybe, the transaction should be
        * aborted by the caller...Quit..
        */
+      assert (er_errid () != NO_ERROR);
       error_code = er_errid ();
       if (error_code == NO_ERROR)
 	{
@@ -5594,6 +5600,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	   *
 	   * Maybe the transaction should be aborted by the caller.
 	   */
+	  assert (er_errid () != NO_ERROR);
 	  error_code = er_errid ();
 	  if (error_code == NO_ERROR)
 	    {
@@ -5612,6 +5619,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	   * information. Maybe, the transaction should be aborted by
 	   * the caller...Quit
 	   */
+	  assert (er_errid () != NO_ERROR);
 	  error_code = er_errid ();
 	  if (error_code == NO_ERROR)
 	    {
@@ -5623,6 +5631,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
       if (catcls_Enable == true
 	  && catcls_insert_catalog_classes (thread_p, recdes) != NO_ERROR)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error_code = er_errid ();
 	  if (error_code == NO_ERROR)
 	    {
@@ -5645,6 +5654,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 					  true, true, &real_hfid,
 					  local_func_preds) != NO_ERROR)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error_code = er_errid ();
 	  if (error_code == NO_ERROR)
 	    {
@@ -5676,6 +5686,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		  (thread_p, &real_hfid, &real_class_oid, oid, recdes, NULL,
 		   &isold_object, local_scan_cache, true) == NULL)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
 		    {
@@ -5805,6 +5816,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
 						   ins_op_type, false);
       if (ins_cache == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  return (error != NO_ERROR) ? error : ER_FAILED;
 	}
@@ -5963,6 +5975,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		}
 	      else
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error_code = er_errid ();
 		  error_code = ((error_code == NO_ERROR)
 				? ER_FAILED : error_code);
@@ -6332,6 +6345,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 			       IX_LOCK, LK_UNCOND_LOCK);
 	      if (granted != LK_GRANTED)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error_code = er_errid ();
 		  if (error_code == NO_ERROR)
 		    {
@@ -6429,6 +6443,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 
 	      if (no_data_new_address)
 		{
+		  er_clear ();	/* clear the error code */
 		  if (op_type == SINGLE_ROW_MODIFY)
 		    {		/* to enable uniqueness checking */
 		      op_type = SINGLE_ROW_INSERT;
@@ -6715,6 +6730,7 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
     }
   if (scan_code != S_SUCCESS)
     {
+      assert (er_errid () != NO_ERROR);
       error_code = er_errid ();
 
       if (error_code == ER_HEAP_NODATA_NEWADDRESS)
@@ -6768,6 +6784,7 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
 	  er_log_debug (ARG_FILE_LINE,
 			"locator_delete_force: ehash_delete failed for tran %d\n",
 			LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+	  assert (er_errid () != NO_ERROR);
 	  error_code = er_errid ();
 	  if (error_code == NO_ERROR)
 	    {
@@ -6933,6 +6950,7 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
 	  er_log_debug (ARG_FILE_LINE,
 			"locator_delete_force: hf_delete failed for tran %d\n",
 			LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+	  assert (er_errid () != NO_ERROR);
 	  error_code = er_errid ();
 	  if (error_code == NO_ERROR)
 	    {
@@ -7477,6 +7495,7 @@ xlocator_force (THREAD_ENTRY * thread_p, LC_COPYAREA * force_area,
 
       if (error_code != NO_ERROR)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  obj->error_code = er_errid ();
 
 	  if (obj->error_code == NO_ERROR)
@@ -7669,16 +7688,19 @@ xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
 		  NULL_CHN);
       if (scan != S_SUCCESS)
 	{
-	  int err_id = er_errid ();
-	  if (err_id == ER_HEAP_UNKNOWN_OBJECT)
+	  error_code = er_errid ();
+	  assert (error_code != NO_ERROR);
+	  if (error_code == ER_HEAP_UNKNOWN_OBJECT)
 	    {
 	      er_log_debug (ARG_FILE_LINE,
 			    "xlocator_force_repl_update : "
 			    "unknown oid ( %d|%d|%d )\n", unique_oid.pageid,
 			    unique_oid.slotid, unique_oid.volid);
 	    }
-
-	  error_code = ER_FAILED;
+	  if (error_code == NO_ERROR)
+	    {
+	      error_code = ER_FAILED;
+	    }
 	  goto error;
 	}
     }
@@ -7961,8 +7983,10 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 	}
       else if (scan == S_DOESNT_EXIST)
 	{
-	  int err_id = er_errid ();
+	  int err_id;
 
+	  assert (er_errid () != NO_ERROR);
+	  err_id = er_errid ();
 	  if (err_id == ER_HEAP_NODATA_NEWADDRESS)
 	    {
 	      /* it is an immature record. go ahead to update */
@@ -8253,7 +8277,7 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
   BTID btid;
   DB_VALUE *key_dbvalue, *key_ins_del = NULL;
   DB_VALUE dbvalue;
-  int unique;
+  int dummy_unique;
   BTREE_UNIQUE_STATS *unique_stat_info;
   HEAP_IDX_ELEMENTS_INFO idx_info;
   char buf[DBVAL_BUFSIZE + MAX_ALIGNMENT], *aligned_buf;
@@ -8283,6 +8307,7 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
   assert_release (class_oid != NULL);
   assert_release (!OID_ISNULL (class_oid));
 
+  key_dbvalue = NULL;
   DB_MAKE_NULL (&dbvalue);
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
@@ -8413,7 +8438,7 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 	      key_ins_del =
 		btree_perform_insert (thread_p, &btid, key_dbvalue, class_oid,
 				      inst_oid, op_type, unique_stat_info,
-				      &unique, p_mvcc_rec_header);
+				      &dummy_unique, p_mvcc_rec_header);
 
 #if defined(ENABLE_SYSTEMTAP)
 	      if (key_ins_del == NULL)
@@ -8432,7 +8457,7 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 	      key_ins_del =
 		btree_perform_insert (thread_p, &btid, key_dbvalue, class_oid,
 				      inst_oid, op_type, unique_stat_info,
-				      &unique, p_mvcc_rec_header);
+				      &dummy_unique, p_mvcc_rec_header);
 	    }
 	  else
 	    {
@@ -8454,8 +8479,8 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 
 	      key_ins_del = btree_delete (thread_p, &btid, key_dbvalue,
 					  class_oid, inst_oid, locked_keys,
-					  &unique, op_type, unique_stat_info,
-					  mvcc_args_p);
+					  &dummy_unique, op_type,
+					  unique_stat_info, mvcc_args_p);
 #if defined(ENABLE_SYSTEMTAP)
 	      if (key_ins_del == NULL)
 		{
@@ -8536,15 +8561,11 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 					REPL_INFO_TYPE_STMT_NORMAL);
 	}
 
-      if (key_dbvalue == &dbvalue)
-	{
-	  pr_clear_value (&dbvalue);
-	}
-
       if (key_ins_del == NULL)
 	{
 	  if (error_code == NO_ERROR)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error_code = er_errid ();
 	      if (error_code == NO_ERROR)
 		{
@@ -8553,11 +8574,57 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 	    }
 	  goto error;
 	}
+
+#if !defined(NDEBUG)
+      if (key_ins_del != NULL
+	  && !DB_IS_NULL (key_dbvalue)
+	  && !btree_multicol_key_is_null (key_dbvalue))
+	{
+	  BTREE_CHECKSCAN bt_checkscan;
+	  DISK_ISVALID isvalid = DISK_VALID;
+
+	  /* start a check-scan on index */
+	  if (btree_keyoid_checkscan_start (thread_p, &btid, &bt_checkscan) !=
+	      NO_ERROR)
+	    {
+	      goto error;
+	    }
+
+	  isvalid = btree_keyoid_checkscan_check (thread_p,
+						  &bt_checkscan,
+						  class_oid,
+						  key_dbvalue, inst_oid);
+
+	  if (is_insert)
+	    {
+	      assert (isvalid == DISK_VALID);	/* found */
+	    }
+	  else
+	    {
+	      assert (isvalid == DISK_INVALID);	/* not found */
+	    }
+
+	  /* close the index check-scan */
+	  btree_keyoid_checkscan_end (thread_p, &bt_checkscan);
+	}
+#endif
+
+      if (key_dbvalue == &dbvalue)
+	{
+	  pr_clear_value (&dbvalue);
+	  key_dbvalue = NULL;
+	}
     }
 
 error:
 
   heap_attrinfo_end (thread_p, &index_attrinfo);
+
+  if (key_dbvalue == &dbvalue)
+    {
+      pr_clear_value (&dbvalue);
+      key_dbvalue = NULL;
+    }
 
 #if defined(ENABLE_SYSTEMTAP)
   if (classname != NULL)
@@ -8946,7 +9013,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   bool new_isnull, old_isnull;
   PR_TYPE *pr_type;
   OR_INDEX *index = NULL;
-  int i, j, k, num_btids, old_num_btids, unique;
+  int i, j, k, num_btids, old_num_btids, unique, dummy_unique;
   bool found_btid = true;
   BTREE_UNIQUE_STATS *unique_stat_info;
   HEAP_IDX_ELEMENTS_INFO new_idx_info;
@@ -9135,8 +9202,8 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		}
 	      else
 		{
-		  /*the old rec does not satisfied the filter predicate */
-		  /*the new rec satisfied the filter predicate */
+		  /* the old rec does not satisfied the filter predicate */
+		  /* the new rec satisfied the filter predicate */
 		  do_insert_only = true;
 		}
 	    }
@@ -9249,6 +9316,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 
 		  if (c == DB_UNK)
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      error_code = er_errid ();
 		      goto error;
 		    }
@@ -9292,6 +9360,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 						unique_stat_info, &unique,
 						p_mvcc_rec_header) == NULL)
 			{
+			  assert (er_errid () != NO_ERROR);
 			  error_code = er_errid ();
 #if defined(ENABLE_SYSTEMTAP)
 			  CUBRID_IDX_UPDATE_END (classname, index->btname, 1);
@@ -9351,6 +9420,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 			  CUBRID_IDX_UPDATE_END (classname, index->btname, 1);
 #endif /* ENABLE_SYSTEMTAP */
 
+			  assert (er_errid () != NO_ERROR);
 			  error_code = er_errid ();
 			  goto error;
 			}
@@ -9403,6 +9473,46 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		  goto error;
 		}
 	    }
+
+#if !defined(NDEBUG)
+	  {
+	    BTREE_CHECKSCAN bt_checkscan;
+	    DISK_ISVALID isvalid = DISK_VALID;
+
+	    /* start a check-scan on index */
+	    if (btree_keyoid_checkscan_start
+		(thread_p, &old_btid, &bt_checkscan) != NO_ERROR)
+	      {
+		goto error;
+	      }
+
+	    if (!do_insert_only
+		&& !DB_IS_NULL (old_key)
+		&& !btree_multicol_key_is_null (old_key))
+	      {
+		isvalid = btree_keyoid_checkscan_check (thread_p,
+							&bt_checkscan,
+							class_oid,
+							old_key, old_oid);
+		assert (isvalid == DISK_INVALID);	/* not found */
+	      }
+
+	    if (!do_delete_only
+		&& !DB_IS_NULL (new_key)
+		&& !btree_multicol_key_is_null (new_key)
+		&& !OID_ISNULL (new_oid))
+	      {
+		isvalid = btree_keyoid_checkscan_check (thread_p,
+							&bt_checkscan,
+							class_oid,
+							new_key, new_oid);
+		assert (isvalid == DISK_VALID);	/* found */
+	      }
+
+	    /* close the index check-scan */
+	    btree_keyoid_checkscan_end (thread_p, &bt_checkscan);
+	  }
+#endif
 	}
 
       if (pk_btid_index == i && repl_old_key == NULL)
@@ -9414,10 +9524,12 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
       if (new_key == &new_dbvalue)
 	{
 	  pr_clear_value (&new_dbvalue);
+	  new_key = NULL;
 	}
       if (old_key == &old_dbvalue)
 	{
 	  pr_clear_value (&old_dbvalue);
+	  old_key = NULL;
 	}
     }
 
@@ -9494,10 +9606,12 @@ error:
   if (new_key == &new_dbvalue)
     {
       pr_clear_value (&new_dbvalue);
+      new_key = NULL;
     }
   if (old_key == &old_dbvalue)
     {
       pr_clear_value (&old_dbvalue);
+      old_key = NULL;
     }
 
   if (repl_old_key != NULL)
@@ -9547,7 +9661,7 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
   HEAP_CACHE_ATTRINFO index_attrinfo;
   HEAP_SCANCACHE scan_cache;
   OID inst_oid, *p_inst_oid = &inst_oid;
-  int key_index, i, num_btids, num_found, dummy, key_found;
+  int key_index, i, num_btids, num_found, dummy_unique, key_found;
   RECDES copy_rec, *p_copy_rec = &copy_rec;
   BTID inst_btid;
   DB_VALUE dbvalue;
@@ -9707,7 +9821,7 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
 	}
 
       /* Delete the instance from the B-tree */
-      if (key_found == false)
+      if (key_found == false || dbvalue_ptr == NULL)
 	{
 	  error_code = ER_FAILED;
 	  goto error;
@@ -9739,7 +9853,7 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
 	}
       key_del =
 	btree_delete (thread_p, btid, dbvalue_ptr, class_oid, &inst_oid,
-		      BTREE_NO_KEY_LOCKED, &dummy, MULTI_ROW_DELETE,
+		      BTREE_NO_KEY_LOCKED, &dummy_unique, MULTI_ROW_DELETE,
 		      &unique_info, mvcc_args_p);
     }
 
@@ -9981,7 +10095,7 @@ locator_repair_btree_by_delete (THREAD_ENTRY * thread_p, OID * class_oid,
 {
   DB_VALUE key;
   bool clear_key = false;
-  int unique;
+  int dummy_unique;
   LOG_LSA lsa;
   DISK_ISVALID isvalid = DISK_INVALID;
   MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
@@ -10008,8 +10122,8 @@ locator_repair_btree_by_delete (THREAD_ENTRY * thread_p, OID * class_oid,
 	      mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
 	    }
 	  if (btree_delete (thread_p, btid, &key, class_oid, inst_oid,
-			    locked_keys, &unique, SINGLE_ROW_DELETE, NULL,
-			    mvcc_args_p) != NULL)
+			    locked_keys, &dummy_unique, SINGLE_ROW_DELETE,
+			    NULL, mvcc_args_p) != NULL)
 	    {
 	      isvalid = DISK_VALID;
 	      xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_COMMIT,
@@ -10191,6 +10305,8 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 	}
       else
 	{
+	  assert (key != NULL);
+
 	  if (db_value_is_null (key) || btree_multicol_key_is_null (key))
 	    {
 	      /* Do not check the btree since unbound values are not recorded */
@@ -10635,6 +10751,8 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 	    }
 	  else
 	    {
+	      assert (key != NULL);
+
 	      if (db_value_is_null (key) || btree_multicol_key_is_null (key))
 		{
 		  num_nulls++;
@@ -11159,7 +11277,7 @@ locator_check_class (THREAD_ENTRY * thread_p, OID * class_oid,
 	  break;
 	}
 
-      if (xbtree_get_unique (thread_p, btid))
+      if (xbtree_get_unique_pk (thread_p, btid))
 	{
 	  rv = locator_check_unique_btree_entries (thread_p, btid, class_oid,
 						   peek, attrids, btname,
@@ -12683,6 +12801,7 @@ xlocator_prefetch_repl_insert (THREAD_ENTRY * thread_p,
 free_and_return:
   heap_attrinfo_end (thread_p, &attr_info);
   heap_scancache_end (thread_p, &scan);
+
   return error;
 }
 
@@ -13228,7 +13347,10 @@ locator_filter_errid (THREAD_ENTRY * thread_p, int num_ignore_error_count,
 		      int *ignore_error_list)
 {
   int i;
-  int error_code = er_errid ();
+  int error_code;
+
+  assert (er_errid () != NO_ERROR);
+  error_code = er_errid ();
 
   for (i = 0; i < num_ignore_error_count; i++)
     {
@@ -13366,7 +13488,6 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
 				      RECDES * recdes)
 {
   int error = NO_ERROR;
-  HEAP_SCANCACHE scan_cache, *scan_cache_p = NULL;
   BTREE_CHECKSCAN bt_checkscan, *bt_checkscan_p = NULL;
   HEAP_CACHE_ATTRINFO attr_info;
   HEAP_CACHE_ATTRINFO *attr_info_p = NULL;
@@ -13378,6 +13499,7 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
   KEY_VAL_RANGE key_val_range;
   INDX_SCAN_ID isid;
   BTID tmp_btid = *btid;
+  BTREE_SCAN bt_scan;
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
 
@@ -13386,14 +13508,6 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
     {
       return NO_ERROR;
     }
-
-  /* Start a scan cursor and a class attribute information */
-  if (heap_scancache_start (thread_p, &scan_cache, &hfid, class_oid, true,
-			    false, LOCKHINT_NONE, NULL) != NO_ERROR)
-    {
-      return ER_FAILED;
-    }
-  scan_cache_p = &scan_cache;
 
   index_id = heap_attrinfo_start_with_btid (thread_p, class_oid, &tmp_btid,
 					    &attr_info);
@@ -13414,12 +13528,16 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
   BTREE_INIT_SCAN (&bt_checkscan_p->btree_scan);
   scan_init_index_scan (&isid, bt_checkscan_p->oid_ptr, NULL);
 
-  if ((heap_attrinfo_read_dbvalues_without_oid
-       (thread_p, recdes, attr_info_p) != NO_ERROR)
-      || (key =
-	  heap_attrvalue_get_key (thread_p, index_id, attr_info_p, recdes,
-				  &tmp_btid, &dbvalue, aligned_buf,
-				  NULL)) == NULL)
+  if (heap_attrinfo_read_dbvalues_without_oid (thread_p, recdes, attr_info_p)
+      != NO_ERROR)
+    {
+      error = ER_FAILED;
+      goto free_and_return;
+    }
+
+  key = heap_attrvalue_get_key (thread_p, index_id, attr_info_p, recdes,
+				&tmp_btid, &dbvalue, aligned_buf, NULL);
+  if (key == NULL)
     {
       error = ER_FAILED;
       goto free_and_return;
@@ -13434,6 +13552,9 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
 		       &bt_checkscan_p->btree_scan, &key_val_range,
 		       class_oid, bt_checkscan_p->oid_ptr,
 		       bt_checkscan_p->oid_area_size, NULL, &isid, false);
+
+  /* the oid buffer might be realloced during btree_range_search () */
+  bt_checkscan_p->oid_ptr = isid.oid_list.oidp;
 
   btree_scan_clear_key (&bt_checkscan.btree_scan);
 
@@ -13451,11 +13572,6 @@ free_and_return:
   if (attr_info_p)
     {
       heap_attrinfo_end (thread_p, attr_info_p);
-    }
-
-  if (scan_cache_p)
-    {
-      heap_scancache_end (thread_p, scan_cache_p);
     }
 
   return error;

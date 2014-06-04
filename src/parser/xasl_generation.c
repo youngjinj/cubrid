@@ -1378,7 +1378,7 @@ pt_plan_single_table_hq_iterations (PARSER_CONTEXT * parser,
 
   if (!plan && select_node->info.query.q.select.hint != PT_HINT_NONE)
     {
-      PT_NODE *ordered, *use_nl, *use_idx, *index_ss, *use_merge;
+      PT_NODE *ordered, *use_nl, *use_idx, *index_ss, *index_ls, *use_merge;
       PT_HINT_ENUM hint;
       const char *alias_print;
 
@@ -1398,6 +1398,9 @@ pt_plan_single_table_hq_iterations (PARSER_CONTEXT * parser,
       index_ss = select_node->info.query.q.select.index_ss;
       select_node->info.query.q.select.index_ss = NULL;
 
+      index_ls = select_node->info.query.q.select.index_ls;
+      select_node->info.query.q.select.index_ls = NULL;
+
       use_merge = select_node->info.query.q.select.use_merge;
       select_node->info.query.q.select.use_merge = NULL;
 
@@ -1413,6 +1416,7 @@ pt_plan_single_table_hq_iterations (PARSER_CONTEXT * parser,
       select_node->info.query.q.select.use_nl = use_nl;
       select_node->info.query.q.select.use_idx = use_idx;
       select_node->info.query.q.select.index_ss = index_ss;
+      select_node->info.query.q.select.index_ls = index_ls;
       select_node->info.query.q.select.use_merge = use_merge;
 
       select_node->alias_print = alias_print;
@@ -6335,13 +6339,28 @@ pt_make_regu_hostvar (PARSER_CONTEXT * parser, const PT_NODE * node)
 	      (void) db_value_domain_init (val, exptyp,
 					   regu->domain->precision,
 					   regu->domain->scale);
+	      if (TP_IS_CHAR_TYPE (exptyp))
+		{
+		  db_string_put_cs_and_collation (val,
+						  TP_DOMAIN_CODESET (regu->
+								     domain),
+						  TP_DOMAIN_COLLATION (regu->
+								       domain));
+		}
 	    }
-	  else if (typ != exptyp)
+	  else if (typ != exptyp
+		   || (TP_TYPE_HAS_COLLATION (typ)
+		       && TP_TYPE_HAS_COLLATION (exptyp)
+		       && (DB_GET_STRING_COLLATION (val)
+			   != TP_DOMAIN_COLLATION (regu->domain))))
 	    {
 	      if (tp_value_cast (val, val,
 				 regu->domain, false) != DOMAIN_COMPATIBLE)
 		{
-		  PT_INTERNAL_ERROR (parser, "cannot coerce host var");
+		  PT_ERRORmf2 (parser, node, MSGCAT_SET_ERROR,
+			       -(ER_TP_CANT_COERCE),
+			       pr_type_name (DB_VALUE_DOMAIN_TYPE (val)),
+			       pr_type_name (TP_DOMAIN_TYPE (regu->domain)));
 		  regu = NULL;
 		}
 	    }
@@ -9000,6 +9019,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  if (node->info.expr.arg2 == NULL)
 		    {
 		      parser_free_tree (parser, empty_str);
+		      REGU_VARIABLE_SET_FLAG (regu,
+					      REGU_VARIABLE_INFER_COLLATION);
 		    }
 		  break;
 
@@ -9024,12 +9045,16 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  if (node->info.expr.arg2 == NULL)
 		    {
 		      parser_free_tree (parser, empty_str);
+		      REGU_VARIABLE_SET_FLAG (regu,
+					      REGU_VARIABLE_INFER_COLLATION);
 		    }
 		  break;
 
 		case PT_FROM_UNIXTIME:
 		  r1 = pt_to_regu_variable (parser,
 					    node->info.expr.arg1, unbox);
+		  r3 = pt_to_regu_variable (parser, node->info.expr.arg3,
+					    unbox);
 		  r2 = (node->info.expr.arg2)
 		    ? pt_to_regu_variable (parser, node->info.expr.arg2,
 					   unbox) : NULL;
@@ -9038,7 +9063,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		    {
 		      break;
 		    }
-		  regu = pt_make_regu_arith (r1, r2, NULL, T_FROM_UNIXTIME,
+		  regu = pt_make_regu_arith (r1, r2, r3, T_FROM_UNIXTIME,
 					     domain);
 		  break;
 
@@ -9056,6 +9081,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  if (node->info.expr.arg3 == NULL)
 		    {
 		      parser_free_tree (parser, empty_str);
+		      REGU_VARIABLE_SET_FLAG (regu,
+					      REGU_VARIABLE_INFER_COLLATION);
 		    }
 		  break;
 
@@ -9073,6 +9100,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  if (node->info.expr.arg3 == NULL)
 		    {
 		      parser_free_tree (parser, empty_str);
+		      REGU_VARIABLE_SET_FLAG (regu,
+					      REGU_VARIABLE_INFER_COLLATION);
 		    }
 		  break;
 
@@ -9090,6 +9119,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  if (node->info.expr.arg3 == NULL)
 		    {
 		      parser_free_tree (parser, empty_str);
+		      REGU_VARIABLE_SET_FLAG (regu,
+					      REGU_VARIABLE_INFER_COLLATION);
 		    }
 		  break;
 
@@ -9107,6 +9138,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  if (node->info.expr.arg3 == NULL)
 		    {
 		      parser_free_tree (parser, empty_str);
+		      REGU_VARIABLE_SET_FLAG (regu,
+					      REGU_VARIABLE_INFER_COLLATION);
 		    }
 		  break;
 
@@ -9460,6 +9493,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		  if (node->info.expr.arg2 == NULL)
 		    {
 		      parser_free_tree (parser, empty_str);
+		      REGU_VARIABLE_SET_FLAG (regu,
+					      REGU_VARIABLE_INFER_COLLATION);
 		    }
 		  break;
 
@@ -12362,7 +12397,7 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
 
       qo_check_coll_optimization (index_entryp, &collation_opt);
 
-      indx_infop->coverage = collation_opt.allow_index_cov;
+      indx_infop->coverage = collation_opt.allow_index_opt;
     }
 
   indx_infop->class_oid = class_->oid_info.oid;
@@ -17813,6 +17848,12 @@ pt_plan_query (PARSER_CONTEXT * parser, PT_NODE * select_node)
 			    select_node->info.query.q.select.index_ss);
 	  select_node->info.query.q.select.index_ss = NULL;
 	}
+      if (select_node->info.query.q.select.index_ls)
+	{
+	  parser_free_tree (parser,
+			    select_node->info.query.q.select.index_ls);
+	  select_node->info.query.q.select.index_ls = NULL;
+	}
       if (select_node->info.query.q.select.use_merge)
 	{
 	  parser_free_tree (parser,
@@ -19107,6 +19148,7 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 		  if ((insert->att_id[a] =
 		       sm_att_id (class_obj, attr->info.name.original)) < 0)
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      error = er_errid ();
 		    }
 		}
@@ -19118,6 +19160,7 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 		  if ((insert->att_id[a] =
 		       sm_att_id (class_obj, attr->info.name.original)) < 0)
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      error = er_errid ();
 		    }
 		}
@@ -19128,12 +19171,14 @@ pt_to_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 	    }
 	  else
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	}
     }
   else
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
 
@@ -19460,6 +19505,7 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl)
 			       assignments_helper.lhs->info.name.original);
       if (attr == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto exit_on_error;
 	}
@@ -19521,6 +19567,7 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl)
 	  odku->assignments[i].constant = regu_dbval_alloc ();
 	  if (odku->assignments[i].constant == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      goto exit_on_error;
 	    }
@@ -19545,6 +19592,7 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl)
 		parser_generate_xasl (parser, assignments_helper.rhs);
 	      if (rhs_xasl == NULL)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		  goto exit_on_error;
 		}
@@ -19907,6 +19955,7 @@ pt_copy_upddel_hints_to_select (PARSER_CONTEXT * parser, PT_NODE * node,
 exit_on_error:
   if (pt_has_error (parser))
     {
+      assert (er_errid () != NO_ERROR);
       err = er_errid ();
     }
   else
@@ -21295,6 +21344,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
   if (aptr_statement == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -21307,6 +21357,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   aptr_statement = mq_translate (parser, aptr_statement);
   if (aptr_statement == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -21391,6 +21442,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   xasl = pt_make_aptr_parent_node (parser, aptr_statement, UPDATE_PROC);
   if (xasl == NULL || xasl->aptr_list == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -21443,6 +21495,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   update->classes = regu_upddel_class_info_array_alloc (no_classes);
   if (update->classes == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto cleanup;
     }
@@ -21450,6 +21503,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   update->assigns = regu_update_assignment_array_alloc (update->no_assigns);
   if (update->assigns == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto cleanup;
     }
@@ -21538,6 +21592,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       upd_cls->class_oid = regu_oid_array_alloc (no_subclasses);
       if (upd_cls->class_oid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto cleanup;
 	}
@@ -21545,6 +21600,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       upd_cls->class_hfid = regu_hfid_array_alloc (no_subclasses);
       if (upd_cls->class_hfid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto cleanup;
 	}
@@ -21553,6 +21609,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	regu_int_array_alloc (no_subclasses * upd_cls->no_attrs);
       if (upd_cls->att_id == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto cleanup;
 	}
@@ -21589,6 +21646,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  hfid = sm_get_heap (class_obj);
 	  if (hfid == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	      goto cleanup;
 	    }
@@ -21614,6 +21672,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
 		  if (upd_cls->att_id[cl * upd_cls->no_attrs + a] < 0)
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      error = er_errid ();
 		      goto cleanup;
 		    }
@@ -25526,6 +25585,7 @@ pt_to_merge_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   xasl = regu_xasl_node_alloc (MERGE_PROC);
   if (xasl == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -25580,6 +25640,7 @@ pt_to_merge_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   xasl->tcard_list = regu_int_array_alloc (xptr->n_oid_list);
   if (xasl->class_oid_list == NULL || xasl->tcard_list == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -25686,6 +25747,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
   if (aptr_statement == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR && !pt_has_error (parser))
 	{
@@ -25698,6 +25760,9 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   aptr_statement = mq_translate (parser, aptr_statement);
   if (aptr_statement == NULL)
     {
+#if 0				/* TODO */
+      assert (er_errid () != NO_ERROR);
+#endif
       error = er_errid ();
       if (error == NO_ERROR && !pt_has_error (parser))
 	{
@@ -25710,6 +25775,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   xasl = pt_make_aptr_parent_node (parser, aptr_statement, UPDATE_PROC);
   if (xasl == NULL || xasl->aptr_list == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR && !pt_has_error (parser))
 	{
@@ -25744,6 +25810,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   update->classes = regu_upddel_class_info_array_alloc (1);
   if (update->classes == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -25756,6 +25823,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   update->assigns = regu_update_assignment_array_alloc (update->no_assigns);
   if (update->assigns == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -25795,6 +25863,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   upd_cls->class_oid = regu_oid_array_alloc (no_subclasses);
   if (upd_cls->class_oid == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -25807,6 +25876,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   upd_cls->class_hfid = regu_hfid_array_alloc (no_subclasses);
   if (upd_cls->class_hfid == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -25819,6 +25889,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   upd_cls->att_id = regu_int_array_alloc (no_subclasses * upd_cls->no_attrs);
   if (upd_cls->att_id == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -25858,6 +25929,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       hfid = sm_get_heap (class_obj);
       if (hfid == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  if (error == NO_ERROR)
 	    {
@@ -25888,6 +25960,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
 	      if (upd_cls->att_id[cl * upd_cls->no_attrs + a] < 0)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		  if (error == NO_ERROR && !pt_has_error (parser))
 		    {
@@ -25994,6 +26067,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       update->assigns[a].constant = regu_dbval_alloc ();
       if (update->assigns[a].constant == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  if (error == NO_ERROR)
 	    {
@@ -26005,6 +26079,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       attr = db_get_attribute (class_obj, att_name_node->info.name.original);
       if (attr == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  if (error == NO_ERROR)
 	    {
@@ -26135,6 +26210,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 			      &statement->info.merge);
   if (aptr_statement == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR && !pt_has_error (parser))
 	{
@@ -26146,6 +26222,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   aptr_statement = mq_translate (parser, aptr_statement);
   if (aptr_statement == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR && !pt_has_error (parser))
 	{
@@ -26164,6 +26241,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 					  sm_is_reuse_oid_class (class_obj));
   if (class_ == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -26176,6 +26254,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   hfid = sm_heap (class_);
   if (hfid == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -26187,6 +26266,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
   if (locator_flush_class (class_obj) != NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{
@@ -26204,6 +26284,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   xasl = pt_make_aptr_parent_node (parser, aptr_statement, INSERT_PROC);
   if (xasl == NULL || xasl->aptr_list == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR && !pt_has_error (parser))
 	{
@@ -26261,6 +26342,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	      if ((insert->att_id[a] =
 		   sm_att_id (class_obj, attr->info.name.original)) < 0)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		}
 	    }
@@ -26270,6 +26352,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	      if ((insert->att_id[a] =
 		   sm_att_id (class_obj, attr->info.name.original)) < 0)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		}
 	    }
@@ -26279,6 +26362,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	}
       else
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
       if (error != NO_ERROR)
@@ -26322,6 +26406,7 @@ pt_to_merge_insert_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   xasl->tcard_list = regu_int_array_alloc (1 + aptr->n_oid_list);
   if (xasl->class_oid_list == NULL || xasl->tcard_list == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       if (error == NO_ERROR)
 	{

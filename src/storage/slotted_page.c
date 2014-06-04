@@ -71,8 +71,7 @@ spage_verify_header_debug (SPAGE_HEADER * sphdr)
       || sphdr->cont_free > sphdr->total_free
       || sphdr->offset_to_free_area > DB_PAGESIZE
       || sphdr->num_slots < 0
-      || sphdr->num_records < 0
-      || sphdr->num_records > sphdr->num_slots)
+      || sphdr->num_records < 0 || sphdr->num_records > sphdr->num_slots)
     {
       assert_release (false);
       if (sphdr == NULL)
@@ -81,9 +80,9 @@ spage_verify_header_debug (SPAGE_HEADER * sphdr)
 	{
 	  _er_log_debug (ARG_FILE_LINE, "Invalid page header: total_free = %d"
 			 "cont_free = %d, offset_to = %d, num_slots = %d,"
-			 "num_records = %d", sphdr->total_free, sphdr->cont_free,
-			 sphdr->offset_to_free_area, sphdr->num_slots,
-			 sphdr->num_records);
+			 "num_records = %d", sphdr->total_free,
+			 sphdr->cont_free, sphdr->offset_to_free_area,
+			 sphdr->num_slots, sphdr->num_records);
 	}
     }
 }
@@ -4755,6 +4754,41 @@ spage_dump (THREAD_ENTRY * thread_p, FILE * fp, PAGE_PTR page_p,
 #endif
 }
 
+#if !defined(NDEBUG)
+/*
+ * spage_check_num_slots () - Check consistency of page. This function is used for
+ *               debugging purposes
+ *   return: true/false
+ *   ppage_p(in): Pointer to slotted page
+ */
+bool
+spage_check_num_slots (THREAD_ENTRY * thread_p, PAGE_PTR page_p)
+{
+  SPAGE_HEADER *page_header_p;
+  SPAGE_SLOT *slot_p;
+  int i, nrecs;
+
+  assert (page_p != NULL);
+
+  page_header_p = (SPAGE_HEADER *) page_p;
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+  slot_p = spage_find_slot (page_p, page_header_p, 0, false);
+
+  nrecs = 0;
+  for (i = 0; i < page_header_p->num_slots; slot_p--, i++)
+    {
+      if (slot_p->offset_to_record != SPAGE_EMPTY_OFFSET)
+	{
+	  nrecs++;
+	}
+    }
+  assert (page_header_p->num_records == nrecs);
+
+  return (page_header_p->num_records == nrecs) ? true : false;
+}
+#endif
+
 #ifdef SPAGE_DEBUG
 /*
  * spage_check () - Check consistency of page. This function is used for
@@ -5309,6 +5343,7 @@ spage_header_start_scan (THREAD_ENTRY * thread_p, int show_type,
 
   if (ctx == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }
@@ -5329,6 +5364,7 @@ spage_header_start_scan (THREAD_ENTRY * thread_p, int show_type,
 		     PGBUF_UNCONDITIONAL_LATCH);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }
@@ -5475,6 +5511,7 @@ spage_slots_start_scan (THREAD_ENTRY * thread_p, int show_type,
 
   if (ctx == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }
@@ -5496,6 +5533,7 @@ spage_slots_start_scan (THREAD_ENTRY * thread_p, int show_type,
   ctx->pgptr = (PAGE_PTR) db_private_alloc (thread_p, DB_PAGESIZE);
   if (ctx->pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }
@@ -5504,6 +5542,7 @@ spage_slots_start_scan (THREAD_ENTRY * thread_p, int show_type,
 		     PGBUF_UNCONDITIONAL_LATCH);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }

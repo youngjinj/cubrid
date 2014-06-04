@@ -2362,6 +2362,28 @@ qo_analyze_term (QO_TERM * term, int term_type)
 	    }
 	}
 
+      /* check LHS and RHS for collations that invalidate the term's use in a
+       * key range/filter; if one of the expr sides contains such a collation
+       * then the whole term is not indexable */
+      if (lhs_indexable || rhs_indexable)
+	{
+	  int has_nis_coll = 0;
+
+	  (void) parser_walk_tree (parser, lhs_expr,
+				   pt_has_non_idx_sarg_coll_pre,
+				   &has_nis_coll, NULL, NULL);
+	  (void) parser_walk_tree (parser, rhs_expr,
+				   pt_has_non_idx_sarg_coll_pre,
+				   &has_nis_coll, NULL, NULL);
+
+	  if (has_nis_coll)
+	    {
+	      QO_TERM_SET_FLAG (term, QO_TERM_NON_IDX_SARG_COLL);
+	      lhs_indexable = 0;
+	      rhs_indexable = 0;
+	    }
+	}
+
       if (lhs_indexable)
 	{
 	  n = bitset_first_member (&lhs_segs);
@@ -2652,6 +2674,8 @@ qo_analyze_term (QO_TERM * term, int term_type)
   /* classify TC_JOIN term for outer join and determine its join type */
   if (QO_TERM_CLASS (term) == QO_TC_JOIN)
     {
+      QO_ASSERT (env, QO_NODE_IDX (head_node) < QO_NODE_IDX (tail_node));
+
       /* inner join until proven otherwise */
       QO_TERM_JOIN_TYPE (term) = JOIN_INNER;
 
@@ -2659,8 +2683,6 @@ qo_analyze_term (QO_TERM * term, int term_type)
       if (QO_ON_COND_TERM (term))
 	{
 	  QO_NODE *on_node;
-
-	  QO_ASSERT (env, QO_NODE_IDX (head_node) < QO_NODE_IDX (tail_node));
 
 	  on_node = QO_ENV_NODE (env, QO_TERM_LOCATION (term));
 	  QO_ASSERT (env, on_node != NULL);
@@ -2707,6 +2729,30 @@ qo_analyze_term (QO_TERM * term, int term_type)
 	      QO_TERM_CLEAR_FLAG (term, QO_TERM_MERGEABLE_EDGE);
 	    }
 	}
+      else
+	{
+	  QO_NODE *node;
+
+	  for (i = 0; i < env->nnodes; i++)
+	    {
+	      node = QO_ENV_NODE (env, i);
+
+	      if (QO_NODE_IDX (node) >= QO_NODE_IDX (head_node)
+		  && QO_NODE_IDX (node) < QO_NODE_IDX (tail_node))
+		{
+		  if (QO_NODE_PT_JOIN_TYPE (node) == PT_JOIN_LEFT_OUTER
+		      || QO_NODE_PT_JOIN_TYPE (node) == PT_JOIN_RIGHT_OUTER
+		      || QO_NODE_PT_JOIN_TYPE (node) == PT_JOIN_FULL_OUTER)
+		    {
+		      /* record explicit join dependecy */
+		      bitset_union (&(QO_NODE_OUTER_DEP_SET (tail_node)),
+				    &(QO_NODE_OUTER_DEP_SET (node)));
+		      bitset_add (&(QO_NODE_OUTER_DEP_SET (tail_node)),
+				  QO_NODE_IDX (node));
+		    }
+		}
+	    }
+	}			/* else */
     }
 
 wrapup:
@@ -4447,6 +4493,12 @@ add_hint (QO_ENV * env, PT_NODE * tree)
       add_hint_args (env, tree->info.query.q.select.index_ss,
 		     PT_HINT_INDEX_SS);
     }
+  if (hint & PT_HINT_INDEX_LS)
+    {
+      add_hint_args (env, tree->info.query.q.select.index_ls,
+		     PT_HINT_INDEX_LS);
+    }
+
 
   if (hint & PT_HINT_USE_MERGE)
     {
@@ -7048,7 +7100,8 @@ qo_get_ils_prefix_length (QO_ENV * env, QO_NODE * nodep,
     {
       return 0;			/* disable loose index scan */
     }
-  else if (tree->info.query.q.select.hint & PT_HINT_INDEX_LS)
+  else if ((tree->info.query.q.select.hint & PT_HINT_INDEX_LS)
+	   && (QO_NODE_HINT (nodep) & PT_HINT_INDEX_LS))
     {				/* enable loose index scan */
       if (tree->info.query.q.select.hint & PT_HINT_NO_INDEX_SS
 	  || !(tree->info.query.q.select.hint & PT_HINT_INDEX_SS)
@@ -9470,7 +9523,7 @@ qo_check_coll_optimization (QO_INDEX_ENTRY * ent, COLL_OPT * collation_opt)
 
   assert (collation_opt != NULL);
 
-  collation_opt->allow_index_cov = true;
+  collation_opt->allow_index_opt = true;
 
   if (ent && ent->class_ && ent->class_->smclass)
     {
@@ -9494,9 +9547,9 @@ qo_check_coll_optimization (QO_INDEX_ENTRY * ent, COLL_OPT * collation_opt)
 
 	      assert (lang_coll != NULL);
 
-	      if (!(lang_coll->options.allow_index_cov))
+	      if (!(lang_coll->options.allow_index_opt))
 		{
-		  collation_opt->allow_index_cov = false;
+		  collation_opt->allow_index_opt = false;
 		  return;
 		}
 	    }

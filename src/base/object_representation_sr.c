@@ -906,6 +906,7 @@ or_class_subclasses (RECDES * record, int *array_size, OID ** array_ptr)
 
 	  if (array == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      return er_errid ();
 	    }
 
@@ -1175,6 +1176,7 @@ error:
       free_and_init (record.data);
     }
 
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 

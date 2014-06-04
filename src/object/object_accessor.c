@@ -517,6 +517,7 @@ assign_null_value (MOP op, SM_ATTRIBUTE * att, char *mem)
     {
       if (PRIM_SETMEM (att->domain->type, att->domain, mem, NULL))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
       else
@@ -578,6 +579,7 @@ assign_set_value (MOP op, SM_ATTRIBUTE * att, char *mem, SETREF * setref)
       new_set = set_change_owner (setref, owner, att->id, att->domain);
       if (new_set == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
     }
@@ -786,6 +788,7 @@ obj_set_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att,
       trigstate = sm_active_triggers (class_, TR_EVENT_ALL);
       if (trigstate < 0)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
       if (trigstate || classobj_has_unique_constraint (att->constraints))
@@ -794,6 +797,7 @@ obj_set_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att,
 	  temp = obt_edit_object (op);
 	  if (temp == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else
@@ -833,6 +837,7 @@ obj_set_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att,
 						       AU_FETCH_UPDATE) !=
 			      NO_ERROR)
 			    {
+			      assert (er_errid () != NO_ERROR);
 			      return er_errid ();
 			    }
 
@@ -895,6 +900,7 @@ obj_set_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att,
 	    {
 	      if (au_fetch_instance (op, &obj, AU_FETCH_UPDATE, AU_UPDATE))
 		{
+		  assert (er_errid () != NO_ERROR);
 		  return er_errid ();
 		}
 
@@ -914,6 +920,7 @@ obj_set_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att,
 	      actual = obt_check_assignment (att, value, valid, 0);
 	      if (actual == NULL)
 		{
+		  assert (er_errid () != NO_ERROR);
 		  error = er_errid ();
 		}
 	      else
@@ -1009,6 +1016,7 @@ obj_desc_set (MOP op, SM_DESCRIPTOR * desc, DB_VALUE * value)
       if (sm_get_descriptor_component (op, desc, 1, &class_,
 				       (SM_COMPONENT **) (&att)))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -1063,6 +1071,7 @@ obj_set_shared (MOP op, const char *name, DB_VALUE * value)
 	  actual = obt_check_assignment (att, value, NULL, 0);
 	  if (actual == NULL)
 	    {
+	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	  else
@@ -1120,6 +1129,7 @@ get_object_value (MOP op, SM_ATTRIBUTE * att, char *mem,
       DB_MAKE_OBJECT (&curval, NULL);
       if (PRIM_GETMEM (att->domain->type, att->domain, mem, &curval))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
       current = DB_GET_OBJECT (&curval);
@@ -1180,7 +1190,10 @@ get_object_value (MOP op, SM_ATTRIBUTE * att, char *mem,
 	  if (mem != NULL)
 	    {
 	      if (PRIM_SETMEM (att->domain->type, att->domain, mem, NULL))
-		return er_errid ();
+		{
+		  assert (er_errid () != NO_ERROR);
+		  return er_errid ();
+		}
 	      OBJ_CLEAR_BOUND_BIT (op->object, att->storage_order);
 	    }
 	  else
@@ -1251,6 +1264,7 @@ get_set_value (MOP op, SM_ATTRIBUTE * att, char *mem,
 			    DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
       if (PRIM_GETMEM (att->domain->type, att->domain, mem, &setval))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
       set = DB_GET_SET (&setval);
@@ -1282,6 +1296,7 @@ get_set_value (MOP op, SM_ATTRIBUTE * att, char *mem,
     {
       if (set_connect (set, owner, att->id, att->domain))
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
     }
@@ -1347,6 +1362,11 @@ obj_get_value (MOP op, SM_ATTRIBUTE * att, void *mem,
     {
       source = &att->default_value.value;
     }
+
+  /* In MVCC, we must be sure that we have the last mop version before
+   * we access the object.
+   */
+  op = ws_mvcc_latest_version (op);
 
   if ((ws_find (op, &object) == WS_FIND_MOP_DELETED) || object == NULL)
     {
@@ -1471,7 +1491,10 @@ obj_get_att (MOP op, SM_CLASS * class_, SM_ATTRIBUTE * att, DB_VALUE * value)
 	{
 	  /* fetch the instance and caluclate memory offset */
 	  if (au_fetch_instance_force (op, &obj, AU_FETCH_READ) != NO_ERROR)
-	    return er_errid ();
+	    {
+	      assert (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
 	  mem = (char *) (((char *) obj) + att->offset);
 	}
 
@@ -1512,6 +1535,7 @@ obj_desc_get (MOP op, SM_DESCRIPTOR * desc, DB_VALUE * value)
       if (sm_get_descriptor_component (op, desc, 0, &class_,
 				       (SM_COMPONENT **) (&att)) != NO_ERROR)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -2822,7 +2846,10 @@ check_args (SM_METHOD * method, ARGSTATE * state)
 		   */
 		  value = pr_make_ext_value ();
 		  if (value == NULL)
-		    return er_errid ();
+		    {
+		      assert (er_errid () != NO_ERROR);
+		      return er_errid ();
+		    }
 		  dom = tp_domain_select (arg->domain, state->values[i], 0,
 					  TP_STR_MATCH);
 		  if (dom)
@@ -2861,6 +2888,7 @@ check_args (SM_METHOD * method, ARGSTATE * state)
 		  switch (status)
 		    {
 		    case DOMAIN_ERROR:
+		      assert (er_errid () != NO_ERROR);
 		      error = er_errid ();
 		      break;
 

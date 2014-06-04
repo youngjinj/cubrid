@@ -400,8 +400,8 @@ thread_initialize_manager (void)
 	    (DAEMON_THREAD_MONITOR *) malloc (size);
 	  if (thread_Vacuum_worker_threads == NULL)
 	    {
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
-		      1, size);
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
 	      return ER_OUT_OF_VIRTUAL_MEMORY;
 	    }
 
@@ -412,8 +412,8 @@ thread_initialize_manager (void)
 	    (VACUUM_WORKER_THREAD_ENTRY *) malloc (size);
 	  if (thread_Vacuum_worker_thread_entries == NULL)
 	    {
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
-		      1, size);
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
 	      return ER_OUT_OF_VIRTUAL_MEMORY;
 	    }
 
@@ -447,8 +447,8 @@ thread_initialize_manager (void)
       thread_Daemons = (THREAD_DAEMON *) malloc (size);
       if (thread_Daemons == NULL)
 	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
-		  size);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, size);
 	  return ER_OUT_OF_VIRTUAL_MEMORY;
 	}
 

@@ -999,6 +999,11 @@ domain_init (TP_DOMAIN * domain, DB_TYPE typeid_)
 	  domain->enumeration.collation_id = LANG_SYS_COLLATION;
 	}
     }
+  else if (TP_IS_BIT_TYPE (typeid_))
+    {
+      domain->codeset = INTL_CODESET_RAW_BITS;
+      domain->collation_id = 0;
+    }
   else
     {
       domain->codeset = 0;
@@ -7870,6 +7875,7 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest,
 
 		  if (setref == NULL)
 		    {
+		      assert (er_errid () != NO_ERROR);
 		      err = er_errid ();
 		    }
 		  else if (desired_type == DB_TYPE_SET)
@@ -8054,10 +8060,12 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest,
 	  {
 	    DB_VALUE tmpval;
 
+	    DB_MAKE_NULL (&tmpval);
+
 	    err = db_blob_to_bit (src, NULL, &tmpval);
 	    if (err == NO_ERROR)
 	      {
-		err = tp_value_cast_internal (&tmpval, dest, desired_domain,
+		err = tp_value_cast_internal (&tmpval, target, desired_domain,
 					      coercion_mode,
 					      do_domain_select, false);
 	      }
@@ -8463,17 +8471,17 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest,
 	{
 	case DB_TYPE_ELO:
 	case DB_TYPE_BLOB:
-	  err = db_value_clone ((DB_VALUE *) src, dest);
+	  err = db_value_clone ((DB_VALUE *) src, target);
 	  break;
 	case DB_TYPE_BIT:
 	case DB_TYPE_VARBIT:
-	  err = db_bit_to_blob (src, dest);
+	  err = db_bit_to_blob (src, target);
 	  break;
 	case DB_TYPE_CHAR:
 	case DB_TYPE_VARCHAR:
 	case DB_TYPE_NCHAR:
 	case DB_TYPE_VARNCHAR:
-	  err = db_char_to_blob (src, dest);
+	  err = db_char_to_blob (src, target);
 	  break;
 	case DB_TYPE_ENUMERATION:
 	  {
@@ -8500,11 +8508,11 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest,
 	{
 	case DB_TYPE_ELO:
 	case DB_TYPE_CLOB:
-	  err = db_value_clone ((DB_VALUE *) src, dest);
+	  err = db_value_clone ((DB_VALUE *) src, target);
 	  break;
 	case DB_TYPE_CHAR:
 	case DB_TYPE_VARCHAR:
-	  err = db_char_to_clob (src, dest);
+	  err = db_char_to_clob (src, target);
 	  break;
 	case DB_TYPE_ENUMERATION:
 	  {
@@ -8531,7 +8539,7 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest,
 	case DB_TYPE_CLOB:
 	case DB_TYPE_BLOB:
 	case DB_TYPE_ELO:
-	  db_value_clone ((DB_VALUE *) src, dest);
+	  db_value_clone ((DB_VALUE *) src, target);
 	  break;
 	default:
 	  status = DOMAIN_INCOMPATIBLE;
@@ -9000,6 +9008,54 @@ tp_value_cast_no_domain_select (const DB_VALUE * src, DB_VALUE * dest,
   mode = (implicit_coercion ? TP_IMPLICIT_COERCION : TP_EXPLICIT_COERCION);
   return tp_value_cast_internal (src, dest, desired_domain, mode, false,
 				 false);
+}
+
+/*
+ * tp_value_change_coll_and_codeset () - change the collation and codeset of a 
+ *                                       value
+ *   returns: cast operation result
+ *   src(in): source DB_VALUE
+ *   dest(in): destination DB_VALUE where src will be copied/adjusted to
+ *   coll_id(in): destination collation id
+ *   codeset(in): destination codeset
+ */
+TP_DOMAIN_STATUS
+tp_value_change_coll_and_codeset (DB_VALUE * src, DB_VALUE * dest,
+				  int coll_id, int codeset)
+{
+  TP_DOMAIN *temp_domain;
+
+  assert (src != NULL && dest != NULL);
+  assert (TP_IS_STRING_TYPE (DB_VALUE_TYPE (src)));
+
+  if (DB_GET_STRING_COLLATION (src) == coll_id
+      && DB_GET_STRING_CODESET (src) == codeset)
+    {
+      /* early exit scenario */
+      return DOMAIN_COMPATIBLE;
+    }
+
+  /* create new domain and adjust collation and codeset */
+  temp_domain = tp_domain_resolve_value (src, NULL);
+  if (temp_domain != NULL && temp_domain->is_cached)
+    {
+      temp_domain = tp_domain_copy (temp_domain, false);
+    }
+  if (temp_domain == NULL)
+    {
+      /* not exactly a relevant error code, but should serve it's purpose */
+      assert (false);
+      return DOMAIN_ERROR;
+    }
+
+  temp_domain->collation_id = coll_id;
+  temp_domain->codeset = codeset;
+
+  /* cache domain */
+  temp_domain = tp_domain_cache (temp_domain);
+
+  /* cast the value */
+  return tp_value_cast (src, dest, temp_domain, true);
 }
 
 /*
@@ -10425,6 +10481,9 @@ tp_domain_status_er_set (TP_DOMAIN_STATUS status, const char *file_name,
    */
   if (status == DOMAIN_ERROR)
     {
+#if 0				/* TODO */
+      assert (er_errid () != NO_ERROR);
+#endif
       error = er_errid ();
 
       if (error == ER_IT_DATA_OVERFLOW)

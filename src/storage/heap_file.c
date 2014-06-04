@@ -492,247 +492,6 @@ static int rv;
 	} \
   }while (0)
 
-/*
- * MVCC logging macros
- */
-
-/* Log MVCC heap insert */
-#define HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS	    1
-#define HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS	    4
-#define HEAP_LOG_MVCC_INSERT(thread_p, p_recdes, log_lsa_buf, p_addr, \
-			     no_undo, no_redo) \
-  do { \
-    int n_undo_crumbs = 0, n_redo_crumbs = 0; \
-    LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS]; \
-    LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS]; \
-    assert (p_addr != NULL); \
-    if (!no_undo) \
-      { \
-	/* Add log lsa buffer where previous MVCC op log lsa will be saved */ \
-	assert ((log_lsa_buf) != NULL); \
-	undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE; \
-	undo_crumbs[n_undo_crumbs++].data = log_lsa_buf; \
-	assert (n_undo_crumbs <= HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS); \
-      } \
-    if (!no_redo) \
-      { \
-	int data_copy_offset = 0; \
-	assert ((p_recdes) != NULL); \
-	/* Add record type */ \
-	redo_crumbs[n_redo_crumbs].length = sizeof ((p_recdes)->type); \
-	redo_crumbs[n_redo_crumbs++].data = &((p_recdes)->type); \
-	if ((p_recdes)->type != REC_BIGONE) \
-	  { \
-	    INT32 repid_and_flags = (INT32) OR_GET_INT ((p_recdes)->data); \
-	    INT32 mvcc_flags = (INT32) OR_GET_MVCC_FLAG ((p_recdes)->data); \
-	    INT32 chn = \
-	      (INT32) OR_GET_MVCC_CHN ((p_recdes)->data, mvcc_flags); \
-	    /* Add representation ID and flags field */ \
-	    redo_crumbs[n_redo_crumbs].length = sizeof (repid_and_flags); \
-	    redo_crumbs[n_redo_crumbs++].data = &repid_and_flags; \
-	    /* Add CHN */ \
-	    /* TODO: Investigate if CHN can also be removed. */ \
-	    redo_crumbs[n_redo_crumbs].length = sizeof (chn); \
-	    redo_crumbs[n_redo_crumbs++].data = &chn; \
-	    /* Set offset after the mvcc header */ \
-	    data_copy_offset = OR_HEADER_SIZE ((p_recdes)->data); \
-	  } \
-	/* Add record data - header may be skipped */ \
-	redo_crumbs[n_redo_crumbs].length = \
-	  (p_recdes)->length - data_copy_offset; \
-	redo_crumbs[n_redo_crumbs++].data = \
-	  (p_recdes)->data + data_copy_offset; \
-	assert (n_redo_crumbs <= HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS); \
-      } \
-    if (!(no_undo) && !(no_redo)) \
-      { \
-	log_append_undoredo_crumbs (thread_p, RVHF_MVCC_INSERT, p_addr, \
-				    n_undo_crumbs, n_redo_crumbs, \
-				    undo_crumbs, redo_crumbs); \
-      } \
-    else if (!(no_undo)) \
-      { \
-	log_append_undo_crumbs (thread_p, RVHF_MVCC_INSERT, p_addr, \
-				n_undo_crumbs, undo_crumbs); \
-      } \
-    else if (!(no_redo)) \
-      { \
-	log_append_redo_crumbs (thread_p, RVHF_MVCC_INSERT, p_addr, \
-				n_redo_crumbs, redo_crumbs); \
-      } \
-  } while (0)
-
-/* Log MVCC heap delete relocation */
-#define HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS	4
-#define HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS	2
-#define HEAP_LOG_MVCC_DELETE_RELOCATION(thread_p, log_lsa_buf, \
-					p_undo_datasource_oid, \
-					undo_record_type, undo_chn, \
-					p_redo_recdes, p_addr, \
-					no_undo, no_redo) \
-  do { \
-    int n_undo_crumbs = 0, n_redo_crumbs = 0; \
-    LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS]; \
-    LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS]; \
-    assert (p_addr != NULL); \
-    if (!no_undo)	\
-      { \
-	/* Add log lsa buffer where previous MVCC op log lsa will be saved */ \
-	undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE; \
-	undo_crumbs[n_undo_crumbs++].data = log_lsa_buf; \
-	/* Add source OID */ \
-	undo_crumbs[n_undo_crumbs].length = \
-	  sizeof (*p_undo_datasource_oid);  \
-	undo_crumbs[n_undo_crumbs++].data = p_undo_datasource_oid; \
-	/* Add record type */ \
-	undo_crumbs[n_undo_crumbs].length = sizeof (undo_record_type); \
-	undo_crumbs[n_undo_crumbs++].data = &(undo_record_type); \
-	/* Add undo CHN */ \
-	undo_crumbs[n_undo_crumbs].length = sizeof (undo_chn);  \
-	undo_crumbs[n_undo_crumbs++].data = &undo_chn; \
-	assert (n_undo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS); \
-      } \
-    if (!no_redo)	\
-      {	\
-	assert ((p_redo_recdes) != NULL); \
-	/* Add record type */ \
-	redo_crumbs[n_redo_crumbs].length = sizeof ((p_redo_recdes)->type); \
-	redo_crumbs[n_redo_crumbs++].data = &((p_redo_recdes)->type); \
-	/* Add record data */ \
-	redo_crumbs[n_redo_crumbs].length = (p_redo_recdes)->length;  \
-	redo_crumbs[n_redo_crumbs++].data = (p_redo_recdes)->data;  \
-	assert (n_redo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS); \
-      }	\
-    if (!(no_undo) && !(no_redo)) \
-      { \
-	log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATION, \
-				    p_addr, n_undo_crumbs, n_redo_crumbs, \
-				    undo_crumbs, redo_crumbs); \
-      } \
-    else if (!(no_undo)) \
-      { \
-	log_append_undo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATION, p_addr, \
-				n_undo_crumbs, undo_crumbs); \
-      } \
-    else if (!(no_redo)) \
-      { \
-	log_append_redo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATION, p_addr, \
-				n_redo_crumbs, redo_crumbs); \
-      } \
-  } while (0)
-
-/* Log MVC heap delete relocated */
-#define HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS	3
-#define HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS	3
-#define HEAP_LOG_MVCC_DELETE_RELOCATED(thread_p, p_undo_recdes, \
-				       log_lsa_buf, p_redo_datasource_oid, \
-				       redo_record_type, p_redo_next_version, \
-				       p_addr, no_undo, no_redo) \
-  do { \
-    int n_undo_crumbs = 0, n_redo_crumbs = 0; \
-    LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS]; \
-    LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS]; \
-    assert (p_addr != NULL); \
-    if (!no_undo)  \
-      {	\
-	assert ((log_lsa_buf) != NULL && (p_undo_recdes) != NULL); \
-	/* Add log lsa buffer where previous MVCC op log lsa will be saved */ \
-	undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE; \
-	undo_crumbs[n_undo_crumbs++].data = log_lsa_buf; \
-	/* Add undo record type */ \
-	undo_crumbs[n_undo_crumbs].length = sizeof ((p_undo_recdes)->type); \
-	undo_crumbs[n_undo_crumbs++].data = &((p_undo_recdes)->type); \
-	/* Add undo record data */ \
-	undo_crumbs[n_undo_crumbs].length = (p_undo_recdes)->length;  \
-	undo_crumbs[n_undo_crumbs++].data = (p_undo_recdes)->data;  \
-	assert (n_undo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS); \
-      }	\
-    if (!no_redo)  \
-      {	\
-	assert ((p_redo_datasource_oid) != NULL); \
-	/* Add redo source OID */ \
-	redo_crumbs[n_redo_crumbs].length = OR_OID_SIZE;  \
-	redo_crumbs[n_redo_crumbs++].data = p_redo_datasource_oid;  \
-	/* Add redo record type */ \
-	redo_crumbs[n_redo_crumbs].length = sizeof (redo_record_type); \
-	redo_crumbs[n_redo_crumbs++].data = &(redo_record_type); \
-	if ((p_redo_next_version) != NULL)  \
-	{ \
-	  /* Add redo next version */ \
-	  redo_crumbs[n_redo_crumbs].length = OR_OID_SIZE;  \
-	  redo_crumbs[n_redo_crumbs++].data = p_redo_next_version; \
-	} \
-	assert (n_redo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS); \
-      }	\
-    if (!(no_undo) && !(no_redo)) \
-      { \
-	log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATED, \
-				    p_addr, n_undo_crumbs, n_redo_crumbs, \
-				    undo_crumbs, redo_crumbs); \
-      } \
-    else if (!(no_undo)) \
-      { \
-	log_append_undo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATED, p_addr, \
-				n_undo_crumbs, undo_crumbs); \
-      } \
-    else if (!(no_redo)) \
-      { \
-	log_append_redo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATED, p_addr, \
-				n_redo_crumbs, redo_crumbs); \
-      } \
-  } while (0)
-
-/* Log MVCC heap delete */
-#define HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS 3
-#define HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS 2
-#define HEAP_LOG_MVCC_DELETE(thread_p, log_lsa_buf, undo_chn, \
-			     p_redo_next_version, is_bigone, \
-			     p_addr, no_undo, no_redo)	\
-  do { \
-    int n_undo_crumbs = 0, n_redo_crumbs = 0; \
-    LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS]; \
-    LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS]; \
-    assert (p_addr != NULL); \
-    if (!no_undo)  \
-      {	\
-	assert ((log_lsa_buf) != NULL); \
-	undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;  \
-	undo_crumbs[n_undo_crumbs++].data = log_lsa_buf; \
-	undo_crumbs[n_undo_crumbs].length = sizeof (undo_chn);  \
-	undo_crumbs[n_undo_crumbs++].data = &undo_chn; \
-	undo_crumbs[n_undo_crumbs].length = sizeof (new_flags); \
-	undo_crumbs[n_undo_crumbs++].data = &is_bigone; \
-	assert (n_undo_crumbs <= HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS); \
-      }	\
-    if (!no_redo)  \
-      {	\
-	redo_crumbs[n_redo_crumbs].length = sizeof (is_bigone);  \
-	redo_crumbs[n_redo_crumbs++].data = &is_bigone; \
-	if ((p_redo_next_version) != NULL)  \
-	  { \
-	    redo_crumbs[n_redo_crumbs].length = OR_OID_SIZE;  \
-	    redo_crumbs[n_redo_crumbs++].data = p_redo_next_version; \
-	  } \
-	assert (n_redo_crumbs <= HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS); \
-      }	\
-    if (!(no_undo) && !(no_redo)) \
-      { \
-	log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE, p_addr, \
-				    n_undo_crumbs, n_redo_crumbs, \
-				    undo_crumbs, redo_crumbs); \
-      } \
-    else if (!(no_undo)) \
-      { \
-	log_append_undo_crumbs (thread_p, RVHF_MVCC_DELETE, p_addr, \
-				n_undo_crumbs, undo_crumbs); \
-      } \
-    else if (!(no_redo)) \
-      { \
-	log_append_redo_crumbs (thread_p, RVHF_MVCC_DELETE, p_addr, \
-				n_redo_crumbs, redo_crumbs); \
-      } \
-  } while (0)
-
 #define HEAP_MVCC_SET_HEADER_MAXIMUM_SIZE(p_mvcc_rec_header) \
   do{ \
     if (!MVCC_IS_FLAG_SET (p_mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID))  \
@@ -1581,6 +1340,27 @@ static DB_LOGICAL heap_mvcc_reev_cond_assigns (THREAD_ENTRY * thread_p,
 					       RECDES * recdes,
 					       MVCC_UPDDEL_REEV_DATA *
 					       mvcc_reev_data);
+
+static void heap_mvcc_log_insert (THREAD_ENTRY * thread_p, RECDES * p_recdes,
+				  LOG_DATA_ADDR * p_addr);
+static void heap_mvcc_log_delete_relocation (THREAD_ENTRY * thread_p,
+					     const OID *
+					     p_undo_datasource_oid,
+					     INT16 undo_record_type,
+					     INT32 undo_chn,
+					     RECDES * p_redo_recdes,
+					     LOG_DATA_ADDR * p_addr);
+static void heap_mvcc_log_delete_relocated (THREAD_ENTRY * thread_p,
+					    RECDES * p_undo_recdes,
+					    OID * p_redo_datasource_oid,
+					    INT16 redo_record_type,
+					    OID * p_redo_next_version,
+					    LOG_DATA_ADDR * p_addr);
+static void heap_mvcc_log_modify_relocation_link (THREAD_ENTRY * thread_p,
+						  RECDES * p_old_recdes,
+						  RECDES * p_new_recdes,
+						  LOG_DATA_ADDR * p_addr);
+
 
 /*
  * heap_hash_vpid () - Hash a page identifier
@@ -7029,6 +6809,7 @@ xheap_create (THREAD_ENTRY * thread_p, HFID * hfid, const OID * class_oid,
 {
   if (heap_create_internal (thread_p, hfid, -1, class_oid, reuse_oid) == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
   else
@@ -7322,16 +7103,12 @@ heap_insert_internal (THREAD_ENTRY * thread_p, const HFID * hfid, OID * oid,
 	   * built, during recovery phase, by using the record founded at
 	   * mvcc_delete_oid. This will optimize the log size.
 	   */
-	  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
-	  (void) or_pack_log_lsa (log_lsa_buf, NULL);
-
-	  HEAP_LOG_MVCC_DELETE_RELOCATED (thread_p, (RECDES *) NULL,
-					  log_lsa_buf,
+	  heap_mvcc_log_delete_relocated (thread_p, NULL,
 					  mvcc_relocate_delete->
 					  mvcc_delete_oid,
 					  recdes->type,
 					  mvcc_relocate_delete->next_version,
-					  &addr, true, false);
+					  &addr);
 	}
       else
 	{
@@ -15688,8 +15465,10 @@ end:
 
 exit_on_error:
 
+  assert (ret != NO_ERROR);
   if (ret == NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       ret = er_errid ();
       if (ret == NO_ERROR)
 	{
@@ -19727,6 +19506,7 @@ heap_prefetch (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid,
 				       NULL);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       ret = er_errid ();
       if (ret == ER_PB_BAD_PAGEID)
 	{
@@ -21676,6 +21456,7 @@ heap_rv_redo_newpage_internal (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 		  0);
 	}
       /* something went wrong. Unable to redo initialization of new heap page */
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
@@ -21740,6 +21521,7 @@ heap_rv_undoredo_pagehdr (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR,
 		  0);
 	}
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
@@ -21830,10 +21612,79 @@ heap_rv_redo_insert (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR,
 		  0);
 	}
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
 
   return NO_ERROR;
+}
+
+/*
+ * heap_mvcc_log_insert () - Log MVCC insert heap operation.
+ *
+ * return	 : Void.
+ * thread_p (in) : Thread entry.
+ * p_recdes (in) : Newly iserted record.
+ * p_addr (in)	 : Log address data.
+ */
+static void
+heap_mvcc_log_insert (THREAD_ENTRY * thread_p, RECDES * p_recdes,
+		      LOG_DATA_ADDR * p_addr)
+{
+#define HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS	    1
+#define HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS	    4
+
+  int n_undo_crumbs = 0, n_redo_crumbs = 0, data_copy_offset = 0;
+  LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS];
+  LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS];
+  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
+  INT32 repid_and_flags, mvcc_flags, chn;
+
+  assert (p_recdes != NULL && p_addr != NULL);
+
+  /* Build undo crumbs */
+  /* Add log lsa to undo crumbs */
+  (void) or_pack_log_lsa (log_lsa_buf, NULL);
+  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
+  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
+
+  /* Safe guard */
+  assert (n_undo_crumbs <= HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS);
+
+  /* Build redo crumbs */
+  /* Add record type */
+  redo_crumbs[n_redo_crumbs].length = sizeof (p_recdes->type);
+  redo_crumbs[n_redo_crumbs++].data = &p_recdes->type;
+
+  if (p_recdes->type != REC_BIGONE)
+    {
+      repid_and_flags = (INT32) OR_GET_INT (p_recdes->data);
+      mvcc_flags = (INT32) OR_GET_MVCC_FLAG (p_recdes->data);
+      chn = (INT32) OR_GET_MVCC_CHN (p_recdes->data, mvcc_flags);
+
+      /* Add representation ID and flags field */
+      redo_crumbs[n_redo_crumbs].length = sizeof (repid_and_flags);
+      redo_crumbs[n_redo_crumbs++].data = &repid_and_flags;
+
+      /* Add CHN */
+      redo_crumbs[n_redo_crumbs].length = sizeof (chn);
+      redo_crumbs[n_redo_crumbs++].data = &chn;
+
+      /* Set data copy offset after the record header */
+      data_copy_offset = OR_HEADER_SIZE (p_recdes->data);
+    }
+
+  /* Add record data - record may be skipped if the record is not big one */
+  redo_crumbs[n_redo_crumbs].length = p_recdes->length - data_copy_offset;
+  redo_crumbs[n_redo_crumbs++].data = p_recdes->data + data_copy_offset;
+
+  /* Safe guard */
+  assert (n_redo_crumbs <= HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS);
+
+  /* Append undo/redo crumbs */
+  log_append_undoredo_crumbs (thread_p, RVHF_MVCC_INSERT, p_addr,
+			      n_undo_crumbs, n_redo_crumbs,
+			      undo_crumbs, redo_crumbs);
 }
 
 /*
@@ -21967,6 +21818,69 @@ heap_rv_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
 
   return NO_ERROR;
+}
+
+/*
+ * heap_mvcc_log_delete () - Log normal MVCC heap delete operation (just
+ *			     append delete MVCCID and next version OID).
+ *
+ * return		    : Void.
+ * thread_p (in)	    : Thread entry.
+ * undo_chn (in)	    : Record CHN before delete.
+ * p_redo_next_version (in) : In case of update, the OID of next version. NULL
+ *			      otherwise.
+ * is_bigone (in)	    : Is original record a big one?
+ * p_addr (in)		    : Log address data.
+ */
+static void
+heap_mvcc_log_delete (THREAD_ENTRY * thread_p, INT32 undo_chn,
+		      OID * p_redo_next_version, bool is_bigone,
+		      LOG_DATA_ADDR * p_addr)
+{
+#define HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS 3
+#define HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS 2
+  
+  int n_undo_crumbs = 0, n_redo_crumbs = 0;
+  LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS];
+  LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS];
+  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
+
+  /* Build undo crumbs */
+  /* Add log lsa buffer */
+  (void) or_pack_log_lsa (log_lsa_buf, NULL);
+  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
+  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
+
+  /* Append CHN before delete */
+  undo_crumbs[n_undo_crumbs].length = sizeof (undo_chn);
+  undo_crumbs[n_undo_crumbs++].data = &undo_chn;
+
+  /* Append is_bigone */
+  undo_crumbs[n_undo_crumbs].length = sizeof (is_bigone);
+  undo_crumbs[n_undo_crumbs++].data = &is_bigone;
+
+  /* Safe guard */
+  assert (n_undo_crumbs <= HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS);
+
+  /* Build redo crumbs */
+  /* Add is_bigone */
+  redo_crumbs[n_redo_crumbs].length = sizeof (is_bigone);
+  redo_crumbs[n_redo_crumbs++].data = &is_bigone;
+
+  if (p_redo_next_version != NULL)
+    {
+      /* Update case, must also add OID of next version */
+      redo_crumbs[n_redo_crumbs].length = sizeof (*p_redo_next_version);
+      redo_crumbs[n_redo_crumbs++].data = p_redo_next_version;
+    }
+
+  /* Safe guard */
+  assert (n_redo_crumbs <= HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS);
+
+  /* Log append undo/redo crumbs */
+  log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE, p_addr,
+			      n_undo_crumbs, n_redo_crumbs,
+			      undo_crumbs, redo_crumbs);
 }
 
 /*
@@ -22262,6 +22176,7 @@ heap_rv_undoredo_update (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR,
 		  0);
 	}
+      assert (er_errid () != NO_ERROR);
       return er_errid ();
     }
   spage_update_record_type (thread_p, rcv->pgptr, slotid, recdes.type);
@@ -22333,6 +22248,7 @@ heap_rv_redo_reuse_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	      er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_GENERIC_ERROR, 0);
 	    }
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -22380,6 +22296,7 @@ heap_rv_redo_reuse_page_reuse_oid (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	      er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_GENERIC_ERROR, 0);
 	    }
+	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
 
@@ -22951,6 +22868,7 @@ heap_get_btid_from_index_name (THREAD_ENTRY * thread_p,
 
   if (classrepr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit;
     }
@@ -23716,6 +23634,7 @@ heap_header_capacity_start_scan (THREAD_ENTRY * thread_p, int show_type,
 						 sizeof (HEAP_SHOW_SCAN_CTX));
   if (ctx == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto cleanup;
     }
@@ -23745,6 +23664,7 @@ heap_header_capacity_start_scan (THREAD_ENTRY * thread_p, int show_type,
 					      parts_count * sizeof (HFID));
       if (ctx->hfids == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto cleanup;
 	}
@@ -23761,6 +23681,7 @@ heap_header_capacity_start_scan (THREAD_ENTRY * thread_p, int show_type,
       ctx->hfids = (HFID *) db_private_alloc (thread_p, sizeof (HFID));
       if (ctx->hfids == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto cleanup;
 	}
@@ -23843,6 +23764,7 @@ heap_header_next_scan (THREAD_ENTRY * thread_p, int cursor,
 				       NULL);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto cleanup;
     }
@@ -23861,6 +23783,7 @@ heap_header_next_scan (THREAD_ENTRY * thread_p, int cursor,
   class_name = heap_get_class_name (thread_p, &(heap_hdr->class_oid));
   if (class_name == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto cleanup;
     }
@@ -24124,6 +24047,7 @@ heap_capacity_next_scan (THREAD_ENTRY * thread_p, int cursor,
   class_name = heap_get_class_name (thread_p, &hfdes.class_oid);
   if (class_name == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto cleanup;
     }
@@ -24489,9 +24413,6 @@ heap_mvcc_insert_internal (THREAD_ENTRY * thread_p,
 			   HEAP_SCANCACHE * scan_cache, bool ishome_insert)
 {
   LOG_DATA_ADDR addr;		/* Address of logging data */
-  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
-
-  (void) or_pack_log_lsa (log_lsa_buf, NULL);
 
   addr.vfid = &hfid->vfid;
 
@@ -24541,7 +24462,7 @@ heap_mvcc_insert_internal (THREAD_ENTRY * thread_p,
 
   /* Log the insertion, set the page dirty, free, and unlock */
   addr.offset = oid->slotid;
-  HEAP_LOG_MVCC_INSERT (thread_p, recdes, log_lsa_buf, &addr, false, false);
+  heap_mvcc_log_insert (thread_p, recdes, &addr);
 
   pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
 
@@ -25353,7 +25274,7 @@ try_again:
 	  else
 	    {
 	      OID *forward_oid;
-	      
+
 	      forward_oid = (OID *) recdes.data;
 
 	      /* get forward reusing recdes */
@@ -27271,7 +27192,7 @@ try_again:
 	      if (heap_mvcc_check_and_lock_for_delete (thread_p, hfid, oid,
 						       class_oid,
 						       X_LOCK, &mvcc_header,
-						       &pgptr, NULL,
+						       &pgptr, &forward_pgptr,
 						       mvcc_delete_info)
 		  != NO_ERROR)
 		{
@@ -27288,6 +27209,7 @@ try_again:
 		   */
 		  goto end;
 		}
+	      assert (spage_get_record_type (pgptr, oid->slotid));
 	    }
 	}
 
@@ -28456,12 +28378,9 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
   MVCC_RELOCATE_DELETE_INFO mvcc_relocate_delete;
   MVCC_REC_HEADER new_rec_header;
   int old_mvcc_header_size;
-  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
   bool is_bigone = false;
 
   assert (mvcc_id != NULL);
-
-  (void) or_pack_log_lsa (log_lsa_buf, NULL);
 
   if (scan_cache != NULL)
     {
@@ -28658,8 +28577,9 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 					    home_oid->slotid, REC_BIGONE);
 		}
 
-	      log_append_undoredo_recdes (thread_p, RVHF_UPDATE, &addr,
-					  home_recdes, &new_forward_recdes);
+	      heap_mvcc_log_modify_relocation_link (thread_p, home_recdes,
+						    &new_forward_recdes,
+						    &addr);
 
 	      /* Physically delete the old record - relocation to null - since
 	       * the data with new MVCC header has been moved
@@ -28668,11 +28588,9 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	      assert (!MVCC_IS_FLAG_SET (old_rec_header,
 					 OR_MVCC_FLAG_VALID_DELID));
 
-	      HEAP_LOG_MVCC_DELETE_RELOCATION (thread_p, log_lsa_buf,
-					       &new_forward_oid,
-					       fwd_recdes->type, chn,
-					       (RECDES *) NULL,
-					       &forward_addr, false, true);
+	      heap_mvcc_log_delete_relocation (thread_p, &new_forward_oid,
+					       fwd_recdes->type, chn, NULL,
+					       &forward_addr);
 
 	      prev_freespace =
 		spage_get_free_space_without_saving (thread_p,
@@ -28698,8 +28616,8 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	      /* object can be updated at relocated home page */
 	      assert (!MVCC_IS_FLAG_SET (old_rec_header,
 					 OR_MVCC_FLAG_VALID_DELID));
-	      HEAP_LOG_MVCC_DELETE (thread_p, log_lsa_buf, chn, next_version,
-				    is_bigone, &forward_addr, false, false);
+	      heap_mvcc_log_delete (thread_p, chn, next_version, is_bigone,
+				    &forward_addr);
 	      if (new_flags == 0)
 		{
 		  or_mvcc_set_header (fwd_recdes, &new_rec_header);
@@ -28776,9 +28694,9 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 		  fwd_recdes->length - old_mvcc_header_size);
 	  recdes.length += (fwd_recdes->length - old_mvcc_header_size);
 
-	  HEAP_LOG_MVCC_DELETE_RELOCATED (thread_p, home_recdes, log_lsa_buf,
-					  fwd_oid, recdes.type,
-					  next_version, &addr, false, false);
+	  heap_mvcc_log_delete_relocated (thread_p, home_recdes, fwd_oid,
+					  recdes.type, next_version, &addr);
+
 	  sp_success =
 	    spage_update (thread_p, addr.pgptr, home_oid->slotid, &recdes);
 	  if (sp_success != SP_SUCCESS)
@@ -28809,10 +28727,10 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	  /* Physically delete fwd_oid record */
 	  assert (!MVCC_IS_FLAG_SET
 		  (old_rec_header, OR_MVCC_FLAG_VALID_DELID));
-	  HEAP_LOG_MVCC_DELETE_RELOCATION (thread_p, log_lsa_buf, home_oid,
-					   fwd_recdes->type, chn,
-					   (RECDES *) NULL,
-					   &forward_addr, false, true);
+
+	  heap_mvcc_log_delete_relocation (thread_p, home_oid,
+					   fwd_recdes->type, chn, NULL,
+					   &forward_addr);
 
 	  prev_freespace =
 	    spage_get_free_space_without_saving (thread_p, forward_addr.pgptr,
@@ -28843,9 +28761,8 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 					    &new_rec_header);
 
       is_bigone = true;
-      HEAP_LOG_MVCC_DELETE (thread_p, log_lsa_buf,
-			    MVCC_GET_CHN (old_rec_header), next_version,
-			    is_bigone, &forward_addr, true, true);
+      heap_mvcc_log_delete (thread_p, MVCC_GET_CHN (old_rec_header),
+			    next_version, is_bigone, &forward_addr);
       pgbuf_set_dirty (thread_p, forward_addr.pgptr, DONT_FREE);
       break;
 
@@ -28928,12 +28845,11 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 
 	  assert (!MVCC_IS_FLAG_SET
 		  (old_rec_header, OR_MVCC_FLAG_VALID_DELID));
+
 	  /* set and add logging */
-	  HEAP_LOG_MVCC_DELETE_RELOCATION (thread_p, log_lsa_buf,
-					   &new_forward_oid,
+	  heap_mvcc_log_delete_relocation (thread_p, &new_forward_oid,
 					   home_recdes->type, chn,
-					   &new_forward_recdes, &addr, false,
-					   false);
+					   &new_forward_recdes, &addr);
 
 	  sp_success = spage_update (thread_p, addr.pgptr, home_oid->slotid,
 				     &new_forward_recdes);
@@ -28978,8 +28894,8 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	{
 	  assert (!MVCC_IS_FLAG_SET
 		  (old_rec_header, OR_MVCC_FLAG_VALID_DELID));
-	  HEAP_LOG_MVCC_DELETE (thread_p, log_lsa_buf, chn, next_version,
-				is_bigone, &addr, false, false);
+	  heap_mvcc_log_delete (thread_p, chn, next_version, is_bigone,
+				&addr);
 	  if (new_flags == 0)
 	    {
 	      /* no need to resize the buffer */
@@ -29045,6 +28961,82 @@ heap_mvcc_delete_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 
 error:
   return ((ret = er_errid ()) == NO_ERROR) ? ER_FAILED : ret;
+}
+
+/*
+ * heap_mvcc_log_delete_relocated () - Log the relocated record after adding
+ *				       delete information.
+ *
+ * return		      : Void.
+ * thread_p (in)	      : Thread entry.
+ * p_undo_recdes (in)	      : Undo recovery data.
+ * p_redo_datasource_oid (in) : Source for record data for redo recovery.
+ * redo_record_type (in)      : Record data type for redo recovery.
+ * p_redo_next_version (in)   : OID of next version in case of update.
+ * p_addr (in)		      : Log address data.
+ */
+static void
+heap_mvcc_log_delete_relocated (THREAD_ENTRY * thread_p,
+				RECDES * p_undo_recdes,
+				OID * p_redo_datasource_oid,
+				INT16 redo_record_type,
+				OID * p_redo_next_version,
+				LOG_DATA_ADDR * p_addr)
+{
+#define HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS	3
+#define HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS	3
+
+  int n_undo_crumbs = 0, n_redo_crumbs = 0;
+  LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS];
+  LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS];
+  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
+
+  assert (p_redo_datasource_oid != NULL);
+  assert (p_addr != NULL);
+
+  /* Build undo crumbs */
+  /* Add log lsa buffer */
+  (void) or_pack_log_lsa (log_lsa_buf, NULL);
+  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
+  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
+
+  if (p_undo_recdes != NULL)
+    {
+      /* Add undo record type */
+      undo_crumbs[n_undo_crumbs].length = sizeof (p_undo_recdes->type);
+      undo_crumbs[n_undo_crumbs++].data = &p_undo_recdes->type;
+
+      /* Add undo recdes data */
+      undo_crumbs[n_undo_crumbs].length = p_undo_recdes->length;
+      undo_crumbs[n_undo_crumbs++].data = p_undo_recdes->data;
+    }
+
+  /* Safe guard */
+  assert (n_undo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS);
+
+  /* Build redo crumbs */
+  /* Add record source OID for redo */
+  redo_crumbs[n_redo_crumbs].length = sizeof (*p_redo_datasource_oid);
+  redo_crumbs[n_redo_crumbs++].data = p_redo_datasource_oid;
+
+  /* Add redo record type */
+  redo_crumbs[n_redo_crumbs].length = sizeof (redo_record_type);
+  redo_crumbs[n_redo_crumbs++].data = &redo_record_type;
+
+  if (p_redo_next_version != NULL)
+    {
+      /* Used for updated */
+      redo_crumbs[n_redo_crumbs].length = sizeof (*p_redo_next_version);
+      redo_crumbs[n_redo_crumbs++].data = p_redo_next_version;
+    }
+
+  /* Safe guard */
+  assert (n_redo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS);
+
+  /* Log append undo/redo crumbs */
+  log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATED, p_addr,
+			      n_undo_crumbs, n_redo_crumbs,
+			      undo_crumbs, redo_crumbs);
 }
 
 /*
@@ -29158,7 +29150,10 @@ heap_rv_mvcc_redo_delete_relocated (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 
   HEAP_SET_RECORD (&recdes, IO_DEFAULT_PAGE_SIZE + OR_MVCC_MAX_HEADER_SIZE, 0,
 		   REC_HOME, PTR_ALIGN (data_buffer, MAX_ALIGNMENT));
-  error_code = or_mvcc_add_header (&recdes, &mvcc_rec_header, OR_GET_BOUND_BIT_FLAG (mvcc_delete_recdes.data), OR_GET_OFFSET_SIZE (mvcc_delete_recdes.data));
+  error_code =
+    or_mvcc_add_header (&recdes, &mvcc_rec_header,
+			OR_GET_BOUND_BIT_FLAG (mvcc_delete_recdes.data),
+			OR_GET_OFFSET_SIZE (mvcc_delete_recdes.data));
   if (error_code != NO_ERROR)
     {
       pgbuf_unfix_and_init (thread_p, mvcc_delete_page_ptr);
@@ -29211,6 +29206,174 @@ heap_rv_mvcc_redo_delete_relocated (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   return NO_ERROR;
 }
 
+/*
+ * heap_mvcc_log_modify_relocation_link () - Log modified relocation linked.
+ *					     It can be called in MVCC context
+ *					     when a relocated record is
+ *					     assigned a new home when delete
+ *					     or update info is added.
+ *					     Must be processed by vacuum
+ *					     (so regular RVHF_UPDATE cannot
+ *					     be used).
+ *
+ * return	     : Void.
+ * thread_p (in)     : Thread entry.
+ * p_old_recdes (in) : Record data for undo recovery (old data).
+ * p_new_recdes (in) : Record data for redo recovery (new data).
+ * p_addr (in)	     : Log address data.
+ */
+static void
+heap_mvcc_log_modify_relocation_link (THREAD_ENTRY * thread_p,
+				      RECDES * p_old_recdes,
+				      RECDES * p_new_recdes,
+				      LOG_DATA_ADDR * p_addr)
+{
+#define HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_UNDO_CRUMBS 3
+#define HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_REDO_CRUMBS 2
+
+  int n_undo_crumbs = 0, n_redo_crumbs = 0;
+  LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_UNDO_CRUMBS];
+  LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_REDO_CRUMBS];
+  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
+
+  assert (p_old_recdes != NULL);
+  assert (p_new_recdes != NULL);
+  assert (p_addr != NULL);
+
+  /* Build undo crumbs */
+  /* Add log lsa buffer */
+  (void) or_pack_log_lsa (log_lsa_buf, NULL);
+  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
+  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
+
+  /* Add old forward recdes type */
+  undo_crumbs[n_undo_crumbs].length = sizeof (p_old_recdes->type);
+  undo_crumbs[n_undo_crumbs++].data = &p_old_recdes->type;
+
+  /* Add old forward recdes data */
+  undo_crumbs[n_undo_crumbs].length = p_old_recdes->length;
+  undo_crumbs[n_undo_crumbs++].data = p_old_recdes->data;
+
+  /* Safe guard */
+  assert (n_undo_crumbs
+	  <= HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_UNDO_CRUMBS);
+
+  /* Build redo crumbs */
+  /* Add new forward recdes type */
+  redo_crumbs[n_redo_crumbs].length = sizeof (p_new_recdes->type);
+  redo_crumbs[n_redo_crumbs++].data = &p_new_recdes->type;
+
+  /* Add new forward recdes data */
+  redo_crumbs[n_redo_crumbs].length = p_new_recdes->length;
+  redo_crumbs[n_redo_crumbs++].data = p_new_recdes->data;
+
+  log_append_undoredo_crumbs (thread_p, RVHF_MVCC_MODIFY_RELOCATION_LINK,
+			      p_addr, n_undo_crumbs, n_redo_crumbs,
+			      undo_crumbs, redo_crumbs);
+}
+
+/*
+ * heap_rv_mvcc_undoredo_update_skip_log_lsa () - Same functionality as
+ *						  heap_rv_undoredo_update,
+ *						  except that it has to skip
+ *						  log lsa information.
+ *
+ * return	 : Error code.
+ * thread_p (in) : Thread entry.
+ * rcv (in)	 : Recovery data.
+ */
+int
+heap_rv_mvcc_undoredo_update_skip_log_lsa (THREAD_ENTRY * thread_p,
+					   LOG_RCV * rcv)
+{
+  int error_code = NO_ERROR;
+
+  /* Skip log lsa */
+  rcv->length -= OR_LOG_LSA_ALIGNED_SIZE;
+  rcv->data += OR_LOG_LSA_ALIGNED_SIZE;
+
+  /* Call undo/redo update recovery */
+  error_code = heap_rv_undoredo_update (thread_p, rcv);
+
+  /* Restore recovery data */
+  rcv->length += OR_LOG_LSA_ALIGNED_SIZE;
+  rcv->data -= OR_LOG_LSA_ALIGNED_SIZE;
+
+  return error_code;
+}
+
+/*
+ * heap_mvcc_log_delete_relocation () - Log the relocation of a record after
+ *					being delete by an MVCC heap delete
+ *					operation.
+ *
+ * return		      : Void.
+ * thread_p (in)	      : Thread entry.
+ * p_undo_datasource_oid (in) : Source of record data for undo recovery.
+ * undo_record_type (in)      : Record type before MVCC delete.
+ * undo_chn (in)	      : CHN of record before MVCC delete.
+ * p_redo_recdes (in)	      : Redo record type after MVCC delete.
+ * p_addr (in)		      : Log address data.
+ */
+static void
+heap_mvcc_log_delete_relocation (THREAD_ENTRY * thread_p,
+				 const OID * p_undo_datasource_oid,
+				 INT16 undo_record_type, INT32 undo_chn,
+				 RECDES * p_redo_recdes,
+				 LOG_DATA_ADDR * p_addr)
+{
+#define HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS	4
+#define HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS	2
+
+  int n_undo_crumbs = 0, n_redo_crumbs = 0;
+  LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS];
+  LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS];
+  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
+
+  assert (p_addr != NULL);
+  assert (p_undo_datasource_oid != NULL);
+
+  /* Build undo crumbs */
+  /* Add buffer for log lsa */
+  (void) or_pack_log_lsa (log_lsa_buf, NULL);
+  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
+  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
+
+  /* Add source OID for undo operation */
+  undo_crumbs[n_undo_crumbs].length = sizeof (*p_undo_datasource_oid);
+  undo_crumbs[n_undo_crumbs++].data = p_undo_datasource_oid;
+
+  /* Add source record type for undo operation */
+  undo_crumbs[n_undo_crumbs].length = sizeof (undo_record_type);
+  undo_crumbs[n_undo_crumbs++].data = &undo_record_type;
+
+  /* Add CHN for undo operation */
+  undo_crumbs[n_undo_crumbs].length = sizeof (undo_chn);
+  undo_crumbs[n_undo_crumbs++].data = &undo_chn;
+
+  /* Safe guard */
+  assert (n_undo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS);
+
+  /* Build redo crumbs */
+  if (p_redo_recdes != NULL)
+    {
+      /* Add record type */
+      redo_crumbs[n_redo_crumbs].length = sizeof (p_redo_recdes->type);
+      redo_crumbs[n_redo_crumbs++].data = &p_redo_recdes->type;
+
+      /* Add record data */
+      redo_crumbs[n_redo_crumbs].length = p_redo_recdes->length;
+      redo_crumbs[n_redo_crumbs].data = p_redo_recdes->data;
+    }
+
+  /* Safe guard */
+  assert (n_redo_crumbs <= HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS);
+
+  /* Append log crumbs */
+  log_append_undoredo_crumbs (thread_p, RVHF_MVCC_DELETE_RELOCATION, p_addr,
+			      n_undo_crumbs, n_redo_crumbs,
+			      undo_crumbs, redo_crumbs);
+}
 
 /*
  * heap_rv_mvcc_undo_delete_relocation () - Undo MVCC delete relocation

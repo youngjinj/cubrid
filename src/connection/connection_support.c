@@ -510,6 +510,14 @@ css_readn (SOCKET fd, char *ptr, int nbytes, int timeout)
 	    }
 #else
 	  winsock_error = WSAGetLastError ();
+
+	  /* In Windows 2003, pass large length (such as 120MB) to recv()
+	   * will temporary unavailable by error number WSAENOBUFS (10055) */
+	  if (winsock_error == WSAENOBUFS)
+	    {
+	      goto read_again;
+	    }
+
 	  if (winsock_error == WSAEINTR)
 	    {
 	      goto read_again;
@@ -2473,6 +2481,8 @@ css_read_ip_info (IP_INFO ** out_ip_info, char *filename)
 error:
   fclose (fd_ip_list);
   css_free_ip_info (ip_info);
+
+  assert (er_errid () != NO_ERROR);
   return er_errid ();
 }
 
@@ -2613,6 +2623,7 @@ css_user_access_status_start_scan (THREAD_ENTRY * thread_p, int type,
   ctx = showstmt_alloc_array_context (thread_p, default_num_tuple, num_cols);
   if (ctx == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       return error;
     }
@@ -2657,6 +2668,7 @@ css_user_access_status_start_scan (THREAD_ENTRY * thread_p, int type,
       vals = showstmt_alloc_tuple_in_context (thread_p, ctx);
       if (vals == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto error;
 	}
@@ -2742,6 +2754,7 @@ css_make_access_status_exist_user (THREAD_ENTRY * thread_p, OID * class_oid,
   if (heap_get (thread_p, class_oid, &recdes, &scan_cache, PEEK,
 		NULL_CHN) != S_SUCCESS)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto end;
     }
@@ -2818,6 +2831,7 @@ css_make_access_status_exist_user (THREAD_ENTRY * thread_p, OID * class_oid,
       vals = showstmt_alloc_tuple_in_context (thread_p, ctx);
       if (vals == NULL)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	  goto end;
 	}

@@ -1150,9 +1150,7 @@ retry:
 
   if (volid == NULL_VOLID)
     {
-#if defined (SERVER_MODE)
       if (thread_get_check_interrupt (thread_p) == true)
-#endif
 	{
 	  if (logtb_is_interrupted (thread_p, false, &continue_check) == true)
 	    {
@@ -1177,9 +1175,7 @@ retry:
 
   if (volid == NULL_VOLID)
     {
-#if defined (SERVER_MODE)
       if (thread_get_check_interrupt (thread_p) == true)
-#endif
 	{
 	  if (logtb_is_interrupted (thread_p, false, &continue_check) == true)
 	    {
@@ -5789,6 +5785,7 @@ disk_volume_header_start_scan (THREAD_ENTRY * thread_p, int type,
   ctx = db_private_alloc (thread_p, sizeof (DISK_VOL_HEADER_CONTEXT));
   if (ctx == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }
@@ -5856,6 +5853,7 @@ disk_volume_header_next_scan (THREAD_ENTRY * thread_p, int cursor,
   pgptr = pgbuf_fix (thread_p, &vpid, OLD_PAGE, PGBUF_LATCH_READ, false);
   if (pgptr == NULL)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
       goto exit_on_error;
     }

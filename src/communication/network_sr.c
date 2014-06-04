@@ -1417,6 +1417,7 @@ net_server_start (const char *server_name)
   if (boot_restart_server (NULL, true, server_name, false, true,
 			   NULL) != NO_ERROR)
     {
+      assert (er_errid () != NO_ERROR);
       error = er_errid ();
     }
   else
@@ -1430,6 +1431,7 @@ net_server_start (const char *server_name)
 
       if (r < 0)
 	{
+	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 
 	  if (error == NO_ERROR)

@@ -180,6 +180,7 @@ vacuum_data_get_entry (int block_index)
     }
   return &vacuum_Data->vacuum_data_table[block_index];
 }
+
 #define VACUUM_DATA_GET_ENTRY(block_index) \
   vacuum_data_get_entry (block_index)
 #endif
@@ -583,7 +584,7 @@ vacuum_initialize (THREAD_ENTRY * thread_p)
     }
 
   vacuum_Dropped_class_buffer = (VACUUM_DROP_DATA_BUFFER *)
-				      malloc (sizeof (VACUUM_DROP_DATA_BUFFER));
+    malloc (sizeof (VACUUM_DROP_DATA_BUFFER));
   if (vacuum_Dropped_class_buffer == NULL)
     {
       goto error;
@@ -591,8 +592,8 @@ vacuum_initialize (THREAD_ENTRY * thread_p)
   vacuum_Dropped_class_buffer->n_dropped_entries = 0;
   pthread_mutex_init (&vacuum_Dropped_class_buffer->mutex, NULL);
   vacuum_Dropped_class_buffer->dropped_entries =
-	   (VACUUM_DROPPED_ENTRY *) malloc (VACUUM_DROPPED_DATA_BUFFER_CAPACITY
-					    * sizeof (VACUUM_DROPPED_ENTRY));
+    (VACUUM_DROPPED_ENTRY *) malloc (VACUUM_DROPPED_DATA_BUFFER_CAPACITY
+				     * sizeof (VACUUM_DROPPED_ENTRY));
   if (vacuum_Dropped_class_buffer->dropped_entries == NULL)
     {
       goto error;
@@ -600,7 +601,7 @@ vacuum_initialize (THREAD_ENTRY * thread_p)
   vacuum_Dropped_class_buffer->capacity = VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
 
   vacuum_Dropped_index_buffer = (VACUUM_DROP_DATA_BUFFER *)
-				      malloc (sizeof (VACUUM_DROP_DATA_BUFFER));
+    malloc (sizeof (VACUUM_DROP_DATA_BUFFER));
   if (vacuum_Dropped_index_buffer == NULL)
     {
       goto error;
@@ -608,8 +609,8 @@ vacuum_initialize (THREAD_ENTRY * thread_p)
   vacuum_Dropped_index_buffer->n_dropped_entries = 0;
   pthread_mutex_init (&vacuum_Dropped_index_buffer->mutex, NULL);
   vacuum_Dropped_index_buffer->dropped_entries =
-	   (VACUUM_DROPPED_ENTRY *) malloc (VACUUM_DROPPED_DATA_BUFFER_CAPACITY
-					    * sizeof (VACUUM_DROPPED_ENTRY));
+    (VACUUM_DROPPED_ENTRY *) malloc (VACUUM_DROPPED_DATA_BUFFER_CAPACITY
+				     * sizeof (VACUUM_DROPPED_ENTRY));
   if (vacuum_Dropped_index_buffer->dropped_entries == NULL)
     {
       goto error;
@@ -1495,7 +1496,7 @@ vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
 {
   int n_dropped_entries = 0;
   VACUUM_DROPPED_ENTRY *new_entry = NULL;
-  LOG_DROPPED_CLS_BTID_ENTRY * entry = NULL;
+  LOG_DROPPED_CLS_BTID_ENTRY *entry = NULL;
   VACUUM_DROPPED_ENTRY *new_buffer = NULL;
   int n_new_entries = 0;
 
@@ -1521,13 +1522,14 @@ vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
   (void) pthread_mutex_lock (&vacuum_Dropped_class_buffer->mutex);
 
   n_dropped_entries = vacuum_Dropped_class_buffer->n_dropped_entries;
-  if (n_dropped_entries + n_new_entries > vacuum_Dropped_class_buffer->capacity)
+  if (n_dropped_entries + n_new_entries >
+      vacuum_Dropped_class_buffer->capacity)
     {
       new_buffer = (VACUUM_DROPPED_ENTRY *)
-			   realloc (vacuum_Dropped_class_buffer->dropped_entries,
-			   (vacuum_Dropped_class_buffer->capacity
-			    + VACUUM_DROPPED_DATA_BUFFER_CAPACITY)
-			    * sizeof (VACUUM_DROPPED_ENTRY));
+	realloc (vacuum_Dropped_class_buffer->dropped_entries,
+		 (vacuum_Dropped_class_buffer->capacity
+		  + VACUUM_DROPPED_DATA_BUFFER_CAPACITY)
+		 * sizeof (VACUUM_DROPPED_ENTRY));
       if (new_buffer == NULL)
 	{
 	  pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
@@ -1535,7 +1537,7 @@ vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
 	  return ER_FAILED;
 	}
       vacuum_Dropped_class_buffer->capacity +=
-					    VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
+	VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
       vacuum_Dropped_class_buffer->dropped_entries = new_buffer;
     }
 
@@ -1543,7 +1545,7 @@ vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
        entry = entry->next)
     {
       new_entry =
-	      &vacuum_Dropped_class_buffer->dropped_entries[n_dropped_entries];
+	&vacuum_Dropped_class_buffer->dropped_entries[n_dropped_entries];
       if (new_entry == NULL)
 	{
 	  pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
@@ -1552,8 +1554,7 @@ vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
 	}
 
       new_entry->mvccid = entry->mvccid;
-      COPY_OID (&new_entry->dropped_cls_btid.class_oid,
-		&entry->id.class_oid);
+      COPY_OID (&new_entry->dropped_cls_btid.class_oid, &entry->id.class_oid);
 
       n_dropped_entries++;
     }
@@ -1605,13 +1606,14 @@ vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
   (void) pthread_mutex_lock (&vacuum_Dropped_index_buffer->mutex);
 
   n_dropped_entries = vacuum_Dropped_index_buffer->n_dropped_entries;
-  if (n_dropped_entries + n_new_entries > vacuum_Dropped_index_buffer->capacity)
+  if (n_dropped_entries + n_new_entries >
+      vacuum_Dropped_index_buffer->capacity)
     {
       new_buffer = (VACUUM_DROPPED_ENTRY *)
-			   realloc (vacuum_Dropped_index_buffer->dropped_entries,
-			   (vacuum_Dropped_index_buffer->capacity
-			    + VACUUM_DROPPED_DATA_BUFFER_CAPACITY)
-			    * sizeof (VACUUM_DROPPED_ENTRY));
+	realloc (vacuum_Dropped_index_buffer->dropped_entries,
+		 (vacuum_Dropped_index_buffer->capacity
+		  + VACUUM_DROPPED_DATA_BUFFER_CAPACITY)
+		 * sizeof (VACUUM_DROPPED_ENTRY));
       if (new_buffer == NULL)
 	{
 	  pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
@@ -1619,7 +1621,7 @@ vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
 	  return ER_FAILED;
 	}
       vacuum_Dropped_index_buffer->capacity +=
-					    VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
+	VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
       vacuum_Dropped_index_buffer->dropped_entries = new_buffer;
     }
 
@@ -1627,7 +1629,7 @@ vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
        entry = entry->next)
     {
       new_entry =
-	       &vacuum_Dropped_index_buffer->dropped_entries[n_dropped_entries];
+	&vacuum_Dropped_index_buffer->dropped_entries[n_dropped_entries];
       if (new_entry == NULL)
 	{
 	  pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
@@ -1956,7 +1958,7 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 	    }
 
 	  /* Vacuum b-tree */
-	  unique = btid_int.unique;
+	  unique = BTREE_IS_UNIQUE (btid_int.unique_pk);
 	  /* Set btree_delete purpose: vacuum object if it was deleted or
 	   * vacuum insert MVCCID if it was inserted.
 	   */
@@ -2939,7 +2941,7 @@ vacuum_data_remove_entries (THREAD_ENTRY * thread_p, int n_removed_entries,
 
       /* Compute the size of memory data being moved */
       mem_size = (vacuum_Data->n_table_entries - (start_index + n_successive))
-		  * sizeof (VACUUM_DATA_ENTRY);
+	* sizeof (VACUUM_DATA_ENTRY);
       assert (mem_size >= 0);
       if (mem_size > 0)
 	{
@@ -3175,7 +3177,7 @@ vacuum_consume_dropped_class_buffer_log_blocks (THREAD_ENTRY * thread_p)
 	}
 
       vacuum_add_dropped_class (thread_p,
-			        &drop_data_entry->dropped_cls_btid.class_oid,
+				&drop_data_entry->dropped_cls_btid.class_oid,
 				drop_data_entry->mvccid);
     }
   vacuum_Dropped_class_buffer->n_dropped_entries = 0;
@@ -3219,7 +3221,7 @@ vacuum_consume_dropped_index_buffer_log_blocks (THREAD_ENTRY * thread_p)
 	}
 
       vacuum_add_dropped_index (thread_p,
-			        &drop_data_entry->dropped_cls_btid.btid,
+				&drop_data_entry->dropped_cls_btid.btid,
 				drop_data_entry->mvccid);
     }
   vacuum_Dropped_index_buffer->n_dropped_entries = 0;
@@ -3227,6 +3229,7 @@ vacuum_consume_dropped_index_buffer_log_blocks (THREAD_ENTRY * thread_p)
 
   return;
 }
+
 /*
  * vacuum_data_get_first_log_pageid () - Get the first pageid in first block
  *					 found in vacuum data. If vacuum has
@@ -3596,7 +3599,7 @@ vacuum_update_oldest_mvccid (THREAD_ENTRY * thread_p)
   for (i = 1; i < vacuum_Data->n_table_entries; i++)
     {
       if (mvcc_id_precedes (VACUUM_DATA_ENTRY_OLDEST_MVCCID
-			   (VACUUM_DATA_GET_ENTRY (i)), oldest_mvccid))
+			    (VACUUM_DATA_GET_ENTRY (i)), oldest_mvccid))
 	{
 	  oldest_mvccid =
 	    VACUUM_DATA_ENTRY_OLDEST_MVCCID (VACUUM_DATA_GET_ENTRY (i));
@@ -3856,8 +3859,8 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 	      page->dropped_entries[mid].mvccid = mvccid;
 
 	      vacuum_log_add_dropped_cls_btid (thread_p, (PAGE_PTR) page,
-					       &page->dropped_entries[mid], mid,
-					       type, true);
+					       &page->dropped_entries[mid],
+					       mid, type, true);
 
 #if !defined (NDEBUG)
 	      memcpy (&track_page->dropped_data_page, page, DB_PAGESIZE);
@@ -3915,9 +3918,9 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 					 dropped_cls_btid, cls_btid, type);
       page->dropped_entries[position].mvccid = mvccid;
 
-     vacuum_log_add_dropped_cls_btid (thread_p, (PAGE_PTR) page,
-				      &page->dropped_entries[position], position,
-				      type, false);
+      vacuum_log_add_dropped_cls_btid (thread_p, (PAGE_PTR) page,
+				       &page->dropped_entries[position],
+				       position, type, false);
 
 #if !defined (NDEBUG)
       memcpy (&track_page->dropped_data_page, page, DB_PAGESIZE);
@@ -4232,11 +4235,11 @@ vacuum_is_class_dropped (THREAD_ENTRY * thread_p, OID * class_oid,
     {
       return false;
     }
-  if (vacuum_find_dropped_cls_btid (thread_p, class_oid, mvccid, DROPPED_CLASS)
-      == false)
+  if (vacuum_find_dropped_cls_btid
+      (thread_p, class_oid, mvccid, DROPPED_CLASS) == false)
     {
-      return vacuum_is_dropped_cls_btid_in_buffer (thread_p, class_oid, mvccid,
-						   DROPPED_CLASS);
+      return vacuum_is_dropped_cls_btid_in_buffer (thread_p, class_oid,
+						   mvccid, DROPPED_CLASS);
     }
   return true;
 }
@@ -4718,7 +4721,7 @@ static int
 vacuum_is_dropped_cls_btid_in_buffer (THREAD_ENTRY * thread_p, void *cls_btid,
 				      MVCCID mvccid, DROPPED_TYPE type)
 {
-  VACUUM_DROPPED_ENTRY * entry = NULL;
+  VACUUM_DROPPED_ENTRY *entry = NULL;
   int i = 0;
 
   if (type == DROPPED_CLASS)
@@ -4735,13 +4738,13 @@ vacuum_is_dropped_cls_btid_in_buffer (THREAD_ENTRY * thread_p, void *cls_btid,
 	      if (!mvcc_id_precedes (entry->mvccid, mvccid))
 		{
 		  (void) pthread_mutex_unlock (&vacuum_Dropped_class_buffer->
-						mutex);
+					       mutex);
 		  return true;
 		}
 	      else
 		{
 		  (void) pthread_mutex_unlock (&vacuum_Dropped_class_buffer->
-						mutex);
+					       mutex);
 		  return false;
 		}
 	    }
@@ -4762,13 +4765,13 @@ vacuum_is_dropped_cls_btid_in_buffer (THREAD_ENTRY * thread_p, void *cls_btid,
 	      if (!mvcc_id_precedes (entry->mvccid, mvccid))
 		{
 		  (void) pthread_mutex_unlock (&vacuum_Dropped_index_buffer->
-						mutex);
+					       mutex);
 		  return true;
 		}
 	      else
 		{
 		  (void) pthread_mutex_unlock (&vacuum_Dropped_index_buffer->
-						mutex);
+					       mutex);
 		  return false;
 		}
 	    }

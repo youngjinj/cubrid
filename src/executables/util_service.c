@@ -165,9 +165,6 @@ static UTIL_SERVICE_OPTION_MAP_T us_Service_map[] = {
   {ADMIN, UTIL_OPTION_PARAMDUMP, MASK_ADMIN},
   {ADMIN, UTIL_OPTION_STATDUMP, MASK_ADMIN},
   {ADMIN, UTIL_OPTION_CHANGEMODE, MASK_ADMIN},
-  {ADMIN, UTIL_OPTION_COPYLOGDB, MASK_ADMIN},
-  {ADMIN, UTIL_OPTION_APPLYLOGDB, MASK_ADMIN},
-  {ADMIN, UTIL_OPTION_PREFETCHLOGDB, MASK_ADMIN},
   {ADMIN, UTIL_OPTION_APPLYINFO, MASK_ADMIN},
   {ADMIN, UTIL_OPTION_GENERATE_LOCALE, MASK_ADMIN},
   {ADMIN, UTIL_OPTION_DUMP_LOCALE, MASK_ADMIN},
@@ -2722,7 +2719,8 @@ us_hb_copylogdb_stop (HA_CONF * ha_conf, const char *db_name,
 		  wait_time = 0;
 		  do
 		    {
-		      if (ha_is_registered (args, true) == false)
+		      if (ha_is_registered (args, HB_PTYPE_COPYLOGDB) ==
+			  false)
 			{
 			  break;
 			}
@@ -2937,7 +2935,8 @@ us_hb_applylogdb_stop (HA_CONF * ha_conf, const char *db_name,
 		  wait_time = 0;
 		  do
 		    {
-		      if (ha_is_registered (args, false) == false)
+		      if (ha_is_registered (args, HB_PTYPE_APPLYLOGDB) ==
+			  false)
 			{
 			  break;
 			}

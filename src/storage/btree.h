@@ -64,9 +64,6 @@
 #define BTREE_GOTO_LOCKING_DONE		   -7
 #define BTREE_RESTART_SCAN                 -8
 
-#if defined(SERVER_MODE)
-#define BTREE_CLASS_LOCK_MAP_MAX_COUNT     10
-#endif /* SERVER_MODE */
 
 typedef enum
 {
@@ -84,8 +81,8 @@ typedef enum
   BTREE_ALL_KEYS_LOCKED
 } BTREE_LOCKED_KEYS;
 
-#define BTREE_IS_PRIMARY_KEY(unique) ((unique) & BTREE_CONSTRAINT_PRIMARY_KEY)
-#define BTREE_IS_UNIQUE(btid)  ((btid)->unique & BTREE_CONSTRAINT_UNIQUE)
+#define BTREE_IS_PRIMARY_KEY(unique_pk) ((unique_pk) & BTREE_CONSTRAINT_PRIMARY_KEY)
+#define BTREE_IS_UNIQUE(unique_pk)  ((unique_pk) & BTREE_CONSTRAINT_UNIQUE)
 #define BTREE_IS_PART_KEY_DESC(btid) ((btid)->part_key_desc == true)
 
 
@@ -101,7 +98,7 @@ typedef struct btid_int BTID_INT;
 struct btid_int
 {				/* Internal btree block */
   BTID *sys_btid;
-  int unique;			/* if it is an unique index */
+  int unique_pk;		/* if it is an unique index, is PK */
   int part_key_desc;		/* the last partial-key domain is desc */
   TP_DOMAIN *key_type;
   TP_DOMAIN *nonleaf_key_type;	/* With prefix keys, the domain of the
@@ -132,14 +129,6 @@ struct btree_keyrange
   int num_index_term;
 };
 
-#if defined(SERVER_MODE)
-typedef struct btree_class_lock_map_entry BTREE_CLASS_LOCK_MAP_ENTRY;
-struct btree_class_lock_map_entry
-{
-  OID oid;			/* class OID */
-  LK_ENTRY *lock_ptr;		/* memory address to class lock */
-};
-#endif /* SERVER_MODE */
 
 /* Btree range search scan structure */
 typedef struct btree_scan BTREE_SCAN;	/* BTS */
@@ -147,7 +136,7 @@ struct btree_scan
 {
   BTID_INT btid_int;
   TRAN_ISOLATION tran_isolation;	/* transaction isolation level */
-  int read_uncommitted;
+  bool read_uncommitted;
 
   VPID P_vpid;			/* vpid of previous leaf page */
   VPID C_vpid;			/* vpid of current leaf page */
@@ -176,23 +165,8 @@ struct btree_scan
 
   int common_prefix;
 
-#if defined(SERVER_MODE)
   OID cls_oid;			/* class OID */
 
-  /*
-   * 'cls_lock_ptr' has the memory address where the lock mode
-   * acquired on the class oid has been kept. Since the lock mode
-   * is kept in the lock acquired entry of the corresponding class,
-   * the class lock mode cannot be moved to another memory space
-   * during the index scan operation.
-   */
-  LK_ENTRY *cls_lock_ptr;
-
-  /*
-   * class lock map
-   */
-  int class_lock_map_count;
-  BTREE_CLASS_LOCK_MAP_ENTRY class_lock_map[BTREE_CLASS_LOCK_MAP_MAX_COUNT];
 
   /*
    * lock_mode, escalated_mode
@@ -214,10 +188,9 @@ struct btree_scan
    * cur_leaf_lsa
    */
   LOG_LSA cur_leaf_lsa;		/* page LSA of current leaf page */
-#endif				/* SERVER_MODE */
 };
 
-#define COMMON_PREFIX_UNKNOWN	-1
+#define COMMON_PREFIX_UNKNOWN	(-1)
 
 #define BTREE_INIT_SCAN(bts)				\
   do {							\
@@ -378,9 +351,9 @@ enum mvcc_btree_op_purpose
   MVCC_BTREE_INSERT_DELID,	/* Insert delete MVCCID for object when
 				 * deleted.
 				 */
-  MVCC_BTREE_RELOCATE_OBJ_AND_MVCC_INFO	  /* Relocate the object and its
-					   * MVCC info.
-					   */
+  MVCC_BTREE_RELOCATE_OBJ_AND_MVCC_INFO	/* Relocate the object and its
+					 * MVCC info.
+					 */
 };
 
 /* MVCC_BTREE_OP_ARGUMENTS - Structure used to pass arguments relevant for
@@ -400,7 +373,7 @@ extern int btree_find_foreign_key (THREAD_ENTRY * thread_p, BTID * btid,
 extern void btree_scan_clear_key (BTREE_SCAN * btree_scan);
 
 extern bool btree_is_unique_type (BTREE_TYPE type);
-extern int xbtree_get_unique (THREAD_ENTRY * thread_p, BTID * btid);
+extern int xbtree_get_unique_pk (THREAD_ENTRY * thread_p, BTID * btid);
 extern int btree_get_unique_statistics (THREAD_ENTRY * thread_p, BTID * btid,
 					int *oid_cnt, int *null_cnt,
 					int *key_cnt);
@@ -460,10 +433,6 @@ extern int btree_multicol_key_has_null (DB_VALUE * key);
 extern DISK_ISVALID btree_find_key (THREAD_ENTRY * thread_p, BTID * btid,
 				    OID * oid, DB_VALUE * key,
 				    bool * clear_key);
-extern int btree_get_prefix_separator (const DB_VALUE * key1,
-				       const DB_VALUE * key2,
-				       DB_VALUE * prefix_key,
-				       TP_DOMAIN * key_domain);
 /* for migration */
 extern TP_DOMAIN *btree_read_key_type (THREAD_ENTRY * thread_p, BTID * btid);
 

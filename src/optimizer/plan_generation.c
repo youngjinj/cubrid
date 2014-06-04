@@ -4018,6 +4018,7 @@ qo_check_terms_for_multiple_range_opt (QO_PLAN * plan,
        t = bitset_next_member (&iter_t))
     {
       termp = QO_ENV_TERM (env, t);
+      assert (!QO_TERM_IS_FLAGED (termp, QO_TERM_NON_IDX_SARG_COLL));
 
       pos = -1;
       for (i = 0; i < termp->can_use_index && i < 2 && pos == -1; i++)
@@ -4086,6 +4087,7 @@ qo_check_terms_for_multiple_range_opt (QO_PLAN * plan,
        t = bitset_next_member (&iter_t))
     {
       termp = QO_ENV_TERM (env, t);
+      assert (!QO_TERM_IS_FLAGED (termp, QO_TERM_NON_IDX_SARG_COLL));
 
       pos = -1;
       for (i = 0; i < termp->can_use_index && i < 2 && pos == -1; i++)
@@ -4135,6 +4137,11 @@ qo_check_terms_for_multiple_range_opt (QO_PLAN * plan,
   for (t = 0; t < env->nterms; t++)
     {
       termp = QO_ENV_TERM (env, t);
+      if (QO_TERM_IS_FLAGED (termp, QO_TERM_NON_IDX_SARG_COLL))
+	{
+	  return NO_ERROR;
+	}
+
       for (s = bitset_iterate (&(termp->segments), &iter_s); s != -1;
 	   s = bitset_next_member (&iter_s))
 	{
