@@ -952,6 +952,7 @@ struct log_tdes
   /* bind values of executed queries in transaction */
   int num_exec_queries;
   DB_VALUE_ARRAY bind_history[MAX_NUM_EXEC_QUERY_HISTORY];
+  bool has_deadlock_priority;
 
   LOG_MVCC_UPDATE_STATS log_upd_stats;	/* Collects data about inserted/
 					 * deleted records during last
@@ -2306,6 +2307,7 @@ logtb_find_smallest_and_largest_active_pages (THREAD_ENTRY * thread_p,
 					      LOG_PAGEID * smallest,
 					      LOG_PAGEID * largest);
 extern int logtb_is_tran_modification_disabled (THREAD_ENTRY * thread_p);
+extern bool logtb_has_deadlock_priority (int tran_index);
 /* For Debugging */
 extern void xlogtb_dump_trantable (THREAD_ENTRY * thread_p, FILE * out_fp);
 

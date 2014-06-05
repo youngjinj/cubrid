@@ -1808,6 +1808,7 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
     {
       tdes->disable_modifications = db_Disable_modifications;
     }
+  tdes->has_deadlock_priority = false;
 }
 
 /*
@@ -1890,6 +1891,7 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
       tdes->bind_history[i].size = 0;
       tdes->bind_history[i].vals = NULL;
     }
+  tdes->has_deadlock_priority = false;
 
   tdes->mvcc_info = NULL;
 
@@ -1902,6 +1904,7 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
   tdes->log_dropped_cls_btids.last_command_dropped_classes = NULL;
   tdes->log_dropped_cls_btids.last_command_dropped_indexes = NULL;
   tdes->log_dropped_cls_btids.free_dropped_cls_btid_entries = NULL;
+  
 }
 
 /*
@@ -5870,4 +5873,23 @@ logtb_find_smallest_and_largest_active_pages (THREAD_ENTRY * thread_p,
 	}
     }
   TR_TABLE_CS_EXIT (thread_p);
+}
+
+/*
+ * logtb_has_deadlock_priority -  
+ *
+ * return: whether this transaction has deadlock priority
+ */
+bool
+logtb_has_deadlock_priority (int tran_index)
+{
+  LOG_TDES *tdes;		/* Transaction descriptor */
+
+  tdes = LOG_FIND_TDES (tran_index);
+  if (tdes)
+    {
+      return tdes->has_deadlock_priority;
+    }
+
+  return false;
 }

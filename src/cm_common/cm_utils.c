@@ -29,7 +29,6 @@
 
 #include <stdio.h>
 #include <signal.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 
@@ -38,8 +37,10 @@
 #include <io.h>
 #include <tlhelp32.h>
 #else
+#include "system_parameter.h"
 #include <unistd.h>
 #include <sys/wait.h>
+#include <stdarg.h>
 #endif
 
 static T_CMD_RESULT *new_cmd_result (void);
@@ -734,4 +735,42 @@ make_version_info (char *cli_ver, int *major_ver, int *minor_ver)
     *minor_ver = 0;
 
   return 1;
+}
+
+int
+cm_util_log_write_result (int error)
+{
+  return util_log_write_result (error);
+}
+
+int
+cm_util_log_write_errid (int message_id, ...)
+{
+  int ret = 0;
+  va_list arg_list;
+
+  va_start (arg_list, message_id);
+  ret = util_log_write_errid (message_id, arg_list);
+  va_end (arg_list);
+
+  return ret;
+}
+
+int
+cm_util_log_write_errstr (const char *format, ...)
+{
+  int ret = 0;
+  va_list arg_list;
+
+  va_start (arg_list, format);
+  ret = util_log_write_errstr (format, arg_list);
+  va_end (arg_list);
+
+  return ret;
+}
+
+int
+cm_util_log_write_command (int argc, char *argv[])
+{
+  return util_log_write_command (argc, argv);
 }
