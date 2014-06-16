@@ -516,6 +516,7 @@ pt_associate_label_with_value (const char *label, DB_VALUE * val)
 {
   const char *key;
   DB_VALUE *oldval;
+  MOP mop;
 
   /* create label table if non-existent */
   if (!pt_Label_table)
@@ -550,6 +551,12 @@ pt_associate_label_with_value (const char *label, DB_VALUE * val)
 	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
 	}
+
+      if (DB_VALUE_TYPE ((DB_VALUE *) val) == DB_TYPE_OBJECT)
+	{
+	  mop = db_get_object (val);
+	  ws_add_label_value_to_mop (mop, val);
+	}
     }
   else
     {
@@ -566,6 +573,22 @@ pt_associate_label_with_value (const char *label, DB_VALUE * val)
 	{
 	  assert (er_errid () != NO_ERROR);
 	  return er_errid ();
+	}
+
+      if (DB_VALUE_TYPE ((DB_VALUE *) val) == DB_TYPE_OBJECT)
+	{
+	  mop = db_get_object (val);
+	  if (ws_add_label_value_to_mop (mop, val) != NO_ERROR)
+	    {
+	      assert (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+	}
+
+      if (DB_VALUE_TYPE (oldval) == DB_TYPE_OBJECT)
+	{
+	  mop = db_get_object (oldval);
+	  ws_remove_label_value_from_mop (mop, oldval);
 	}
 
       /* if the insertion went well, free the old value */
@@ -836,7 +859,14 @@ pt_free_label (const void *key, void *data, void *args)
 {
   if (key != NULL)
     {
+      DB_VALUE *val = (DB_VALUE *) data;
+      MOP mop;
       ws_free_string ((char *) key);
+      if (DB_VALUE_TYPE (val) == DB_TYPE_OBJECT)
+	{
+	  mop = db_get_object (val);
+	  ws_remove_label_value_from_mop (mop, val);
+	}
       db_value_free ((DB_VALUE *) data);
     }
 

@@ -73,6 +73,13 @@ struct ws_flush_err
   int error_code;
 };
 
+typedef struct ws_value_list WS_VALUE_LIST;
+typedef struct ws_value_list
+{
+  struct ws_value_list *next;
+  DB_VALUE *val;
+};
+
 /*
  * DB_OBJECT
  *    This is the primary workspace structure used as a reference to a
@@ -113,6 +120,7 @@ struct db_object
   struct db_object *mvcc_link;	/* Used by MVCC to link mops for different
 				 * object versions.
 				 */
+  WS_VALUE_LIST *label_value_list;	/* label value list */
   void *version;		/* versioning information */
   LOCK lock;			/* object lock */
   int mvcc_snapshot_version;	/* The snapshot version at the time mop object
@@ -763,4 +771,9 @@ extern bool ws_is_mop_fetched_with_current_snapshot (MOP mop);
 extern MOP ws_mvcc_latest_version (MOP mop);
 
 extern bool ws_is_same_object (MOP mop1, MOP mop2);
+extern void ws_move_label_value_list (MOP dest_mop, MOP src_mop);
+extern void ws_remove_label_value_from_mop (MOP mop, DB_VALUE * val);
+extern int ws_add_label_value_to_mop (MOP mop, DB_VALUE * val);
+extern void ws_clean_label_value_list (MOP mop);
+
 #endif /* _WORK_SPACE_H_ */

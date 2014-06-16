@@ -4347,6 +4347,9 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 				  /* Mvcc is link is not yet permanent */
 				  mop_toid->mop->permanent_mvcc_link = 0;
 
+				  ws_move_label_value_list (new_mop,
+							    mop_toid->mop);
+
 				  /* Add object to class */
 				  ws_set_class (new_mop, new_class_mop);
 

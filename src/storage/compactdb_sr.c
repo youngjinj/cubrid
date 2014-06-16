@@ -304,7 +304,7 @@ desc_disk_to_attr_info (THREAD_ENTRY * thread_p, OID * oid, RECDES * recdes,
       return ER_FAILED;
     }
 
-  if (heap_attrinfo_read_dbvalues (thread_p, oid, recdes, attr_info) !=
+  if (heap_attrinfo_read_dbvalues (thread_p, oid, recdes, NULL, attr_info) !=
       NO_ERROR)
     {
       return ER_FAILED;

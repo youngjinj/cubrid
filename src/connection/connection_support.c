@@ -2803,7 +2803,7 @@ css_make_access_status_exist_user (THREAD_ENTRY * thread_p, OID * class_oid,
       if (scan == S_SUCCESS)
 	{
 	  error = heap_attrinfo_read_dbvalues (thread_p, &inst_oid,
-					       &recdes, &attr_info);
+					       &recdes, NULL, &attr_info);
 	  if (error != NO_ERROR)
 	    {
 	      goto end;

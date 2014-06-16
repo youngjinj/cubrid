@@ -46,16 +46,15 @@ struct lock_free_circular_queue
 {
   char *data;
   INT32 head;
+  INT32 read_tail;
   INT32 tail;
   INT32 capacity;
   int data_size;
-  bool sync_producers;
-  bool sync_consumers;
 };
 
 /* Check if queue is empty */
 #define LOCK_FREE_CIRCULAR_QUEUE_IS_EMPTY(queue) \
-  (queue->head == queue->tail)
+  (queue->head == queue->read_tail)
 /* Check if queue is full */
 #define LOCK_FREE_CIRCULAR_QUEUE_IS_FULL(queue) \
   (((queue->tail + 1) % queue->capacity) == queue->head)
@@ -67,11 +66,7 @@ extern bool lock_free_circular_queue_pop (LOCK_FREE_CIRCULAR_QUEUE * queue,
 extern LOCK_FREE_CIRCULAR_QUEUE *lock_free_circular_queue_create (INT32
 								  capacity,
 								  int
-								  data_size,
-								  bool
-								  sync_producers,
-								  bool
-								  sync_consumers);
+								  data_size);
 extern void lock_free_circular_queue_destroy (LOCK_FREE_CIRCULAR_QUEUE *
 					      queue);
 

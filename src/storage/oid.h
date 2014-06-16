@@ -49,7 +49,7 @@
   do {	\
       (dest_oid_ptr)->volid = vol_id; \
       (dest_oid_ptr)->pageid = page_id;	\
-      (dest_oid_ptr)->slot_id = slot_id;  \
+      (dest_oid_ptr)->slotid = slot_id;  \
   }while(0)
 
 #define COPY_OID(dest_oid_ptr, src_oid_ptr) do { \

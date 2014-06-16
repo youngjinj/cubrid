@@ -10053,6 +10053,7 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 			  error =
 			    heap_attrinfo_read_dbvalues (thread_p, oid,
 							 &recdes,
+							 NULL,
 							 &crt_del_lob_info->
 							 attr_info);
 			  if (error != NO_ERROR)
@@ -11067,6 +11068,7 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		    {
 		      error =
 			heap_attrinfo_read_dbvalues (thread_p, oid, &recdes,
+						     NULL,
 						     &crt_del_lob_info->
 						     attr_info);
 		      if (error != NO_ERROR)
@@ -11505,7 +11507,8 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
   if (idx_info->has_single_col)
     {
       error_code = heap_attrinfo_read_dbvalues (thread_p, &oid_Null_oid,
-						&new_recdes, index_attr_info);
+						&new_recdes, NULL,
+						index_attr_info);
       if (error_code != NO_ERROR)
 	{
 	  goto error_exit;
@@ -11830,7 +11833,8 @@ qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
   if (idx_info->has_single_col)
     {
       error_code = heap_attrinfo_read_dbvalues (thread_p, &oid_Null_oid,
-						&recdes, index_attr_info);
+						&recdes, NULL,
+						index_attr_info);
       if (error_code != NO_ERROR)
 	{
 	  goto error_exit;
@@ -12089,7 +12093,7 @@ qexec_execute_duplicate_key_update (THREAD_ENTRY * thread_p, ODKU_INFO * odku,
     }
 
   error = heap_attrinfo_read_dbvalues (thread_p, &unique_oid, &rec_descriptor,
-				       odku->attr_info);
+				       NULL, odku->attr_info);
   if (error != NO_ERROR)
     {
       goto exit_on_error;
@@ -13368,6 +13372,7 @@ qexec_execute_obj_fetch (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	  /* read the predicate values from the heap into the scancache */
 	  status =
 	    heap_attrinfo_read_dbvalues (thread_p, dbvaloid, &oRec,
+					 &scan_cache,
 					 specp->s.cls_node.cache_pred);
 	  if (status != NO_ERROR)
 	    {
@@ -13411,7 +13416,7 @@ qexec_execute_obj_fetch (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      fetch->fetch_res = true;
 	      /* read the rest of the values from the heap */
 	      status = heap_attrinfo_read_dbvalues (thread_p, dbvaloid,
-						    &oRec,
+						    &oRec, &scan_cache,
 						    specp->s.
 						    cls_node.cache_rest);
 	      if (status != NO_ERROR)

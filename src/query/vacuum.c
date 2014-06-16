@@ -490,10 +490,10 @@ static bool vacuum_is_work_in_progress (THREAD_ENTRY * thread_p);
 static void vacuum_data_remove_finished_entries (THREAD_ENTRY * thread_p);
 static void vacuum_data_remove_entries (THREAD_ENTRY * thread_p,
 					int n_removed_entries,
-					int * removed_entries);
+					int *removed_entries);
 
 static void vacuum_log_remove_data_entries (THREAD_ENTRY * thread_p,
-					    int * removed_indexes,
+					    int *removed_indexes,
 					    int n_removed_indexes);
 static void vacuum_log_append_block_data (THREAD_ENTRY * thread_p,
 					  VACUUM_DATA_ENTRY * new_entries,
@@ -576,8 +576,7 @@ vacuum_initialize (THREAD_ENTRY * thread_p)
 
   vacuum_Block_data_buffer =
     lock_free_circular_queue_create (VACUUM_BLOCK_DATA_BUFFER_CAPACITY,
-				     sizeof (VACUUM_DATA_ENTRY),
-				     false, false);
+				     sizeof (VACUUM_DATA_ENTRY));
   if (vacuum_Block_data_buffer == NULL)
     {
       goto error;
@@ -1492,7 +1491,7 @@ vacuum_produce_log_block_data (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
  */
 int
 vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
-					  void * entries)
+					  void *entries)
 {
   int n_dropped_entries = 0;
   VACUUM_DROPPED_ENTRY *new_entry = NULL;
@@ -1516,6 +1515,11 @@ vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
        entry = entry->next)
     {
       n_new_entries++;
+    }
+
+  if (n_new_entries <= 0)
+    {
+      return NO_ERROR;
     }
 
   /* Push new block into block data buffer */
@@ -1576,7 +1580,7 @@ vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
  */
 int
 vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
-					  void * entries)
+					  void *entries)
 {
   int n_dropped_entries = 0;
   VACUUM_DROPPED_ENTRY *new_entry = NULL;
@@ -1600,6 +1604,11 @@ vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
        entry = entry->next)
     {
       n_new_entries++;
+    }
+
+  if (n_new_entries <= 0)
+    {
+      return NO_ERROR;
     }
 
   /* Push new block into block data buffer */
@@ -2893,7 +2902,7 @@ vacuum_is_work_in_progress (THREAD_ENTRY * thread_p)
  */
 static void
 vacuum_data_remove_entries (THREAD_ENTRY * thread_p, int n_removed_entries,
-			    int * removed_entries)
+			    int *removed_entries)
 {
 #define TEMP_BUFFER_SIZE 1024
   VACUUM_DATA_ENTRY temp_buffer[TEMP_BUFFER_SIZE], *entry = NULL;
@@ -2966,6 +2975,14 @@ vacuum_data_remove_entries (THREAD_ENTRY * thread_p, int n_removed_entries,
       vacuum_Data->n_table_entries -= n_successive;
 
       /* Reset successive removed entries to 1 */
+      vacuum_er_log (VACUUM_ER_LOG_MASTER | VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: thread(%d) calls: "
+		     "vacuum_remove_data_entries ():"
+		     "removed=(%d)\n"
+		     "n_entries=(%d)\n",
+		     thread_get_current_entry_index (),
+		     n_successive, vacuum_Data->n_table_entries);
+
       n_successive = 1;
     }
 
@@ -3293,8 +3310,7 @@ vacuum_data_get_last_log_pageid (THREAD_ENTRY * thread_p)
  */
 static void
 vacuum_log_remove_data_entries (THREAD_ENTRY * thread_p,
-				int * removed_indexes,
-				int n_removed_indexes)
+				int *removed_indexes, int n_removed_indexes)
 {
 #define MAX_LOG_DISCARD_BLOCK_DATA_CRUMBS 2
 
@@ -4107,7 +4123,8 @@ vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, DROPPED_TYPE type)
 
   /* Clean each page of dropped entries */
   VPID_COPY (&vpid, VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
-  VPID_COPY (&last_non_empty_page_vpid, VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
+  VPID_COPY (&last_non_empty_page_vpid,
+	     VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
   while (!VPID_ISNULL (&vpid))
     {
       /* Reset n_removed_entries */

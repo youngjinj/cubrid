@@ -290,6 +290,7 @@ ws_make_mop (OID * oid)
       op->released = 0;
       op->decached = 0;
       op->permanent_mvcc_link = 0;
+      op->label_value_list = NULL;
       /* Initialize mvcc snapshot version to be sure it doesn't match with
        * current mvcc snapshot version.
        */
@@ -329,6 +330,8 @@ ws_free_mop (MOP op)
 {
   DB_VALUE *keys;
   unsigned int flags;
+
+  ws_clean_label_value_list (op);
 
   keys = ws_keys (op, &flags);
 
@@ -874,6 +877,9 @@ ws_mvcc_updated_mop (OID * oid, OID * new_oid, MOP class_mop,
 	      /* Mark mvcc link as permanent */
 	      mop->permanent_mvcc_link = 1;
 	    }
+
+	  /* move label value list from old mop to new mop */
+	  ws_move_label_value_list (new_mop, mop);
 	  return new_mop;
 	}
     }
@@ -2980,6 +2986,7 @@ ws_clear_internal (bool clear_vmop_keys)
 
 	  if (mop->mvcc_link != NULL && !mop->permanent_mvcc_link)
 	    {
+	      ws_move_label_value_list (mop, mop->mvcc_link);
 	      mop->mvcc_link = NULL;
 	    }
 	}
@@ -3907,6 +3914,7 @@ ws_abort_mops (bool only_unpinned)
       /* Remove MVCC link if it is not permanent */
       if (mop->mvcc_link != NULL && !mop->permanent_mvcc_link)
 	{
+	  ws_move_label_value_list (mop, mop->mvcc_link);
 	  /* Decache temporary version */
 	  ws_decache (mop->mvcc_link);
 	  /* Remove mvcc link */
@@ -6001,4 +6009,162 @@ ws_free_flush_error (WS_FLUSH_ERR * flush_err)
   free_and_init (flush_err);
 
   return;
+}
+
+/*
+ * ws_move_label_value_list() - move label value list
+ *    return: void
+ * dest_mop (in) : destination mop
+ * src_mop (in) : source mop
+ */
+void
+ws_move_label_value_list (MOP dest_mop, MOP src_mop)
+{
+  WS_VALUE_LIST *value_node;
+  if (dest_mop == NULL || src_mop == NULL)
+    {
+      return;
+    }
+
+  /* move src_mop->label_value_list to dest_mop->label_value_list */
+  if (dest_mop->label_value_list == NULL)
+    {
+      dest_mop->label_value_list = src_mop->label_value_list;
+    }
+  else
+    {
+      value_node = dest_mop->label_value_list;
+      while (value_node->next != NULL)
+	{
+	  value_node = value_node->next;
+	}
+
+      value_node->next = src_mop->label_value_list;
+    }
+
+  /* update mop for each db_value from src_mop->label_value_list */
+  for (value_node = src_mop->label_value_list; value_node != NULL;
+       value_node = value_node->next)
+    {
+      if (DB_VALUE_TYPE (value_node->val) == DB_TYPE_OBJECT)
+	{
+	  value_node->val->data.op = dest_mop;
+	}
+    }
+
+  src_mop->label_value_list = NULL;
+}
+
+/*
+ * ws_remove_label_value_from_mop() - remove label value from mop value list
+ *    return: void
+ * mop (in) : mop
+ * val (in) : value to remove from mop value list
+ */
+void
+ws_remove_label_value_from_mop (MOP mop, DB_VALUE * val)
+{
+  WS_VALUE_LIST *prev_value_node, *value_node;
+  if (mop == NULL || val == NULL)
+    {
+      return;
+    }
+
+  if (mop->label_value_list == NULL)
+    {
+      return;
+    }
+
+  /* search for val into mop->label_value_list */
+  prev_value_node = NULL;
+  value_node = mop->label_value_list;
+  while (value_node != NULL)
+    {
+      if (value_node->val == val)
+	{
+	  break;
+	}
+
+      prev_value_node = value_node;
+      value_node = value_node->next;
+    }
+
+  if (value_node == NULL)
+    {
+      /* not found */
+      return;
+    }
+
+  /* remove val from mop->label_value_list */
+  if (value_node == mop->label_value_list)
+    {
+      mop->label_value_list = mop->label_value_list->next;
+    }
+  else
+    {
+      prev_value_node->next = value_node->next;
+    }
+
+  value_node->val = NULL;
+  db_ws_free (value_node);
+}
+
+/*
+ * ws_add_label_value_to_mop() - add label value to mop value list
+ *    return: error code
+ * mop (in) : mop.
+ * val (in) : value to add to mop value list
+ */
+int
+ws_add_label_value_to_mop (MOP mop, DB_VALUE * val)
+{
+  WS_VALUE_LIST *value_node;
+
+  if (mop == NULL || val == NULL)
+    {
+      return NO_ERROR;
+    }
+
+  value_node = (WS_VALUE_LIST *) db_ws_alloc (sizeof (WS_VALUE_LIST));
+  if (value_node == NULL)
+    {
+      assert (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+
+  value_node->val = val;
+
+  if (mop->label_value_list == NULL)
+    {
+      value_node->next = NULL;
+      mop->label_value_list = value_node;
+    }
+  else
+    {
+      value_node->next = mop->label_value_list;
+      mop->label_value_list = value_node;
+    }
+
+  return NO_ERROR;
+}
+
+/*
+ * ws_clean_label_value_list() - clean mop value list
+ *    return: void
+ * mop (in) : mop.
+ */
+void
+ws_clean_label_value_list (MOP mop)
+{
+  WS_VALUE_LIST *next_value_node, *value_node;
+  value_node = mop->label_value_list;
+  while (value_node != NULL)
+    {
+      next_value_node = value_node->next;
+      value_node->val = NULL;
+      db_ws_free (value_node);
+      value_node = next_value_node;
+    }
+
+  mop->label_value_list = NULL;
 }

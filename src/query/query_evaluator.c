@@ -2757,6 +2757,7 @@ update_logical_result (THREAD_ENTRY * thread_p, DB_LOGICAL ev_res,
 	  if (heap_attrinfo_read_dbvalues (thread_p,
 					   oid,
 					   recdes,
+					   NULL,
 					   key_filter->scan_attrs->
 					   attr_cache) != NO_ERROR)
 	    {
@@ -2821,7 +2822,7 @@ update_logical_result (THREAD_ENTRY * thread_p, DB_LOGICAL ev_res,
  */
 DB_LOGICAL
 eval_data_filter (THREAD_ENTRY * thread_p, OID * oid, RECDES * recdesp,
-		  FILTER_INFO * filterp)
+		  HEAP_SCANCACHE * scan_cache, FILTER_INFO * filterp)
 {
   SCAN_PRED *scan_predp;
   SCAN_ATTRS *scan_attrsp;
@@ -2843,7 +2844,7 @@ eval_data_filter (THREAD_ENTRY * thread_p, OID * oid, RECDES * recdesp,
       && scan_predp->regu_list != NULL)
     {
       /* read the predicate values from the heap into the attribute cache */
-      if (heap_attrinfo_read_dbvalues (thread_p, oid, recdesp,
+      if (heap_attrinfo_read_dbvalues (thread_p, oid, recdesp, scan_cache,
 				       scan_attrsp->attr_cache) != NO_ERROR)
 	{
 	  return V_ERROR;

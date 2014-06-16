@@ -50,6 +50,7 @@
 #include "query_manager.h"
 #include "api_compat.h"
 #include "network_interface_cl.h"
+#include "transaction_cl.h"
 
 #define BUF_SIZE 1024
 
@@ -3115,7 +3116,7 @@ db_execute_and_keep_statement (DB_SESSION * session, int stmt_ndx,
 
   err = db_execute_and_keep_statement_local (session, stmt_ndx, result);
 
-  db_invalidate_mvcc_snapshot ();
+  db_invalidate_mvcc_snapshot_after_statement ();
 
   return err;
 }
@@ -3189,7 +3190,7 @@ db_execute_statement (DB_SESSION * session, int stmt_ndx,
 
   err = db_execute_statement_local (session, stmt_ndx, result);
 
-  db_invalidate_mvcc_snapshot ();
+  db_invalidate_mvcc_snapshot_after_statement ();
 
   return err;
 }
@@ -3375,7 +3376,7 @@ db_compile_and_execute_queries_internal (const char *CSQL_query,
 	   */
 	  if (is_new_statement)
 	    {
-	      db_invalidate_mvcc_snapshot ();
+	      db_invalidate_mvcc_snapshot_after_statement ();
 	    }
 	  /* Compile a new statement */
 	  stmt_no = db_compile_statement_local (session);
@@ -3387,7 +3388,7 @@ db_compile_and_execute_queries_internal (const char *CSQL_query,
       *(DB_QUERY_TYPE **) result = db_get_query_type_list (session, stmt_no);
       if (is_new_statement)
 	{
-	  db_invalidate_mvcc_snapshot ();
+	  db_invalidate_mvcc_snapshot_after_statement ();
 	}
     }
 
@@ -4131,11 +4132,14 @@ db_is_query_async_executable (DB_SESSION * session, int stmt_ndx)
 }
 
 /*
- * db_invalidate_mvcc_snapshot () - When MVCC is enabled, server uses a
- *				    snapshot to filter data. Snapshot is
- *				    obtained with the first fetch or execution
- *				    on server and should be invalidated before
- *				    executing a new statement.
+ * db_invalidate_mvcc_snapshot_after_statement () - When MVCC is enabled,
+ *						    server uses a snapshot to
+ *						    filter data. Snapshot is
+ *						    obtained with the first
+ *						    fetch or execution on
+ *						    server and should be
+ *						    invalidated before
+ *						    executing a new statement.
  *
  * return : Void.
  *
@@ -4143,14 +4147,24 @@ db_is_query_async_executable (DB_SESSION * session, int stmt_ndx)
  *	 MVCC, snapshot must be invalidated only on commit/rollback.
  */
 void
-db_invalidate_mvcc_snapshot ()
+db_invalidate_mvcc_snapshot_after_statement ()
 {
   if (!prm_get_bool_value (PRM_ID_MVCC_ENABLED))
     {
       /* Snapshot is used only if MVCC is enabled */
       return;
     }
-  /* TODO: Check isolation level */
+
+  if (TM_TRAN_ISOLATION () >= TRAN_REP_CLASS_REP_INSTANCE)
+    {
+      /* Do not invalidate snapshot after each statement */
+      return;
+    }
+
+  /* TODO: Avoid doing a new request on server now. Find an alternative
+   *       way by saving invalidated snapshot on client and use first request
+   *       in next statement execution to invalidate on server.
+   */
   /* Invalidate snapshot on server */
   log_invalidate_mvcc_snapshot ();
   /* Increment snapshot version in work space */

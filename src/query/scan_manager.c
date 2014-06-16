@@ -5467,6 +5467,8 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       if (mvcc_Enabled == false || !scan_id->mvcc_select_lock_needed)
 	{
 	  ev_res = eval_data_filter (thread_p, p_current_oid, &recdes,
+				     (scan_id->scan_op_type == S_SELECT) ?
+				     (&hsidp->scan_cache) : NULL,
 				     &data_filter);
 	  if (ev_res == V_ERROR)
 	    {
@@ -5519,7 +5521,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  /* read the rest of the values from the heap into the attribute
 	     cache */
 	  if (heap_attrinfo_read_dbvalues (thread_p, p_current_oid,
-					   &recdes,
+					   &recdes, &hsidp->scan_cache,
 					   hsidp->rest_attrs.attr_cache)
 	      != NO_ERROR)
 	    {
@@ -5601,7 +5603,8 @@ scan_next_heap_page_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
       /* evaluate filter to see if the page qualifies */
       ev_res =
-	eval_data_filter (thread_p, &hpsidp->cls_oid, NULL, &data_filter);
+	eval_data_filter (thread_p, &hpsidp->cls_oid, NULL, NULL,
+			  &data_filter);
 
       if (ev_res == V_ERROR)
 	{
@@ -5657,7 +5660,7 @@ scan_next_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       scan_id->position = S_AFTER;
 
       /* evaluate the predicates to see if the object qualifies */
-      ev_res = eval_data_filter (thread_p, NULL, NULL, &data_filter);
+      ev_res = eval_data_filter (thread_p, NULL, NULL, NULL, &data_filter);
       if (ev_res == V_ERROR)
 	{
 	  return S_ERROR;
@@ -5705,7 +5708,7 @@ scan_next_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	{
 	  /* read the rest of the values from the heap into the attribute
 	     cache */
-	  if (heap_attrinfo_read_dbvalues (thread_p, NULL, NULL,
+	  if (heap_attrinfo_read_dbvalues (thread_p, NULL, NULL, NULL,
 					   hsidp->rest_attrs.attr_cache)
 	      != NO_ERROR)
 	    {
@@ -6321,7 +6324,9 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     {
       /* evaluate the predicates to see if the object qualifies */
       ev_res =
-	eval_data_filter (thread_p, isidp->curr_oidp, &recdes, data_filter);
+	eval_data_filter (thread_p, isidp->curr_oidp, &recdes,
+			  (scan_id->scan_op_type == S_SELECT) ?
+			  (&isidp->scan_cache) : NULL, data_filter);
       if (isidp->key_pred.regu_list != NULL)
 	{
 	  FILTER_INFO key_filter;
@@ -6359,6 +6364,7 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
       /* read the rest of the values from the heap into the attribute
          cache */
       if (heap_attrinfo_read_dbvalues (thread_p, isidp->curr_oidp, &recdes,
+				       &isidp->scan_cache,
 				       isidp->rest_attrs.attr_cache) !=
 	  NO_ERROR)
 	{
@@ -6415,7 +6421,7 @@ scan_next_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  return (sp_scan == S_END) ? S_END : S_ERROR;
 	}
 
-      ev_res = eval_data_filter (thread_p, NULL, NULL, &data_filter);
+      ev_res = eval_data_filter (thread_p, NULL, NULL, NULL, &data_filter);
       if (ev_res == V_FALSE)
 	{
 	  continue;
@@ -6472,7 +6478,7 @@ scan_next_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  return (sp_scan == S_END) ? S_END : S_ERROR;
 	}
 
-      ev_res = eval_data_filter (thread_p, NULL, NULL, &data_filter);
+      ev_res = eval_data_filter (thread_p, NULL, NULL, NULL, &data_filter);
       if (ev_res == V_ERROR)
 	{
 	  return S_ERROR;

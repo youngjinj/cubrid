@@ -39,47 +39,59 @@
 bool
 lock_free_circular_queue_push (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
 {
-  INT32 prev_tail, new_tail;
-  if (queue->sync_producers)
+  INT32 prev_tail, new_tail, prev_read_tail, new_read_tail;
+  /* Use atomic compare and swap operation to make sure that two producers
+   * do not write the same entry in queue.
+   * First save queue tail value, compute new tail value and then try to
+   * compare and swap values. If the tail was successfully changed, the
+   * data can be in the previous tail entry.
+   */
+  do
     {
-      /* Use atomic compare and swap operation to make sure that two producers
-       * do not write the same entry in queue.
-       * First save queue tail value, compute new tail value and then try to
-       * compare and swap values. If the tail was successfully changed, the
-       * data can be in the previous tail entry.
-       */
-      do
-	{
-	  if (LOCK_FREE_CIRCULAR_QUEUE_IS_FULL (queue))
-	    {
-	      /* The queue is already full */
-	      return false;
-	    }
-	  /* Read current tail */
-	  prev_tail = queue->tail;
-	  /* Compute next tail */
-	  new_tail = (prev_tail + 1) % queue->capacity;
-	  /* If tail value didn't change, replace it with next tail value */
-	}
-      while (!ATOMIC_CAS_32 (&queue->tail, prev_tail, new_tail));
-      /* Copy data in the read tail value */
-      memcpy (queue->data + (prev_tail * queue->data_size), data,
-	      queue->data_size);
-    }
-  else
-    {
-      /* No need to synchronize producers, just write the data at the end
-       * of the queue.
-       */
+      /* Read current tail */
+      prev_tail = queue->tail;
       if (LOCK_FREE_CIRCULAR_QUEUE_IS_FULL (queue))
 	{
 	  /* The queue is already full */
 	  return false;
 	}
-      memcpy (queue->data + (queue->tail * queue->data_size), data,
-	      queue->data_size);
-      queue->tail = (queue->tail + 1) % queue->capacity;
+      /* Compute next tail */
+      new_tail = (prev_tail + 1) % queue->capacity;
+      /* If tail value didn't change, replace it with next tail value */
     }
+  while (!ATOMIC_CAS_32 (&queue->tail, prev_tail, new_tail));
+  /* Copy data in the read tail value */
+  memcpy (queue->data + (prev_tail * queue->data_size), data,
+	  queue->data_size);
+  /* We can have next anomaly:
+   * 1. Queue is empty (head == tail).
+   * 2. Producer successfully increment tail.
+   * 3. Consumer finds queue not empty (tail == head + 1).
+   * 4. Consumer reads memory data that is not updated.
+   * 5. Producer updates memory data.
+   * TODO: We need to find a proper solution to avoid this anomaly.
+   * Currently we can use a read_tail used for is empty test that is
+   * incremented after the memory copy, because currently producers are
+   * protected by mutex.
+   * However, if producers could write at the same time, we may still have
+   * the next scenario.
+   * 1. Queue is empty.
+   * 2. P1 successfully increments tail to head + 1 and will write its data
+   *    at head.
+   * 3. P2 successfully increments tail to head + 2 and will write its data
+   *    at head + 1.
+   * 4. P2 copies its data and increments read_tail to head + 1.
+   * 5. C1 find a non-empty queue (tail == head + 2) and reads from head
+   *    data that was not updated.
+   * 6. P1 updates its data and increments read_tail.
+   */
+  do
+    {
+      prev_read_tail = queue->read_tail;
+      new_read_tail = (prev_read_tail + 1) % queue->capacity;
+    }
+  while (!ATOMIC_CAS_32 (&queue->read_tail, prev_read_tail, new_read_tail));
+
   return true;
 }
 
@@ -94,44 +106,29 @@ bool
 lock_free_circular_queue_pop (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
 {
   INT32 prev_head, new_head;
-  if (queue->sync_consumers)
+  /* Need to synchronize consumers to avoid consuming the same entry.
+   * Use atomic compare and swap: read head value, compute new head value
+   * and then if the head value didn't change replace it with the new
+   * value. Repeat until successful and then data can be read from
+   * previous head entry.
+   */
+  do
     {
-      /* Need to synchronize consumers to avoid consuming the same entry.
-       * Use atomic compare and swap: read head value, compute new head value
-       * and then if the head value didn't change replace it with the new
-       * value. Repeat until successful and then data can be read from
-       * previous head entry.
-       */
-      do
-	{
-	  if (LOCK_FREE_CIRCULAR_QUEUE_IS_EMPTY (queue))
-	    {
-	      /* Queue is empty, nothing to consume */
-	      return false;
-	    }
-	  /* Read head */
-	  prev_head = queue->head;
-	  /* Compute new head */
-	  new_head = (prev_head + 1) % queue->capacity;
-	  /* Try to replace head value */
-	}
-      while (!ATOMIC_CAS_32 (&queue->head, prev_head, new_head));
-      /* Return data from previous head value */
-      memcpy (data, &queue->data + (prev_head * queue->data_size),
-	      queue->data_size);
-    }
-  else
-    {
-      /* No need to synchronize consumers, return data in current head entry.
-       */
       if (LOCK_FREE_CIRCULAR_QUEUE_IS_EMPTY (queue))
 	{
+	  /* Queue is empty, nothing to consume */
 	  return false;
 	}
-      memcpy (data, queue->data + (queue->head * queue->data_size),
-	      queue->data_size);
-      queue->head = (queue->head + 1) % queue->capacity;
+      /* Read head */
+      prev_head = queue->head;
+      /* Compute new head */
+      new_head = (prev_head + 1) % queue->capacity;
+      /* Try to replace head value */
     }
+  while (!ATOMIC_CAS_32 (&queue->head, prev_head, new_head));
+  /* Return data from previous head value */
+  memcpy (data, queue->data + (prev_head * queue->data_size),
+	  queue->data_size);
   return true;
 }
 
@@ -146,8 +143,7 @@ lock_free_circular_queue_pop (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
  * sync_consumers (in) : True if multiple consumers that need synchronization.
  */
 LOCK_FREE_CIRCULAR_QUEUE *
-lock_free_circular_queue_create (INT32 capacity, int data_size,
-				 bool sync_producers, bool sync_consumers)
+lock_free_circular_queue_create (INT32 capacity, int data_size)
 {
   LOCK_FREE_CIRCULAR_QUEUE *queue =
     (LOCK_FREE_CIRCULAR_QUEUE *) malloc (sizeof (LOCK_FREE_CIRCULAR_QUEUE));
@@ -166,9 +162,8 @@ lock_free_circular_queue_create (INT32 capacity, int data_size,
     }
   queue->data_size = data_size;
   queue->capacity = capacity;
-  queue->sync_producers = sync_producers;
-  queue->sync_consumers = sync_consumers;
   queue->head = queue->tail = 0;
+  queue->read_tail = 0;
 
   return queue;
 }

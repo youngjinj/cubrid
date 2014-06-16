@@ -4169,7 +4169,7 @@ locator_check_primary_key_upddel (THREAD_ENTRY * thread_p, OID * class_oid,
   if (idx_info.has_single_col)
     {
       error_code = heap_attrinfo_read_dbvalues (thread_p, inst_oid, recdes,
-						&index_attrinfo);
+						NULL, &index_attrinfo);
       if (error_code != NO_ERROR)
 	{
 	  goto error;
@@ -4284,7 +4284,7 @@ locator_check_foreign_key (THREAD_ENTRY * thread_p, HFID * hfid,
   if (idx_info.has_single_col)
     {
       error_code = heap_attrinfo_read_dbvalues (thread_p, inst_oid, recdes,
-						&index_attrinfo);
+						NULL, &index_attrinfo);
       if (error_code != NO_ERROR)
 	{
 	  goto error;
@@ -6958,6 +6958,13 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
 	    }
 	  goto error;
 	}
+      if (OID_IS_ROOTOID (&class_oid))
+	{
+	  /* Dropped a class object. Collect it and if transaction is
+	   * committed, vacuum will be notified.
+	   */
+	  logtb_dropped_class (thread_p, oid);
+	}
       deleted = true;
     }
   *force_count = 1;
@@ -8056,16 +8063,6 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
       break;
 
     case LC_FLUSH_DELETE:
-
-      if (mvcc_Enabled)
-	{
-	  scan_cache->mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
-	  if (scan_cache->mvcc_snapshot == NULL)
-	    {
-	      error_code = er_errid ();
-	      return (error_code == NO_ERROR ? ER_FAILED : error_code);
-	    }
-	}
       error_code = locator_delete_force (thread_p, &class_hfid, oid,
 					 search_btid,
 					 search_btid_duplicate_key_locked,
@@ -8331,7 +8328,7 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
   if (idx_info.has_single_col)
     {
       error_code = heap_attrinfo_read_dbvalues (thread_p, inst_oid, recdes,
-						&index_attrinfo);
+						NULL, &index_attrinfo);
       if (error_code != NO_ERROR)
 	{
 	  goto error;
@@ -8896,7 +8893,7 @@ locator_eval_filter_predicate (THREAD_ENTRY * thread_p, BTID * btid,
   for (i = 0; i < num_insts; i++)
     {
       error_code =
-	heap_attrinfo_read_dbvalues (thread_p, inst_oids[i], recs[i],
+	heap_attrinfo_read_dbvalues (thread_p, inst_oids[i], recs[i], NULL,
 				     pred_filter->cache_pred);
       if (error_code != NO_ERROR)
 	{
@@ -9096,14 +9093,16 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   new_attrinfo = &space_attrinfo[0];
   old_attrinfo = &space_attrinfo[1];
 
-  error_code = heap_attrinfo_read_dbvalues (thread_p, new_oid, new_recdes,
-					    new_attrinfo);
+  error_code =
+    heap_attrinfo_read_dbvalues (thread_p, new_oid, new_recdes, NULL,
+				 new_attrinfo);
   if (error_code != NO_ERROR)
     {
       goto error;
     }
-  error_code = heap_attrinfo_read_dbvalues (thread_p, old_oid, old_recdes,
-					    old_attrinfo);
+  error_code =
+    heap_attrinfo_read_dbvalues (thread_p, old_oid, old_recdes, NULL,
+				 old_attrinfo);
   if (error_code != NO_ERROR)
     {
       goto error;
@@ -9764,8 +9763,9 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
 	  continue;
 	}
 
-      error_code = heap_attrinfo_read_dbvalues (thread_p, &inst_oid,
-						&copy_rec, &index_attrinfo);
+      error_code =
+	heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &copy_rec, NULL,
+				     &index_attrinfo);
       if (error_code != NO_ERROR)
 	{
 	  goto error;
@@ -10284,7 +10284,7 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 
       /* Make sure that the index entry exist */
       if ((n_attr_ids == 1
-	   && heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &peek,
+	   && heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &peek, NULL,
 					   &attr_info) != NO_ERROR)
 	  || (key = heap_attrinfo_generate_key (thread_p, n_attr_ids,
 						attr_ids, atts_prefix_length,
@@ -10731,7 +10731,7 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 	    }
 
 	  /* Make sure that the index entry exists */
-	  if ((heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &peek,
+	  if ((heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &peek, NULL,
 					    &attr_info) != NO_ERROR)
 	      || ((key = heap_attrvalue_get_key (thread_p, index_id,
 						 &attr_info, &peek, btid,
@@ -12688,7 +12688,8 @@ xlocator_check_fk_validity (THREAD_ENTRY * thread_p, OID * cls_oid,
       if (n_attrs == 1)
 	{
 	  error_code = heap_attrinfo_read_dbvalues (thread_p, &oid,
-						    &peek_recdes, &attr_info);
+						    &peek_recdes, NULL,
+						    &attr_info);
 	  if (error_code != NO_ERROR)
 	    {
 	      goto end;
@@ -13284,7 +13285,7 @@ xlocator_upgrade_instances_domain (THREAD_ENTRY * thread_p, OID * class_oid,
 	    }
 
 	  error =
-	    heap_attrinfo_read_dbvalues (thread_p, &obj->oid, &recdes,
+	    heap_attrinfo_read_dbvalues (thread_p, &obj->oid, &recdes, NULL,
 					 &attr_info);
 	  if (error != NO_ERROR)
 	    {

@@ -2383,7 +2383,6 @@ fetch_set_internal (DB_SET * set, DB_FETCH_MODE purpose, int quit_on_error)
 			       quit_on_error);
 	  if (obj == NULL)
 	    {
-	      assert (er_errid () != NO_ERROR);
 	      error = er_errid ();
 	    }
 	}
