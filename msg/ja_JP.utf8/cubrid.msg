@@ -1218,6 +1218,7 @@ $ LOADDB
 1149 ボリューム%2$dのページ%1$dを見つかりませんん。
 1150 コンテキストは、互換性のある照合順序を必要とします。
 1151 ボリューム%2$dのページ%1$dは、slotted pageではありません。
+1152 The transaction %1$d cannot be killed because it is owned by another user.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
@@ -1665,6 +1666,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 287 「%1$s」パラメーターは正しくありません。
 288 すべてのパーティションを削除することはできません、代わりにDROP TABLEを使用してください。
 289 %1$sの式はこのコンテキストでは許可されません。
+290 Transaction id is not an integer.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 バチャールメモリーが足りません。: %1$dバイトがアロケーションできません。
@@ -1745,6 +1747,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 オーナーやDBAだけが対象シリアルの定義が変更(Alter)できます。
 78 「Auto increment」制約条件で作られたシリアルオブジェクトは自由に変更できません。
 79 正しくないアイソレーションレベル: 「%1$s」スキーマ、「%2$s」オブジェクト。
+80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** 正しくないキャッシュ ***

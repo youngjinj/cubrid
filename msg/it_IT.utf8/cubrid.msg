@@ -1217,6 +1217,7 @@ $ LOADDB
 1148 Le dimensioni del filter predicate stream cache(%1$d) supera il max(%2$d). È stata aggiunta una nuova voce anche se nulla è vittimizzato perché tutte le voci della cache sono già utilizzate.
 1149 Impossibile trovare la pagina %1$d del volume %2$d.
 1150 Contesto richiede collations compatibili.
+1151 The transaction %1$d cannot be killed because it is owned by another user.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
@@ -1664,6 +1665,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 287 Unknown argument %1$s.
 288 Cannot remove all partitions, use DROP TABLE instead.
 289 The expression including %1$s is not allowed in this context.
+290 Transaction id is not an integer.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Fuori di memoria virtuale: Impossibile allocare %1$d byte.
@@ -1744,6 +1746,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 Il proprietario o DBA può modificare la definizione di target di serial.
 78 Non é permesso agli utenti di modificare l'oggetto serial creato da un vincolo di incremento automatico.
 79 Livello di isolamento non valido, schema %1$s, istanze %2$s.
+80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** cache non valido ***

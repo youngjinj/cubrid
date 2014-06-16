@@ -952,6 +952,7 @@ struct log_tdes
   /* bind values of executed queries in transaction */
   int num_exec_queries;
   DB_VALUE_ARRAY bind_history[MAX_NUM_EXEC_QUERY_HISTORY];
+
   bool has_deadlock_priority;
 
   LOG_MVCC_UPDATE_STATS log_upd_stats;	/* Collects data about inserted/
@@ -1249,6 +1250,22 @@ struct log_arv_header
 #define LOG_ARV_HEADER_INITIALIZER              \
   { /* magic */ {'0'},                          \
     0, 0, 0, 0, 0, 0, 0}
+
+typedef struct log_bgarv_header LOG_BGARV_HEADER;
+struct log_bgarv_header
+{				/* Background log archive header information */
+  char magic[CUBRID_MAGIC_MAX_LENGTH];
+
+  INT32 dummy;
+  INT64 db_creation;
+
+  LOG_PAGEID start_page_id;
+  LOG_PAGEID current_page_id;
+  LOG_PAGEID last_sync_pageid;
+};
+#define LOG_BGARV_HEADER_INITIALIZER		\
+  { /* magic */ {'0'}, 				\
+    0, 0, NULL_PAGEID, NULL_PAGEID, NULL_PAGEID}
 
 typedef enum log_rectype LOG_RECTYPE;
 enum log_rectype
@@ -2260,6 +2277,9 @@ extern int
 logtb_count_not_allowed_clients_in_maintenance_mode (THREAD_ENTRY * thread_p);
 extern int logtb_find_client_type (int tran_index);
 extern char *logtb_find_client_name (int tran_index);
+extern void logtb_set_user_name (int tran_index, const char *client_name);
+extern void logtb_set_current_user_name (THREAD_ENTRY * thread_p,
+					 const char * client_name);
 extern char *logtb_find_client_hostname (int tran_index);
 extern int logtb_find_client_name_host_pid (int tran_index,
 					    char **client_prog_name,
@@ -2275,6 +2295,7 @@ extern LOG_LSA *logtb_find_current_tran_lsa (THREAD_ENTRY * thread_p);
 extern TRAN_STATE logtb_find_state (int tran_index);
 extern int logtb_find_wait_msecs (int tran_index);
 extern int logtb_find_current_wait_msecs (THREAD_ENTRY * thread_p);
+extern int logtb_find_interrupt (int tran_index, bool * interrupt);
 extern TRAN_ISOLATION logtb_find_isolation (int tran_index);
 extern TRAN_ISOLATION logtb_find_current_isolation (THREAD_ENTRY * thread_p);
 extern bool logtb_set_tran_index_interrupt (THREAD_ENTRY * thread_p,

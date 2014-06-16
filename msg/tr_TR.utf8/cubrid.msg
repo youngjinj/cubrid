@@ -1218,6 +1218,7 @@ $ LOADDB
 1149 %2$d hacımın %1$d sayfa bulunmaktadır.
 1150 İçerik uyumlu karşılaştırma gerektirmektedir.
 1151 %2$d hacımın %1$d sayfa yuva donanımlı değildir.
+1152 The transaction %1$d cannot be killed because it is owned by another user.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
@@ -1665,6 +1666,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 287 Bilinmeyen argüman %1$s.
 288 Tüm bölümleri kaldırmaktan yerine DROP TABLE kullanmaktadır.
 289 Ifadesine dahil %1$s bu bağlamda yasaktır.
+290 Transaction id is not an integer.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Sanal bellek yetersiz: %1$d bayt bölüm ayıramadı.
@@ -1745,6 +1747,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 Sahibi veya DBA yalnızca hedef seri tanımını değiştirebilir.
 78 Kullanıcılar otomatik artış kısıtlaması tarafından oluşturulan seri nesneyi değiştirmek için izin verilmez.
 79 Geçersiz yalıtım düzeyi: %1$s şema, %2$s örnekleri.
+80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** geçersiz önbellek ***

@@ -665,6 +665,7 @@ typedef struct YYLTYPE
 %type <number> show_type_arg1_opt
 %type <number> show_type_arg_named
 %type <number> show_type_id_dot_id
+%type <number> kill_type
 /*}}}*/
 
 /* define rule type (node) */
@@ -969,6 +970,8 @@ typedef struct YYLTYPE
 %type <node> named_args
 %type <node> opt_arg_value
 %type <node> arg_value
+%type <node> arg_value_list
+%type <node> kill_stmt
 %type <node> vacuum_stmt
 /*}}}*/
 
@@ -1464,6 +1467,7 @@ typedef struct YYLTYPE
 %token <cptr> INVALIDATE
 %token <cptr> ISNULL
 %token <cptr> KEYS
+%token <cptr> KILL
 %token <cptr> JAVA
 %token <cptr> JSON
 %token <cptr> LAG
@@ -1803,6 +1807,8 @@ stmt_
 	| set_stmt
 		{ $$ = $1; }
 	| get_stmt
+		{ $$ = $1; }
+	| kill_stmt
 		{ $$ = $1; }
 	| DATA_TYPE_ data_type
 		{{
@@ -6597,6 +6603,37 @@ show_stmt
 		DBG_PRINT}}
 	;
 
+kill_stmt
+	: KILL arg_value_list
+		{{
+			PT_NODE *node = parser_new_node (this_parser, PT_KILL);
+
+			if (node)
+			  {
+			    node->info.killstmt.tran_id_list = $2;
+			  }
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}						
+	| KILL kill_type arg_value_list
+		{{
+			int type = $2;
+			PT_NODE *node = parser_new_node (this_parser, PT_KILL);
+
+			if (node)
+			  {
+			    node->info.killstmt.tran_id_list = $3;
+			    node->info.killstmt.kill_type = type;
+			  }
+
+			$$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	;
+
 show_type
 	: ACCESS STATUS
 		{{
@@ -6668,6 +6705,17 @@ show_type_id_dot_id
 		}}
 	;
 
+kill_type
+	: QUERY
+		{{
+			$$ = KILLSTMT_QUERY;
+		}}
+	| TRANSACTION
+		{{
+			$$ = KILLSTMT_TRAN;
+		}}
+	;
+
 of_or_where
 	: OF
 		{{
@@ -6713,6 +6761,23 @@ opt_arg_value
 		{{
 			$$ = $2;
 		}}
+	;
+
+arg_value_list
+	: arg_value_list ','  arg_value
+		{{
+
+			$$ = parser_make_link ($1, $3);
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| arg_value
+		{{
+
+			$$ = $1;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	;
 
 arg_value

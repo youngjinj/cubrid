@@ -9309,7 +9309,6 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
     {
       (void) log_update_drop_cls_btid (true);
     }
-
   return error;
 
 error_exit:

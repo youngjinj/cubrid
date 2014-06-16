@@ -1218,6 +1218,7 @@ $ LOADDB
 1149 无法在卷 %2$d 中找到页 %1$d.
 1150 上下文需要兼容的排序规则.
 1151 卷 %2$d 的页 %1$d 不是一个 slotted 页.
+1152 The transaction %1$d cannot be killed because it is owned by another user.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
@@ -1665,6 +1666,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 287 未知参数 '%1$s'.
 288 无法删除所有分区表, 使用 DROP TABLE 代替.
 289 在此上下文的表达式中不允许包含 '%1$s'.
+290 Transaction id is not an integer.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 虚拟内存耗尽: 无法申请 %1$d 字节.
@@ -1745,6 +1747,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 只有拥有者或DBA才能修改目标序列的定义.
 78 不允许用户修改由auto increment约束创建的序列对象.
 79 无效的隔离等级: %1$s 结构(schema), %2$s 实例.
+80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** 无效的缓存 ***

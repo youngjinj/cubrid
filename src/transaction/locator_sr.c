@@ -8997,7 +8997,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   bool new_isnull, old_isnull;
   PR_TYPE *pr_type;
   OR_INDEX *index = NULL;
-  int i, j, k, num_btids, old_num_btids, unique, dummy_unique;
+  int i, j, k, num_btids, old_num_btids, unique;
   bool found_btid = true;
   BTREE_UNIQUE_STATS *unique_stat_info;
   HEAP_IDX_ELEMENTS_INFO new_idx_info;

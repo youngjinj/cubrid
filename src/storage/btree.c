@@ -260,7 +260,6 @@ struct rec_mvcc_delid_ins_struct
   bool is_overflow;		/* is overflow node? */
 };
 
-
 /* Offset of the fields in the Leaf/NonLeaf Record Recovery Log Data */
 #define OFFS1  0		/* Node Type Offset: Leaf/NonLeaf Information */
 #define OFFS2  2		/* RECDES Type Offset */
@@ -2801,6 +2800,8 @@ btree_write_fixed_portion_of_non_leaf_record (RECDES * rec,
 {
   char *ptr = rec->data;
 
+  assert (!VPID_ISNULL (&(non_leaf_rec->pnt)));
+
   OR_PUT_INT (ptr, non_leaf_rec->pnt.pageid);
   ptr += OR_INT_SIZE;
 
@@ -2830,6 +2831,8 @@ btree_read_fixed_portion_of_non_leaf_record (RECDES * rec,
   non_leaf_rec->pnt.volid = OR_GET_SHORT (ptr);
   ptr += OR_SHORT_SIZE;
 
+  assert (!VPID_ISNULL (&(non_leaf_rec->pnt)));
+
   non_leaf_rec->key_len = OR_GET_SHORT (ptr);
 }
 
@@ -2847,6 +2850,8 @@ btree_write_fixed_portion_of_non_leaf_record_to_orbuf (OR_BUF * buf,
 						       NON_LEAF_REC *
 						       non_leaf_rec)
 {
+  assert (!VPID_ISNULL (&(non_leaf_rec->pnt)));
+
   or_put_int (buf, non_leaf_rec->pnt.pageid);
   or_put_short (buf, non_leaf_rec->pnt.volid);
   or_put_short (buf, non_leaf_rec->key_len);
@@ -2874,6 +2879,8 @@ btree_read_fixed_portion_of_non_leaf_record_from_orbuf (OR_BUF * buf,
     {
       non_leaf_rec->pnt.volid = or_get_short (buf, &rc);
     }
+
+  assert (!VPID_ISNULL (&(non_leaf_rec->pnt)));
 
   if (rc == NO_ERROR)
     {
@@ -11193,7 +11200,7 @@ exit_on_error:
  *  This function must be called by btree_delete if the following conditions
  * are satisfied:
  *  1. curr key lock commit duration is needed (non unique btree, at least
- *     2 OIDS)
+ *     2 OIDs)
  *  2. need to delete the first key buffer OID
  *  3. the pseudo-OID attached to the first key buffer OID has been
  *     NX_LOCK-ed by the current transaction
@@ -11282,6 +11289,8 @@ btree_delete_lock_curr_key_next_pseudo_oid (THREAD_ENTRY * thread_p,
   btree_make_pseudo_oid (last_oid.pageid, last_oid.slotid,
 			 last_oid.volid, btid_int->sys_btid, &last_oid);
 
+  assert (!OID_ISNULL (&last_oid));
+  assert (!OID_ISNULL (class_oid));
   lock_ret = lock_object_with_btid (thread_p, &last_oid, class_oid,
 				    btid_int->sys_btid, NX_LOCK,
 				    LK_COND_LOCK);
@@ -11298,6 +11307,8 @@ btree_delete_lock_curr_key_next_pseudo_oid (THREAD_ENTRY * thread_p,
       pgbuf_unfix_and_init (thread_p, *P_page);
 
       /* UNCONDITIONAL lock request */
+      assert (!OID_ISNULL (&last_oid));
+      assert (!OID_ISNULL (class_oid));
       lock_ret = lock_object_with_btid (thread_p, &last_oid, class_oid,
 					btid_int->sys_btid, NX_LOCK,
 					LK_UNCOND_LOCK);
@@ -12181,7 +12192,7 @@ start_point:
 						       &nleaf_pnt);
 	  Left_vpid = nleaf_pnt.pnt;
 
-	  /* try to fix left page conditionally */
+	  /* try to fix sibling page conditionally */
 	  Left = pgbuf_fix (thread_p, &Left_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
 			    PGBUF_CONDITIONAL_LATCH);
 	  if (Left == NULL)
@@ -12365,7 +12376,7 @@ start_point:
 
 	  if (curr_key_lock_commit_duration && delete_first_key_oid)
 	    {
-	      /* at least 2 OIDS, and the first one is removed
+	      /* at least 2 OIDs, and the first one is removed
 	         lock the second OID */
 	      if (btree_delete_lock_curr_key_next_pseudo_oid (thread_p,
 							      &btid_int,
@@ -12437,7 +12448,7 @@ start_point:
 	  if (curr_key_oids_cnt > 1
 	      || (curr_key_oids_cnt == 1 && !VPID_ISNULL (&(leaf_pnt.ovfl))))
 	    {
-	      /* at least 2 OIDS, lock current key commit duration */
+	      /* at least 2 OIDs, lock current key commit duration */
 	      curr_key_lock_commit_duration = true;
 	      /* if not SERIALIZABLE, lock the current key only */
 	      if (tran_isolation != TRAN_SERIALIZABLE)
@@ -12445,6 +12456,8 @@ start_point:
 		  if (next_lock_flag == true)
 		    {
 		      /* remove the next key lock */
+		      assert (!OID_ISNULL (&saved_N_oid));
+		      assert (!OID_ISNULL (&saved_N_class_oid));
 		      lock_remove_object_lock (thread_p, &saved_N_oid,
 					       &saved_N_class_oid, NX_LOCK);
 		      next_lock_flag = false;
@@ -12516,6 +12529,7 @@ start_point:
 	{
 	  COPY_OID (&N_class_oid, &class_oid);
 	}
+      assert (!OID_ISNULL (&N_class_oid));
     }
   else
     {
@@ -12538,6 +12552,8 @@ start_point:
 	      if (next_lock_flag == true)
 		{
 		  /* remove the next key lock */
+		  assert (!OID_ISNULL (&saved_N_oid));
+		  assert (!OID_ISNULL (&saved_N_class_oid));
 		  lock_remove_object_lock (thread_p, &saved_N_oid,
 					   &saved_N_class_oid, NX_LOCK);
 		  next_lock_flag = false;
@@ -12569,7 +12585,10 @@ start_point:
 	    }
 	  goto curr_key_locking;
 	}
+
       /* remove the next key lock */
+      assert (!OID_ISNULL (&saved_N_oid));
+      assert (!OID_ISNULL (&saved_N_class_oid));
       lock_remove_object_lock (thread_p, &saved_N_oid, &saved_N_class_oid,
 			       NX_LOCK);
       next_lock_flag = false;
@@ -12578,6 +12597,8 @@ start_point:
     }
 
   /* CONDITIONAL lock request */
+  assert (!OID_ISNULL (&N_oid));
+  assert (!OID_ISNULL (&N_class_oid));
   ret_val = lock_object_with_btid (thread_p, &N_oid, &N_class_oid, btid,
 				   NX_LOCK, LK_COND_LOCK);
   if (ret_val == LK_GRANTED)
@@ -12611,6 +12632,8 @@ start_point:
       assert (R == NULL);
       assert (N == NULL);
 
+      assert (!OID_ISNULL (&N_oid));
+      assert (!OID_ISNULL (&N_class_oid));
       ret_val = lock_object_with_btid (thread_p, &N_oid, &N_class_oid,
 				       btid, NX_LOCK, LK_UNCOND_LOCK);
       /* UNCONDITIONAL lock request */
@@ -12730,6 +12753,8 @@ curr_key_locking:
 	}
 
       /* remove current key lock */
+      assert (!OID_ISNULL (&saved_C_oid));
+      assert (!OID_ISNULL (&saved_C_class_oid));
       lock_remove_object_lock (thread_p, &saved_C_oid, &saved_C_class_oid,
 			       NX_LOCK);
       curr_lock_flag = false;
@@ -12749,6 +12774,8 @@ curr_key_locking:
   else if ((curr_key_lock_commit_duration == true)
 	   && (!delete_first_key_oid || locked_keys == BTREE_NO_KEY_LOCKED))
     {
+      assert (!OID_ISNULL (&C_oid));
+      assert (!OID_ISNULL (&C_class_oid));
       ret_val = lock_object_with_btid (thread_p, &C_oid, &C_class_oid, btid,
 				       NX_LOCK, LK_COND_LOCK);
       if (ret_val == LK_NOTGRANTED_DUE_TIMEOUT)
@@ -12796,6 +12823,8 @@ curr_key_locking:
       assert (N == NULL);
 
       /* UNCONDITIONAL lock request */
+      assert (!OID_ISNULL (&C_oid));
+      assert (!OID_ISNULL (&C_class_oid));
       ret_val = lock_object_with_btid (thread_p, &C_oid, &C_class_oid, btid,
 				       NX_LOCK, LK_UNCOND_LOCK);
       if (ret_val != LK_GRANTED)
@@ -12917,6 +12946,8 @@ key_deletion:
   if (curr_lock_flag == true && (curr_key_lock_commit_duration == false ||
 				 delete_first_key_oid))
     {
+      assert (!OID_ISNULL (&C_oid));
+      assert (!OID_ISNULL (&C_class_oid));
       lock_remove_object_lock (thread_p, &C_oid, &C_class_oid, NX_LOCK);
     }
 
@@ -12964,6 +12995,8 @@ error:
 
   if (curr_lock_flag)
     {
+      assert (!OID_ISNULL (&C_oid));
+      assert (!OID_ISNULL (&C_class_oid));
       lock_remove_object_lock (thread_p, &C_oid, &C_class_oid, NX_LOCK);
     }
 
@@ -17295,6 +17328,8 @@ btree_insert_unlock_curr_key_remaining_pseudo_oid (THREAD_ENTRY * thread_p,
 	  return ret_val;
 	}
 
+      assert (!OID_ISNULL (&temp_pseudo_oid));
+      assert (!OID_ISNULL (class_oid));
       lock_remove_object_lock (thread_p, &temp_pseudo_oid, class_oid,
 			       NS_LOCK);
 
@@ -17333,6 +17368,8 @@ btree_insert_unlock_curr_key_remaining_pseudo_oid (THREAD_ENTRY * thread_p,
 				 temp_pseudo_oid.volid,
 				 btid_int->sys_btid, &temp_pseudo_oid);
 
+	  assert (!OID_ISNULL (&temp_pseudo_oid));
+	  assert (!OID_ISNULL (class_oid));
 	  lock_remove_object_lock (thread_p, &temp_pseudo_oid, class_oid,
 				   NS_LOCK);
 
@@ -17960,7 +17997,6 @@ start_point:
 
   while (node_type == BTREE_NON_LEAF_NODE)
     {
-
       /* find and get the child page to be followed */
       if (btree_search_nonleaf_page
 	  (thread_p, &btid_int, P, key, &p_slot_id, &Q_vpid) != NO_ERROR)
@@ -18208,6 +18244,8 @@ start_point:
 	     indexes */
 	  if (next_lock_flag == true)
 	    {
+	      assert (!OID_ISNULL (&saved_N_oid));
+	      assert (!OID_ISNULL (&saved_N_class_oid));
 	      lock_remove_object_lock (thread_p, &saved_N_oid,
 				       &saved_N_class_oid, NS_LOCK);
 	      next_lock_flag = false;
@@ -18306,6 +18344,8 @@ start_point:
 	    {
 	      if (next_lock_flag == true)
 		{
+		  assert (!OID_ISNULL (&saved_N_oid));
+		  assert (!OID_ISNULL (&saved_N_class_oid));
 		  lock_remove_object_lock (thread_p, &saved_N_oid,
 					   &saved_N_class_oid, NS_LOCK);
 		  next_lock_flag = false;
@@ -18340,6 +18380,9 @@ start_point:
 	     curr key locking */
 	  goto curr_key_locking;
 	}
+
+      assert (!OID_ISNULL (&saved_N_oid));
+      assert (!OID_ISNULL (&saved_N_class_oid));
       lock_remove_object_lock (thread_p, &saved_N_oid, &saved_N_class_oid,
 			       NS_LOCK);
       next_lock_flag = false;
@@ -18682,6 +18725,8 @@ curr_key_locking:
 	  goto curr_key_lock_consistency;
 	}
 
+      assert (!OID_ISNULL (&saved_C_oid));
+      assert (!OID_ISNULL (&saved_C_class_oid));
       lock_remove_object_lock (thread_p, &saved_C_oid, &saved_C_class_oid,
 			       current_lock);
       if (curr_key_lock_escalation != NO_KEY_LOCK_ESCALATION)
@@ -18703,6 +18748,8 @@ curr_key_lock_promote:
   if (current_lock == NX_LOCK)
     {
       /* lock state replication via next key locking */
+      assert (!OID_ISNULL (&C_oid));
+      assert (!OID_ISNULL (&C_class_oid));
       ret_val =
 	lock_object_with_btid (thread_p, &C_oid, &C_class_oid, btid,
 			       current_lock, LK_COND_LOCK);
@@ -18776,6 +18823,8 @@ curr_key_lock_promote:
 	  && curr_key_lock_escalation == NO_KEY_LOCK_ESCALATION)
 	{
 	  /* prev_tot_hold_mode set to NULL_LOCK */
+	  assert (!OID_ISNULL (&C_oid));
+	  assert (!OID_ISNULL (&C_class_oid));
 	  ret_val = lock_object_with_btid (thread_p, &C_oid, &C_class_oid,
 					   btid, current_lock,
 					   LK_UNCOND_LOCK);
@@ -19017,6 +19066,8 @@ key_insertion:
   if (next_lock_flag == true)
     {
       assert (!mvcc_Enabled);
+      assert (!OID_ISNULL (&N_oid));
+      assert (!OID_ISNULL (&N_class_oid));
       lock_remove_object_lock (thread_p, &N_oid, &N_class_oid, NS_LOCK);
     }
 
@@ -19063,10 +19114,14 @@ error:
 
   if (next_lock_flag)
     {
+      assert (!OID_ISNULL (&N_oid));
+      assert (!OID_ISNULL (&N_class_oid));
       lock_remove_object_lock (thread_p, &N_oid, &N_class_oid, NS_LOCK);
     }
   if (curr_lock_flag)
     {
+      assert (!OID_ISNULL (&C_oid));
+      assert (!OID_ISNULL (&C_class_oid));
       if (mvcc_Enabled)
 	{
 	  lock_remove_object_lock (thread_p, &C_oid, &C_class_oid, X_LOCK);
@@ -20905,7 +20960,6 @@ btree_find_next_index_record_holding_current_helper (THREAD_ENTRY * thread_p,
 	      goto end;		/* OK */
 	    }
 	}
-
     }
 
   while (bts->C_page != NULL)
@@ -21831,10 +21885,6 @@ btree_handle_prev_leaf_after_locking (THREAD_ENTRY * thread_p,
   BTREE_NODE_HEADER *header = NULL;
 #endif
 
-#if !defined (SERVER_MODE)
-  assert_release (false);
-#endif
-
   /*
    * Following conditions are satisfied.
    * 1. The second argument, oid_idx, is always 0(zero).
@@ -21981,6 +22031,10 @@ btree_handle_prev_leaf_after_locking (THREAD_ENTRY * thread_p,
    * by the merge operation of other transactions.
    */
 
+#if !defined (SERVER_MODE)
+  assert_release (false);
+#endif
+
   /* unfix the previous leaf page */
   pgbuf_unfix_and_init (thread_p, bts->P_page);
   VPID_SET_NULL (&(bts->P_vpid));
@@ -22096,10 +22150,6 @@ btree_handle_curr_leaf_after_locking (THREAD_ENTRY * thread_p,
   int ret = NO_ERROR;
   bool old_check_page_validation;
 
-#if !defined (SERVER_MODE)
-  assert_release (false);
-#endif
-
   /*
    * Following conditions are satisfied.
    * 1. VPID_ISNULL (&(bts->P_vpid))
@@ -22178,6 +22228,10 @@ btree_handle_curr_leaf_after_locking (THREAD_ENTRY * thread_p,
        * find the current locked <key, oid> pair
        * Be careful that the locked OID can be deleted.
        */
+
+#if !defined (SERVER_MODE)
+      assert_release (false);
+#endif
 
       /* unfix the current leaf page */
       pgbuf_unfix_and_init (thread_p, bts->C_page);
@@ -22446,10 +22500,6 @@ btree_lock_current_key (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
   OID oid;
   LOG_LSA prev_leaf_lsa, ovfl_page_lsa;
 
-#if !defined (SERVER_MODE)
-  assert_release (false);
-#endif
-
   if (first_key_oid == NULL || OID_ISNULL (first_key_oid)
       || prev_oid_locked_ptr == NULL || prev_key == NULL
       || ck_pseudo_oid == NULL || which_action == NULL)
@@ -22485,11 +22535,15 @@ btree_lock_current_key (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 
   if (!OID_ISNULL (ck_pseudo_oid))
     {
+      assert (!OID_ISNULL (ck_pseudo_oid));
+      assert (!OID_ISNULL (class_oid));
       lock_remove_object_lock (thread_p, ck_pseudo_oid, class_oid,
 			       bts->key_lock_mode);
       OID_SET_NULL (ck_pseudo_oid);
     }
 
+  assert (!OID_ISNULL (&oid));
+  assert (!OID_ISNULL (class_oid));
   lock_ret =
     lock_object_on_iscan (thread_p, &oid, class_oid, bts->btid_int.sys_btid,
 			  bts->key_lock_mode, LK_COND_LOCK, scanid_bit);
@@ -22541,6 +22595,8 @@ btree_lock_current_key (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
     }
 
   /* UNCONDITIONAL lock request */
+  assert (!OID_ISNULL (&oid));
+  assert (!OID_ISNULL (class_oid));
   lock_ret = lock_object_on_iscan (thread_p, &oid, class_oid,
 				   bts->btid_int.sys_btid,
 				   bts->key_lock_mode,
@@ -22620,10 +22676,6 @@ btree_lock_next_key (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
   int ret_val = NO_ERROR, lock_ret;
   BTREE_SCAN tmp_bts;
   bool is_last_key;
-
-#if !defined (SERVER_MODE)
-  assert_release (false);
-#endif
 
   /*
    * Assumptions : last accessed leaf page is fixed.
@@ -22719,12 +22771,16 @@ start_point:
     }
   if (!OID_ISNULL (nk_pseudo_oid))
     {
+      assert (!OID_ISNULL (nk_pseudo_oid));
+      assert (!OID_ISNULL (nk_class_oid));
       lock_remove_object_lock (thread_p, nk_pseudo_oid, nk_class_oid,
 			       bts->key_lock_mode);
       OID_SET_NULL (nk_pseudo_oid);
       OID_SET_NULL (nk_class_oid);
     }
 
+  assert (!OID_ISNULL (&N_oid));
+  assert (!OID_ISNULL (&N_class_oid));
   lock_ret =
     lock_object_on_iscan (thread_p, &N_oid, &N_class_oid,
 			  bts->btid_int.sys_btid,
@@ -22788,6 +22844,8 @@ start_point:
   assert (temp_page == NULL);
 
   /* UNCONDITIONAL lock request */
+  assert (!OID_ISNULL (&N_oid));
+  assert (!OID_ISNULL (&N_class_oid));
   lock_ret = lock_object_on_iscan (thread_p, &N_oid, &N_class_oid,
 				   bts->btid_int.sys_btid,
 				   bts->key_lock_mode,
@@ -26155,12 +26213,16 @@ btree_range_opt_check_add_index_key (THREAD_ENTRY * thread_p,
 	       * corresponding to the instance OID being rejected */
 	      if (ck_pseudo_oid != NULL && !OID_ISNULL (ck_pseudo_oid))
 		{
+		  assert (!OID_ISNULL (ck_pseudo_oid));
+		  assert (!OID_ISNULL (class_oid));
 		  lock_remove_object_lock (thread_p, ck_pseudo_oid,
 					   class_oid, bts->key_lock_mode);
 		}
 
 	      if (nk_pseudo_oid != NULL && !OID_ISNULL (nk_pseudo_oid))
 		{
+		  assert (!OID_ISNULL (nk_pseudo_oid));
+		  assert (!OID_ISNULL (class_oid));
 		  lock_remove_object_lock (thread_p, nk_pseudo_oid,
 					   class_oid, bts->key_lock_mode);
 		}
@@ -26184,6 +26246,8 @@ btree_range_opt_check_add_index_key (THREAD_ENTRY * thread_p,
 	   * to instance which is overwritten */
 	  if (!OID_ISNULL (&(last_item->ck_ps_oid)))
 	    {
+	      assert (!OID_ISNULL (&(last_item->ck_ps_oid)));
+	      assert (!OID_ISNULL (&(last_item->class_oid)));
 	      lock_remove_object_lock (thread_p,
 				       &(last_item->ck_ps_oid),
 				       &(last_item->class_oid),
@@ -26192,6 +26256,8 @@ btree_range_opt_check_add_index_key (THREAD_ENTRY * thread_p,
 
 	  if (!OID_ISNULL (&(last_item->nk_ps_oid)))
 	    {
+	      assert (!OID_ISNULL (&(last_item->nk_ps_oid)));
+	      assert (!OID_ISNULL (&(last_item->class_oid)));
 	      lock_remove_object_lock (thread_p,
 				       &(last_item->nk_ps_oid),
 				       &(last_item->class_oid),
@@ -29062,10 +29128,6 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
   OID temp_oid;
   int s;
 
-#if !defined (SERVER_MODE)
-  assert_release (false);
-#endif
-
   assert (bts != NULL && btrs_helper != NULL && which_action != NULL);
   assert (btrs_helper->saved_inst_oid.pageid != NULL_PAGEID
 	  || (bts->prev_oid_pos == -1 && btrs_helper->curr_key_locked));
@@ -29075,6 +29137,10 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
       /* remove next key lock since only current key lock is needed
        * when delete or update multi OID key
        */
+      assert (!OID_ISNULL (OID_ISNULL (&btrs_helper->nk_pseudo_oid)
+			   ? &btrs_helper->saved_nk_pseudo_oid
+			   : &btrs_helper->nk_pseudo_oid));
+      assert (!OID_ISNULL (&btrs_helper->saved_nk_class_oid));
       lock_remove_object_lock (thread_p,
 			       OID_ISNULL (&btrs_helper->nk_pseudo_oid)
 			       ? &btrs_helper->saved_nk_pseudo_oid
@@ -29190,6 +29256,11 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
    *  || (btrs_helper->curr_key_locked
    *      && OID_EQ (&btrs_helper->saved_ck_pseudo_oid, &temp_oid))
    */
+
+#if !defined (SERVER_MODE)
+  assert_release (false);
+#endif
+
   if (!OID_EQ (&btrs_helper->saved_inst_oid, &btrs_helper->inst_oid))
     {
 
@@ -29204,6 +29275,11 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
       if (btrs_helper->next_key_locked)
 	{
 	  /* TO DO saved_clas_oid */
+	  assert (!OID_ISNULL (OID_ISNULL (&btrs_helper->
+					   nk_pseudo_oid)
+			       ? &btrs_helper->saved_nk_pseudo_oid
+			       : &btrs_helper->nk_pseudo_oid));
+	  assert (!OID_ISNULL (&btrs_helper->saved_nk_class_oid));
 	  lock_remove_object_lock (thread_p,
 				   OID_ISNULL (&btrs_helper->
 					       nk_pseudo_oid)
@@ -29215,6 +29291,8 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
 
       if (btrs_helper->curr_key_locked)
 	{
+	  assert (!OID_ISNULL (&btrs_helper->saved_ck_pseudo_oid));
+	  assert (!OID_ISNULL (&btrs_helper->saved_class_oid));
 	  lock_remove_object_lock (thread_p,
 				   &btrs_helper->saved_ck_pseudo_oid,
 				   &btrs_helper->saved_class_oid,
@@ -29390,6 +29468,8 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
       /*
        * CONDITIONAL lock request (current waitsecs : 0)
        */
+      assert (!OID_ISNULL (&btrs_helper->inst_oid));
+      assert (!OID_ISNULL (&btrs_helper->class_oid));
       lock_ret = lock_object_on_iscan (thread_p, &btrs_helper->inst_oid,
 				       &btrs_helper->class_oid,
 				       btid, bts->lock_mode, LK_COND_LOCK,
@@ -29456,6 +29536,7 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 	    {
 	      /* current key lock needed */
 	    curr_key_locking:
+
 	      if (btree_lock_current_key (thread_p, bts,
 					  &btrs_helper->saved_inst_oid,
 					  &btrs_helper->inst_oid,
@@ -29562,6 +29643,8 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
    */
 
   /* UNCONDITIONAL lock request */
+  assert (!OID_ISNULL (&btrs_helper->inst_oid));
+  assert (!OID_ISNULL (&btrs_helper->class_oid));
   lock_ret =
     lock_object_on_iscan (thread_p, &btrs_helper->inst_oid,
 			  &btrs_helper->class_oid, btid, bts->lock_mode,

@@ -1218,6 +1218,7 @@ $ LOADDB
 1149 Cannot find the page %1$d of volume %2$d.
 1150 Context requires compatible collations.
 1151 The page %1$d of volume %2$d is not a slotted page.
+1152 The transaction %1$d cannot be killed because it is owned by another user.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
@@ -1665,6 +1666,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 287 %1$s은(는) 알 수 없는 인자입니다.
 288 분할 테이블 내의 모든 분할을 제거하는 것은 허용되지 않습니다. 'DROP TABLE' 구문을 사용하십시오.
 289 The expression including %1$s is not allowed in this context.
+290 Transaction id is not an integer.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 가상 메모리 없음: %1$d 바이트를 할당할 수 없습니다.
@@ -1745,6 +1747,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 소유자나 DBA만이 대상 시리얼의 정의를 변경(Alter)할 수 있습니다. 
 78 Auto increment 제약 조건으로 생성된 시리얼 객체는 임의로 변경할 수 없습니다. 
 79 유효하지 않은 Isolation 수준: %1$s 스키마, %2$s 객체.
+80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** 잘못된 캐시 ***

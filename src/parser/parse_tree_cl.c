@@ -333,6 +333,8 @@ static PT_NODE *pt_apply_query_trace (PARSER_CONTEXT * parser, PT_NODE * p,
 				      PT_NODE_FUNCTION g, void *arg);
 static PT_NODE *pt_apply_insert_value (PARSER_CONTEXT * parser, PT_NODE * p,
 				       PT_NODE_FUNCTION g, void *arg);
+static PT_NODE *pt_apply_kill (PARSER_CONTEXT * parser, PT_NODE * P,
+			       PT_NODE_FUNCTION g, void *arg);
 static PT_NODE *pt_apply_vacuum (PARSER_CONTEXT * parser, PT_NODE * p,
 				 PT_NODE_FUNCTION g, void *arg);
 
@@ -431,6 +433,7 @@ static PT_NODE *pt_init_merge (PT_NODE * p);
 static PT_NODE *pt_init_tuple_value (PT_NODE * p);
 static PT_NODE *pt_init_query_trace (PT_NODE * p);
 static PT_NODE *pt_init_insert_value (PT_NODE * p);
+static PT_NODE *pt_init_kill (PT_NODE * p);
 static PT_NODE *pt_init_vacuum (PT_NODE * p);
 
 static PARSER_INIT_NODE_FUNC pt_init_func_array[PT_NODE_NUMBER];
@@ -5151,7 +5154,7 @@ pt_init_apply_f (void)
   pt_apply_func_array[PT_TUPLE_VALUE] = pt_apply_tuple_value;
   pt_apply_func_array[PT_QUERY_TRACE] = pt_apply_query_trace;
   pt_apply_func_array[PT_INSERT_VALUE] = pt_apply_insert_value;
-  pt_apply_func_array[PT_VACUUM] = pt_apply_vacuum;
+  pt_apply_func_array[PT_KILL] = pt_apply_kill;
 
   pt_apply_f = pt_apply_func_array;
 }
@@ -5266,6 +5269,7 @@ pt_init_init_f (void)
   pt_init_func_array[PT_TUPLE_VALUE] = pt_init_tuple_value;
   pt_init_func_array[PT_QUERY_TRACE] = pt_init_query_trace;
   pt_init_func_array[PT_INSERT_VALUE] = pt_init_insert_value;
+  pt_init_func_array[PT_KILL] = pt_init_kill;
   pt_init_func_array[PT_VACUUM] = pt_init_vacuum;
 
   pt_init_f = pt_init_func_array;
@@ -17560,6 +17564,14 @@ pt_apply_insert_value (PARSER_CONTEXT * parser, PT_NODE * p,
   return p;
 }
 
+static PT_NODE *
+pt_apply_kill (PARSER_CONTEXT * parser, PT_NODE * p,
+	       PT_NODE_FUNCTION g, void *arg)
+{
+  return p;
+}
+
+
 /*
  * pt_init_insert_value ()
  * return :
@@ -17572,6 +17584,15 @@ pt_init_insert_value (PT_NODE * p)
   DB_MAKE_NULL (&p->info.insert_value.value);
   p->info.insert_value.is_evaluated = false;
   p->info.insert_value.replace_names = false;
+
+  return p;
+}
+
+static PT_NODE *
+pt_init_kill (PT_NODE * p)
+{
+  p->info.killstmt.kill_type = KILLSTMT_TRAN;
+  p->info.killstmt.tran_id_list = NULL;
 
   return p;
 }

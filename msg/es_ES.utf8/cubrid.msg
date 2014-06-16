@@ -1218,6 +1218,7 @@ $ LOADDB
 1149 No se puede encontrar la pagina %1$d de volumen %2$d.
 1150 Contexto requiere colaciones compatibles.
 1151 The page %1$d of volume %2$d is not a slotted page.
+1152 The transaction %1$d cannot be killed because it is owned by another user.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
@@ -1665,6 +1666,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 287 Unknown argument %1$s.
 288 Cannot remove all partitions, use DROP TABLE instead.
 289 The expression including %1$s is not allowed in this context.
+290 Transaction id is not an integer.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Sin memoria virtual: incapaz de asignar %1$d bytes.
@@ -1745,6 +1747,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 El patrocinador o DBA puede solamente alterar la definicion de un serial de destino.
 78 Los utilizadores no son permitidos modificar el objeto serial creado por una restriccion de incremento automatico.
 79 Nivel de aislamiento no valido: %1$s esquema, %2$s instancias.
+80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** Cache no valida. ***

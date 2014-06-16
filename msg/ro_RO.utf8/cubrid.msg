@@ -1218,6 +1218,7 @@ $ LOADDB
 1149 Pagina %1$d a volumului %2$d nu poate fi găsită.
 1150 Contextul necesită colaţii compatibile.
 1151 The page %1$d of volume %2$d is not a slotted page.
+1152 The transaction %1$d cannot be killed because it is owned by another user.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
@@ -1665,6 +1666,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 287 Unknown argument %1$s.
 288 Nu se pot şterge toate partiţiile, folosiţi DROP TABLE în schimb.
 289 The expression including %1$s is not allowed in this context.
+290 Transaction id is not an integer.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Memorie virtuală epuizată: nu s-au putut aloca %1$d bytes.
@@ -1745,6 +1747,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 Numai proprietarul sau un DBA poate schimba definiţia serialului.
 78 Nu este permis utilizatorilor să modifice un obiect serial creat de o constrângere AUTO INCREMENT.
 79 Nivel de izolare invalid; schema: %1$s, instanţe: %2$s.
+80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** cache invalid ***

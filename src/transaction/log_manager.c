@@ -666,6 +666,20 @@ log_get_append_lsa (void)
   return (&log_Gl.hdr.append_lsa);
 }
 
+
+/*
+ * log_get_eof_lsa -
+ *
+ * return:
+ *
+ * NOTE:
+ */
+LOG_LSA *
+log_get_eof_lsa (void)
+{
+  return (&log_Gl.hdr.eof_lsa);
+}
+
 /*
  * log_is_logged_since_restart - is log sequence address made after restart ?
  *
@@ -2460,6 +2474,15 @@ log_append_undoredo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex,
 	  assert (false);
 	  return;
 	}
+    }
+
+  /*
+   * Vacuum data may occupy many pages but has only one log lsa. Check if this
+   * is a change on vacuum data and pass start_lsa to be recorded.
+   */
+  if (LOG_IS_VACUUM_DATA_RECOVERY (rcvindex))
+    {
+      vacuum_set_vacuum_data_lsa (thread_p, &start_lsa);
     }
 
   if (!LOG_CHECK_LOG_APPLIER (thread_p)
