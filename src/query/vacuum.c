@@ -1218,12 +1218,6 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	    }
 	  break;
 
-	case REC_DEAD:
-	  /* TODO: REC_DEAD is probably going to be removed */
-	  spage_vacuum_slot (thread_p, page, oids[i].slotid, NULL);
-	  vacuumed_slots[n_vacuumed_slots++] = oids[i].slotid;
-	  break;
-
 	default:
 	  /* Unhandled case */
 	  assert (0);

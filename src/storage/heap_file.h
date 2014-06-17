@@ -405,7 +405,7 @@ extern INT32 heap_estimate_num_pages_needed (THREAD_ENTRY * thread_p,
 					     int num_var_attrs);
 
 extern OID *heap_get_class_oid (THREAD_ENTRY * thread_p, OID * class_oid,
-				const OID * oid);
+				const OID * oid, bool need_snapshot);
 extern char *heap_get_class_name (THREAD_ENTRY * thread_p,
 				  const OID * class_oid);
 extern char *heap_get_class_name_alloc_if_diff (THREAD_ENTRY * thread_p,

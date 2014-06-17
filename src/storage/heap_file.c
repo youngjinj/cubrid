@@ -12304,7 +12304,6 @@ try_again:
 
       break;
 
-    case REC_DEAD:
     case REC_MVCC_NEXT_VERSION:
       if (mvcc_Enabled)
 	{
@@ -12325,7 +12324,7 @@ try_again:
 	}
       else
 	{
-	  /* REC_DEAD type is only used in the context of MVCC */
+	  /* REC_MVCC_NEXT_VERSION type is only used in the context of MVCC */
 	  assert (0);
 	  /* Fall through */
 	}
@@ -12926,7 +12925,6 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	    }
 	  return scan;
 
-	case REC_DEAD:
 	case REC_UNKNOWN:
 	case REC_DELETED_WILL_REUSE:
 	case REC_MARKDELETED:
@@ -14203,7 +14201,8 @@ heap_does_exist (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid)
 	       * Caller does not know the class of the object. Get the class
 	       * identifier from disk
 	       */
-	      if (heap_get_class_oid (thread_p, class_oid, oid) == NULL)
+	      if (heap_get_class_oid (thread_p, class_oid, oid,
+				      class_oid != NULL) == NULL)
 		{
 		  doesexist = false;
 		  break;
@@ -14593,11 +14592,13 @@ exit_on_error:
  *   return: OID *(class_oid on success and NULL on failure)
  *   class_oid(out): The Class oid of the instance
  *   oid(in): The Object identifier of the instance
+ *   need_snapshot(in): true if need snapshot
  *
  * Note: Find the class identifier of the given instance.
  */
 OID *
-heap_get_class_oid (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid)
+heap_get_class_oid (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid,
+		    bool need_snapshot)
 {
   RECDES recdes;
   HEAP_SCANCACHE scan_cache;
@@ -14610,7 +14611,7 @@ heap_get_class_oid (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid)
     }
 
   heap_scancache_quick_start (&scan_cache);
-  if (mvcc_Enabled)
+  if (mvcc_Enabled && need_snapshot)
     {
       scan_cache.mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
       if (scan_cache.mvcc_snapshot == NULL)
@@ -16765,7 +16766,7 @@ heap_get_class_partitions (THREAD_ENTRY * thread_p, const OID * class_oid,
    * partition information can be found for this class. We will get the OID of
    * the _db_partition class here because we will need it later
    */
-  if (heap_get_class_oid (thread_p, &_db_part_oid, &part_info) == NULL)
+  if (heap_get_class_oid (thread_p, &_db_part_oid, &part_info, false) == NULL)
     {
       error = ER_FAILED;
       goto cleanup;
@@ -20407,7 +20408,6 @@ heap_chkreloc_next (THREAD_ENTRY * thread_p, HEAP_CHKALL_RELOCOIDS * chk,
 
 	case REC_MARKDELETED:
 	case REC_DELETED_WILL_REUSE:
-	case REC_DEAD:
 	case REC_MVCC_NEXT_VERSION:
 	default:
 	  break;
@@ -24715,7 +24715,6 @@ heap_get_record (THREAD_ENTRY * thread_p, const OID oid, RECDES * recdes,
       break;
 
     case REC_NEWHOME:
-    case REC_DEAD:
     case REC_MVCC_NEXT_VERSION:
     case REC_MARKDELETED:
     case REC_DELETED_WILL_REUSE:
@@ -25117,7 +25116,7 @@ try_again:
 	  pgbuf_get_latch_mode (*pgptr) == PGBUF_LATCH_WRITE);
 
   type = spage_get_record_type (*pgptr, oid->slotid);
-  if (type == REC_UNKNOWN || type == REC_DEAD)
+  if (type == REC_UNKNOWN)
     {
       /*er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3,
          oid->volid, oid->pageid, oid->slotid);
@@ -25808,7 +25807,6 @@ heap_get_mvcc_data (THREAD_ENTRY * thread_p, const OID * oid,
     case REC_MARKDELETED:
     case REC_DELETED_WILL_REUSE:
     case REC_NEWHOME:
-    case REC_DEAD:
     case REC_MVCC_NEXT_VERSION:
     default:
       scan_code = S_ERROR;
@@ -26210,7 +26208,6 @@ try_again:
     case REC_NEWHOME:
     case REC_MARKDELETED:
     case REC_DELETED_WILL_REUSE:
-    case REC_DEAD:
     case REC_MVCC_NEXT_VERSION:
     default:
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_BAD_OBJECT_TYPE, 3,
@@ -27096,7 +27093,6 @@ try_again:
 	}
       break;
 
-    case REC_DEAD:
     case REC_MVCC_NEXT_VERSION:
       if (mvcc_Enabled)
 	{
@@ -27115,7 +27111,7 @@ try_again:
 	}
       else
 	{
-	  /* REC_DEAD type is only used in the context of MVCC */
+	  /* REC_MVCC_NEXT_VERSION type is only used in the context of MVCC */
 	  assert (0);
 	  /* Fall through */
 	}

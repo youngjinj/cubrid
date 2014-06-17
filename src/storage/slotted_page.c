@@ -48,7 +48,6 @@
 #define SPAGE_SEARCH_NEXT       1
 #define SPAGE_SEARCH_PREV       -1
 
-#if 0
 #define SPAGE_VERIFY_HEADER(sphdr) 				\
   do {								\
     assert ((sphdr) != NULL);					\
@@ -60,33 +59,6 @@
     assert ((sphdr)->num_slots >= 0);				\
     assert ((sphdr)->num_records <= (sphdr)->num_slots);	\
   } while (0)
-#else
-#define SPAGE_VERIFY_HEADER(sphdr) spage_verify_header_debug (sphdr)
-static void
-spage_verify_header_debug (SPAGE_HEADER * sphdr)
-{
-  if (sphdr == NULL
-      || sphdr->total_free < 0 || sphdr->total_free > DB_PAGESIZE
-      || sphdr->cont_free < 0 || sphdr->cont_free > DB_PAGESIZE
-      || sphdr->cont_free > sphdr->total_free
-      || sphdr->offset_to_free_area > DB_PAGESIZE
-      || sphdr->num_slots < 0
-      || sphdr->num_records < 0 || sphdr->num_records > sphdr->num_slots)
-    {
-      assert_release (false);
-      if (sphdr == NULL)
-	_er_log_debug (ARG_FILE_LINE, "Invalid page header NULL");
-      else
-	{
-	  _er_log_debug (ARG_FILE_LINE, "Invalid page header: total_free = %d"
-			 "cont_free = %d, offset_to = %d, num_slots = %d,"
-			 "num_records = %d", sphdr->total_free,
-			 sphdr->cont_free, sphdr->offset_to_free_area,
-			 sphdr->num_slots, sphdr->num_records);
-	}
-    }
-}
-#endif
 
 enum
 {
@@ -4138,11 +4110,6 @@ spage_get_record_data (PAGE_PTR page_p, SPAGE_SLOT * slot_p,
   assert (slot_p != NULL);
   assert (record_descriptor_p != NULL);
 
-  if (slot_p->record_type == REC_DEAD)
-    {
-      return SP_ERROR;
-    }
-
   /*
    * If peeking, the address of the data in the descriptor is set to the
    * address of the record in the buffer. Otherwise, the record is copied
@@ -4497,8 +4464,6 @@ spage_record_type_string (INT16 record_type)
       return "DELETED_WILL_REUSE";
     case REC_ASSIGN_ADDRESS:
       return "ASSIGN_ADDRESS";
-    case REC_DEAD:
-      return "REC_DEAD";
     case REC_MVCC_NEXT_VERSION:
       return "REC_MVCC_NEXT_VERSION";
     default:
@@ -4990,11 +4955,6 @@ spage_find_slot (PAGE_PTR page_p, SPAGE_HEADER * page_header_p,
 
   if (is_unknown_slot_check)
     {
-      if (slot_p->record_type == REC_DEAD)
-	{
-	  /* This is not unknown slot, even though it doesn't have data */
-	  return slot_p;
-	}
       if (spage_is_unknown_slot (slot_id, page_header_p, slot_p))
 	{
 	  return NULL;

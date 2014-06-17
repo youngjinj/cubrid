@@ -106,7 +106,7 @@ process_value (DB_VALUE * value)
 	    break;
 	  }
 
-	if (heap_get_class_oid (NULL, &ref_class_oid, ref_oid) == NULL)
+	if (heap_get_class_oid (NULL, &ref_class_oid, ref_oid, true) == NULL)
 	  {
 	    OID_SET_NULL (ref_oid);
 	    return_value = 1;

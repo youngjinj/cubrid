@@ -75,14 +75,11 @@ enum
  */
   REC_DELETED_WILL_REUSE = 7,
 
-/* Slot's record has been deleted from heap file but has to be deleted from
- * index entries too (MVCC context).
- */
-/* This may be not required anymore with the new vacuum system */
-  REC_DEAD = 8,
+/* Slot used after vacuum to keep link to newer object version */
+  REC_MVCC_NEXT_VERSION = 8,
 
 /* unused reserved record type */
-  REC_MVCC_NEXT_VERSION = 9,
+  REC_RESERVED_TYPE_9 = 9,
   REC_RESERVED_TYPE_10 = 10,
   REC_RESERVED_TYPE_11 = 11,
   REC_RESERVED_TYPE_12 = 12,

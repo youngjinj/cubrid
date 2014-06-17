@@ -2092,7 +2092,8 @@ locator_find_lockset_missing_class_oids (THREAD_ENTRY * thread_p,
        * Caller does not know the class identifier of the requested object.
        * Get the class identifier from disk
        */
-      if (heap_get_class_oid (thread_p, &class_oid, &reqobjs[i].oid) == NULL)
+      if (heap_get_class_oid (thread_p, &class_oid, &reqobjs[i].oid, true)
+	  == NULL)
 	{
 	  /*
 	   * Unable to find the class of the object. Remove the object from
@@ -2377,7 +2378,7 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
        * Caller does not know the class of the object. Get the class
        * identifier from disk
        */
-      if (heap_get_class_oid (thread_p, class_oid, oid) == NULL)
+      if (heap_get_class_oid (thread_p, class_oid, oid, true) == NULL)
 	{
 	  /* Unable to find the class of the object.. return */
 	  *fetch_area = NULL;
@@ -2639,7 +2640,7 @@ xlocator_get_class (THREAD_ENTRY * thread_p, OID * class_oid, int class_chn,
        * Caller does not know the class of the object. Get the class identifier
        * from disk
        */
-      if (heap_get_class_oid (thread_p, class_oid, oid) == NULL)
+      if (heap_get_class_oid (thread_p, class_oid, oid, true) == NULL)
 	{
 	  /*
 	   * Unable to find out the class identifier.
@@ -3912,7 +3913,7 @@ xlocator_does_exist (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
        * from disk
        */
       class_chn = CHN_UNKNOWN_ATCLIENT;
-      if (heap_get_class_oid (thread_p, class_oid, oid) == NULL)
+      if (heap_get_class_oid (thread_p, class_oid, oid, true) == NULL)
 	{
 	  /* Unable to find the class of the object.. return */
 	  return LC_DOESNOT_EXIST;
@@ -6322,7 +6323,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	  /* make sure we use the correct class oid - we could be dealing
 	   * with a classoid resulted from a unique btid pruning
 	   */
-	  if (heap_get_class_oid (thread_p, class_oid, oid) == NULL)
+	  if (heap_get_class_oid (thread_p, class_oid, oid, false) == NULL)
 	    {
 	      goto error;
 	    }
@@ -10942,8 +10943,8 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 	       * check to make sure that the OID is one of the OIDs from our
 	       * list of classes.
 	       */
-	      if (heap_get_class_oid (thread_p, &cl_oid, &oid_area[i]) ==
-		  NULL)
+	      if (heap_get_class_oid (thread_p, &cl_oid, &oid_area[i], true)
+		  == NULL)
 		{
 		  (void) heap_scancache_end (thread_p, &isid.scan_cache);
 		  goto error;
