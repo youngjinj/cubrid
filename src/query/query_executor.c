@@ -2404,6 +2404,11 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 	  pg_cnt +=
 	    qexec_clear_regu_list (xasl_p, p->s_id.s.hsid.rest_regu_list,
 				   final);
+
+	  pg_cnt +=
+	    qexec_clear_regu_list (xasl_p, p->s_id.s.hsid.
+				   regu_list_last_version, final);
+
 	  hsidp = &p->s_id.s.hsid;
 	  if (hsidp->caches_inited)
 	    {
@@ -2448,6 +2453,10 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 				       p->s_id.s.isid.indx_cov.regu_val_list,
 				       final);
 	    }
+
+	  pg_cnt +=
+	    qexec_clear_regu_list (xasl_p, p->s_id.s.isid.
+				   regu_list_last_version, final);	  
 
 	  if (p->s_id.s.isid.indx_cov.output_val_list != NULL)
 	    {
@@ -2540,6 +2549,10 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 				   final);
 	  pg_cnt +=
 	    qexec_clear_regu_list (xasl_p, p->s.cls_node.cls_regu_list_rest,
+				   final);
+	  pg_cnt +=
+	    qexec_clear_regu_list (xasl_p,
+				   p->s.cls_node.cls_regu_list_last_version,
 				   final);
 	  if (p->access == INDEX)
 	    {
@@ -7418,6 +7431,8 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 				   curr_spec->s.cls_node.cls_regu_list_pred,
 				   curr_spec->where_pred,
 				   curr_spec->s.cls_node.cls_regu_list_rest,
+				   curr_spec->s.cls_node.
+				   cls_regu_list_last_version,
 				   curr_spec->s.cls_node.num_attrs_pred,
 				   curr_spec->s.cls_node.attrids_pred,
 				   curr_spec->s.cls_node.cache_pred,
@@ -7505,6 +7520,8 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 				    curr_spec->s.cls_node.cls_regu_list_rest,
 				    curr_spec->where_range,
 				    curr_spec->s.cls_node.cls_regu_list_range,
+				    curr_spec->s.cls_node.
+				    cls_regu_list_last_version,
 				    curr_spec->s.cls_node.cls_output_val_list,
 				    curr_spec->s.cls_node.cls_regu_val_list,
 				    curr_spec->s.cls_node.num_attrs_key,
@@ -8454,13 +8471,14 @@ qexec_prune_spec (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec,
     }
   else
     {
-      if (spec->access == SEQUENTIAL
+      if ((spec->access == SEQUENTIAL
 	  || spec->access == S_HEAP_SCAN_RECORD_INFO
 	  || spec->access == S_HEAP_PAGE_SCAN)
+	  && (!mvcc_Enabled || spec->where_pred == NULL))
 	{
 	  lock = X_LOCK;
 	}
-      else if (IS_ANY_INDEX_ACCESS (spec->access))
+      else if (mvcc_Enabled || IS_ANY_INDEX_ACCESS (spec->access))
 	{
 	  lock = IX_LOCK;
 	}
@@ -8547,6 +8565,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
   qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_pred);
   qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_rest);
   qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_key);
+  qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_last_version);
   qexec_reset_pred_expr (spec->where_pred);
   qexec_reset_pred_expr (spec->where_key);
 
@@ -8600,6 +8619,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 			     spec->s.cls_node.cls_regu_list_pred,
 			     spec->where_pred,
 			     spec->s.cls_node.cls_regu_list_rest,
+			     spec->s.cls_node.cls_regu_list_last_version,
 			     spec->s.cls_node.num_attrs_pred,
 			     spec->s.cls_node.attrids_pred,
 			     spec->s.cls_node.cache_pred,
@@ -8663,6 +8683,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 			      spec->s.cls_node.cls_regu_list_rest,
 			      spec->where_range,
 			      spec->s.cls_node.cls_regu_list_range,
+			      spec->s.cls_node.cls_regu_list_last_version,
 			      spec->s.cls_node.cls_output_val_list,
 			      spec->s.cls_node.cls_regu_val_list,
 			      spec->s.cls_node.num_attrs_key,
@@ -21236,14 +21257,6 @@ qexec_gby_finalize_group_val_list (THREAD_ENTRY * thread_p,
 	  gby_vallist = gby_vallist->next;
 	}
     }
-
-wrapup:
-  return;
-
-exit_on_error:
-  assert (er_errid () != NO_ERROR);
-  gbstate->state = er_errid ();
-  goto wrapup;
 }
 
 /*
@@ -21342,10 +21355,6 @@ qexec_gby_finalize_group_dim (THREAD_ENTRY * thread_p,
 wrapup:
   return level;
 
-exit_on_error:
-  assert (er_errid () != NO_ERROR);
-  gbstate->state = er_errid ();
-  goto wrapup;
 }
 
 /*

@@ -3111,3 +3111,73 @@ eval_key_filter (THREAD_ENTRY * thread_p, DB_VALUE * value,
 
   return ev_res;
 }
+
+/*
+ * eval_set_last_version () - set last versions
+ *   return: error code
+ * 	 class_oid(in): class OID
+ *	 scan_cache(in): scan cache
+ *	 regu_list_last_version(in) : constant regu variable list, used to fetch
+ *				    object last version
+ *
+ * Note: This function replace OID contained in each DB_VALUE with the latest
+ *	  version. The DB_VALUE is pointed by constant regu variables.
+ */
+int
+eval_set_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
+		       HEAP_SCANCACHE * scan_cache,
+		       REGU_VARIABLE_LIST regu_list_last_version)
+{
+
+  /* TO DO - add into a function */
+  REGU_VARIABLE_LIST regup;
+  RECDES mvcc_last_record;
+  DB_VALUE *peek_dbval;
+  OID mvcc_updated_oid;
+
+
+  for (regup = regu_list_last_version; regup != NULL;
+       regup = regu_list_last_version->next)
+    {
+      if (regup->value.type != TYPE_CONSTANT)
+	{
+	  return ER_FAILED;
+	}
+
+      assert (regup->value.type == TYPE_CONSTANT);
+      peek_dbval = regup->value.value.dbvalptr;
+
+      if (DB_IS_NULL (peek_dbval))
+	{
+	  continue;
+	}
+
+      if (DB_VALUE_DOMAIN_TYPE (peek_dbval) != DB_TYPE_OID)
+	{
+	  return ER_FAILED;
+	}
+
+      mvcc_last_record.data = NULL;
+      if (heap_get_last (thread_p,
+			 DB_GET_OID (peek_dbval), &mvcc_last_record,
+			 scan_cache, true, NULL_CHN,
+			 &mvcc_updated_oid) != S_SUCCESS)
+	{
+	  if (er_errid () == ER_HEAP_NODATA_NEWADDRESS
+	      || er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+	    {
+	      er_clear ();	/* clear ER_HEAP_NODATA_NEWADDRESS */
+	      continue;
+	    }
+	  return er_errid ();
+	}
+
+      if (!OID_ISNULL (&mvcc_updated_oid)
+	  && !OID_EQ (&mvcc_updated_oid, DB_GET_OID (peek_dbval)))
+	{
+	  DB_MAKE_OID (peek_dbval, &mvcc_updated_oid);
+	}
+    }
+
+  return NO_ERROR;
+}

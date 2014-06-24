@@ -6399,6 +6399,10 @@ log_recovery_vacuum_data_buffer (THREAD_ENTRY * thread_p,
 				 LOG_LSA * mvcc_op_lsa, MVCCID mvccid)
 {
   assert (mvcc_Enabled);
+
+  assert (mvccid != MVCCID_NULL);
+  assert (mvcc_id_precedes (mvccid, log_Gl.hdr.mvcc_next_id));
+
   /* Recover vacuum data information */
   if (LSA_ISNULL (&log_Gl.hdr.mvcc_op_log_lsa)
       || (VACUUM_GET_LOG_BLOCKID (log_Gl.hdr.mvcc_op_log_lsa.pageid)

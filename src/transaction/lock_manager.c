@@ -8564,12 +8564,8 @@ lock_scan (THREAD_ENTRY * thread_p, const OID * class_oid, bool is_indexscan,
 	    }
 	}
     }
-
-  /* in MVCC do not acquire instance/key locks when scan index,
-   * no matter isolation level
-   */
-  if (mvcc_Enabled == false
-      && is_indexscan && !LK_UNCOMMITTED_READ_ISOLATION (isolation)
+  
+  if (is_indexscan && !LK_UNCOMMITTED_READ_ISOLATION (isolation)
       && !(lock_hint & LOCKHINT_READ_UNCOMMITTED))
     {
       *scanid_bit = lock_alloc_scanid_bit (thread_p);

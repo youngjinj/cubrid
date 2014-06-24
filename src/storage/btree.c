@@ -55,6 +55,7 @@
 #include "network_interface_sr.h"
 #include "utility.h"
 #include "mvcc.h"
+#include "transform.h"
 
 /* this must be the last header file included!!! */
 #include "dbval.h"
@@ -528,7 +529,8 @@ static int btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 				 KEY_VAL_RANGE * key_val_range,
 				 FILTER_INFO * filter,
 				 bool need_construct_btid_int, char *copy_buf,
-				 int copy_buf_len, bool for_update);
+				 int copy_buf_len, bool for_update,
+				 bool mvcc_need_locks);
 static int btree_find_next_index_record (THREAD_ENTRY * thread_p,
 					 BTREE_SCAN * bts);
 static int btree_find_next_index_record_holding_current (THREAD_ENTRY *
@@ -999,9 +1001,14 @@ static int btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p,
 
 static BTREE_SEARCH
 btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
-				  BTID_INT * btid_int, RECDES * key_recdes,
-				  int offset, int *visible_row_position,
+				  BTID_INT * btid_int, RECDES * rec,
+				  int offset, BTREE_NODE_TYPE node_type,
 				  OID * oid, OID * class_oid);
+static BTREE_SEARCH
+btree_key_find_first_visible_row_from_all_ovf (THREAD_ENTRY * thread_p,
+					       BTID_INT * btid_int,
+					       VPID * first_ovfl_vpid,
+					       OID * oid, OID * class_oid);
 static DB_VALUE *btree_insert (THREAD_ENTRY * thread_p, BTID * btid,
 			       DB_VALUE * key, OID * cls_oid, OID * oid,
 			       int op_type,
@@ -17449,7 +17456,6 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
   bool old_check_interrupt;
   int retry_btree_no_space = 0;
   BTREE_SEARCH result;
-  int visible_row_position = 0;
 
   assert (key != NULL);
 
@@ -18511,8 +18517,15 @@ curr_key_locking:
 			     PEEK_KEY_VALUE, NULL);
 	  result =
 	    btree_key_find_first_visible_row (thread_p, &btid_int, &peek_rec,
-					      offset, &visible_row_position,
+					      offset, BTREE_LEAF_NODE,
 					      &C_oid, &C_class_oid);
+	  if (result == BTREE_KEY_NOTFOUND && !VPID_ISNULL (&(leaf_pnt.ovfl)))
+	    {
+	      /* search for visible OID into OID overflow page */
+	      result =
+		btree_key_find_first_visible_row_from_all_ovf
+		(thread_p, &btid_int, &(leaf_pnt.ovfl), &C_oid, &C_class_oid);
+	    }
 	  switch (result)
 	    {
 	    case BTREE_KEY_NOTFOUND:
@@ -18608,7 +18621,6 @@ curr_key_locking:
 	      pgbuf_unfix_and_init (thread_p, P);
 
 	      assert (curr_lock_flag == true);
-	      visible_row_position = 0;
 	      goto start_point;
 	    }
 	}
@@ -20039,14 +20051,17 @@ btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
   int scanid_bit = -1;
   int num_classes;
 
-  rc = lock_scan (thread_p, class_oid, true, LOCKHINT_NONE, &class_lock,
-		  &scanid_bit);
-  if (rc != LK_GRANTED)
+  if (isidp->mvcc_need_locks)
     {
-      return ER_FAILED;
-    }
+      rc = lock_scan (thread_p, class_oid, true, LOCKHINT_NONE, &class_lock,
+		      &scanid_bit);
+      if (rc != LK_GRANTED)
+	{
+	  return ER_FAILED;
+	}
 
-  isidp->scan_cache.scanid_bit = scanid_bit;
+      isidp->scan_cache.scanid_bit = scanid_bit;
+    }
 
   /* check if the search is based on all classes contained in the class hierarchy. */
   num_classes = (is_all_class_srch) ? 0 : 1;
@@ -20057,7 +20072,10 @@ btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
 			oids_size, filter, isidp, true, false, NULL, NULL,
 			false, 0);
 
-  lock_unlock_scan (thread_p, class_oid, scanid_bit, END_SCAN);
+  if (isidp->mvcc_need_locks)
+    {
+      lock_unlock_scan (thread_p, class_oid, scanid_bit, END_SCAN);
+    }
 
   return rc;
 }
@@ -20377,6 +20395,7 @@ btree_coerce_key (DB_VALUE * keyp, int keysize,
  *   copy_buf(in):
  *   copy_buf_len(in):
  *   bool for_update(in): true if FOR UPDATE clause is active
+ *   bool mvcc_need_locks(in): true if need locks in MVCC during index scan
  *
  * Note: Initialize a new B+-tree scan structure for an index scan.
  */
@@ -20386,7 +20405,7 @@ btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 		      OID * class_oid, KEY_VAL_RANGE * key_val_range,
 		      FILTER_INFO * filter,
 		      bool need_construct_btid_int, char *copy_buf,
-		      int copy_buf_len, bool for_update)
+		      int copy_buf_len, bool for_update, bool mvcc_need_locks)
 {
   VPID root_vpid;
   PAGE_PTR root = NULL;
@@ -20423,7 +20442,7 @@ btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
    * even if update/delete. The locks will be acquired later, outside
    * of btree_range_search, only for visible OIDs.
    */
-  if (mvcc_Enabled == true)
+  if (mvcc_Enabled == true && mvcc_need_locks == false)
     {
       bts->read_uncommitted = true;
     }
@@ -23002,7 +23021,8 @@ btree_get_next_key_info (THREAD_ENTRY * thread_p,
 	btree_initialize_bts (thread_p, bts, btid, 1,
 			      LOCKHINT_READ_UNCOMMITTED, class_oids_ptr, NULL,
 			      NULL, false, index_scan_id_p->copy_buf,
-			      index_scan_id_p->copy_buf_len, false);
+			      index_scan_id_p->copy_buf_len, false,
+			      index_scan_id_p->mvcc_need_locks);
       if (error_code != NO_ERROR)
 	{
 	  goto error;
@@ -23085,14 +23105,30 @@ btree_get_next_key_info (THREAD_ENTRY * thread_p,
   /* Get OIDs -> For now just the first OID */
   if (mvcc_Enabled)
     {
-      int visible_position = 0;
       BTREE_SEARCH result =
 	btree_key_find_first_visible_row (thread_p, &bts->btid_int, &rec,
-					  offset, &visible_position, &oid,
-					  &class_oid);
+					  offset, BTREE_LEAF_NODE,
+					  &oid, &class_oid);
       if (result == BTREE_KEY_NOTFOUND)
 	{
-	  OID_SET_NULL (&oid);
+	  if (!VPID_ISNULL (&(leaf_pnt.ovfl)))
+	    {
+	      /* search for visible OID into OID overflow page */
+	      result =
+		btree_key_find_first_visible_row_from_all_ovf (thread_p,
+							       &bts->btid_int,
+							       &(leaf_pnt.
+								 ovfl), &oid,
+							       &class_oid);
+	      if (result == BTREE_KEY_NOTFOUND)
+		{
+		  OID_SET_NULL (&oid);
+		}
+	    }
+	  else
+	    {
+	      OID_SET_NULL (&oid);
+	    }
 	}
     }
   else
@@ -27791,7 +27827,7 @@ btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
 	  return -1;
 	}
 
-      if (mvcc_Enabled)
+      if (mvcc_Enabled && !(index_scan_id_p->mvcc_need_locks))
 	{
 	  /* do not acquire any lock during btree scan */
 	  readonly_purpose = true;
@@ -27807,7 +27843,8 @@ btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
 				filter, need_construct_btid_int,
 				index_scan_id_p->copy_buf,
 				index_scan_id_p->copy_buf_len,
-				index_scan_id_p->for_update) != NO_ERROR)
+				index_scan_id_p->for_update,
+				index_scan_id_p->mvcc_need_locks) != NO_ERROR)
 	{
 	  goto error;
 	}
@@ -29089,6 +29126,15 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
 					  int *which_action)
 {
   OID temp_oid;
+  MVCC_REC_HEADER mvcc_header, *p_mvcc_header = NULL;
+
+  if (mvcc_Enabled)
+    {
+      MVCC_SET_INSID (&mvcc_header, MVCCID_NULL);
+      MVCC_SET_DELID (&mvcc_header, MVCCID_NULL);
+      MVCC_SET_NEXT_VERSION (&mvcc_header, &oid_Null_oid);
+      p_mvcc_header = &mvcc_header;
+    }
 
   assert (bts != NULL && btrs_helper != NULL && which_action != NULL);
   assert (btrs_helper->saved_inst_oid.pageid != NULL_PAGEID
@@ -29122,7 +29168,7 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
   btree_leaf_get_oid_from_oidptr (bts, btrs_helper->rec_oid_ptr,
 				  btrs_helper->node_type,
 				  &btrs_helper->inst_oid,
-				  &btrs_helper->class_oid, NULL);
+				  &btrs_helper->class_oid, p_mvcc_header);
   if (btrs_helper->curr_key_locked)
     {
       btree_make_pseudo_oid (btrs_helper->inst_oid.pageid,
@@ -29168,7 +29214,8 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
 					    index_scan_id_p,
 					    need_count_only,
 					    &btrs_helper->inst_oid,
-					    NULL, which_action) != NO_ERROR)
+					    p_mvcc_header, which_action)
+		  != NO_ERROR)
 		{
 		  return ER_FAILED;
 		}
@@ -29330,12 +29377,12 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
   int j;
   int lock_ret;
   bool dummy_clear;
+  MVCC_REC_HEADER mvcc_header, *p_mvcc_header = NULL;
 
   assert (bts != NULL);
   assert (btrs_helper != NULL);
   assert (which_action != NULL);
   assert (bts->read_uncommitted == false);
-  assert (mvcc_Enabled == false);
 
   *which_action = BTREE_CONTINUE;
 
@@ -29343,11 +29390,19 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
   /* reset CLS_satisfied flag to true */
   btrs_helper->CLS_satisfied = true;
 
+  if (mvcc_Enabled)
+    {
+      MVCC_SET_INSID (&mvcc_header, MVCCID_NULL);
+      MVCC_SET_DELID (&mvcc_header, MVCCID_NULL);
+      MVCC_SET_NEXT_VERSION (&mvcc_header, &oid_Null_oid);
+      p_mvcc_header = &mvcc_header;
+    }
+
   /* get current class OID and instance OID */
   btree_leaf_get_oid_from_oidptr (bts, btrs_helper->rec_oid_ptr,
 				  btrs_helper->node_type,
 				  &btrs_helper->inst_oid,
-				  &btrs_helper->class_oid, NULL);
+				  &btrs_helper->class_oid, p_mvcc_header);
 
   /* checking phase */
   if (!BTREE_IS_UNIQUE (bts->btid_int.unique_pk))
@@ -29419,6 +29474,13 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
       lock_ret = LK_GRANTED;
       if (btrs_helper->end_of_leaf_level == true)
 	{
+	  if (mvcc_Enabled == true)
+	    {
+	      /* in MVCC do not lock keys */
+	      *which_action = BTREE_GOTO_END_OF_SCAN;
+	      return NO_ERROR;
+	    }
+
 	  /* skip next key lock */
 	  goto curr_key_locking;
 	}
@@ -29445,7 +29507,9 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
       OID_SET_NULL (&btrs_helper->ck_pseudo_oid);
       OID_SET_NULL (&btrs_helper->nk_pseudo_oid);
 
-      if ((bts->oid_pos + oid_index) == 0 && VPID_ISNULL (&(bts->O_vpid))
+      /* in MVCC, do not lock keys */
+      if (mvcc_Enabled == false
+	  && (bts->oid_pos + oid_index) == 0 && VPID_ISNULL (&(bts->O_vpid))
 	  && !VPID_ISNULL (&(bts->C_vpid)))
 	{
 	  if (btrs_helper->is_condition_satisfied && scan_op_type != S_SELECT
@@ -29545,7 +29609,7 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 	  if (btree_handle_current_oid (thread_p, bts, btrs_helper,
 					key_limit_lower, key_limit_upper,
 					index_scan_id_p, need_count_only,
-					&btrs_helper->inst_oid, NULL,
+					&btrs_helper->inst_oid, p_mvcc_header,
 					which_action) != NO_ERROR)
 	    {
 	      return ER_FAILED;
@@ -29684,7 +29748,9 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
       OID_SET_NULL (&btrs_helper->ck_pseudo_oid);
       OID_SET_NULL (&btrs_helper->nk_pseudo_oid);
 
-      if ((bts->oid_pos + oid_index) == 0 && VPID_ISNULL (&(bts->O_vpid))
+      /* in MVCC, do not lock keys */
+      if (mvcc_Enabled == false
+	  && (bts->oid_pos + oid_index) == 0 && VPID_ISNULL (&(bts->O_vpid))
 	  && !VPID_ISNULL (&(bts->C_vpid)))
 	{
 	  if (btrs_helper->is_condition_satisfied && scan_op_type != S_SELECT
@@ -29824,13 +29890,13 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
       btree_leaf_get_oid_from_oidptr (bts, btrs_helper->rec_oid_ptr,
 				      btrs_helper->node_type,
 				      &btrs_helper->inst_oid,
-				      &btrs_helper->class_oid, NULL);
+				      &btrs_helper->class_oid, p_mvcc_header);
       if (btrs_helper->is_condition_satisfied && btrs_helper->CLS_satisfied)
 	{
 	  if (btree_handle_current_oid (thread_p, bts, btrs_helper,
 					key_limit_lower, key_limit_upper,
 					index_scan_id_p, need_count_only,
-					&btrs_helper->inst_oid, NULL,
+					&btrs_helper->inst_oid, p_mvcc_header,
 					which_action) != NO_ERROR)
 	    {
 	      return ER_FAILED;
@@ -30482,193 +30548,111 @@ btree_insert_init_locks (THREAD_ENTRY * thread_p, bool is_active,
  * btree_key_find_first_visible_row () - MVCC find first visible row
  *   return: whether the visible row has been found
  *   btid(in): B+tree index identifier
- *   key_recdes(in): Key record descriptor
+ *   rec(in): Record descriptor
  *   offset(in): Offset of the second OID in key buffer
- *   visible_row_position(in/out): key buffer position
+ *   node_type(in): node type
  *   oid(out): Object identifier of the visible row or NULL_OID
  *   class_oid(out): Object class identifier
  */
 static BTREE_SEARCH
 btree_key_find_first_visible_row (THREAD_ENTRY * thread_p,
-				  BTID_INT * btid_int, RECDES * key_recdes,
-				  int offset, int *visible_row_position,
+				  BTID_INT * btid_int, RECDES * rec,
+				  int offset, BTREE_NODE_TYPE node_type,
 				  OID * oid, OID * class_oid)
 {
-  char *rec_oid_ptr;
-  int oids_cnt;
   PAGE_PTR pgptr = NULL, forward_pgptr = NULL;
-  SCAN_CODE scan_code;
-  MVCC_SNAPSHOT mvcc_snapshot_dirty;
   MVCC_REC_HEADER mvcc_rec_header;
-  int oid_pos, oid_size_in_buffer;
-  BTREE_SEARCH result = BTREE_KEY_NOTFOUND;
-  bool ignore_record = false;
-  int mvccid_size;
+  OR_BUF buf;
+  int mvcc_flags = 0, length = 0;
+  bool is_first = true;
+  MVCC_SNAPSHOT mvcc_snapshot_dirty;
 
-  assert (btid_int != NULL && key_recdes != NULL && key_recdes->data != NULL
-	  && visible_row_position && oid != NULL && class_oid != NULL);
-
-  /* Unique b-tree will store OID and class OID */
-  if (BTREE_IS_UNIQUE (btid_int->unique_pk))
-    {
-      oid_size_in_buffer = 2 * OR_OID_SIZE;
-      mvccid_size = 2 * OR_MVCCID_SIZE;
-    }
-  else
-    {
-      oid_size_in_buffer = OR_OID_SIZE;
-    }
+  assert (btid_int != NULL && rec != NULL && rec->data != NULL
+	  && oid != NULL && class_oid != NULL);
 
   OID_SET_NULL (oid);
   OID_SET_NULL (class_oid);
   mvcc_snapshot_dirty.snapshot_fnc = mvcc_satisfies_dirty;
-  if (*visible_row_position == 0)
-    {
-      btree_leaf_get_first_oid (btid_int, key_recdes, oid, class_oid, NULL);
 
-      if (heap_get_pages_for_mvcc_chain_read
-	  (thread_p, oid, &pgptr, &forward_pgptr, &ignore_record) != NO_ERROR)
+  length = rec->length;
+  if (btree_leaf_is_flaged (rec, BTREE_LEAF_RECORD_OVERFLOW_OIDS))
+    {
+      length -= DB_ALIGN (DISK_VPID_SIZE, INT_ALIGNMENT);
+    }
+
+  or_init (&buf, rec->data, length);
+  while (buf.ptr < buf.endptr)
+    {
+      /* Get MVCC flags */
+      mvcc_flags = btree_leaf_key_oid_get_mvcc_flag (buf.ptr);
+
+      /* Read object OID */
+      if (or_get_oid (&buf, oid) != NO_ERROR)
 	{
 	  goto error;
 	}
-
-      if (!ignore_record)
-	{
-	  scan_code =
-	    heap_get_mvcc_data (thread_p, oid, &mvcc_rec_header, pgptr,
-				forward_pgptr, &mvcc_snapshot_dirty);
-	  if (scan_code == S_SUCCESS)
-	    {
-	      /* visible row found it */
-	      if (MVCCID_IS_VALID (mvcc_snapshot_dirty.lowest_active_mvccid)
-		  || MVCCID_IS_VALID (mvcc_snapshot_dirty.
-				      highest_completed_mvccid))
-		{
-		  /* C_oid is modified by other active transaction */
-		  result = BTREE_ACTIVE_KEY_FOUND;
-		}
-	      else
-		{
-		  /* inserted by committed transaction,
-		   */
-		  result = BTREE_KEY_FOUND;
-		}
-
-	      goto end;
-	    }
-	}
-
-      (*visible_row_position)++;
-    }
-
-  oids_cnt =
-    btree_leaf_get_num_oids (key_recdes, offset, BTREE_LEAF_NODE,
-			     oid_size_in_buffer);
-  rec_oid_ptr = key_recdes->data + offset;
-  for (oid_pos = *visible_row_position; oid_pos < oids_cnt; oid_pos++)
-    {
-      BTREE_GET_OID (rec_oid_ptr, oid);
-      if (!BTREE_IS_UNIQUE (btid_int->unique_pk))
-	{
-	  mvccid_size = 0;
-	  if (btree_leaf_key_oid_is_mvcc_flaged (rec_oid_ptr,
-						 BTREE_LEAF_OID_HAS_MVCC_INSID))
-	    {
-	      mvccid_size += OR_MVCCID_SIZE;
-	    }
-	  if (btree_leaf_key_oid_is_mvcc_flaged (rec_oid_ptr,
-						 BTREE_LEAF_OID_HAS_MVCC_DELID))
-	    {
-	      mvccid_size += OR_MVCCID_SIZE;
-	    }
-	}
-      else
-	{
-	  mvccid_size = 2 * OR_MVCCID_SIZE;
-	}
-
-      oid->slotid = oid->slotid & (~BTREE_LEAF_RECORD_MASK);
-      if (mvcc_Enabled == true)
-	{
-	  oid->volid = oid->volid & (~BTREE_LEAF_OID_MVCC_MASK);
-	}
+      /* Clear flags */
+      BTREE_CLEAR_MVCC_FLAGS_FROM_OID (oid);
+      BTREE_CLEAR_RECORD_FLAGS_FROM_OID (oid);
 
       if (BTREE_IS_UNIQUE (btid_int->unique_pk))
 	{
-	  BTREE_GET_OID (rec_oid_ptr + OR_OID_SIZE, class_oid);
+	  if (node_type == BTREE_OVERFLOW_NODE || !is_first
+	      || btree_leaf_is_flaged (rec, BTREE_LEAF_RECORD_SUBCLASS))
+	    {
+	      /* Read class OID */
+	      if (or_get_oid (&buf, class_oid) != NO_ERROR)
+		{
+		  goto error;
+		}
+	    }
+	  else
+	    {
+	      /* Class OID is top class OID */
+	      COPY_OID (class_oid, &btid_int->topclass_oid);
+	    }
 	}
 
-      if (pgptr != NULL)
-	{
-	  pgbuf_unfix_and_init (thread_p, pgptr);
-	}
-
-      if (forward_pgptr != NULL)
-	{
-	  pgbuf_unfix_and_init (thread_p, forward_pgptr);
-	}
-
-      if (heap_get_pages_for_mvcc_chain_read
-	  (thread_p, oid, &pgptr, &forward_pgptr, &ignore_record) != NO_ERROR)
+      /* Get MVCC information */
+      if (btree_or_get_mvccinfo (&buf, &mvcc_rec_header, mvcc_flags)
+	  != NO_ERROR)
 	{
 	  goto error;
 	}
 
-      if (!ignore_record)
+      if ((mvcc_snapshot_dirty).snapshot_fnc (thread_p, &mvcc_rec_header,
+					      &mvcc_snapshot_dirty))
 	{
-	  scan_code =
-	    heap_get_mvcc_data (thread_p, oid, &mvcc_rec_header, pgptr,
-				forward_pgptr, &mvcc_snapshot_dirty);
-	  if (scan_code == S_SUCCESS)
+	  /* visible row found it */
+	  if (MVCCID_IS_VALID (mvcc_snapshot_dirty.lowest_active_mvccid)
+	      || MVCCID_IS_VALID (mvcc_snapshot_dirty.
+				  highest_completed_mvccid))
 	    {
-	      /* visible row found it */
-	      if (MVCCID_IS_VALID (mvcc_snapshot_dirty.lowest_active_mvccid)
-		  || MVCCID_IS_VALID (mvcc_snapshot_dirty.
-				      highest_completed_mvccid))
-		{
-		  result = BTREE_ACTIVE_KEY_FOUND;
-		}
-	      else
-		{
-		  /* inserted by committed transaction,
-		   */
-		  result = BTREE_KEY_FOUND;
-		}
-
-	      break;
+	      /* oid is modified by other active transaction */
+	      return BTREE_ACTIVE_KEY_FOUND;
+	    }
+	  else
+	    {
+	      /* inserted by committed transaction */
+	      return BTREE_KEY_FOUND;
 	    }
 	}
 
-      rec_oid_ptr += (oid_size_in_buffer + mvccid_size);
+      if (node_type == BTREE_LEAF_NODE && is_first)
+	{
+	  /* Must skip over the key value to the next object */
+	  or_seek (&buf, offset);
+	}
+
+      is_first = false;
     }
 
-  if (oid_pos < oids_cnt)
-    {
-      *visible_row_position = oid_pos;
-    }
-  else
-    {
-      *visible_row_position = -1;
-    }
-
-
-end:
-  if (pgptr != NULL)
-    {
-      pgbuf_unfix_and_init (thread_p, pgptr);
-    }
-  if (forward_pgptr != NULL)
-    {
-      pgbuf_unfix_and_init (thread_p, forward_pgptr);
-    }
-
-  return result;
+  return BTREE_KEY_NOTFOUND;
 
 error:
   OID_SET_NULL (oid);
   OID_SET_NULL (class_oid);
-  result = BTREE_ERROR_OCCURRED;
-  goto end;
+  return BTREE_ERROR_OCCURRED;
 }
 
 /*
@@ -30720,20 +30704,15 @@ xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
   BTREE_SEARCH status;
   INDX_SCAN_ID index_scan_id;
   KEY_VAL_RANGE key_val_range;
-  int visible_row_position = 0;
   OID *oid_ptr = NULL;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
+  MVCC_SNAPSHOT mvcc_snapshot_dirty;
 
   assert (mvcc_Enabled == true && btid != NULL && class_oid != NULL &&
 	  oid != NULL);
 
   if (mvcc_Enabled)
     {
-      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
-      if (mvcc_snapshot == NULL)
-	{
-	  return BTREE_KEY_NOTFOUND;
-	}
+      mvcc_snapshot_dirty.snapshot_fnc = mvcc_satisfies_dirty;
     }
 
   BTREE_INIT_SCAN (&btree_scan);
@@ -30746,7 +30725,16 @@ xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
 	      1, ISCAN_OID_BUFFER_SIZE);
       return ER_FAILED;
     }
-  scan_init_index_scan (&index_scan_id, oid_ptr, mvcc_snapshot);
+  scan_init_index_scan (&index_scan_id, oid_ptr, &mvcc_snapshot_dirty);
+
+  if (scan_op_type == S_SELECT && tf_is_catalog_class (class_oid))
+    {
+      index_scan_id.mvcc_need_locks = false;
+    }
+  else
+    {
+      index_scan_id.mvcc_need_locks = true;
+    }
 
   if (key == NULL || db_value_is_null (key)
       || btree_multicol_key_is_null (key))
@@ -31878,4 +31866,79 @@ btree_leaf_lsa_eq (THREAD_ENTRY * thread_p, LOG_LSA * a, LOG_LSA * b)
 #endif
 
   return LSA_EQ (a, b) ? true : false;
+}
+
+/*
+ * btree_key_find_first_visible_row_from_all_ovf () - MVCC find first visible
+ *						    row in OID overflow pages
+ *   return: whether the visible row has been found
+ *   btid_int(in): B+tree index identifier
+ *   first_ovfl_vpid(in): First overflow vpid 
+ *   oid(out): Object identifier of the visible row or NULL_OID
+ *   class_oid(out): Object class identifier
+ */
+static BTREE_SEARCH
+btree_key_find_first_visible_row_from_all_ovf (THREAD_ENTRY * thread_p,
+					       BTID_INT * btid_int,
+					       VPID * first_ovfl_vpid,
+					       OID * oid, OID * class_oid)
+{
+  RECDES ovfl_copy_rec;
+  char ovfl_copy_rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
+  VPID next_ovfl_vpid;
+  PAGE_PTR ovfl_page = NULL;
+  BTREE_SEARCH result = BTREE_KEY_NOTFOUND;
+
+  assert (mvcc_Enabled == true && oid != NULL && class_oid != NULL);
+
+  ovfl_copy_rec.area_size = DB_PAGESIZE;
+  ovfl_copy_rec.data = PTR_ALIGN (ovfl_copy_rec_buf, BTREE_MAX_ALIGN);
+  next_ovfl_vpid = *first_ovfl_vpid;
+
+  /* find first visible OID into overflow page */
+  while (!VPID_ISNULL (&next_ovfl_vpid))
+    {
+      ovfl_page = pgbuf_fix (thread_p, &next_ovfl_vpid, OLD_PAGE,
+			     PGBUF_LATCH_READ, PGBUF_UNCONDITIONAL_LATCH);
+      if (ovfl_page == NULL)
+	{
+	  goto error;
+	}
+
+      (void) pgbuf_check_page_ptype (thread_p, ovfl_page, PAGE_BTREE);
+
+      if (spage_get_record (ovfl_page, 1, &ovfl_copy_rec, COPY) != S_SUCCESS)
+	{
+	  goto error;
+	}
+      assert (ovfl_copy_rec.length % 4 == 0);
+
+      result = btree_key_find_first_visible_row (thread_p, btid_int,
+						 &ovfl_copy_rec, 0,
+						 BTREE_OVERFLOW_NODE,
+						 oid, class_oid);
+      if (result == BTREE_ERROR_OCCURRED)
+	{
+	  goto error;
+	}
+      else if (result != BTREE_KEY_NOTFOUND)
+	{
+	  pgbuf_unfix_and_init (thread_p, ovfl_page);
+	  return result;
+	}
+
+      btree_get_next_overflow_vpid (ovfl_page, &next_ovfl_vpid);
+      pgbuf_unfix_and_init (thread_p, ovfl_page);
+    }
+
+  return BTREE_KEY_NOTFOUND;
+
+error:
+
+  if (ovfl_page != NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, ovfl_page);
+    }
+
+  return BTREE_ERROR_OCCURRED;
 }

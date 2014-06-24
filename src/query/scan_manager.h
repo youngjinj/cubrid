@@ -77,6 +77,8 @@ struct heap_scan_id
   SCAN_PRED scan_pred;		/* scan predicates(filters) */
   SCAN_ATTRS pred_attrs;	/* attr info from predicates */
   REGU_VARIABLE_LIST rest_regu_list;	/* regulator variable list */
+  REGU_VARIABLE_LIST regu_list_last_version; /* regulator variable list */
+  bool cls_regu_inited;		/* is cls_regu_list_last_version inited */
   SCAN_ATTRS rest_attrs;	/* attr info from other than preds */
   bool caches_inited;		/* are the caches initialized?? */
   bool scancache_inited;
@@ -209,6 +211,8 @@ struct indx_scan_id
   SCAN_PRED range_pred;		/* range predicates */
   SCAN_ATTRS range_attrs;	/* attr info from range predicates */
   REGU_VARIABLE_LIST rest_regu_list;	/* regulator variable list */
+  REGU_VARIABLE_LIST regu_list_last_version;	/* regulator variable list */
+  bool cls_regu_inited;		/* is cls_regu_list_last_version inited */
   SCAN_ATTRS rest_attrs;	/* attr info from other than preds */
   KEY_VAL_RANGE *key_vals;	/* for eliminating duplicate ranges */
   int key_cnt;			/* number of valid ranges */
@@ -228,6 +232,9 @@ struct indx_scan_id
   bool for_update;		/* true if FOR UPDATE clause is active */
   DB_VALUE **key_info_values;	/* Used for index key info scan */
   REGU_VARIABLE_LIST key_info_regu_list;	/* regulator variable list */
+  bool mvcc_need_locks;		/* true, if need locking in MVCC during
+				 * index scan
+				 */
 };
 
 typedef struct index_node_scan_id INDEX_NODE_SCAN_ID;
@@ -387,6 +394,7 @@ extern int scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				REGU_VARIABLE_LIST regu_list_pred,
 				PRED_EXPR * pr,
 				REGU_VARIABLE_LIST regu_list_rest,
+				REGU_VARIABLE_LIST regu_list_last_version,
 				int num_attrs_pred,
 				ATTR_ID * attrids_pred,
 				HEAP_CACHE_ATTRINFO * cache_pred,
@@ -447,6 +455,7 @@ extern int scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				 REGU_VARIABLE_LIST regu_list_rest,
 				 PRED_EXPR * pr_range,
 				 REGU_VARIABLE_LIST regu_list_range,
+				 REGU_VARIABLE_LIST regu_list_last_version,
 				 OUTPTR_LIST * output_val_list,
 				 REGU_VARIABLE_LIST regu_val_list,
 				 int num_attrs_key,

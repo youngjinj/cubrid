@@ -126,9 +126,12 @@ extern FILE *query_Plan_dump_fp;
 
 extern REGU_VARIABLE *pt_to_regu_variable (PARSER_CONTEXT * p, PT_NODE * node,
 					   UNBOX unbox);
-extern PRED_EXPR *pt_to_pred_expr (PARSER_CONTEXT * p, PT_NODE * node);
+extern PRED_EXPR *pt_to_pred_expr (PARSER_CONTEXT * p, PT_NODE * node,
+				   REGU_VARIABLE_LIST * regu_list_last_version);
 extern PRED_EXPR *pt_to_pred_expr_with_arg (PARSER_CONTEXT * p,
-					    PT_NODE * node, int *argp);
+					    PT_NODE * node, int *argp,
+					    REGU_VARIABLE_LIST *
+					    regu_list_last_version);
 extern XASL_NODE *parser_generate_xasl (PARSER_CONTEXT * p, PT_NODE * node);
 extern REGU_VARIABLE *pt_make_regu_arith (const REGU_VARIABLE * arg1,
 					  const REGU_VARIABLE * arg2,

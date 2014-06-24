@@ -12096,8 +12096,13 @@ try_again:
 
       assert (pgptr != NULL && forward_pgptr != NULL);
 
-      if (spage_get_record_type (forward_pgptr, forward_oid.slotid)
-	  != REC_NEWHOME)
+      type = spage_get_record_type (forward_pgptr, forward_oid.slotid);
+      if (mvcc_Enabled && type == REC_MVCC_NEXT_VERSION)
+	{
+	  scan = S_SNAPSHOT_NOT_SATISFIED;
+	  goto end;
+	}
+      if (type != REC_NEWHOME)
 	{
 	  assert (0);
 	  scan = S_DOESNT_EXIST;
@@ -13043,6 +13048,7 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
   MVCC_SNAPSHOT *mvcc_snapshot = NULL;
   MVCC_REC_HEADER mvcc_header;
   bool check_snapshot = false;
+  bool is_null_recdata;
 
   if (scan_cache != NULL && scan_cache->mvcc_snapshot != NULL
       && scan_cache->mvcc_snapshot->snapshot_fnc != NULL)
@@ -13128,6 +13134,9 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
     {
       oid = *next_oid;
     }
+
+
+  is_null_recdata = (recdes->data == NULL);
 
   /* Start looking for next object */
   while (true)
@@ -13374,12 +13383,22 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	  else
 	    {
 	      /* continue looking */
+	      if (is_null_recdata)
+	      {
+		/* reset recdes->data before getting next record */
+		recdes->data = NULL;
+	      }
 	      continue;
 	    }
 	}
       else if (scan == S_SNAPSHOT_NOT_SATISFIED)
 	{
 	  /* the record does not satisfies snapshot - continue */
+	  if (is_null_recdata)
+	  {
+	    /* reset recdes->data before getting next record */
+	    recdes->data = NULL;
+	  }
 	  continue;
 	}
 

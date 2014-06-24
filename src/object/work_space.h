@@ -74,7 +74,7 @@ struct ws_flush_err
 };
 
 typedef struct ws_value_list WS_VALUE_LIST;
-typedef struct ws_value_list
+struct ws_value_list
 {
   struct ws_value_list *next;
   DB_VALUE *val;

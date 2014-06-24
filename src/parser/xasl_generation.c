@@ -153,7 +153,9 @@ static PRED_EXPR *pt_make_pred_term_is (PARSER_CONTEXT * parser,
 					PT_NODE * arg1,
 					PT_NODE * arg2, const BOOL_OP bop);
 static PRED_EXPR *pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser,
-						  PT_NODE * node, int *argp);
+						  PT_NODE * node, int *argp,
+						  REGU_VARIABLE_LIST *
+						  regu_list_last_version);
 
 #if defined (ENABLE_UNUSED_FUNCTION)
 static int hhhhmmss (const DB_TIME * time, char *buf, int buflen);
@@ -659,6 +661,8 @@ static ACCESS_SPEC_TYPE *pt_make_class_access_spec (PARSER_CONTEXT * parser,
 						    attr_list_rest,
 						    REGU_VARIABLE_LIST
 						    attr_list_range,
+						    REGU_VARIABLE_LIST
+						    regu_list_last_version,
 						    OUTPTR_LIST *
 						    output_val_list,
 						    REGU_VARIABLE_LIST
@@ -855,6 +859,14 @@ static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
 static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
 					      PT_NODE * tree, void *arg,
 					      int *continue_walk);
+static int pt_add_constant_object_regu_variable (PARSER_CONTEXT *parser,
+						 PT_NODE *node1,
+						 REGU_VARIABLE *regu_var1,
+						 PT_NODE *node2,
+						 REGU_VARIABLE *regu_var2,
+						 PT_NODE *node3,
+						 REGU_VARIABLE *regu_var3,
+						 REGU_VARIABLE_LIST *regu_list);
 
 
 static void
@@ -1013,7 +1025,7 @@ pt_make_connect_by_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
   flag = 0;
   select_xasl->instnum_pred = pt_to_pred_expr_with_arg (parser, instnum_part,
-							&flag);
+							&flag, NULL);
   if (flag & PT_PRED_ARG_INSTNUM_CONTINUE)
     {
       select_xasl->instnum_flag = XASL_INSTNUM_FLAG_SCAN_CONTINUE;
@@ -1700,7 +1712,7 @@ pt_make_pred_term_is (PARSER_CONTEXT * parser, PT_NODE * arg1, PT_NODE * arg2,
 							 UNBOX_AS_VALUE),
 				    R_EQ, data_type);
 
-	  pred = pt_make_pred_expr_pred (pt_to_pred_expr (parser, arg1),
+	  pred = pt_make_pred_expr_pred (pt_to_pred_expr (parser, arg1, NULL),
 					 pred_rhs, bop);
 	}
       else
@@ -1720,10 +1732,13 @@ pt_make_pred_term_is (PARSER_CONTEXT * parser, PT_NODE * arg1, PT_NODE * arg2,
  *   parser(in):
  *   node(in): should be something that will evaluate into a boolean
  *   argp(out):
+ *   regu_list_last_version(out): constant regu variable list, used to fetch
+ *				  object last version
  */
 static PRED_EXPR *
 pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
-				int *argp)
+				int *argp,
+				REGU_VARIABLE_LIST *regu_list_last_version)
 {
   PRED_EXPR *pred = NULL;
   DB_TYPE data_type;
@@ -1806,8 +1821,8 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 	      /* Logical operators */
 	    case PT_AND:
 	      pred = pt_make_pred_expr_pred
-		(pt_to_pred_expr (parser, node->info.expr.arg1),
-		 pt_to_pred_expr (parser, node->info.expr.arg2), B_AND);
+		(pt_to_pred_expr (parser, node->info.expr.arg1, NULL),
+		 pt_to_pred_expr (parser, node->info.expr.arg2, NULL), B_AND);
 	      break;
 
 	    case PT_OR:
@@ -1816,8 +1831,8 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 	      *argp |= PT_PRED_ARG_GRBYNUM_CONTINUE;
 	      *argp |= PT_PRED_ARG_ORDBYNUM_CONTINUE;
 	      pred = pt_make_pred_expr_pred
-		(pt_to_pred_expr (parser, node->info.expr.arg1),
-		 pt_to_pred_expr (parser, node->info.expr.arg2), B_OR);
+		(pt_to_pred_expr (parser, node->info.expr.arg1, NULL),
+		 pt_to_pred_expr (parser, node->info.expr.arg2, NULL), B_OR);
 	      break;
 
 	    case PT_NOT:
@@ -1827,7 +1842,7 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 	      *argp |= PT_PRED_ARG_GRBYNUM_CONTINUE;
 	      *argp |= PT_PRED_ARG_ORDBYNUM_CONTINUE;
 	      pred = pt_make_pred_term_not
-		(pt_to_pred_expr (parser, node->info.expr.arg1));
+		(pt_to_pred_expr (parser, node->info.expr.arg1, NULL));
 	      break;
 
 	      /* one to one comparisons */
@@ -1864,8 +1879,8 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 
 	    case PT_XOR:
 	      pred = pt_make_pred_expr_pred
-		(pt_to_pred_expr (parser, node->info.expr.arg1),
-		 pt_to_pred_expr (parser, node->info.expr.arg2), B_XOR);
+		(pt_to_pred_expr (parser, node->info.expr.arg1, NULL),
+		 pt_to_pred_expr (parser, node->info.expr.arg2, NULL), B_XOR);
 	      break;
 
 	    case PT_SETNEQ:
@@ -2263,6 +2278,20 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 	      *argp |= PT_PRED_ARG_GRBYNUM_CONTINUE;
 	      *argp |= PT_PRED_ARG_ORDBYNUM_CONTINUE;
 	    }
+	  
+	  if (pt_add_constant_object_regu_variable (parser,
+						    node->info.expr.arg1,
+						    regu_var1,
+						    node->info.expr.arg2,
+						    regu_var2,
+						    node->info.expr.arg3,
+						    regu_var3,
+						    regu_list_last_version)
+						    != NO_ERROR)
+	    {
+	      PT_INTERNAL_ERROR (parser, "failed building last version"
+				 " regu variable list");
+	    }
 
 	  parser->etc = saved_etc;
 	}
@@ -2401,10 +2430,12 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
  *   parser(in):
  *   node_list(in):
  *   argp(out):
+ *   regu_list_last_version(out): constant regu variable list, used to fetch
+ *				  object last version
  */
 PRED_EXPR *
 pt_to_pred_expr_with_arg (PARSER_CONTEXT * parser, PT_NODE * node_list,
-			  int *argp)
+			  int *argp, REGU_VARIABLE_LIST *regu_list_last_version)
 {
   PRED_EXPR *cnf_pred, *dnf_pred, *temp;
   PT_NODE *node, *cnf_node, *dnf_node;
@@ -2451,7 +2482,8 @@ pt_to_pred_expr_with_arg (PARSER_CONTEXT * parser, PT_NODE * node_list,
 	    }
 
 	  /* get the last dnf_node */
-	  temp = pt_to_pred_expr_local_with_arg (parser, dnf_node, argp);
+	  temp = pt_to_pred_expr_local_with_arg (parser, dnf_node, argp,
+						 regu_list_last_version);
 	  if (temp == NULL)
 	    {
 	      goto error;
@@ -2495,11 +2527,14 @@ error:
  *   return:
  *   parser(in):
  *   node(in):
+ *   regu_list_last_version(out): constant regu variable list, used to fetch
+ *				  object last version
  */
 PRED_EXPR *
-pt_to_pred_expr (PARSER_CONTEXT * parser, PT_NODE * node)
+pt_to_pred_expr (PARSER_CONTEXT * parser, PT_NODE * node,
+		 REGU_VARIABLE_LIST *regu_list_last_version)
 {
-  return pt_to_pred_expr_with_arg (parser, node, NULL);
+  return pt_to_pred_expr_with_arg (parser, node, NULL, regu_list_last_version);
 }
 
 #if defined (ENABLE_UNUSED_FUNCTION)
@@ -5153,6 +5188,7 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
 			   REGU_VARIABLE_LIST attr_list_pred,
 			   REGU_VARIABLE_LIST attr_list_rest,
 			   REGU_VARIABLE_LIST attr_list_range,
+			   REGU_VARIABLE_LIST regu_list_last_version,
 			   OUTPTR_LIST * output_val_list,
 			   REGU_VARIABLE_LIST regu_val_list,
 			   HEAP_CACHE_ATTRINFO * cache_key,
@@ -5209,6 +5245,7 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
   spec->s.cls_node.cls_regu_list_pred = attr_list_pred;
   spec->s.cls_node.cls_regu_list_rest = attr_list_rest;
   spec->s.cls_node.cls_regu_list_range = attr_list_range;
+  spec->s.cls_node.cls_regu_list_last_version = regu_list_last_version;
   spec->s.cls_node.cls_output_val_list = output_val_list;
   spec->s.cls_node.cls_regu_val_list = regu_val_list;
   spec->s.cls_node.hfid = *hfid;
@@ -5968,7 +6005,7 @@ pt_to_pred_terms (PARSER_CONTEXT * parser,
 	{
 	  if (terms->spec_ident == (UINTPTR) id)
 	    {
-	      pred1 = pt_to_pred_expr (parser, terms);
+	      pred1 = pt_to_pred_expr (parser, terms, NULL);
 	      if (!*pred)
 		{
 		  *pred = pred1;
@@ -6502,6 +6539,24 @@ pt_make_regu_constant (PARSER_CONTEXT * parser, DB_VALUE * db_value,
 		      pt_register_orphan_db_value (parser, dbvalptr);
 		    }
 		}
+	      else if (node->info.name.meta_class == PT_PARAMETER)
+		{
+		  OID *oid;
+		  oid = db_identifier (DB_GET_OBJECT (db_value));
+
+		  /* need a new db_val that may be pointed later from other
+		   * regu variable */
+		  dbvalptr = regu_dbval_alloc ();		  
+		  if (!dbvalptr)
+		    {
+		      return NULL;
+		    }
+
+		  regu->value.dbvalptr = dbvalptr;
+		  db_make_object (dbvalptr, ws_mop (oid, NULL));
+		  pt_register_orphan_db_value (parser, dbvalptr);
+		  return regu;
+		}
 	      else
 		{
 		  OID *oid;
@@ -6509,14 +6564,13 @@ pt_make_regu_constant (PARSER_CONTEXT * parser, DB_VALUE * db_value,
 		  oid = db_identifier (DB_GET_OBJECT (db_value));
 		  if (oid == NULL)
 		    {
-		      db_value_put_null (db_value);
-		      regu->value.dbvalptr = db_value;
+		      db_value_put_null (db_value);		      
 		    }
 		  else
 		    {
-		      db_make_object (db_value, ws_mop (oid, NULL));
-		      regu->value.dbvalptr = db_value;
+		      db_make_object (db_value, ws_mop (oid, NULL));		      
 		    }
+		  regu->value.dbvalptr = db_value;
 		}
 	    }
 	  else if (pr_is_set_type (typ)
@@ -7720,7 +7774,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
       if (node != NULL && node->type_enum == PT_TYPE_LOGICAL
 	  && (node->node_type == PT_EXPR || node->node_type == PT_VALUE))
 	{
-	  regu = pt_make_regu_pred (pt_to_pred_expr (parser, node));
+	  regu = pt_make_regu_pred (pt_to_pred_expr (parser, node, NULL));
 	}
       else if (node != NULL)
 	{
@@ -8436,7 +8490,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		      break;
 		    }
 		  regu->value.arithptr->pred =
-		    pt_to_pred_expr (parser, node->info.expr.arg1);
+		    pt_to_pred_expr (parser, node->info.expr.arg1, NULL);
 		  break;
 
 		case PT_IFNULL:
@@ -9595,7 +9649,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		      break;
 		    }
 		  regu->value.arithptr->pred =
-		    pt_to_pred_expr (parser, node->info.expr.arg3);
+		    pt_to_pred_expr (parser, node->info.expr.arg3, NULL);
 		  break;
 
 		case PT_NULLIF:
@@ -9622,7 +9676,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		      break;
 		    }
 		  regu->value.arithptr->pred =
-		    pt_to_pred_expr (parser, node->info.expr.arg3);
+		    pt_to_pred_expr (parser, node->info.expr.arg3, NULL);
 		  break;
 
 		case PT_EXTRACT:
@@ -12639,7 +12693,7 @@ pt_get_mvcc_reev_range_data (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
   *cache_range = regu_cache_attrinfo_alloc ();
   parser->symbols->cache_attrinfo = *cache_range;
 
-  *where_range = pt_to_pred_expr (parser, where_range_part);
+  *where_range = pt_to_pred_expr (parser, where_range_part, NULL);
 
   *regu_attributes_range = pt_to_regu_variable_list (parser,
 						     range_attrs,
@@ -12686,6 +12740,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
   REGU_VARIABLE_LIST regu_attributes_pred, regu_attributes_rest;
   REGU_VARIABLE_LIST regu_attributes_reserved;
   REGU_VARIABLE_LIST regu_attributes_range = NULL;
+  REGU_VARIABLE_LIST regu_list_last_version = NULL;
   TABLE_INFO *table_info = NULL;
   INDX_INFO *index_info = NULL;
   HEAP_CACHE_ATTRINFO *cache_pred = NULL, *cache_rest = NULL;
@@ -12796,7 +12851,8 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	      symbols->cache_attrinfo = cache_pred;
 	      symbols->reserved_values = db_values_array_p;
 
-	      where = pt_to_pred_expr (parser, where_part);
+	      where = pt_to_pred_expr (parser, where_part,
+				       &regu_list_last_version);
 
 	      if (scan_type == TARGET_CLASS_ATTR)
 		{
@@ -12845,6 +12901,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 						  NULL, NULL, where, NULL,
 						  NULL, regu_attributes_pred,
 						  regu_attributes_rest, NULL,
+						  regu_list_last_version,
 						  output_val_list,
 						  regu_var_list, NULL,
 						  cache_pred, cache_rest,
@@ -12893,7 +12950,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	      symbols->current_class = class_;
 	      symbols->reserved_values = db_values_array_p;
 
-	      where = pt_to_pred_expr (parser, where_part);
+	      where = pt_to_pred_expr (parser, where_part, NULL);
 
 	      output_val_list =
 		pt_make_outlist_from_vallist (parser, table_info->value_list);
@@ -12918,7 +12975,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 					   TARGET_CLASS, access_method,
 					   spec->info.spec.lock_hint,
 					   index_info, NULL, where, NULL,
-					   NULL, NULL, NULL, NULL,
+					   NULL, NULL, NULL, NULL, NULL,
 					   output_val_list, NULL, NULL, NULL,
 					   NULL, NULL, NO_SCHEMA,
 					   db_values_array_p,
@@ -13003,7 +13060,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 
 	      symbols->cache_attrinfo = cache_key;
 
-	      where_key = pt_to_pred_expr (parser, where_key_part);
+	      where_key = pt_to_pred_expr (parser, where_key_part, NULL);
 
 	      regu_attributes_key = pt_to_regu_variable_list (parser,
 							      key_attrs,
@@ -13014,7 +13071,8 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 
 	      symbols->cache_attrinfo = cache_pred;
 
-	      where = pt_to_pred_expr (parser, where_part);
+	      where = pt_to_pred_expr (parser, where_part,
+				       &regu_list_last_version);
 
 	      regu_attributes_pred = pt_to_regu_variable_list (parser,
 							       pred_attrs,
@@ -13067,6 +13125,7 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 						  regu_attributes_pred,
 						  regu_attributes_rest,
 						  regu_attributes_range,
+						  regu_list_last_version,
 						  output_val_list,
 						  regu_var_list,
 						  cache_key, cache_pred,
@@ -13146,7 +13205,7 @@ pt_to_showstmt_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 
   saved_current_class = parser->symbols->current_class;
   parser->symbols->current_class = NULL;
-  where = pt_to_pred_expr (parser, where_part);
+  where = pt_to_pred_expr (parser, where_part, NULL);
   parser->symbols->current_class = saved_current_class;
   if (where_part != NULL && where == NULL)
     {
@@ -13232,7 +13291,7 @@ pt_to_subquery_table_spec_list (PARSER_CONTEXT * parser,
    */
   saved_current_class = parser->symbols->current_class;
   parser->symbols->current_class = NULL;
-  where = pt_to_pred_expr (parser, where_part);
+  where = pt_to_pred_expr (parser, where_part, NULL);
   parser->symbols->current_class = saved_current_class;
 
   access = pt_make_list_access_spec (subquery_proc, SEQUENTIAL,
@@ -13282,7 +13341,7 @@ pt_to_set_expr_table_spec_list (PARSER_CONTEXT * parser,
 				       spec->info.spec.as_attr_list,
 				       NULL, NULL);
 
-  where = pt_to_pred_expr (parser, where_part);
+  where = pt_to_pred_expr (parser, where_part, NULL);
 
   access = pt_make_set_access_spec (regu_set_expr, SEQUENTIAL, NULL,
 				    where, regu_attributes);
@@ -14375,7 +14434,7 @@ pt_to_fetch_as_scan_proc (PARSER_CONTEXT * parser, PT_NODE * spec,
    */
   saved_current_class = parser->symbols->current_class;
   parser->symbols->current_class = NULL;
-  where = pt_to_pred_expr (parser, join_term);
+  where = pt_to_pred_expr (parser, join_term, NULL);
   parser->symbols->current_class = saved_current_class;
 
   access = pt_make_list_access_spec (xasl_to_scan, SEQUENTIAL,
@@ -14716,7 +14775,7 @@ ptqo_to_list_scan_proc (PARSER_CONTEXT * parser,
        */
       saved_current_class = parser->symbols->current_class;
       parser->symbols->current_class = NULL;
-      pred_expr = pt_to_pred_expr (parser, pred);
+      pred_expr = pt_to_pred_expr (parser, pred, NULL);
       parser->symbols->current_class = saved_current_class;
 
       /* Need to create a value list using the already allocated
@@ -15040,7 +15099,8 @@ pt_gen_simple_plan (PARSER_CONTEXT * parser, PT_NODE * select_node,
 
       flag = 0;
       xasl->instnum_pred = pt_to_pred_expr_with_arg (parser,
-						     instnum_part, &flag);
+						     instnum_part, &flag,
+						     NULL);
 
       if (flag & PT_PRED_ARG_INSTNUM_CONTINUE)
 	{
@@ -15213,7 +15273,7 @@ pt_gen_simple_merge_plan (PARSER_CONTEXT * parser,
 
       flag = 0;
       xasl->instnum_pred = pt_to_pred_expr_with_arg (parser,
-						     instnum_part, &flag);
+						     instnum_part, &flag, NULL);
       if (flag & PT_PRED_ARG_INSTNUM_CONTINUE)
 	{
 	  xasl->instnum_flag = XASL_INSTNUM_FLAG_SCAN_CONTINUE;
@@ -15330,7 +15390,7 @@ pt_to_buildschema_proc (PARSER_CONTEXT * parser, PT_NODE * select_node)
 			       TARGET_CLASS, SCHEMA,
 			       from->info.spec.lock_hint,
 			       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-			       NULL, NULL, NULL, NULL, NULL, NULL,
+			       NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 			       acces_schema_type, NULL, NULL);
 
   if (xasl->spec_list == NULL)
@@ -16613,10 +16673,10 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
       pt_split_having_grbynum (parser,
 			       select_node->info.query.q.select.having,
 			       &having_part, &grbynum_part);
-      buildlist->g_having_pred = pt_to_pred_expr (parser, having_part);
+      buildlist->g_having_pred = pt_to_pred_expr (parser, having_part, NULL);
       grbynum_flag = 0;
       buildlist->g_grbynum_pred =
-	pt_to_pred_expr_with_arg (parser, grbynum_part, &grbynum_flag);
+	pt_to_pred_expr_with_arg (parser, grbynum_part, &grbynum_flag, NULL);
       if (grbynum_flag & PT_PRED_ARG_GRBYNUM_CONTINUE)
 	{
 	  buildlist->g_grbynum_flag = XASL_G_GRBYNUM_FLAG_SCAN_CONTINUE;
@@ -17139,7 +17199,7 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	  xasl->ordbynum_pred =
 	    pt_to_pred_expr_with_arg (parser,
 				      select_node->info.query.orderby_for,
-				      &ordbynum_flag);
+				      &ordbynum_flag, NULL);
 	  if (ordbynum_flag & PT_PRED_ARG_ORDBYNUM_CONTINUE)
 	    {
 	      xasl->ordbynum_flag = XASL_ORDBYNUM_FLAG_SCAN_CONTINUE;
@@ -17208,7 +17268,7 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
 	  xasl->ordbynum_pred =
 	    pt_to_pred_expr_with_arg (parser,
 				      select_node->info.query.orderby_for,
-				      &ordbynum_flag);
+				      &ordbynum_flag, NULL);
 	  if (ordbynum_flag & PT_PRED_ARG_ORDBYNUM_CONTINUE)
 	    {
 	      xasl->ordbynum_flag = XASL_ORDBYNUM_FLAG_SCAN_CONTINUE;
@@ -17536,7 +17596,7 @@ pt_to_buildvalue_proc (PARSER_CONTEXT * parser, PT_NODE * select_node,
   saved_current_class = parser->symbols->current_class;
   parser->symbols->current_class = NULL;
   buildvalue->having_pred =
-    pt_to_pred_expr (parser, select_node->info.query.q.select.having);
+    pt_to_pred_expr (parser, select_node->info.query.q.select.having, NULL);
   parser->symbols->current_class = saved_current_class;
 
   if (xasl->scan_ptr)
@@ -17671,7 +17731,7 @@ pt_to_union_proc (PARSER_CONTEXT * parser, PT_NODE * node, PROC_TYPE type)
       xasl->ordbynum_pred =
 	pt_to_pred_expr_with_arg (parser,
 				  node->info.query.orderby_for,
-				  &ordbynum_flag);
+				  &ordbynum_flag, NULL);
 
       if (ordbynum_flag & PT_PRED_ARG_ORDBYNUM_CONTINUE)
 	{
@@ -18848,7 +18908,7 @@ pt_to_constraint_pred (PARSER_CONTEXT * parser, XASL_NODE * xasl,
   parser->symbols->listfile_value_list = xasl->val_list;
   parser->symbols->listfile_attr_offset = attr_offset;
 
-  pred = pt_to_pred_expr (parser, pt_pred);
+  pred = pt_to_pred_expr (parser, pt_pred, NULL);
 
   conj = pt_pred;
   while (conj)
@@ -19647,7 +19707,7 @@ pt_to_odku_info (PARSER_CONTEXT * parser, PT_NODE * insert, XASL_NODE * xasl)
 	  node = save;
 	}
 
-      odku->cons_pred = pt_to_pred_expr (parser, pt_pred);
+      odku->cons_pred = pt_to_pred_expr (parser, pt_pred, NULL);
       if (odku->cons_pred == NULL)
 	{
 	  goto exit_on_error;
@@ -19733,7 +19793,7 @@ pt_init_pred_expr_context (PARSER_CONTEXT * parser, PT_NODE * predicate,
   attr_num = 0;
   pt_fill_in_attrid_array (regu_attributes_pred, attrids_pred, &attr_num);
 
-  pred = pt_to_pred_expr (parser, predicate);
+  pred = pt_to_pred_expr (parser, predicate, NULL);
 
   pred_expr->pred = pred;
   pred_expr->attrids_pred = attrids_pred;
@@ -27035,4 +27095,101 @@ pt_set_limit_optimization_flags (PARSER_CONTEXT * parser, QO_PLAN * qo_plan,
     }
 
   return NO_ERROR;
+}
+
+/*
+ * pt_to_pred_expr_local_with_arg () - add constant regu variables to
+ * 				     result list
+ *   return: A NULL return indicates an error occurred
+ *   parser(in):
+ *   node1(in): parse expression node 1
+ *   regu_var1(in): regu variable associated with node1
+ *   node2(in): parse expression node 2
+ *   regu_var2(in): regu variable associated with node 2
+ *   node2(in): parse expression node 3
+ *   regu_var1(in): regu variable associated with node3
+ *   regu_list_last_version(out): constant regu variable list, used to fetch
+ *				  object last version
+ */
+static int
+pt_add_constant_object_regu_variable (PARSER_CONTEXT * parser,
+				      PT_NODE * node1, REGU_VARIABLE *regu_var1,
+				      PT_NODE * node2, REGU_VARIABLE *regu_var2,
+				      PT_NODE * node3, REGU_VARIABLE *regu_var3,
+				      REGU_VARIABLE_LIST
+				      *regu_list_last_version)
+{  
+  DB_TYPE type;
+  DB_VALUE * val;
+  PT_NODE * nodes[3] = {node1, node2, node3}, *node;
+  REGU_VARIABLE *regu_vars[3] = {regu_var1, regu_var2, regu_var3}, *regu_var,
+		*cnst_regu_var;
+  REGU_VARIABLE_LIST regu_var_node;
+  int i;
+
+  if (regu_list_last_version == NULL)
+    {
+      return NO_ERROR;
+    }  
+
+  for (i = 0; i < 3; i++)
+    {
+      node = nodes[i];
+      regu_var = regu_vars[i];
+
+      if (node == NULL || regu_var == NULL)
+	{
+	  continue;
+	}
+
+      CAST_POINTER_TO_NODE (node);      
+
+      if (node->node_type == PT_NAME
+	  && node->info.name.meta_class == PT_PARAMETER
+	  && regu_var->type == TYPE_CONSTANT)
+	{
+	  val = regu_var->value.dbvalptr;
+
+	  if (DB_IS_NULL (val))
+	    {
+	      continue;
+	    }
+
+	  type = DB_VALUE_DOMAIN_TYPE (val);	 	  	  
+
+	  /* create new regu variable to fetch the last OID version */
+	  cnst_regu_var = regu_var_alloc ();
+	  if (cnst_regu_var == NULL)
+	    {
+	      PT_ERROR (parser, node, msgcat_message (MSGCAT_CATALOG_CUBRID,
+			MSGCAT_SET_PARSER_SEMANTIC,
+			MSGCAT_SEMANTIC_OUT_OF_MEMORY));
+	      return MSGCAT_SEMANTIC_OUT_OF_MEMORY;
+	    }
+	  cnst_regu_var->domain = pt_xasl_node_to_domain (parser, node);
+	  cnst_regu_var->type = TYPE_CONSTANT;
+	  cnst_regu_var->value.dbvalptr = val;	  
+	  
+	  /* add constant regu variable to result */	  
+	  regu_var_node = regu_varlist_alloc ();
+	  if (regu_var_node == NULL)
+	    {
+	      return ER_FAILED;
+	    }
+
+	  regu_var_node->value = *cnst_regu_var;
+	  if ((*regu_list_last_version) == NULL)
+	    {
+	      regu_var_node->next = NULL;
+	      (*regu_list_last_version) = regu_var_node;
+	    }
+	  else
+	    {
+	      regu_var_node->next = (*regu_list_last_version);
+	      (*regu_list_last_version) = regu_var_node;
+	    }	 
+	}
+    }
+
+  return NO_ERROR;  
 }
