@@ -10128,8 +10128,7 @@ isolation_level_spec
 
 			container_4 ctn;
 			PT_MISC_TYPE level = 0;
-			if ($1 != PT_REPEATABLE_READ)
-			  level = $1;
+			level = $1;
 
 			SET_CONTAINER_4 (ctn, NULL, FROM_NUMBER (PT_NO_ISOLATION_LEVEL),
 					 FROM_NUMBER (level), FROM_NUMBER (0));
