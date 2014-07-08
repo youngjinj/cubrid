@@ -613,7 +613,6 @@ extern void btree_rv_read_keyval_info_nocopy (THREAD_ENTRY * thread_p,
 					      OID * cls_oid, OID * oid,
 					      MVCC_REC_HEADER * p_mvcc_header,
 					      DB_VALUE * key,
-					      bool has_vacuum_info,
 					      bool called_by_vacuum,
 					      bool * is_ghost_index,
 					      bool * class_locked);

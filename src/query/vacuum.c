@@ -467,16 +467,17 @@ static void vacuum_finished_block_vacuum (THREAD_ENTRY * thread_p,
 					  VACUUM_DATA_ENTRY * block_data,
 					  bool is_vacuum_complete);
 
-static int vacuum_get_mvcc_delete_undo_data (THREAD_ENTRY * thread_p,
-					     LOG_LSA * log_lsa_p,
-					     LOG_PAGE * log_page_p,
-					     struct log_data *log_record_data,
-					     MVCCID * mvccid,
-					     LOG_ZIP * log_unzip_ptr,
-					     char **undo_data_buffer,
-					     int *undo_data_buffer_size,
-					     char **undo_data_ptr,
-					     int *undo_data_size);
+static int vacuum_process_log_record (THREAD_ENTRY * thread_p,
+				      LOG_LSA * log_lsa_p,
+				      LOG_PAGE * log_page_p,
+				      struct log_data *log_record_data,
+				      MVCCID * mvccid,
+				      LOG_ZIP * log_unzip_ptr,
+				      char **undo_data_buffer,
+				      int *undo_data_buffer_size,
+				      char **undo_data_ptr,
+				      int *undo_data_size,
+				      LOG_LSA * next_log_lsa_p);
 static int vacuum_load_data_from_disk (THREAD_ENTRY * thread_p,
 				       VFID * vacuum_data_vfid);
 static int vacuum_load_dropped_classes_indexes_from_disk (THREAD_ENTRY *
@@ -1793,11 +1794,15 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
   MVCC_REC_HEADER mvcc_header;
   MVCCID mvccid;
   bool vacuum_complete = false, class_locked = false, is_ghost = false;
+  LOG_LSA next_log_lsa;
 
   if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
     {
       return NO_ERROR;
     }
+
+  /* Initialize next log lsa */
+  LSA_SET_NULL (&next_log_lsa);
 
   /* Allocate space to unzip log data */
   log_zip_ptr = log_zip_alloc (IO_PAGESIZE, false);
@@ -1838,8 +1843,7 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
   /* Follow the linked records starting with start_lsa */
   for (LSA_COPY (&log_lsa, &VACUUM_DATA_ENTRY_START_LSA (data));
        !LSA_ISNULL (&log_lsa) && log_lsa.pageid >= first_block_pageid;
-       /* Get log lsa for previous MVCC operation */
-       (void) or_unpack_log_lsa (undo_data, &log_lsa))
+       LSA_COPY (&log_lsa, &next_log_lsa))
     {
 #if defined(SERVER_MODE)
       if (thread_p->shutdown)
@@ -1866,17 +1870,16 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 	}
       /* Get undo data */
       error_code =
-	vacuum_get_mvcc_delete_undo_data (thread_p, &log_lsa, log_page_p,
-					  &log_record_data, &mvccid,
-					  log_zip_ptr, &undo_data_buffer,
-					  &undo_data_buffer_size, &undo_data,
-					  &undo_data_size);
+	vacuum_process_log_record (thread_p, &log_lsa, log_page_p,
+				   &log_record_data, &mvccid,
+				   log_zip_ptr, &undo_data_buffer,
+				   &undo_data_buffer_size, &undo_data,
+				   &undo_data_size, &next_log_lsa);
       if (error_code != NO_ERROR)
 	{
 	  thread_set_is_process_log_phase (thread_p, false);
 	  goto end;
 	}
-      assert (undo_data != NULL);
 
       thread_set_is_process_log_phase (thread_p, false);
 
@@ -1921,13 +1924,16 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
       else if (LOG_IS_MVCC_BTREE_OPERATION (log_record_data.rcvindex))
 	{
 	  MVCCID save_mvccid = mvccid;
+
+	  assert (undo_data != NULL);
+
 	  /* TODO: is mvccid really required to be stored? it can also be
 	   *       obtained from undoredo data.
 	   */
 	  btree_rv_read_keyval_info_nocopy (thread_p, undo_data,
 					    undo_data_size, &btid_int,
 					    &class_oid, &oid, &mvcc_header,
-					    &key_value, true, true, &is_ghost,
+					    &key_value, true, &is_ghost,
 					    &class_locked);
 	  if (is_ghost)
 	    {
@@ -2187,7 +2193,7 @@ vacuum_finished_block_vacuum (THREAD_ENTRY * thread_p,
 }
 
 /*
- * vacuum_get_mvcc_delete_undo_data () - Get undo data for an MVCC delete
+ * vacuum_process_log_record () - Get undo data for an MVCC delete
  *					 log record.
  *
  * return			  : Error code.
@@ -2204,53 +2210,79 @@ vacuum_finished_block_vacuum (THREAD_ENTRY * thread_p,
  * undo_data_size (out)		  : Undo data size.
  */
 static int
-vacuum_get_mvcc_delete_undo_data (THREAD_ENTRY * thread_p,
-				  LOG_LSA * log_lsa_p,
-				  LOG_PAGE * log_page_p,
-				  struct log_data *log_record_data,
-				  MVCCID * mvccid,
-				  LOG_ZIP * log_unzip_ptr,
-				  char **undo_data_buffer,
-				  int *undo_data_buffer_size,
-				  char **undo_data_ptr, int *undo_data_size)
+vacuum_process_log_record (THREAD_ENTRY * thread_p,
+			   LOG_LSA * log_lsa_p,
+			   LOG_PAGE * log_page_p,
+			   struct log_data *log_record_data,
+			   MVCCID * mvccid,
+			   LOG_ZIP * log_unzip_ptr,
+			   char **undo_data_buffer,
+			   int *undo_data_buffer_size,
+			   char **undo_data_ptr, int *undo_data_size,
+			   LOG_LSA * next_log_lsa_p)
 {
   LOG_RECORD_HEADER *log_rec_header = NULL;
+  struct log_mvcc_undoredo *mvcc_undoredo = NULL;
+  struct log_mvcc_undo *mvcc_undo = NULL;
   struct log_undoredo *undoredo = NULL;
   struct log_undo *undo = NULL;
   int ulength;
   char *new_undo_data_buffer = NULL;
   bool is_zipped = false;
 
-  assert (log_lsa_p != NULL && log_page_p != NULL && log_unzip_ptr != NULL);
-  assert (undo_data_buffer != NULL && undo_data_buffer_size != NULL
-	  && undo_data_ptr != NULL && undo_data_size != NULL);
+  assert (log_lsa_p != NULL && log_page_p != NULL);
+  assert (log_record_data != NULL);
+  assert (mvccid != NULL);
+
+  *undo_data_ptr = NULL;
+  *undo_data_size = 0;
+
+  LSA_SET_NULL (next_log_lsa_p);
 
   /* Get log record header */
   log_rec_header = LOG_GET_LOG_RECORD_HEADER (log_page_p, log_lsa_p);
   LOG_READ_ADD_ALIGN (thread_p, sizeof (*log_rec_header), log_lsa_p,
 		      log_page_p);
-  *mvccid = log_rec_header->mvcc_id;
 
-  if (log_rec_header->type == LOG_UNDO_DATA)
+  if (log_rec_header->type == LOG_MVCC_UNDO_DATA)
     {
-      /* Get log record undo information */
-      LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*undo), log_lsa_p,
-					log_page_p);
-      undo = (struct log_undo *) (log_page_p->area + log_lsa_p->offset);
-      ulength = undo->length;
-      *log_record_data = undo->data;
-      LOG_READ_ADD_ALIGN (thread_p, sizeof (*undo), log_lsa_p, log_page_p);
+      /* Get log record mvcc_undo information */
+      LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*mvcc_undo),
+					log_lsa_p, log_page_p);
+      mvcc_undo =
+	(struct log_mvcc_undo *) (log_page_p->area + log_lsa_p->offset);
+
+      /* Get MVCCID */
+      *mvccid = mvcc_undo->mvccid;
+      /* Get record log data */
+      *log_record_data = mvcc_undo->undo.data;
+      /* Get undo data length */
+      ulength = mvcc_undo->undo.length;
+      /* Copy LSA for next MVCC operation */
+      LSA_COPY (next_log_lsa_p, &mvcc_undo->vacuum_info.prev_mvcc_op_log_lsa);
+
+      LOG_READ_ADD_ALIGN (thread_p, sizeof (*mvcc_undo), log_lsa_p,
+			  log_page_p);
     }
-  else if (log_rec_header->type == LOG_UNDOREDO_DATA)
+  else if (log_rec_header->type == LOG_MVCC_UNDOREDO_DATA
+	   || log_rec_header->type == LOG_MVCC_DIFF_UNDOREDO_DATA)
     {
       /* Get log record undoredo information */
-      LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*undoredo),
+      LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*mvcc_undoredo),
 					log_lsa_p, log_page_p);
-      undoredo =
-	(struct log_undoredo *) (log_page_p->area + log_lsa_p->offset);
-      ulength = undoredo->ulength;
-      *log_record_data = undoredo->data;
-      LOG_READ_ADD_ALIGN (thread_p, sizeof (*undoredo), log_lsa_p,
+      mvcc_undoredo =
+	(struct log_mvcc_undoredo *) (log_page_p->area + log_lsa_p->offset);
+      /* Get MVCCID */
+      *mvccid = mvcc_undoredo->mvccid;
+      /* Get record log data */
+      *log_record_data = mvcc_undoredo->undoredo.data;
+      /* Get undo data length */
+      ulength = mvcc_undoredo->undoredo.ulength;
+      /* Copy LSA for next MVCC operation */
+      LSA_COPY (next_log_lsa_p,
+		&mvcc_undoredo->vacuum_info.prev_mvcc_op_log_lsa);
+
+      LOG_READ_ADD_ALIGN (thread_p, sizeof (*mvcc_undoredo), log_lsa_p,
 			  log_page_p);
     }
   else
@@ -2259,6 +2291,12 @@ vacuum_get_mvcc_delete_undo_data (THREAD_ENTRY * thread_p,
       assert (false);
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
       return ER_FAILED;
+    }
+
+  if (!LOG_IS_MVCC_BTREE_OPERATION (log_record_data->rcvindex))
+    {
+      /* No need to unpack undo data */
+      return NO_ERROR;
     }
 
   if (ZIP_CHECK (ulength))
@@ -2290,7 +2328,7 @@ vacuum_get_mvcc_delete_undo_data (THREAD_ENTRY * thread_p,
 	  if (*undo_data_buffer == NULL)
 	    {
 	      logpb_fatal_error (thread_p, true, ARG_FILE_LINE,
-				 "vacuum_get_mvcc_delete_undo_data");
+				 "vacuum_process_log_record");
 	      return ER_FAILED;
 	    }
 	}
@@ -2303,7 +2341,7 @@ vacuum_get_mvcc_delete_undo_data (THREAD_ENTRY * thread_p,
 	  if (new_undo_data_buffer == NULL)
 	    {
 	      logpb_fatal_error (thread_p, true, ARG_FILE_LINE,
-				 "vacuum_get_mvcc_delete_undo_data");
+				 "vacuum_process_log_record");
 	      return ER_FAILED;
 	    }
 	  *undo_data_buffer = new_undo_data_buffer;
@@ -2325,29 +2363,9 @@ vacuum_get_mvcc_delete_undo_data (THREAD_ENTRY * thread_p,
       else
 	{
 	  logpb_fatal_error (thread_p, true, ARG_FILE_LINE,
-			     "vacuum_get_mvcc_delete_undo_data");
+			     "vacuum_process_log_record");
 	  return ER_FAILED;
 	}
-    }
-
-  if ((prm_get_integer_value (PRM_ID_ER_LOG_VACUUM) & VACUUM_ER_LOG_WORKER) !=
-      0)
-    {
-      LOG_LSA prev_mvcc_log_lsa;
-      (void) or_unpack_log_lsa (*undo_data_ptr, &prev_mvcc_log_lsa);
-      vacuum_er_log (VACUUM_ER_LOG_WORKER,
-		     "VACUUM: thread(%d): unpacked log entry:"
-		     "mvccid(%lld) rec_type(%s) rcvindex(%d) - "
-		     "volid(%d) pageid(%d) offset(%d) - "
-		     "prev_mvcc_log_lsa (%lld, %d)\n",
-		     thread_get_current_entry_index (),
-		     log_rec_header->mvcc_id,
-		     (log_rec_header->type == LOG_UNDO_DATA) ?
-		     "undo" : "undoredo",
-		     log_record_data->rcvindex, log_record_data->volid,
-		     log_record_data->pageid, log_record_data->offset,
-		     (long long int) prev_mvcc_log_lsa.pageid,
-		     (int) prev_mvcc_log_lsa.offset);
     }
   return NO_ERROR;
 }

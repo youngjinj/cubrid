@@ -13384,10 +13384,10 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	    {
 	      /* continue looking */
 	      if (is_null_recdata)
-	      {
-		/* reset recdes->data before getting next record */
-		recdes->data = NULL;
-	      }
+		{
+		  /* reset recdes->data before getting next record */
+		  recdes->data = NULL;
+		}
 	      continue;
 	    }
 	}
@@ -13395,10 +13395,10 @@ heap_next_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 	{
 	  /* the record does not satisfies snapshot - continue */
 	  if (is_null_recdata)
-	  {
-	    /* reset recdes->data before getting next record */
-	    recdes->data = NULL;
-	  }
+	    {
+	      /* reset recdes->data before getting next record */
+	      recdes->data = NULL;
+	    }
 	  continue;
 	}
 
@@ -21334,25 +21334,13 @@ static void
 heap_mvcc_log_insert (THREAD_ENTRY * thread_p, RECDES * p_recdes,
 		      LOG_DATA_ADDR * p_addr)
 {
-#define HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS	    1
 #define HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS	    4
 
-  int n_undo_crumbs = 0, n_redo_crumbs = 0, data_copy_offset = 0;
-  LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS];
+  int n_redo_crumbs = 0, data_copy_offset = 0;
   LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_INSERT_MAX_REDO_CRUMBS];
-  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
   INT32 repid_and_flags, mvcc_flags, chn;
 
   assert (p_recdes != NULL && p_addr != NULL);
-
-  /* Build undo crumbs */
-  /* Add log lsa to undo crumbs */
-  (void) or_pack_log_lsa (log_lsa_buf, NULL);
-  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
-  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
-
-  /* Safe guard */
-  assert (n_undo_crumbs <= HEAP_LOG_MVCC_INSERT_MAX_UNDO_CRUMBS);
 
   /* Build redo crumbs */
   /* Add record type */
@@ -21386,8 +21374,7 @@ heap_mvcc_log_insert (THREAD_ENTRY * thread_p, RECDES * p_recdes,
 
   /* Append undo/redo crumbs */
   log_append_undoredo_crumbs (thread_p, RVHF_MVCC_INSERT, p_addr,
-			      n_undo_crumbs, n_redo_crumbs,
-			      undo_crumbs, redo_crumbs);
+			      0, n_redo_crumbs, NULL, redo_crumbs);
 }
 
 /*
@@ -21540,19 +21527,14 @@ heap_mvcc_log_delete (THREAD_ENTRY * thread_p, INT32 undo_chn,
 		      OID * p_redo_next_version, bool is_bigone,
 		      LOG_DATA_ADDR * p_addr)
 {
-#define HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS 3
+#define HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS 2
 #define HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS 2
 
   int n_undo_crumbs = 0, n_redo_crumbs = 0;
   LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_UNDO_CRUMBS];
   LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_MAX_REDO_CRUMBS];
-  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
 
   /* Build undo crumbs */
-  /* Add log lsa buffer */
-  (void) or_pack_log_lsa (log_lsa_buf, NULL);
-  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
-  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
 
   /* Append CHN before delete */
   undo_crumbs[n_undo_crumbs].length = sizeof (undo_chn);
@@ -21606,9 +21588,6 @@ heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   RECDES recdes;
   int sp_success;
   INT32 chn;
-
-  /* Skip log lsa */
-  offset += OR_LOG_LSA_ALIGNED_SIZE;
 
   /* Read chn */
   chn = *((INT32 *) (rcv->data + offset));
@@ -28682,22 +28661,17 @@ heap_mvcc_log_delete_relocated (THREAD_ENTRY * thread_p,
 				OID * p_redo_next_version,
 				LOG_DATA_ADDR * p_addr)
 {
-#define HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS	3
+#define HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS	2
 #define HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS	3
 
   int n_undo_crumbs = 0, n_redo_crumbs = 0;
   LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_UNDO_CRUMBS];
   LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATED_MAX_REDO_CRUMBS];
-  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
 
   assert (p_redo_datasource_oid != NULL);
   assert (p_addr != NULL);
 
   /* Build undo crumbs */
-  /* Add log lsa buffer */
-  (void) or_pack_log_lsa (log_lsa_buf, NULL);
-  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
-  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
 
   if (p_undo_recdes != NULL)
     {
@@ -28747,8 +28721,6 @@ int
 heap_rv_mvcc_undo_delete_relocated (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
   /* Skip log lsa buffer */
-  rcv->data += OR_LOG_LSA_ALIGNED_SIZE;
-  rcv->length -= OR_LOG_LSA_ALIGNED_SIZE;
   if (rcv->length == 0)
     {
       return heap_rv_undo_insert (thread_p, rcv);
@@ -28757,9 +28729,6 @@ heap_rv_mvcc_undo_delete_relocated (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
     {
       return heap_rv_undoredo_update (thread_p, rcv);
     }
-  /* Reset recovery information */
-  rcv->data -= OR_LOG_LSA_ALIGNED_SIZE;
-  rcv->length += OR_LOG_LSA_ALIGNED_SIZE;
 }
 
 /*
@@ -28927,23 +28896,18 @@ heap_mvcc_log_modify_relocation_link (THREAD_ENTRY * thread_p,
 				      RECDES * p_new_recdes,
 				      LOG_DATA_ADDR * p_addr)
 {
-#define HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_UNDO_CRUMBS 3
+#define HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_UNDO_CRUMBS 2
 #define HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_REDO_CRUMBS 2
 
   int n_undo_crumbs = 0, n_redo_crumbs = 0;
   LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_UNDO_CRUMBS];
   LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_MODIFY_RELOCATION_LINK_MAX_REDO_CRUMBS];
-  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
 
   assert (p_old_recdes != NULL);
   assert (p_new_recdes != NULL);
   assert (p_addr != NULL);
 
   /* Build undo crumbs */
-  /* Add log lsa buffer */
-  (void) or_pack_log_lsa (log_lsa_buf, NULL);
-  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
-  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
 
   /* Add old forward recdes type */
   undo_crumbs[n_undo_crumbs].length = sizeof (p_old_recdes->type);
@@ -28972,36 +28936,6 @@ heap_mvcc_log_modify_relocation_link (THREAD_ENTRY * thread_p,
 }
 
 /*
- * heap_rv_mvcc_undoredo_update_skip_log_lsa () - Same functionality as
- *						  heap_rv_undoredo_update,
- *						  except that it has to skip
- *						  log lsa information.
- *
- * return	 : Error code.
- * thread_p (in) : Thread entry.
- * rcv (in)	 : Recovery data.
- */
-int
-heap_rv_mvcc_undoredo_update_skip_log_lsa (THREAD_ENTRY * thread_p,
-					   LOG_RCV * rcv)
-{
-  int error_code = NO_ERROR;
-
-  /* Skip log lsa */
-  rcv->length -= OR_LOG_LSA_ALIGNED_SIZE;
-  rcv->data += OR_LOG_LSA_ALIGNED_SIZE;
-
-  /* Call undo/redo update recovery */
-  error_code = heap_rv_undoredo_update (thread_p, rcv);
-
-  /* Restore recovery data */
-  rcv->length += OR_LOG_LSA_ALIGNED_SIZE;
-  rcv->data -= OR_LOG_LSA_ALIGNED_SIZE;
-
-  return error_code;
-}
-
-/*
  * heap_mvcc_log_delete_relocation () - Log the relocation of a record after
  *					being delete by an MVCC heap delete
  *					operation.
@@ -29021,23 +28955,18 @@ heap_mvcc_log_delete_relocation (THREAD_ENTRY * thread_p,
 				 RECDES * p_redo_recdes,
 				 LOG_DATA_ADDR * p_addr)
 {
-#define HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS	4
+#define HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS	3
 #define HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS	2
 
   int n_undo_crumbs = 0, n_redo_crumbs = 0;
   LOG_CRUMB undo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_UNDO_CRUMBS];
   LOG_CRUMB redo_crumbs[HEAP_LOG_MVCC_DELETE_RELOCATION_MAX_REDO_CRUMBS],
     *p_redo_crumbs = NULL;
-  char log_lsa_buf[OR_LOG_LSA_ALIGNED_SIZE];
 
   assert (p_addr != NULL);
   assert (p_undo_datasource_oid != NULL);
 
   /* Build undo crumbs */
-  /* Add buffer for log lsa */
-  (void) or_pack_log_lsa (log_lsa_buf, NULL);
-  undo_crumbs[n_undo_crumbs].length = OR_LOG_LSA_ALIGNED_SIZE;
-  undo_crumbs[n_undo_crumbs++].data = log_lsa_buf;
 
   /* Add source OID for undo operation */
   undo_crumbs[n_undo_crumbs].length = sizeof (*p_undo_datasource_oid);
@@ -29099,9 +29028,6 @@ heap_rv_mvcc_undo_delete_relocation (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   INT32 chn;
 
   pgbuf_get_vpid (rcv->pgptr, &vpid);
-
-  /* Skip log lsa */
-  offset += OR_LOG_LSA_ALIGNED_SIZE;
 
   /* Read mvcc delete OID */
   mvcc_delete_oid = (OID *) (rcv->data + offset);

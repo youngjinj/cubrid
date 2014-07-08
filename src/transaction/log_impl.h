@@ -1381,6 +1381,13 @@ enum log_rectype
   LOG_DIFF_UNDOREDO_DATA = 43,	/* diff undo redo data             */
   LOG_DUMMY_HA_SERVER_STATE = 44,	/* HA server state */
   LOG_DUMMY_OVF_RECORD = 45,	/* indicator of the first part of an overflow record */
+
+  LOG_MVCC_UNDOREDO_DATA = 46,	/* Undoredo for MVCC operations (will require
+				 * more fields than a regular undo-redo.
+				 */
+  LOG_MVCC_UNDO_DATA = 47,	/* Undo for MVCC operations */
+  LOG_MVCC_REDO_DATA = 48,	/* Redo for MVCC operations */
+  LOG_MVCC_DIFF_UNDOREDO_DATA = 49,	/* diff undo redo data for MVCC operations */
   LOG_LARGER_LOGREC_TYPE	/* A higher bound for checks       */
 };
 
@@ -1394,9 +1401,34 @@ enum log_repl_flush
 				 */
 };
 
+/* Definitions used to identify UNDO/REDO/UNDOREDO log record data types */
+
+/* Is record type UNDO */
+#define LOG_IS_UNDO_RECORD_TYPE(type) \
+  (((type) == LOG_UNDO_DATA) || ((type) == LOG_MVCC_UNDO_DATA))
+
+/* Is record type REDO */
+#define LOG_IS_REDO_RECORD_TYPE(type) \
+  (((type) == LOG_REDO_DATA) || ((type) == LOG_MVCC_REDO_DATA))
+
+/* Is record type UNDOREDO */
+#define LOG_IS_UNDOREDO_RECORD_TYPE(type) \
+  (((type) == LOG_UNDOREDO_DATA) \
+   || ((type) == LOG_MVCC_UNDOREDO_DATA) \
+   || ((type) == LOG_DIFF_UNDOREDO_DATA) \
+   || ((type) == LOG_MVCC_DIFF_UNDOREDO_DATA))
+
 /* Definitions used to identify MVCC log records. Used by log manager and
  * vacuum.
  */
+
+/* Is record type used a MVCC operation */
+#define LOG_IS_MVCC_OP_RECORD_TYPE(type) \
+  (((type) == LOG_MVCC_UNDO_DATA) \
+   || ((type) == LOG_MVCC_REDO_DATA) \
+   || ((type) == LOG_MVCC_UNDOREDO_DATA) \
+   || ((type) == LOG_MVCC_DIFF_UNDOREDO_DATA))
+
 /* Is log record for a heap MVCC operation */
 #define LOG_IS_MVCC_HEAP_OPERATION(rcvindex) \
   (((rcvindex) == RVHF_MVCC_DELETE) \
@@ -1404,16 +1436,19 @@ enum log_repl_flush
    || ((rcvindex) == RVHF_MVCC_DELETE_RELOCATED) \
    || ((rcvindex) == RVHF_MVCC_INSERT) \
    || ((rcvindex) == RVHF_MVCC_MODIFY_RELOCATION_LINK))
+
 /* Is log record for a b-tree MVCC operation */
 #define LOG_IS_MVCC_BTREE_OPERATION(rcvindex) \
   ((rcvindex) == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID \
    || (rcvindex) == RVBT_KEYVAL_MVCC_INS \
    || (rcvindex) == RVBT_KEYVAL_MVCC_INS_LFRECORD_KEYINS \
    || (rcvindex) == RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS)
+
 /* Is log record for a MVCC operation */
 #define LOG_IS_MVCC_OPERATION(rcvindex) \
   (LOG_IS_MVCC_HEAP_OPERATION (rcvindex) \
    || LOG_IS_MVCC_BTREE_OPERATION (rcvindex))
+
 /* Is log record for a change on vacuum data */
 #define LOG_IS_VACUUM_DATA_RECOVERY(rcvindex) \
   ((rcvindex) == RVVAC_LOG_BLOCK_APPEND	  \
@@ -1442,7 +1477,6 @@ struct log_rec_header
   LOG_LSA back_lsa;		/* Backward log address                      */
   LOG_LSA forw_lsa;		/* Forward  log address                      */
   TRANID trid;			/* Transaction identifier of the log record  */
-  MVCCID mvcc_id;		/* MVCC ID */
   LOG_RECTYPE type;		/* Log record type (e.g., commit, abort)     */
 };
 
@@ -1475,6 +1509,44 @@ struct log_redo
 {
   struct log_data data;		/* Location of recovery data                 */
   int length;			/* Length of redo data                       */
+};
+
+/* Log information required for vacuum */
+struct log_vacuum_info
+{
+  LOG_LSA prev_mvcc_op_log_lsa;	/* Log lsa of previous MVCC operation log
+				 * record. Used by vacuum to process log data.
+				 */
+  VFID vfid;			/* File identifier. Will be used by vacuum for
+				 * heap files (TODO: maybe b-tree too).
+				 * Used to:
+				 * - Find if the file was dropped/reused.
+				 * - Find the type of objects in heap file
+				 *   (reusable or referable).
+				 */
+};
+
+/* Information of undo_redo log records for MVCC operations */
+struct log_mvcc_undoredo
+{
+  struct log_undoredo undoredo;	/* Undoredo information               */
+  MVCCID mvccid;		/* MVCC Identifier for transaction    */
+  struct log_vacuum_info vacuum_info;	/* Info required for vacuum           */
+};
+
+/* Information of undo log records for MVCC operations */
+struct log_mvcc_undo
+{
+  struct log_undo undo;		/* Undo information                  */
+  MVCCID mvccid;		/* MVCC Identifier for transaction   */
+  struct log_vacuum_info vacuum_info;	/* Info required for vacuum          */
+};
+
+/* Information of redo log records for MVCC operations */
+struct log_mvcc_redo
+{
+  struct log_redo redo;		/* Location of recovery data                 */
+  MVCCID mvccid;		/* MVCC Identifier for transaction           */
 };
 
 /* Information of database external redo log records */

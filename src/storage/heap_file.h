@@ -707,8 +707,6 @@ extern int heap_rv_mvcc_redo_delete_relocation (THREAD_ENTRY * thread_p,
 						LOG_RCV * rcv);
 extern int heap_rv_mvcc_undo_delete_relocation (THREAD_ENTRY * thread_p,
 						LOG_RCV * rcv);
-extern int heap_rv_mvcc_undoredo_update_skip_log_lsa (THREAD_ENTRY * thread_p,
-						      LOG_RCV * rcv);
 
 extern bool heap_is_big_length (int length);
 extern int heap_get_class_oid_from_page (THREAD_ENTRY * thread_p,

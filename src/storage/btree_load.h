@@ -63,12 +63,13 @@
 					     /* Maximum Leaf Node Entry Size */
 #define LEAFENTSZ(n)  ( LEAF_RECORD_SIZE + BTREE_MAX_ALIGN \
                             + OR_OID_SIZE + BTREE_MAX_ALIGN + n )
-					     /* Maximum Non_Leaf Entry Size  */
+
+					/* MVCC Maximum Leaf Entry Size  */
 #define MVCC_LEAFENTSZ(n)  ( LEAF_RECORD_SIZE + BTREE_MAX_ALIGN \
 			      + OR_MVCCID_SIZE \
 			      + OR_OID_SIZE + BTREE_MAX_ALIGN + n )
-					/* MVCC Maximum Non_Leaf Entry Size  */
 
+					  /* Maximum Non_Leaf Entry Size  */
 #define NLEAFENTSZ(n) ( NON_LEAF_RECORD_SIZE + BTREE_MAX_ALIGN + n )
 
 #define OIDCMP( n1, n2 )  \

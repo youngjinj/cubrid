@@ -789,7 +789,7 @@ struct rvfun RV_fun[] = {
    NULL},
   {RVHF_MVCC_MODIFY_RELOCATION_LINK,
    "RVHF_MVCC_MODIFY_RELOCATION_LINK",
-   heap_rv_mvcc_undoredo_update_skip_log_lsa,
+   heap_rv_undoredo_update,
    heap_rv_undoredo_update,
    NULL,
    NULL},
