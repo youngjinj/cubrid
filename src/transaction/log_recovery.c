@@ -51,6 +51,7 @@
 #include "thread.h"
 #endif /* SERVER_MODE */
 #include "log_compress.h"
+#include "vacuum.h"
 
 
 static void
@@ -346,7 +347,11 @@ log_rv_undo_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
        * redo/CLR log to describe the undo.
        */
 
-      if (!RCV_IS_LOGICAL_LOG (rcv_vpid, rcvindex))
+      if (rcvindex == RVVAC_DROPPED_FILE_ADD)
+	{
+	  error_code = vacuum_notify_dropped_file (thread_p, rcv, NULL);
+	}
+      else if (!RCV_IS_LOGICAL_LOG (rcv_vpid, rcvindex))
 	{
 	  log_append_compensate (thread_p, rcvindex, rcv_vpid,
 				 rcv->offset, rcv->pgptr, rcv->length,
@@ -4510,6 +4515,7 @@ log_recovery_redo (THREAD_ENTRY * thread_p, const LOG_LSA * start_redolsa,
 	      log_recovery_vacuum_data_buffer (thread_p, &rcv_lsa, mvccid);
 	      break;
 
+	    case LOG_UNDO_DATA:
 	    case LOG_CLIENT_NAME:
 	    case LOG_LCOMPENSATE:
 	    case LOG_DUMMY_HEAD_POSTPONE:

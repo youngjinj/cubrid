@@ -875,6 +875,10 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
     }
   file_created = 1;
 
+  vacuum_log_add_dropped_file (thread_p, &btid->vfid,
+			       logtb_get_current_mvccid (thread_p),
+			       VACUUM_LOG_ADD_DROPPED_FILE_UNDO);
+
   /*
    * Note: We do not initialize the allocated pages during the allocation
    *       since they belong to a new file and we do not perform any undo
@@ -1321,11 +1325,10 @@ btree_connect_page (THREAD_ENTRY * thread_p, DB_VALUE * key, int max_key_len,
 {
   NON_LEAF_REC nleaf_rec;
   INT16 slotid;
-  int ret, sp_success;
+  int sp_success;
   int cur_maxspace;
-  int offset, key_len;
+  int key_len;
   int key_type = BTREE_NORMAL_KEY;
-  LEAF_REC leaf_pnt;
   BTREE_NODE_HEADER *header = NULL;
 
   /* form the leaf record (create the header & insert the key) */
@@ -2141,9 +2144,7 @@ btree_proceed_leaf (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args)
   PAGE_PTR new_leafpgptr = NULL;
   BTREE_NODE_HEADER new_leafhdr, *header = NULL;
   RECDES temp_recdes;		/* Temporary record descriptor; */
-  int ret, sp_success;
   OR_ALIGNED_BUF (sizeof (BTREE_NODE_HEADER)) a_temp_data;
-  RECDES rec;
 
   temp_recdes.data = OR_ALIGNED_BUF_START (a_temp_data);
   temp_recdes.area_size = sizeof (BTREE_NODE_HEADER);
@@ -2931,13 +2932,16 @@ btree_check_foreign_key (THREAD_ENTRY * thread_p, OID * cls_oid, HFID * hfid,
 	  goto exit_on_error;
 	}
 
+      /* since this function is called when the class is altered 
+       * (SCH_M_LOCK on class) update in place is forced.
+       */
       ret = locator_attribute_info_force (thread_p, hfid, oid, NULL, false,
 					  &attr_info, &cache_attr_id, 1,
 					  LC_FLUSH_UPDATE, SINGLE_ROW_UPDATE,
 					  &upd_scancache, &force_count, true,
 					  REPL_INFO_TYPE_STMT_NORMAL,
 					  DB_NOT_PARTITIONED_CLASS, NULL,
-					  NULL, NULL, false);
+					  NULL, NULL, true);
       if (ret != NO_ERROR)
 	{
 	  if (ret == ER_MVCC_NOT_SATISFIED_REEVALUATION)

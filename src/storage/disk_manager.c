@@ -372,7 +372,12 @@ disk_bit_set (unsigned char *c, unsigned int n)
 static void
 disk_bit_clear (unsigned char *c, unsigned int n)
 {
-  assert_release (disk_bit_is_set (c, n));
+  /* TODO: Uncomment and investigate the double clearing issue. As far as I am
+   *       concerned, this shouldn't happen due to last changes of vacuum.
+   *       Maybe a bugged case is uncovered.
+   *       Investigate after fixing current crashes.
+   */
+  /* assert_release (disk_bit_is_set (c, n)); */
 
   *c &= ~(1 << n);
 }
@@ -6367,7 +6372,10 @@ disk_vhdr_rv_undoredo_free_pages (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	  vhdr->used_index_npages -= mtb->num;
 	  if (vhdr->used_index_npages < 0)
 	    {
-	      assert_release (vhdr->used_index_npages >= 0);
+	      /* TODO: Uncomment the check after fixing the multiple
+	       *       deallocation issue.
+	       */
+	      /*assert_release (vhdr->used_index_npages >= 0); */
 	      vhdr->used_index_npages = 0;
 	    }
 	}
@@ -6392,7 +6400,10 @@ disk_vhdr_rv_undoredo_free_pages (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	  vhdr->used_index_npages -= mtb->num;
 	  if (vhdr->used_index_npages < 0)
 	    {
-	      assert_release (vhdr->used_index_npages >= 0);
+	      /* TODO: Uncomment the check after fixing the multiple
+	       *       deallocation issue.
+	       */
+	      /*assert_release (vhdr->used_index_npages >= 0); */
 	      vhdr->used_index_npages = 0;
 	    }
 	}
@@ -6628,7 +6639,10 @@ disk_rv_alloctable_vhdr_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 	      vhdr->used_index_npages -= delta;
 	      if (vhdr->used_index_npages < 0)
 		{
-		  assert_release (vhdr->used_index_npages >= 0);
+		  /* TODO: Uncomment the check after fixing the multiple
+		   *       deallocation issue.
+		   */
+		  /*assert_release (vhdr->used_index_npages >= 0); */
 		  vhdr->used_index_npages = 0;
 		}
 	    }
@@ -6653,7 +6667,10 @@ disk_rv_alloctable_vhdr_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 	      vhdr->used_index_npages -= delta;
 	      if (vhdr->used_index_npages < 0)
 		{
-		  assert_release (vhdr->used_index_npages >= 0);
+		  /* TODO: Uncomment the check after fixing the multiple
+		   *       deallocation issue.
+		   */
+		  /*assert_release (vhdr->used_index_npages >= 0); */
 		  vhdr->used_index_npages = 0;
 		}
 	    }

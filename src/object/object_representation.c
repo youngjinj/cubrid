@@ -390,7 +390,7 @@ or_set_rep_id (RECDES * record, int repid)
       return ER_FAILED;
     }
 
-  OR_BUF_INIT2 (orep, record->data, record->area_size);
+  OR_BUF_INIT (orep, record->data, record->area_size);
   buf = &orep;
 
   if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
@@ -625,7 +625,7 @@ or_mvcc_set_flag (RECDES * record, char flags)
   /* Set new mvcc flags */
   repid_and_flag += ((flags & OR_MVCC_FLAG_MASK) << OR_MVCC_FLAG_SHIFT_BITS);
 
-  OR_BUF_INIT2 (orep, record->data, record->area_size);
+  OR_BUF_INIT (orep, record->data, record->area_size);
   buf = &orep;
   buf->ptr = buf->buffer + OR_REP_OFFSET;
   or_put_int (buf, repid_and_flag);
@@ -786,7 +786,7 @@ or_mvcc_get_next_version (OR_BUF * buf, int mvcc_flags, OID * oid)
 
   if (!(mvcc_flags & OR_MVCC_FLAG_VALID_NEXT_VERSION))
     {
-      COPY_OID (oid, &oid_Null_oid);
+      OID_SET_NULL (oid);
       return NO_ERROR;
     }
 
@@ -919,7 +919,7 @@ or_mvcc_set_header (RECDES * record, MVCC_REC_HEADER * mvcc_rec_header)
       HEAP_MOVE_INSIDE_RECORD (record, new_mvcc_size, old_mvcc_size);
     }
 
-  OR_BUF_INIT2 (orep, record->data, record->area_size);
+  OR_BUF_INIT (orep, record->data, record->area_size);
   buf = &orep;
 
   error = or_mvcc_set_repid_and_flags (buf, mvcc_rec_header->mvcc_flag,
@@ -985,7 +985,7 @@ or_mvcc_add_header (RECDES * record, MVCC_REC_HEADER * mvcc_rec_header,
   assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED)
 	  && record != NULL && record->data != NULL && record->length == 0);
 
-  OR_BUF_INIT2 (orep, record->data, record->area_size);
+  OR_BUF_INIT (orep, record->data, record->area_size);
   buf = &orep;
 
   error = or_mvcc_set_repid_and_flags (buf, mvcc_rec_header->mvcc_flag,
@@ -3050,7 +3050,6 @@ or_unpack_short (char *ptr, short *number)
   *number = (short) OR_GET_INT (ptr);
   return (ptr + OR_INT_SIZE);
 }
-
 
 /*
  * or_pack_errcode - write a errcode value

@@ -283,114 +283,65 @@ LOCK_FREE_CIRCULAR_QUEUE *vacuum_Block_data_buffer = NULL;
 #define VACUUM_BLOCK_DATA_BUFFER_CAPACITY 1024
 
 /*
- * Dropped classes/indexes section.
+ * Dropped files section.
  */
 
-typedef enum
-{
-  DROPPED_CLASS,
-  DROPPED_INDEX
-} DROPPED_TYPE;
+#define VACUUM_DROPPED_FILES_EXTEND_FILE_NPAGES 5
 
-#define VACUUM_DROPPED_ENTRIES_EXTEND_FILE_NPAGES 5
+/* Identifier for the file where dropped file list is kept */
+static VFID vacuum_Dropped_files_vfid;
 
-/* Identifiers for dropped classes/indexes files */
-static VFID vacuum_Dropped_classes_vfid;
-static VFID vacuum_Dropped_indexes_vfid;
-#define VACUUM_DROPPED_ENTRIES_VFID_PTR(dropped_type) \
-  ((dropped_type) == DROPPED_CLASS ? \
-  &vacuum_Dropped_classes_vfid : &vacuum_Dropped_indexes_vfid)
+/* Identifier for first page in dropped files */
+static VPID vacuum_Dropped_files_vpid;
 
-/* Identifiers for first pages in dropped classes/indexes files */
-static VPID vacuum_Dropped_classes_vpid;
-static VPID vacuum_Dropped_indexes_vpid;
-#define VACUUM_DROPPED_ENTRIES_VPID_PTR(dropped_type) \
-  ((dropped_type) == DROPPED_CLASS ? \
-   &vacuum_Dropped_classes_vpid : &vacuum_Dropped_indexes_vpid)
-
-/* Total count of dropped classes/indexes */
-static INT32 vacuum_Dropped_classes_count;
-static INT32 vacuum_Dropped_indexes_count;
-#define VACUUM_DROPPED_ENTRIES_COUNT_PTR(dropped_type) \
-  ((dropped_type) == DROPPED_CLASS ? \
-   &vacuum_Dropped_classes_count : &vacuum_Dropped_indexes_count)
+/* Total count of dropped files */
+static INT32 vacuum_Dropped_files_count;
 
 /* Temporary buffer used to move memory data from the first page of dropped
- * classes/indexes. An exclusive latch on this first page is required to
- * synchronize buffer usage.
- * For other pages, memmove should be used.
+ * files. An exclusive latch on this first page is required to synchronize
+ * buffer usage. For other pages, memmove should be used.
  */
-static char vacuum_Dropped_classes_tmp_buffer[IO_MAX_PAGE_SIZE];
-static char vacuum_Dropped_indexes_tmp_buffer[IO_MAX_PAGE_SIZE];
-#define VACUUM_DROPPED_ENTRIES_TMP_BUFFER(dropped_type) \
-  ((dropped_type) == DROPPED_CLASS ? \
-   vacuum_Dropped_classes_tmp_buffer : vacuum_Dropped_indexes_tmp_buffer)
+static char vacuum_Dropped_files_tmp_buffer[IO_MAX_PAGE_SIZE];
 
-/* Union of class and index identifiers */
-typedef union vacuum_dropped_cls_btid VACUUM_DROPPED_CLS_BTID;
-union vacuum_dropped_cls_btid
+/* Dropped file entry */
+typedef struct vacuum_dropped_file VACUUM_DROPPED_FILE;
+struct vacuum_dropped_file
 {
-  OID class_oid;
-  BTID btid;
-};
-
-/* Dropped class/index entry */
-typedef struct vacuum_dropped_entry VACUUM_DROPPED_ENTRY;
-struct vacuum_dropped_entry
-{
-  VACUUM_DROPPED_CLS_BTID dropped_cls_btid;
+  VFID vfid;
   MVCCID mvccid;
 };
 
-/* A page of dropped classes/indexes entries */
-typedef struct vacuum_dropped_entries_page VACUUM_DROPPED_ENTRIES_PAGE;
-struct vacuum_dropped_entries_page
+/* A page of dropped files entries */
+typedef struct vacuum_dropped_files_page VACUUM_DROPPED_FILES_PAGE;
+struct vacuum_dropped_files_page
 {
-  VPID next_page;		/* VPID of next dropped classes
-				 * or indexes page.
-				 */
-  INT16 n_dropped_entries;	/* Number of entries on page */
+  VPID next_page;		/* VPID of next dropped files page. */
+  INT16 n_dropped_files;	/* Number of entries on page */
 
-  /* Leave the dropped entries at the end of the structure */
-  VACUUM_DROPPED_ENTRY dropped_entries[1];	/* Dropped classes or indexes. It
-						 * has a variable size and can
-						 * fill up to a maximum of
-						 * database page.
-						 */
+  /* Leave the dropped files at the end of the structure */
+  VACUUM_DROPPED_FILE dropped_files[1];	/* Dropped files. */
 };
 
-/* Set a dropped class or index value */
-#define VACUUM_DROPPED_CLS_BTID_SET_VALUE(dropped_cls_btid, val, type) \
-  do \
-    { \
-      if ((type) == DROPPED_CLASS) \
-	{ \
-	  COPY_OID (&((dropped_cls_btid)->class_oid), (OID *) (val)); \
-	} \
-      else \
-	{ \
-	  BTID_COPY (&((dropped_cls_btid)->btid), (BTID *) (val)); \
-	} \
-    } while (0)
+/* Size of dropped file page header */
+#define VACUUM_DROPPED_FILES_PAGE_HEADER_SIZE \
+  (offsetof (VACUUM_DROPPED_FILES_PAGE, dropped_files))
 
-/* Size of dropped class/index page header */
-#define VACUUM_DROPPED_ENTRIES_PAGE_HEADER_SIZE \
-  (offsetof (VACUUM_DROPPED_ENTRIES_PAGE, dropped_entries))
+/* Capacity of dropped file page */
+#define VACUUM_DROPPED_FILES_PAGE_CAPACITY \
+  ((INT16) ((DB_PAGESIZE - VACUUM_DROPPED_FILES_PAGE_HEADER_SIZE) \
+	    / sizeof (VACUUM_DROPPED_FILE)))
+/* Capacity of dropped file page when page size is max */
+#define VACUUM_DROPPED_FILES_MAX_PAGE_CAPACITY \
+  ((INT16) ((IO_MAX_PAGE_SIZE - VACUUM_DROPPED_FILES_PAGE_HEADER_SIZE) \
+	    / sizeof (VACUUM_DROPPED_FILE)))
 
-/* Capacity of dropped class/index page */
-#define VACUUM_DROPPED_ENTRIES_PAGE_CAPACITY \
-  ((INT16) ((DB_PAGESIZE - VACUUM_DROPPED_ENTRIES_PAGE_HEADER_SIZE) \
-	    / sizeof (VACUUM_DROPPED_ENTRY)))
-/* Maximum possible capacity of dropped class/index page */
-#define VACUUM_DROPPED_ENTRIES_PAGE_MAX_CAPACITY \
-  ((IO_MAX_PAGE_SIZE - VACUUM_DROPPED_ENTRIES_PAGE_HEADER_SIZE) \
-  / sizeof (VACUUM_DROPPED_ENTRY))
+#define VACUUM_DROPPED_FILE_FLAG_DUPLICATE 0x8000
 
 /* Overwritten versions of pgbuf_fix, pgbuf_unfix and pgbuf_set_dirty, 
- * adapted for the needs of vacuum and its dropped classes/indexes pages.
+ * adapted for the needs of vacuum and its dropped files pages.
  */
 #define vacuum_fix_dropped_entries_page(thread_p, vpidp, latch) \
-  ((VACUUM_DROPPED_ENTRIES_PAGE *) pgbuf_fix (thread_p, vpidp, OLD_PAGE, \
+  ((VACUUM_DROPPED_FILES_PAGE *) pgbuf_fix (thread_p, vpidp, OLD_PAGE, \
 					      latch, \
 					      PGBUF_UNCONDITIONAL_LATCH))
 #define vacuum_unfix_dropped_entries_page(thread_p, dropped_page) \
@@ -410,55 +361,52 @@ struct vacuum_dropped_entries_page
     } while (0)
 
 #if !defined (NDEBUG)
-/* Track pages allocated for dropped classes and indexes. Used for debugging
- * only, to observe easily the lists of dropped classes and indexes at any
- * time.
+/* Track pages allocated for dropped files. Used for debugging only, for
+ * easy observation of the lists of dropped files at any time.
  */
-typedef struct vacuum_track_dropped_entries VACUUM_TRACK_DROPPED_ENTRIES;
-struct vacuum_track_dropped_entries
+typedef struct vacuum_track_dropped_files VACUUM_TRACK_DROPPED_FILES;
+struct vacuum_track_dropped_files
 {
-  VACUUM_TRACK_DROPPED_ENTRIES *next_tracked_page;
-  VACUUM_DROPPED_ENTRIES_PAGE dropped_data_page;
+  VACUUM_TRACK_DROPPED_FILES *next_tracked_page;
+  VACUUM_DROPPED_FILES_PAGE dropped_data_page;
 };
-VACUUM_TRACK_DROPPED_ENTRIES *vacuum_Track_dropped_classes;
-VACUUM_TRACK_DROPPED_ENTRIES *vacuum_Track_dropped_indexes;
-#define VACUUM_DROPPED_CLS_BTID_TRACK_PTR(dropped_type) \
-  ((dropped_type) == DROPPED_CLASS ? \
-   vacuum_Track_dropped_classes : vacuum_Track_dropped_indexes)
-#define VACUUM_TRACK_DROPPED_ENTRIES_SIZE \
-  (DB_PAGESIZE + sizeof (VACUUM_TRACK_DROPPED_ENTRIES *))
-#endif
+VACUUM_TRACK_DROPPED_FILES *vacuum_Track_dropped_files;
+#define VACUUM_TRACK_DROPPED_FILES_SIZE \
+  (DB_PAGESIZE + sizeof (VACUUM_TRACK_DROPPED_FILES *))
+#endif /* !NDEBUG */
 
 typedef struct vacuum_drop_data_buffer VACUUM_DROP_DATA_BUFFER;
 struct vacuum_drop_data_buffer
 {
-  VACUUM_DROPPED_ENTRY *dropped_entries;
-  int n_dropped_entries;
+  VACUUM_DROPPED_FILE *dropped_files;
+  int n_dropped_files;
   int capacity;
   pthread_mutex_t mutex;
 };
 
-VACUUM_DROP_DATA_BUFFER *vacuum_Dropped_class_buffer = NULL;
-VACUUM_DROP_DATA_BUFFER *vacuum_Dropped_index_buffer = NULL;
-#define VACUUM_DROPPED_DATA_BUFFER_CAPACITY 1024
+INT32 vacuum_Dropped_files_version = 0;
 
-static void vacuum_log_vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p,
-						   PAGE_PTR page_p,
-						   HFID * hfid,
-						   PGSLOTID * slots,
-						   int n_slots);
+#define VACUUM_MAX_PAGE_BUFFER_SIZE  4000
 
-static int vacuum_oids_from_heap (THREAD_ENTRY * thread_p, OID * oids,
-				  int n_oids, MVCCID oldest_mvccid);
-static int vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids,
-				       int n_oids,
-				       MVCCID oldest_active_mvccid);
-static void vacuum_oids_from_heap_page_log_and_reset (THREAD_ENTRY * thread_p,
-						      PAGE_PTR * page_p,
-						      HFID * hfid,
-						      PGSLOTID *
-						      vacuumed_slots,
-						      int *n_vacuumed_slots);
+static void vacuum_log_vacuum_heap_page (THREAD_ENTRY * thread_p,
+					 PAGE_PTR page_p, HFID * hfid,
+					 int n_slots, PGSLOTID * slots,
+					 MVCC_SATISFIES_VACUUM_RESULT *
+					 results, OID * next_versions,
+					 bool reusable);
+static void vacuum_log_remove_ovf_insid (THREAD_ENTRY * thread_p,
+					 PAGE_PTR ovfpage, HFID * hfid);
+
+static int vacuum_heap_page (THREAD_ENTRY * thread_p, VPID vpid,
+			     MVCCID oldest_active_mvccid, VFID vfid);
+static void vacuum_heap_page_log_and_reset (THREAD_ENTRY * thread_p,
+					    PAGE_PTR * page_p, HFID * hfid,
+					    int *n_vacuumed_slots,
+					    PGSLOTID * vacuumed_slots,
+					    MVCC_SATISFIES_VACUUM_RESULT *
+					    vacuum_results,
+					    OID * vacuumed_next_versions,
+					    bool reusable);
 
 static void vacuum_process_vacuum_data (THREAD_ENTRY * thread_p);
 static int vacuum_process_log_block (THREAD_ENTRY * thread_p,
@@ -477,13 +425,16 @@ static int vacuum_process_log_record (THREAD_ENTRY * thread_p,
 				      int *undo_data_buffer_size,
 				      char **undo_data_ptr,
 				      int *undo_data_size,
-				      LOG_LSA * next_log_lsa_p);
+				      struct log_vacuum_info *vacuum_info,
+				      bool * is_file_dropped,
+				      INT32 * prev_dropped_files_version);
+static void vacuum_get_mvcc_delete_undo_vpid (THREAD_ENTRY * thread_p,
+					      struct log_data *log_datap,
+					      char *undo_data, VPID * vpid);
 static int vacuum_load_data_from_disk (THREAD_ENTRY * thread_p,
 				       VFID * vacuum_data_vfid);
-static int vacuum_load_dropped_classes_indexes_from_disk (THREAD_ENTRY *
-							  thread_p,
-							  VFID * vfid,
-							  DROPPED_TYPE type);
+static int vacuum_load_dropped_files_from_disk (THREAD_ENTRY *
+						thread_p, VFID * vfid);
 static int vacuum_compare_data_entries (const void *ptr1, const void *ptr2);
 static VACUUM_DATA_ENTRY *vacuum_get_vacuum_data_entry (VACUUM_LOG_BLOCKID
 							blockid);
@@ -502,43 +453,27 @@ static void vacuum_log_append_block_data (THREAD_ENTRY * thread_p,
 static void vacuum_log_update_block_data (THREAD_ENTRY * thread_p,
 					  VACUUM_DATA_ENTRY * block_datad);
 
-static int vacuum_compare_dropped_cls_btid (const void *a, const void *b,
-					    DROPPED_TYPE type);
-static int vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					void *cls_btid, MVCCID mvccid,
-					DROPPED_TYPE type);
-static int vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					    DROPPED_TYPE type);
-static bool vacuum_find_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					  void *cls_btid, MVCCID mvccid,
-					  DROPPED_TYPE type);
-static void vacuum_log_add_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					     PAGE_PTR page_p,
-					     VACUUM_DROPPED_ENTRY *
-					     dropped_cls_btid,
-					     INT16 position,
-					     DROPPED_TYPE type,
-					     bool is_duplicate);
-static void vacuum_log_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p,
-						 PAGE_PTR page_p,
-						 INT16 * indexes,
-						 INT16 n_indexes,
-						 DROPPED_TYPE type);
-static void vacuum_log_set_next_page_dropped_cls_btid (THREAD_ENTRY *
-						       thread_p,
-						       PAGE_PTR page_p,
-						       VPID * next_page,
-						       DROPPED_TYPE type);
+static int vacuum_compare_dropped_files (const void *a, const void *b);
+static int vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid,
+				    MVCCID mvccid, LOG_RCV * rcv,
+				    LOG_LSA * postpone_ref_lsa);
+static int vacuum_cleanup_dropped_files (THREAD_ENTRY * thread_p);
+static bool vacuum_find_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid,
+				      MVCCID mvccid);
+static void vacuum_log_cleanup_dropped_files (THREAD_ENTRY * thread_p,
+					      PAGE_PTR page_p,
+					      INT16 * indexes,
+					      INT16 n_indexes);
+static void vacuum_log_dropped_files_set_next_page (THREAD_ENTRY * thread_p,
+						    PAGE_PTR page_p,
+						    VPID * next_page);
 
 static void vacuum_update_oldest_mvccid (THREAD_ENTRY * thread_p);
-static void vacuum_consume_dropped_index_buffer_log_blocks (THREAD_ENTRY *
-							    thread_p);
-static void vacuum_consume_dropped_class_buffer_log_blocks (THREAD_ENTRY *
-							    thread_p);
-static int vacuum_is_dropped_cls_btid_in_buffer (THREAD_ENTRY * thread_p,
-						 void *cls_btid,
-						 MVCCID mvccid,
-						 DROPPED_TYPE type);
+
+static int vacuum_compare_vpids (const void *a, const void *b);
+static int vacuum_add_page_to_buffer (VPID ** pages, VPID * original_buffer,
+				      int *n_pages, int *capacity,
+				      VPID vpid, bool * found);
 
 /*
  * xvacuum () - Server function for vacuuming classes
@@ -582,40 +517,6 @@ vacuum_initialize (THREAD_ENTRY * thread_p)
     {
       goto error;
     }
-
-  vacuum_Dropped_class_buffer = (VACUUM_DROP_DATA_BUFFER *)
-    malloc (sizeof (VACUUM_DROP_DATA_BUFFER));
-  if (vacuum_Dropped_class_buffer == NULL)
-    {
-      goto error;
-    }
-  vacuum_Dropped_class_buffer->n_dropped_entries = 0;
-  pthread_mutex_init (&vacuum_Dropped_class_buffer->mutex, NULL);
-  vacuum_Dropped_class_buffer->dropped_entries =
-    (VACUUM_DROPPED_ENTRY *) malloc (VACUUM_DROPPED_DATA_BUFFER_CAPACITY
-				     * sizeof (VACUUM_DROPPED_ENTRY));
-  if (vacuum_Dropped_class_buffer->dropped_entries == NULL)
-    {
-      goto error;
-    }
-  vacuum_Dropped_class_buffer->capacity = VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
-
-  vacuum_Dropped_index_buffer = (VACUUM_DROP_DATA_BUFFER *)
-    malloc (sizeof (VACUUM_DROP_DATA_BUFFER));
-  if (vacuum_Dropped_index_buffer == NULL)
-    {
-      goto error;
-    }
-  vacuum_Dropped_index_buffer->n_dropped_entries = 0;
-  pthread_mutex_init (&vacuum_Dropped_index_buffer->mutex, NULL);
-  vacuum_Dropped_index_buffer->dropped_entries =
-    (VACUUM_DROPPED_ENTRY *) malloc (VACUUM_DROPPED_DATA_BUFFER_CAPACITY
-				     * sizeof (VACUUM_DROPPED_ENTRY));
-  if (vacuum_Dropped_index_buffer->dropped_entries == NULL)
-    {
-      goto error;
-    }
-  vacuum_Dropped_index_buffer->capacity = VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
 
   return NO_ERROR;
 
@@ -679,238 +580,97 @@ vacuum_finalize (THREAD_ENTRY * thread_p)
       vacuum_Block_data_buffer = NULL;
     }
 
-  /* Destroy the dropped classes buffer */
-  if (vacuum_Dropped_class_buffer != NULL)
-    {
-      if (vacuum_Dropped_class_buffer->dropped_entries != NULL)
-	{
-	  free_and_init (vacuum_Dropped_class_buffer->dropped_entries);
-	}
-      pthread_mutex_destroy (&vacuum_Dropped_class_buffer->mutex);
-      free_and_init (vacuum_Dropped_class_buffer);
-    }
-
-  /* Destroy the dropped indexes buffer */
-  if (vacuum_Dropped_index_buffer != NULL)
-    {
-      if (vacuum_Dropped_index_buffer->dropped_entries != NULL)
-	{
-	  free_and_init (vacuum_Dropped_index_buffer->dropped_entries);
-	}
-      pthread_mutex_destroy (&vacuum_Dropped_index_buffer->mutex);
-      free_and_init (vacuum_Dropped_index_buffer);
-    }
-
   /* Unlock data */
   VACUUM_UNLOCK_DATA ();
 }
 
 /*
- * vacuum_oids_from_heap () - Vacuum all objects in the array from heap files.
- *
- * return	      : Error code.
- * thread_p (in)      : Thread entry.
- * oids (in)	      : Array of OID's to be vacuumed.
- * n_oids (in)	      : Number of objects in the array.
- * oldest_mvccid (in) : Threshold MVCCID used for the vacuum test.
- */
-static int
-vacuum_oids_from_heap (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
-		       MVCCID oldest_mvccid)
-{
-  int i, start_index, error_code = NO_ERROR;
-
-  /* Sort OID's to have OID's belonging to the same page on successive
-   * positions.
-   */
-  qsort (oids, n_oids, sizeof (OID), oid_compare);
-
-  /* We will always save start_index the first OID in a new page. When next
-   * OID is on a different page, vacuum current batch of OID's (which should
-   * all be on the same page.
-   */
-  for (i = 0, start_index = 0; i < n_oids; i++)
-    {
-      if (			/* The end of the OID array is reached, vacuum last batch */
-	   i == n_oids - 1
-	   /* Next OID is on a different page, vacuum current batch */
-	   || !VPID_EQ_FOR_OIDS (&oids[i], &oids[i + 1]))
-	{
-	  error_code =
-	    vacuum_oids_from_heap_page (thread_p, &oids[start_index],
-					i - start_index + 1, oldest_mvccid);
-	  if (error_code != NO_ERROR)
-	    {
-	      return error_code;
-	    }
-	  start_index = i + 1;
-	}
-      else
-	{
-	  /* Next OID is on the same page, continue "collecting" OID's */
-	}
-    }
-  return NO_ERROR;
-}
-
-/*
- * vacuum_oids_from_heap_page () - Vacuum the given OID's from current page.
- *				   It is supposed that all OID's belong to
- *				   this page.
+ * vacuum_heap_page () - Vacuum heap page.
  *
  * return		     : Error code.
  * thread_p (in)	     : Thread entry.
- * oids (in)		     : Array of OID's to vacuum.
- * n_oids (in)		     : The number of OID's.
- * oldest_active_mvccid (in) : Oldest active MVCCID used to check record for
- *			       vacuum.
+ * page_vpid (in)	     : Heap page vpid.
+ * oldest_active_mvccid (in) : Threshold MVCCID used to vacuum.
+ * reusable (in)	     : True if object slots are reusable.
  */
 static int
-vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
-			    MVCCID oldest_active_mvccid)
+vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
+		  MVCCID oldest_active_mvccid, VFID vfid)
 {
-  int i, error_code = NO_ERROR;
+  int error_code = NO_ERROR;
   RECDES recdes, forward_recdes, temp_recdes;
   OID forward_oid;
   PAGE_PTR forward_page = NULL, page = NULL;
   SPAGE_SLOT *slot_p = NULL;
-  VPID page_vpid, forward_vpid;
+  VPID forward_vpid;
   MVCC_REC_HEADER mvcc_rec_header;
   OID class_oid;
   HFID hfid;
-  PGSLOTID vacuumed_slots[MAX_SLOTS_IN_PAGE];
+  PGSLOTID vacuumed_slots[MAX_SLOTS_IN_PAGE], slotid;
+  MVCC_SATISFIES_VACUUM_RESULT vacuum_results[MAX_SLOTS_IN_PAGE];
+  OID vacuumed_next_versions[MAX_SLOTS_IN_PAGE];
+  OID *vacuumed_next_versions_p = NULL;
   int n_vacuumed_slots = 0;
-  int lock_ret;
   int old_header_size, new_header_size;
   MVCC_SATISFIES_VACUUM_RESULT result;
-  DISK_ISVALID valid;
   char buffer[IO_MAX_PAGE_SIZE];
   bool is_bigone = false;
-  bool is_class_locked = false;
+  bool reusable = false;
+  SPAGE_HEADER *page_header_p = NULL;
 
-  if (oids == NULL || n_oids <= 0)
-    {
-      /* nothing to do */
-      return NO_ERROR;
-    }
+  reusable = file_get_type (thread_p, &vfid) == FILE_HEAP_REUSE_SLOTS;
 
-  /* Get page VPID and fix page */
-  VPID_GET_FROM_OID (&page_vpid, &oids[0]);
-  valid = disk_isvalid_page (thread_p, page_vpid.volid, page_vpid.pageid);
-  if (valid != DISK_VALID)
-    {
-      /* Page is no longer valid. This can happen if the heap file was
-       * destroyed.
-       */
-      assert (valid == DISK_INVALID);
-      vacuum_er_log (VACUUM_ER_LOG_HEAP | VACUUM_ER_LOG_WARNING
-		     | VACUUM_ER_LOG_WORKER,
-		     "VACUUM WARNING: thread(%d): "
-		     "page(%d, %d) could not be found\n",
-		     thread_get_current_entry_index (),
-		     page_vpid.pageid, page_vpid.volid);
-      return NO_ERROR;
-    }
   page =
     pgbuf_fix (thread_p, &page_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
 	       PGBUF_UNCONDITIONAL_LATCH);
   if (page == NULL)
     {
       /* Page fix failed */
-      valid = disk_isvalid_page (thread_p, page_vpid.volid, page_vpid.pageid);
-      if (valid != DISK_VALID)
-	{
-	  /* Page is no longer valid. This can happen if the heap file was
-	   * destroyed.
-	   */
-	  assert (valid == DISK_INVALID);
-	  vacuum_er_log (VACUUM_ER_LOG_HEAP | VACUUM_ER_LOG_WARNING
-			 | VACUUM_ER_LOG_WORKER,
-			 "VACUUM WARNING: thread(%d): "
-			 "page(%d, %d) could not be found\n",
-			 thread_get_current_entry_index (),
-			 page_vpid.pageid, page_vpid.volid);
-	  return NO_ERROR;
-	}
-      assert (false);
+      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+		     "VACUUM ERROR: Failed to fix heap page (%d, %d) "
+		     "part of file (%d %d).", page_vpid.volid,
+		     page_vpid.pageid, vfid.volid, vfid.fileid);
       return ER_FAILED;
     }
 
-  if (!pgbuf_check_page_type_no_error (thread_p, page, PAGE_HEAP))
+  page_header_p = (SPAGE_HEADER *) page;
+
+  if (!reusable)
     {
+      /* We must keep next versions if objects have been updated */
+      vacuumed_next_versions_p = vacuumed_next_versions;
+    }
+
+  error_code = heap_get_class_oid_from_page (thread_p, page, &class_oid);
+  if (error_code != NO_ERROR)
+    {
+      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+		     "VACUUM ERROR: Failed to obtain class OID from heap "
+		     "page (%d, %d), file (%d %d)", page_vpid.volid,
+		     page_vpid.pageid, vfid.volid, vfid.fileid);
+      assert (false);
       goto end;
     }
 
-  /* Get class OID */
-  if (heap_get_class_oid_from_page (thread_p, page, &class_oid) != NO_ERROR)
+  error_code = heap_get_hfid_from_class_oid (thread_p, &class_oid, &hfid);
+  if (error_code != NO_ERROR)
     {
-      error_code = ER_FAILED;
+      /* The class must have been dropped */
+      vacuum_er_log (VACUUM_ER_LOG_WARNING | VACUUM_ER_LOG_HEAP,
+		     "VACUUM WARNING: Failed to obtain heap file identifier "
+		     "for class (%d, %d, %d)", class_oid.volid,
+		     class_oid.pageid, class_oid.slotid);
+      error_code = NO_ERROR;
       goto end;
     }
-  /* Lock class */
-  lock_ret =
-    lock_object (thread_p, &class_oid, oid_Root_class_oid, SCH_S_LOCK,
-		 LK_COND_LOCK);
-  if (lock_ret != LK_GRANTED)
-    {
-      /* Usually page is fixed after locking class object. In order to avoid
-       * a dead lock, unfix page now, lock class object and then retry page
-       * fix.
-       */
-      pgbuf_unfix_and_init (thread_p, page);
-      lock_ret =
-	lock_object (thread_p, &class_oid, oid_Root_class_oid, SCH_S_LOCK,
-		     LK_UNCOND_LOCK);
-      if (lock_ret != LK_GRANTED)
-	{
-	  /* Lock was not granted */
-	  error_code = ER_FAILED;
-	  goto end;
-	}
-      is_class_locked = true;
-      valid = disk_isvalid_page (thread_p, page_vpid.volid, page_vpid.pageid);
-      if (valid != DISK_VALID)
-	{
-	  assert (valid == DISK_INVALID);
-	  vacuum_er_log (VACUUM_ER_LOG_HEAP | VACUUM_ER_LOG_WARNING
-			 | VACUUM_ER_LOG_WORKER,
-			 "VACUUM WARNING: thread(%d): "
-			 "page(%d, %d) could not be found\n",
-			 thread_get_current_entry_index (),
-			 page_vpid.pageid, page_vpid.volid);
-	  return NO_ERROR;
-	}
-      page =
-	pgbuf_fix (thread_p, &page_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
-		   PGBUF_UNCONDITIONAL_LATCH);
-      if (page == NULL)
-	{
-	  /* Page fix failed */
-	  error_code = ER_FAILED;
-	  assert (false);
-	  goto end;
-	}
-    }
-  is_class_locked = true;
-  /* Get HFID (required for logging) */
-  if (heap_get_hfid_from_class_oid (thread_p, &class_oid, &hfid) != NO_ERROR)
-    {
-      /* Class was probably deleted. */
-      /* TODO: Is there a way to know this? */
-      goto end;
-    }
-  for (i = 0; i < n_oids; i++)
+
+  /* Skip heap page header slot! */
+  for (slotid = 1; slotid < page_header_p->num_slots; slotid++)
     {
       /* Safety check */
-      assert (page_vpid.pageid == oids[i].pageid
-	      && page_vpid.volid == oids[i].volid);
-      if (page == NULL)
-	{
-	  page =
-	    pgbuf_fix (thread_p, &page_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
-		       PGBUF_UNCONDITIONAL_LATCH);
-	}
-      slot_p = spage_get_slot (page, oids[i].slotid);
+      assert (page != NULL);
+
+      slot_p = spage_get_slot (page, slotid);
       if (slot_p == NULL)
 	{
 	  /* Couldn't find object slot. Probably the page was reused until
@@ -931,6 +691,10 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	  /* Cannot vacuum */
 	  break;
 
+	case REC_NEWHOME:
+	  /* Always vacuum new home from REC_RELOCATION */
+	  break;
+
 	case REC_RELOCATION:
 	  /* Must also vacuum REC_NEWHOME */
 
@@ -939,13 +703,16 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	  forward_recdes.length = OR_OID_SIZE;
 	  forward_recdes.data = (char *) &forward_oid;
 
-	  if (spage_get_record (page, oids[i].slotid, &forward_recdes, COPY)
+	  if (spage_get_record (page, slotid, &forward_recdes, COPY)
 	      != S_SUCCESS)
 	    {
-	      /* TODO: add vacuum error log */
+	      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+			     "VACUUM ERROR: Failed to obtain REC_RELOCATION "
+			     "record data at (%d, %d, %d)", page_vpid.volid,
+			     page_vpid.pageid, slotid);
 	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_BAD_OBJECT_TYPE, 3, oids[i].volid,
-		      oids[i].pageid, oids[i].slotid);
+		      ER_HEAP_BAD_OBJECT_TYPE, 3, page_vpid.volid,
+		      page_vpid.pageid, slotid);
 	      break;
 	    }
 
@@ -959,31 +726,39 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	      /* Couldn't obtain conditional latch, free original page and
 	       * retry.
 	       */
-	      vacuum_oids_from_heap_page_log_and_reset (thread_p, &page,
-							&hfid,
-							vacuumed_slots,
-							&n_vacuumed_slots);
+	      vacuum_heap_page_log_and_reset (thread_p, &page, &hfid,
+					      &n_vacuumed_slots,
+					      vacuumed_slots, vacuum_results,
+					      vacuumed_next_versions_p,
+					      reusable);
 	      forward_page =
 		pgbuf_fix (thread_p, &forward_vpid, OLD_PAGE,
 			   PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
 	      if (forward_page == NULL)
 		{
-		  /* TODO: Add vacuum error log */
+		  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				 "VACUUM ERROR: Failed to fix page (%d, %d).",
+				 forward_vpid.volid, forward_vpid.pageid);
 		  break;
 		}
 	    }
 	  if (spage_get_record (forward_page, forward_oid.slotid, &recdes,
 				PEEK) != S_SUCCESS)
 	    {
-	      /* TODO: Add vacuum error log */
+	      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+			     "VACUUM ERROR: Failed to get record data at "
+			     "(%d, %d, %d).", forward_oid.volid,
+			     forward_oid.pageid, forward_oid.slotid);
 	      break;
 	    }
 	  if (recdes.type != REC_NEWHOME)
 	    {
-	      /* TODO: Add vacuum error log */
+	      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+			     "VACUUM ERROR: Unexpected record type. Expected "
+			     "%d and found %d", REC_NEWHOME, recdes.type);
 	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_BAD_OBJECT_TYPE, 3, oids[i].volid,
-		      oids[i].pageid, oids[i].slotid);
+		      ER_HEAP_BAD_OBJECT_TYPE, 3, page_vpid.volid,
+		      page_vpid.pageid, slotid);
 	      break;
 	    }
 	  or_mvcc_get_header (&recdes, &mvcc_rec_header);
@@ -1014,9 +789,36 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 		  goto end;
 		}
 	      assert (page != NULL);
-	      spage_vacuum_slot (thread_p, page, oids[i].slotid,
-				 &MVCC_GET_NEXT_VERSION (&mvcc_rec_header));
-	      vacuumed_slots[n_vacuumed_slots++] = oids[i].slotid;
+	      /* Make sure we have an updated page header */
+	      page_header_p = (SPAGE_HEADER *) page;
+	      /* Check slot was not changed in the meantime */
+	      slot_p = spage_get_slot (page, slotid);
+	      if (slot_p->record_type != REC_RELOCATION)
+		{
+		  /* Must have been vacuumed by another thread while this
+		   * worker lost the latch on page.
+		   */
+		  assert (slot_p->record_type == REC_MVCC_NEXT_VERSION
+			  || slot_p->record_type == REC_MARKDELETED
+			  || slot_p->record_type == REC_DELETED_WILL_REUSE);
+		  vacuum_er_log (VACUUM_ER_LOG_WARNING | VACUUM_ER_LOG_HEAP,
+				 "VACUUM: Object (%d, %d, %d) was vacuumed "
+				 "someone else", page_vpid.volid,
+				 page_vpid.pageid, slotid);
+		  break;
+		}
+
+	      spage_vacuum_slot (thread_p, page, slotid,
+				 &MVCC_GET_NEXT_VERSION (&mvcc_rec_header),
+				 reusable);
+	      vacuumed_slots[n_vacuumed_slots] = slotid;
+	      vacuum_results[n_vacuumed_slots] = result;
+	      if (vacuumed_next_versions_p != NULL)
+		{
+		  COPY_OID (&vacuumed_next_versions_p[n_vacuumed_slots],
+			    &MVCC_GET_NEXT_VERSION (&mvcc_rec_header));
+		}
+	      n_vacuumed_slots++;
 
 	      /* Clean new home slot */
 	      if (forward_page == NULL)
@@ -1026,25 +828,55 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 			       PGBUF_LATCH_WRITE, PGBUF_CONDITIONAL_LATCH);
 		  if (forward_page == NULL)
 		    {
-		      vacuum_oids_from_heap_page_log_and_reset (thread_p,
-								&page,
-								&hfid,
-								vacuumed_slots,
-								&n_vacuumed_slots);
+		      vacuum_heap_page_log_and_reset (thread_p, &page, &hfid,
+						      &n_vacuumed_slots,
+						      vacuumed_slots,
+						      vacuum_results,
+						      vacuumed_next_versions_p,
+						      reusable);
 		      forward_page =
 			pgbuf_fix (thread_p, &forward_vpid, OLD_PAGE,
 				   PGBUF_LATCH_WRITE,
 				   PGBUF_UNCONDITIONAL_LATCH);
 		      if (forward_page == NULL)
 			{
-			  /* TODO: Add vacuum error log */
+			  vacuum_er_log (VACUUM_ER_LOG_ERROR
+					 | VACUUM_ER_LOG_HEAP,
+					 "VACUUM ERROR: Failed to fix page "
+					 "(%d, %d).", forward_vpid.volid,
+					 forward_vpid.pageid);
+			  break;
+			}
+		      slot_p =
+			spage_get_slot (forward_page, forward_oid.slotid);
+		      if (slot_p->record_type != REC_NEWHOME)
+			{
+			  /* Must have been vacuumed by another thread while
+			   * this worker lost the latch on page.
+			   */
+			  assert (slot_p->record_type == REC_MVCC_NEXT_VERSION
+				  || slot_p->record_type == REC_MARKDELETED
+				  || slot_p->record_type
+				  == REC_DELETED_WILL_REUSE);
+			  vacuum_er_log (VACUUM_ER_LOG_WARNING
+					 | VACUUM_ER_LOG_HEAP,
+					 "VACUUM: Object (%d, %d, %d) was "
+					 "vacuumed someone else",
+					 page_vpid.volid, page_vpid.pageid,
+					 slotid);
 			  break;
 			}
 		    }
 		}
 	      assert (forward_page != NULL);
+
+	      /* Vacuum REC_NEWHOME */
 	      spage_vacuum_slot (thread_p, forward_page, forward_oid.slotid,
-				 NULL);
+				 NULL, reusable);
+	      /* Log vacuum of REC_NEWHOME */
+	      vacuum_log_vacuum_heap_page (thread_p, forward_page, &hfid, 1,
+					   &forward_oid.slotid, &result, NULL,
+					   reusable);
 	      pgbuf_set_dirty (thread_p, forward_page, DONT_FREE);
 	      pgbuf_unfix_and_init (thread_p, forward_page);
 	      break;
@@ -1072,7 +904,23 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 		or_mvcc_set_header (&temp_recdes, &mvcc_rec_header);
 	      if (error_code != NO_ERROR)
 		{
-		  /* TODO: Vacuum log error */
+		  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				 "Vacuum error: set mvcc header "
+				 "(flag=%d, repid=%d, chn=%d, insid=%lld, "
+				 "delid=%lld, next_v=(%d %d %d) to object "
+				 "(%d %d %d) with record of type=%d and "
+				 "size=%d",
+				 (int) MVCC_GET_FLAG (&mvcc_rec_header),
+				 (int) MVCC_GET_REPID (&mvcc_rec_header),
+				 MVCC_GET_CHN (&mvcc_rec_header),
+				 MVCC_GET_INSID (&mvcc_rec_header),
+				 MVCC_GET_DELID (&mvcc_rec_header),
+				 mvcc_rec_header.next_version.volid,
+				 mvcc_rec_header.next_version.pageid,
+				 mvcc_rec_header.next_version.slotid,
+				 forward_vpid.volid, forward_vpid.pageid,
+				 forward_oid.slotid, (int) recdes.type,
+				 recdes.length);
 		  pgbuf_unfix_and_init (thread_p, forward_page);
 		  error_code = NO_ERROR;
 		  break;
@@ -1085,13 +933,18 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	      if (spage_update (thread_p, forward_page, forward_oid.slotid,
 				&temp_recdes) != SP_SUCCESS)
 		{
-		  /* TODO: Vacuum log error */
+		  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				 "VACUUM ERROR: Error vacuuming object, "
+				 "could not update record at (%d, %d, %d).",
+				 forward_oid.volid, forward_oid.pageid,
+				 forward_oid.slotid);
 		  break;
 		}
+	      vacuum_log_vacuum_heap_page (thread_p, forward_page, &hfid, 1,
+					   &forward_oid.slotid, &result, NULL,
+					   reusable);
 	      pgbuf_set_dirty (thread_p, forward_page, DONT_FREE);
 	      pgbuf_unfix_and_init (thread_p, forward_page);
-	      /* Add relocation slot to vacuumed slots */
-	      vacuumed_slots[n_vacuumed_slots++] = oids[i].slotid;
 	      break;
 	    case VACUUM_RECORD_CANNOT_VACUUM:
 	    default:
@@ -1102,7 +955,6 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	case REC_BIGONE:
 	  is_bigone = true;
 	  /* Fall through */
-	case REC_NEWHOME:
 	case REC_HOME:
 	  if (is_bigone)
 	    {
@@ -1110,10 +962,13 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	      forward_recdes.area_size = OR_OID_SIZE;
 	      forward_recdes.length = OR_OID_SIZE;
 	      forward_recdes.data = (char *) &forward_oid;
-	      if (spage_get_record (page, oids[i].slotid, &forward_recdes,
-				    COPY) != S_SUCCESS)
+	      if (spage_get_record (page, slotid, &forward_recdes, COPY)
+		  != S_SUCCESS)
 		{
-		  /* TODO: Add vacuum error log */
+		  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				 "VACUUM ERROR: Could not obtain record at "
+				 "(%d, %d, %d).", page_vpid.volid,
+				 page_vpid.pageid, slotid);
 		  break;
 		}
 	      VPID_GET_FROM_OID (&forward_vpid, &forward_oid);
@@ -1123,7 +978,9 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 			   PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
 	      if (forward_page == NULL)
 		{
-		  /* TODO: Add vacuum error log */
+		  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				 "VACUUM ERROR: Failed to fix page (%d, %d).",
+				 forward_vpid.pageid, forward_vpid.volid);
 		  break;
 		}
 	      /* Get MVCC header from overflow page */
@@ -1133,10 +990,12 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	  else
 	    {
 	      /* Get MVCC header */
-	      if (spage_get_record (page, oids[i].slotid, &recdes, PEEK)
-		  != S_SUCCESS)
+	      if (spage_get_record (page, slotid, &recdes, PEEK) != S_SUCCESS)
 		{
-		  /* TODO: Add vacuum error log */
+		  vacuum_er_log (VACUUM_ER_LOG_HEAP | VACUUM_ER_LOG_ERROR,
+				 "VACUUM ERROR: Failed to get record data at "
+				 "(%d, %d, %d).", page_vpid.volid,
+				 page_vpid.pageid, slotid);
 		  break;
 		}
 	      or_mvcc_get_header (&recdes, &mvcc_rec_header);
@@ -1150,15 +1009,26 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	    {
 	    case VACUUM_RECORD_REMOVE:
 	      /* Vacuum record */
-	      spage_vacuum_slot (thread_p, page, oids[i].slotid,
-				 &MVCC_GET_NEXT_VERSION (&mvcc_rec_header));
-	      vacuumed_slots[n_vacuumed_slots++] = oids[i].slotid;
+	      spage_vacuum_slot (thread_p, page, slotid,
+				 &MVCC_GET_NEXT_VERSION (&mvcc_rec_header),
+				 reusable);
+	      vacuumed_slots[n_vacuumed_slots] = slotid;
+	      vacuum_results[n_vacuumed_slots] = result;
+	      if (vacuumed_next_versions_p != NULL)
+		{
+		  COPY_OID (&vacuumed_next_versions_p[n_vacuumed_slots],
+			    &MVCC_GET_NEXT_VERSION (&mvcc_rec_header));
+		}
+	      n_vacuumed_slots++;
 	      if (is_bigone)
 		{
 		  /* Delete overflow pages */
 		  if (heap_ovf_delete (thread_p, &hfid, &forward_oid) == NULL)
 		    {
-		      /* TODO: Add vacuum error log */
+		      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				     "VACUUM ERROR: Failed to delete "
+				     "overflow starting with (%d, %d).",
+				     forward_oid.volid, forward_oid.pageid);
 		      break;
 		    }
 		}
@@ -1177,6 +1047,7 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 		   */
 		  heap_set_mvcc_rec_header_on_overflow (forward_page,
 							&mvcc_rec_header);
+		  vacuum_log_remove_ovf_insid (thread_p, forward_page, &hfid);
 		  pgbuf_set_dirty (thread_p, forward_page, DONT_FREE);
 		  pgbuf_unfix_and_init (thread_p, forward_page);
 		}
@@ -1199,18 +1070,49 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 		  temp_recdes.type = recdes.type;
 		  memcpy (temp_recdes.data, recdes.data, recdes.length);
 		  temp_recdes.length = recdes.length;
-		  or_mvcc_set_header (&temp_recdes, &mvcc_rec_header);
+		  error_code =
+		    or_mvcc_set_header (&temp_recdes, &mvcc_rec_header);
+		  if (error_code != NO_ERROR)
+		    {
+		      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				     "Vacuum error: set mvcc header "
+				     "(flag=%d, repid=%d, chn=%d, insid=%lld, "
+				     "delid=%lld, next_v=(%d %d %d) to object "
+				     "(%d %d %d) with record of type=%d and "
+				     "size=%d",
+				     (int) MVCC_GET_FLAG (&mvcc_rec_header),
+				     (int) MVCC_GET_REPID (&mvcc_rec_header),
+				     MVCC_GET_CHN (&mvcc_rec_header),
+				     MVCC_GET_INSID (&mvcc_rec_header),
+				     MVCC_GET_DELID (&mvcc_rec_header),
+				     mvcc_rec_header.next_version.volid,
+				     mvcc_rec_header.next_version.pageid,
+				     mvcc_rec_header.next_version.slotid,
+				     page_vpid.volid, page_vpid.pageid,
+				     slotid, (int) recdes.type,
+				     recdes.length);
+		    }
 		  /* Update slot */
-		  if (spage_update (thread_p, page, oids[i].slotid,
+		  if (spage_update (thread_p, page, slotid,
 				    &temp_recdes) != SP_SUCCESS)
 		    {
-		      /* TODO: Vacuum log error */
+		      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				     "VACUUM ERROR: Failed to update record "
+				     "at (%d, %d, %d).", page_vpid.volid,
+				     page_vpid.pageid, slotid);
 		      break;
 		    }
 		  /* Add to vacuumed slots. Page will be set as dirty later,
 		   * before releasing latch on page.
 		   */
-		  vacuumed_slots[n_vacuumed_slots++] = oids[i].slotid;
+		  vacuumed_slots[n_vacuumed_slots] = slotid;
+		  vacuum_results[n_vacuumed_slots] = result;
+		  if (vacuumed_next_versions_p != NULL)
+		    {
+		      OID_SET_NULL (&vacuumed_next_versions_p
+				    [n_vacuumed_slots]);
+		    }
+		  n_vacuumed_slots++;
 		}
 	      break;
 	    case VACUUM_RECORD_CANNOT_VACUUM:
@@ -1229,6 +1131,21 @@ vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p, OID * oids, int n_oids,
 	{
 	  pgbuf_unfix_and_init (thread_p, forward_page);
 	}
+      if (page == NULL)
+	{
+	  page =
+	    pgbuf_fix (thread_p, &page_vpid, OLD_PAGE, PGBUF_LATCH_WRITE,
+		       PGBUF_UNCONDITIONAL_LATCH);
+	  if (page == NULL)
+	    {
+	      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+			     "VACUUM ERROR: Failed to fix page (%d, %d).",
+			     page_vpid.volid, page_vpid.pageid);
+	      break;
+	    }
+	  /* Update page header */
+	  page_header_p = (SPAGE_HEADER *) page;
+	}
     }
 
 end:
@@ -1238,24 +1155,20 @@ end:
     }
   if (page != NULL)
     {
-      vacuum_oids_from_heap_page_log_and_reset (thread_p, &page, &hfid,
-						vacuumed_slots,
-						&n_vacuumed_slots);
+      vacuum_heap_page_log_and_reset (thread_p, &page, &hfid,
+				      &n_vacuumed_slots, vacuumed_slots,
+				      vacuum_results,
+				      vacuumed_next_versions_p, reusable);
     }
   else
     {
-      /* Make all changes were logged */
+      /* Make sure all changes were logged */
       assert (n_vacuumed_slots == 0);
     }
 
   if (page != NULL)
     {
       pgbuf_unfix_and_init (thread_p, page);
-    }
-  if (is_class_locked)
-    {
-      lock_unlock_object (thread_p, &class_oid, oid_Root_class_oid,
-			  SCH_S_LOCK, true);
     }
 
 #if !defined (NDEBUG)
@@ -1266,27 +1179,31 @@ end:
 }
 
 /*
- * vacuum_oids_from_heap_page_log_and_reset () - Logs the vacuumed slots from
- *						 page and reset page pointer
- *						 and number of vacuumed slots.
+ * vacuum_heap_page_log_and_reset () - Logs the vacuumed slots from page and
+ *				       reset page pointer and number of
+ *				       vacuumed slots.
  *
- * return		     : Void.
- * thread_p (in)	     : Thread entry.
- * page_p (in/out)	     : Pointer to page (where the vacuumed slots are
- *			       found).
- * hfid (in)		     : Heap file identifier.
- * vacuumed_slots (in)	     : Array of vacuumed slots.
- * n_vacuumed_slots (in/out) : Number of vacuumed slots.
+ * return		       : Void.
+ * thread_p (in)	       : Thread entry.
+ * page_p (in/out)	       : Pointer to page (where the vacuumed slots are
+ *			         found).
+ * hfid (in)		       : Heap file identifier.
+ * n_vacuumed_slots (in/out)   : Number of vacuumed slots.
+ * vacuumed_slots (in)	       : Array of vacuumed slots.
+ * vacuum_results (in)	       : The result of satisfies vacuum (remove object
+ *				 or remove INSERT MVCCID).
+ * vacuumed_next_versions (in) : Array of next versions.
+ * reusable (in)	       : True if vacuumed objects are reusable.
  *
- * NOTE: This is supposed to be called by vacuum_oids_from_heap_page whenever
+ * NOTE: This is supposed to be called by vacuum_heap_page whenever
  *	 the vacuumed page must be unfixed.
  */
 static void
-vacuum_oids_from_heap_page_log_and_reset (THREAD_ENTRY * thread_p,
-					  PAGE_PTR * page_p,
-					  HFID * hfid,
-					  PGSLOTID * vacuumed_slots,
-					  int *n_vacuumed_slots)
+vacuum_heap_page_log_and_reset (THREAD_ENTRY * thread_p, PAGE_PTR * page_p,
+				HFID * hfid, int *n_vacuumed_slots,
+				PGSLOTID * vacuumed_slots,
+				MVCC_SATISFIES_VACUUM_RESULT * vacuum_results,
+				OID * vacuumed_next_versions, bool reusable)
 {
   assert (page_p != NULL && vacuumed_slots != NULL
 	  && n_vacuumed_slots != NULL);
@@ -1305,8 +1222,9 @@ vacuum_oids_from_heap_page_log_and_reset (THREAD_ENTRY * thread_p,
   spage_compact (*page_p);
 
   /* Log vacuumed slots */
-  vacuum_log_vacuum_oids_from_heap_page (thread_p, *page_p, hfid,
-					 vacuumed_slots, *n_vacuumed_slots);
+  vacuum_log_vacuum_heap_page (thread_p, *page_p, hfid, *n_vacuumed_slots,
+			       vacuumed_slots, vacuum_results,
+			       vacuumed_next_versions, reusable);
   /* Mark page as dirty and unfix */
   pgbuf_set_dirty (thread_p, *page_p, DONT_FREE);
   pgbuf_unfix_and_init (thread_p, *page_p);
@@ -1316,78 +1234,251 @@ vacuum_oids_from_heap_page_log_and_reset (THREAD_ENTRY * thread_p,
 
 
 /*
- * vacuum_log_vacuum_oids_from_heap_page () - Log removing OID's from heap
- *					      page.
+ * vacuum_log_vacuum_heap_page () - Log removing OID's from heap page.
  *
- * return	 : Error code.
- * thread_p (in) : Thread entry.
- * page_p (in)	 : Page pointer.
- * hfid (in)	 : Heap file identifier.
- * slots (in)	 : Array of slots removed from heap page.
- * n_slots (in)  : OID count in slots.
+ * return	      : Error code.
+ * thread_p (in)      : Thread entry.
+ * page_p (in)	      : Page pointer.
+ * hfid (in)	      : Heap file identifier.
+ * n_slots (in)	      : OID count in slots.
+ * slots (in/out)     : Array of slots removed from heap page.
+ * results (in)	      : Satisfies vacuum result.
+ * next_versions (in) : OID of next versions.
+ *
+ * NOTE: Some values in slots array are modified and set to negative values.
  */
 static void
-vacuum_log_vacuum_oids_from_heap_page (THREAD_ENTRY * thread_p,
-				       PAGE_PTR page_p, HFID * hfid,
-				       PGSLOTID * slots, int n_slots)
+vacuum_log_vacuum_heap_page (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+			     HFID * hfid, int n_slots, PGSLOTID * slots,
+			     MVCC_SATISFIES_VACUUM_RESULT * results,
+			     OID * next_versions, bool reusable)
 {
   LOG_DATA_ADDR addr;
-  LOG_CRUMB crumbs[2];
+  int packed_size = 0, i = 0;
+  char *ptr = NULL, *buffer_p = NULL;
+  char buffer[MAX_SLOTS_IN_PAGE * (sizeof (PGSLOTID) + OR_OID_SIZE)
+	      + OR_INT_SIZE + MAX_ALIGNMENT];
 
-  /* Add number of slots to crumbs */
-  crumbs[0].length = sizeof (int);
-  crumbs[0].data = &n_slots;
+  assert (n_slots > 0 && n_slots <= ((SPAGE_HEADER *) page_p)->num_slots);
 
-  /* Add slots to crumbs */
-  crumbs[1].length = n_slots * sizeof (PGSLOTID);
-  crumbs[1].data = slots;
+  /* Compute recovery data size */
+  /* reusable & n_slots */
+  packed_size += OR_INT_SIZE;
+  /* slots & results */
+  packed_size += n_slots * sizeof (PGSLOTID);
+  if (next_versions != NULL && !reusable)
+    {
+      /* next versions */
+      packed_size = DB_ALIGN (packed_size, OR_OID_SIZE);
+      packed_size += n_slots * OR_OID_SIZE;
+    }
+  assert (packed_size <= sizeof (buffer));
+  buffer_p = PTR_ALIGN (buffer, MAX_ALIGNMENT);
+
+  /* Pack reusable and n_slots in one integer */
+  /* Use negative n_slots for non-reusable objects */
+  ptr = or_pack_int (buffer_p, reusable ? n_slots : -n_slots);
+
+  /* Pack slot ID's and results */
+  for (i = 0; i < n_slots; i++)
+    {
+      assert (results[i] == VACUUM_RECORD_DELETE_INSID
+	      || results[i] == VACUUM_RECORD_REMOVE);
+      assert (slots[i] > 0);
+      if (results[i] == VACUUM_RECORD_REMOVE)
+	{
+	  /* Use negative slot ID to mark that object has been completely
+	   * removed.
+	   */
+	  slots[i] = -slots[i];
+	}
+    }
+  memcpy (ptr, slots, n_slots * sizeof (PGSLOTID));
+  ptr += n_slots * sizeof (PGSLOTID);
+
+  if (next_versions != NULL && !reusable)
+    {
+      /* Pack next versions */
+      ptr = PTR_ALIGN (ptr, OR_OID_SIZE);
+      memcpy (ptr, next_versions, n_slots * OR_OID_SIZE);
+
+      ptr += n_slots * OR_OID_SIZE;
+    }
+
+  assert ((ptr - buffer_p) == packed_size);
 
   /* Initialize addr */
   addr.pgptr = page_p;
   addr.offset = -1;
   addr.vfid = &hfid->vfid;
 
-  /* Append new redo log record */
-  log_append_redo_crumbs (thread_p, RVVAC_REMOVE_HEAP_OIDS, &addr, 2, crumbs);
+  /* Append new redo log rebuild_record */
+  log_append_redo_data (thread_p, RVVAC_REMOVE_HEAP_OIDS, &addr, packed_size,
+			buffer_p);
 }
 
 /*
- * vacuum_rv_redo_remove_oids_from_heap_page () - Redo vacuum remove oids from
- *						  heap page.
+ * vacuum_rv_redo_vacuum_heap_page () - Redo vacuum remove oids from heap page.
  *
  * return	 : Error code.
  * thread_p (in) : Thread entry.
  * rcv (in)	 : Recovery structure.
  */
 int
-vacuum_rv_redo_remove_oids_from_heap_page (THREAD_ENTRY * thread_p,
-					   LOG_RCV * rcv)
+vacuum_rv_redo_vacuum_heap_page (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
-  int n_slots;
+  int n_slots, offset = 0, i = 0, error_code = NO_ERROR;
   PGSLOTID *slotids = NULL;
   PAGE_PTR page_p = NULL;
-  PGSLOTID *slotid_p = NULL;
+  MVCC_SATISFIES_VACUUM_RESULT *results = NULL;
+  OID *next_versions = NULL;
+  RECDES rebuild_record, peek_record;
+  int old_header_size, new_header_size;
+  MVCC_REC_HEADER rec_header;
+  char *ptr = NULL;
+  char data_buf[IO_MAX_PAGE_SIZE + MAX_ALIGNMENT];
+  bool reusable;
 
   page_p = rcv->pgptr;
 
-  /* Get logged number of slots */
-  n_slots = *((int *) rcv->data);
+  ptr = (char *) rcv->data;
 
-  /* Safety check */
-  assert (rcv->length == (sizeof (int) + n_slots * sizeof (PGSLOTID)));
+  /* Get reusable and n_slots */
+  ptr = or_unpack_int (ptr, &n_slots);
+  if (n_slots < 0)
+    {
+      reusable = false;
+      n_slots = -n_slots;
+    }
+  else
+    {
+      reusable = true;
+    }
+  assert (n_slots < ((SPAGE_HEADER *) page_p)->num_slots);
 
-  /* Get logged slots */
-  slotids = (PGSLOTID *) (((char *) rcv->data) + sizeof (int));
+  /* Get slot ID's and result types */
+  slotids = (PGSLOTID *) ptr;
+  ptr += n_slots * sizeof (PGSLOTID);
+
+  if (ptr < rcv->data + rcv->length)
+    {
+      /* Next versions must be obtained */
+      assert (!reusable);
+      ptr = PTR_ALIGN (ptr, OR_OID_SIZE);
+      next_versions = (OID *) ptr;
+
+      ptr += n_slots * OR_OID_SIZE;
+    }
+
+  /* Safeguard for correct unpacking of recovery data */
+  assert (ptr == rcv->data + rcv->length);
+
+  /* Initialize rebuild_record for deleting INSERT MVCCID's */
+  rebuild_record.area_size = IO_MAX_PAGE_SIZE + MAX_ALIGNMENT;
+  rebuild_record.data = data_buf;
 
   /* Vacuum slots */
-  for (slotid_p = slotids; slotid_p < slotids + n_slots; slotid_p++)
+  for (i = 0; i < n_slots; i++)
     {
-      if (spage_vacuum_slot (thread_p, page_p, *slotid_p, NULL) != NO_ERROR)
+      if (slotids[i] < 0)
 	{
-	  return ER_FAILED;
+	  /* Record was removed completely */
+	  slotids[i] = -slotids[i];
+	  if (spage_vacuum_slot (thread_p, page_p, slotids[i],
+				 next_versions != NULL ?
+				 &next_versions[i] : NULL, reusable)
+	      != NO_ERROR)
+	    {
+	      return ER_FAILED;
+	    }
+	}
+      else
+	{
+	  /* Only insert MVCCID has been removed */
+	  if (spage_get_record (rcv->pgptr, slotids[i], &peek_record, PEEK)
+	      != S_SUCCESS)
+	    {
+	      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP
+			     | VACUUM_ER_LOG_RECOVERY,
+			     "VACUUM ERROR: Failed to get record at "
+			     "(%d, %d, %d).",
+			     pgbuf_get_volume_id (rcv->pgptr),
+			     pgbuf_get_page_id (rcv->pgptr), slotids[i]);
+	      assert (false);
+	      return ER_FAILED;
+	    }
+	  if (peek_record.type != REC_HOME && peek_record.type != REC_NEWHOME)
+	    {
+	      /* Unexpected */
+	      assert (false);
+	      return ER_FAILED;
+	    }
+	  /* Remove insert MVCCID */
+	  or_mvcc_get_header (&peek_record, &rec_header);
+	  old_header_size =
+	    or_mvcc_header_size_from_flags (MVCC_GET_FLAG (&rec_header));
+	  MVCC_CLEAR_FLAG_BITS (&rec_header, OR_MVCC_FLAG_VALID_INSID);
+	  new_header_size =
+	    or_mvcc_header_size_from_flags (MVCC_GET_FLAG (&rec_header));
+
+	  /* Rebuild record */
+	  rebuild_record.type = peek_record.type;
+	  rebuild_record.length = peek_record.length;
+	  memcpy (rebuild_record.data, peek_record.data, peek_record.length);
+
+	  /* Set new header */
+	  or_mvcc_set_header (&rebuild_record, &rec_header);
+	  /* Copy record data */
+	  memcpy (rebuild_record.data + new_header_size,
+		  peek_record.data + old_header_size,
+		  peek_record.length - old_header_size);
+
+	  if (spage_update (thread_p, rcv->pgptr, slotids[i], &rebuild_record)
+	      != SP_SUCCESS)
+	    {
+	      error_code = ER_FAILED;
+	      break;
+	    }
 	}
     }
+  (void) spage_compact (rcv->pgptr);
   pgbuf_set_dirty (thread_p, page_p, DONT_FREE);
+
+  return error_code;
+}
+
+/*
+ * vacuum_log_remove_ovf_insid () - Log removing insert MVCCID from big record.
+ *
+ * return	 : Void.
+ * thread_p (in) : Thread entry.
+ * ovfpage (in)  : Big record first overflow page.
+ * hfid (in)	 : Heap file identifier.
+ */
+static void
+vacuum_log_remove_ovf_insid (THREAD_ENTRY * thread_p, PAGE_PTR ovfpage,
+			     HFID * hfid)
+{
+  log_append_redo_data2 (thread_p, RVVAC_REMOVE_OVF_INSID, &hfid->vfid,
+			 ovfpage, 0, 0, NULL);
+}
+
+/*
+ * vacuum_rv_redo_remove_ovf_insid () - Redo removing insert MVCCID from big
+ *					record.
+ *
+ * return	 : Error code.
+ * thread_p (in) : Thread entry.
+ * rcv (in)	 : Recovery data.
+ */
+int
+vacuum_rv_redo_remove_ovf_insid (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
+{
+  MVCC_REC_HEADER rec_header;
+
+  heap_get_mvcc_rec_header_from_overflow (rcv->pgptr, &rec_header, NULL);
+  MVCC_SET_INSID (&rec_header, MVCCID_ALL_VISIBLE);
+  heap_set_mvcc_rec_header_on_overflow (rcv->pgptr, &rec_header);
 
   return NO_ERROR;
 }
@@ -1475,184 +1566,6 @@ vacuum_produce_log_block_data (THREAD_ENTRY * thread_p, LOG_LSA * start_lsa,
 }
 
 /*
- * vacuum_produce_log_block_dropped_classes () - After logging a block of log data,
- *				      useful information for vacuum is passed
- *				      by log manager and should be saved in
- *				      lock-free buffer.
- *
- * return	      : error
- * thread_p (in)      : Thread entry.
- * entries (in)	      : vacuum dropped class entries to be added to buffer.
- */
-int
-vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
-					  void *entries)
-{
-  int n_dropped_entries = 0;
-  VACUUM_DROPPED_ENTRY *new_entry = NULL;
-  LOG_DROPPED_CLS_BTID_ENTRY *entry = NULL;
-  VACUUM_DROPPED_ENTRY *new_buffer = NULL;
-  int n_new_entries = 0;
-
-  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
-    {
-      return NO_ERROR;
-    }
-
-  if (vacuum_Dropped_class_buffer == NULL
-      || vacuum_Dropped_class_buffer->dropped_entries == NULL)
-    {
-      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-      return ER_FAILED;
-    }
-
-  for (entry = (LOG_DROPPED_CLS_BTID_ENTRY *) entries; entry != NULL;
-       entry = entry->next)
-    {
-      n_new_entries++;
-    }
-
-  if (n_new_entries <= 0)
-    {
-      return NO_ERROR;
-    }
-
-  /* Push new block into block data buffer */
-  (void) pthread_mutex_lock (&vacuum_Dropped_class_buffer->mutex);
-
-  n_dropped_entries = vacuum_Dropped_class_buffer->n_dropped_entries;
-  if (n_dropped_entries + n_new_entries >
-      vacuum_Dropped_class_buffer->capacity)
-    {
-      new_buffer = (VACUUM_DROPPED_ENTRY *)
-	realloc (vacuum_Dropped_class_buffer->dropped_entries,
-		 (vacuum_Dropped_class_buffer->capacity
-		  + VACUUM_DROPPED_DATA_BUFFER_CAPACITY)
-		 * sizeof (VACUUM_DROPPED_ENTRY));
-      if (new_buffer == NULL)
-	{
-	  pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return ER_FAILED;
-	}
-      vacuum_Dropped_class_buffer->capacity +=
-	VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
-      vacuum_Dropped_class_buffer->dropped_entries = new_buffer;
-    }
-
-  for (entry = (LOG_DROPPED_CLS_BTID_ENTRY *) entries; entry != NULL;
-       entry = entry->next)
-    {
-      new_entry =
-	&vacuum_Dropped_class_buffer->dropped_entries[n_dropped_entries];
-      if (new_entry == NULL)
-	{
-	  pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return ER_FAILED;
-	}
-
-      new_entry->mvccid = entry->mvccid;
-      COPY_OID (&new_entry->dropped_cls_btid.class_oid, &entry->id.class_oid);
-
-      n_dropped_entries++;
-    }
-  vacuum_Dropped_class_buffer->n_dropped_entries = n_dropped_entries;
-  pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
-
-  return NO_ERROR;
-}
-
-/*
- * vacuum_produce_log_block_dropped_indexes () - After logging a block of log data,
- *				      useful information for vacuum is passed
- *				      by log manager and should be saved in
- *				      lock-free buffer.
- *
- * return	      : Void. 
- * thread_p (in)      : Thread entry.
- * entries (in)	      : vacuum dropped index entries to be added to buffer.
- */
-int
-vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
-					  void *entries)
-{
-  int n_dropped_entries = 0;
-  VACUUM_DROPPED_ENTRY *new_entry = NULL;
-  LOG_DROPPED_CLS_BTID_ENTRY *entry = NULL;
-  VACUUM_DROPPED_ENTRY *new_buffer = NULL;
-  int n_new_entries = 0;
-
-  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
-    {
-      return NO_ERROR;
-    }
-
-  if (vacuum_Dropped_index_buffer == NULL
-      || vacuum_Dropped_index_buffer->dropped_entries == NULL)
-    {
-      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-      return ER_FAILED;
-    }
-
-  for (entry = (LOG_DROPPED_CLS_BTID_ENTRY *) entries; entry != NULL;
-       entry = entry->next)
-    {
-      n_new_entries++;
-    }
-
-  if (n_new_entries <= 0)
-    {
-      return NO_ERROR;
-    }
-
-  /* Push new block into block data buffer */
-  (void) pthread_mutex_lock (&vacuum_Dropped_index_buffer->mutex);
-
-  n_dropped_entries = vacuum_Dropped_index_buffer->n_dropped_entries;
-  if (n_dropped_entries + n_new_entries >
-      vacuum_Dropped_index_buffer->capacity)
-    {
-      new_buffer = (VACUUM_DROPPED_ENTRY *)
-	realloc (vacuum_Dropped_index_buffer->dropped_entries,
-		 (vacuum_Dropped_index_buffer->capacity
-		  + VACUUM_DROPPED_DATA_BUFFER_CAPACITY)
-		 * sizeof (VACUUM_DROPPED_ENTRY));
-      if (new_buffer == NULL)
-	{
-	  pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return ER_FAILED;
-	}
-      vacuum_Dropped_index_buffer->capacity +=
-	VACUUM_DROPPED_DATA_BUFFER_CAPACITY;
-      vacuum_Dropped_index_buffer->dropped_entries = new_buffer;
-    }
-
-  for (entry = (LOG_DROPPED_CLS_BTID_ENTRY *) entries; entry != NULL;
-       entry = entry->next)
-    {
-      new_entry =
-	&vacuum_Dropped_index_buffer->dropped_entries[n_dropped_entries];
-      if (new_entry == NULL)
-	{
-	  pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return ER_FAILED;
-	}
-
-      new_entry->mvccid = entry->mvccid;
-      BTID_COPY (&new_entry->dropped_cls_btid.btid, &entry->id.btid);
-
-      n_dropped_entries++;
-    }
-  vacuum_Dropped_index_buffer->n_dropped_entries = n_dropped_entries;
-  pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
-
-  return NO_ERROR;
-}
-
-/*
  * vacuum_master_start () - Base function for auto vacuum routine. It will
  *			  process vacuum data and assign vacuum jobs to
  *			  workers. Each job will process a block of log data
@@ -1716,8 +1629,6 @@ vacuum_process_vacuum_data (THREAD_ENTRY * thread_p)
 
   /* Append newly logged blocks at the end of the vacuum data table */
   vacuum_consume_buffer_log_blocks (thread_p, false);
-  vacuum_consume_dropped_class_buffer_log_blocks (thread_p);
-  vacuum_consume_dropped_index_buffer_log_blocks (thread_p);
 
   /* Search for blocks ready to be vacuumed */
   for (i = 0; i < vacuum_Data->n_table_entries; i++)
@@ -1771,7 +1682,6 @@ end:
 static int
 vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 {
-#define VACUUM_MAX_OID_BUFFER_SIZE  4000
   LOG_ZIP *log_zip_ptr = NULL;
   LOG_LSA log_lsa;
   LOG_PAGEID first_block_pageid =
@@ -1788,21 +1698,28 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
   OID class_oid, oid;
   MVCCID threshold_mvccid = logtb_get_lowest_active_mvccid (thread_p);
   int unique;
-  OID oid_buffer[VACUUM_MAX_OID_BUFFER_SIZE];
-  int n_oids = 0;
+  VPID page_buffer[VACUUM_MAX_PAGE_BUFFER_SIZE];
+  VPID *page_bufp = page_buffer;
+  int page_buf_capacity = VACUUM_MAX_PAGE_BUFFER_SIZE;
+  int n_pages = 0;
   MVCC_BTREE_OP_ARGUMENTS mvcc_args;
   MVCC_REC_HEADER mvcc_header;
   MVCCID mvccid;
-  bool vacuum_complete = false, class_locked = false, is_ghost = false;
-  LOG_LSA next_log_lsa;
+  struct log_vacuum_info log_vacuum;
+  VPID heap_page_vpid;
+  INT32 local_dropped_files_version;
+  bool vacuum_complete = false;
+  bool is_file_dropped = false;
+  bool page_found = false;
 
   if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
     {
       return NO_ERROR;
     }
 
-  /* Initialize next log lsa */
-  LSA_SET_NULL (&next_log_lsa);
+  /* Initialize log_vacuum */
+  LSA_SET_NULL (&log_vacuum.prev_mvcc_op_log_lsa);
+  VFID_SET_NULL (&log_vacuum.vfid);
 
   /* Allocate space to unzip log data */
   log_zip_ptr = log_zip_alloc (IO_PAGESIZE, false);
@@ -1827,6 +1744,11 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 	      VACUUM_GET_LOG_BLOCKID (VACUUM_DATA_ENTRY_START_LSA (data).
 				      pageid)));
 
+  /* Get dropped files version */
+  local_dropped_files_version = vacuum_Dropped_files_version;
+  thread_set_vacuum_worker_drop_file_version (thread_p,
+					      local_dropped_files_version);
+
   /* Fetch the page where start_lsa is located */
   log_page_p = (LOG_PAGE *) PTR_ALIGN (log_pgbuf, MAX_ALIGNMENT);
   log_page_p->hdr.logical_pageid = NULL_PAGEID;
@@ -1843,7 +1765,7 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
   /* Follow the linked records starting with start_lsa */
   for (LSA_COPY (&log_lsa, &VACUUM_DATA_ENTRY_START_LSA (data));
        !LSA_ISNULL (&log_lsa) && log_lsa.pageid >= first_block_pageid;
-       LSA_COPY (&log_lsa, &next_log_lsa))
+       LSA_COPY (&log_lsa, &log_vacuum.prev_mvcc_op_log_lsa))
     {
 #if defined(SERVER_MODE)
       if (thread_p->shutdown)
@@ -1857,14 +1779,14 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 		     "(%lld, %d)\n", thread_get_current_entry_index (),
 		     (long long int) log_lsa.pageid, (int) log_lsa.offset);
 
-      thread_set_is_process_log_phase (thread_p, true);
+      thread_set_vacuum_worker_state (thread_p,
+				      VACUUM_WORKER_STATE_PROCESS_LOG);
       if (log_page_p->hdr.logical_pageid != log_lsa.pageid)
 	{
 	  if (logpb_fetch_page (thread_p, log_lsa.pageid, log_page_p) == NULL)
 	    {
 	      logpb_fatal_error (thread_p, true, ARG_FILE_LINE,
 				 "vacuum_process_log_block");
-	      thread_set_is_process_log_phase (thread_p, false);
 	      goto end;
 	    }
 	}
@@ -1874,14 +1796,20 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 				   &log_record_data, &mvccid,
 				   log_zip_ptr, &undo_data_buffer,
 				   &undo_data_buffer_size, &undo_data,
-				   &undo_data_size, &next_log_lsa);
+				   &undo_data_size, &log_vacuum,
+				   &is_file_dropped,
+				   &local_dropped_files_version);
       if (error_code != NO_ERROR)
 	{
-	  thread_set_is_process_log_phase (thread_p, false);
 	  goto end;
 	}
+      if (is_file_dropped)
+	{
+	  /* No need to vacuum */
+	  continue;
+	}
 
-      thread_set_is_process_log_phase (thread_p, false);
+      thread_set_vacuum_worker_state (thread_p, VACUUM_WORKER_STATE_EXECUTE);
 
       if (mvcc_id_follow_or_equal (mvccid, threshold_mvccid))
 	{
@@ -1897,28 +1825,31 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 
       if (LOG_IS_MVCC_HEAP_OPERATION (log_record_data.rcvindex))
 	{
-	  /* Get record OID and add it to oid_buffer */
-	  oid.pageid = log_record_data.pageid;
-	  oid.volid = log_record_data.volid;
-	  oid.slotid = log_record_data.offset;
+	  /* Get page VPID and add it to page buffer */
+	  vacuum_get_mvcc_delete_undo_vpid (thread_p, &log_record_data,
+					    undo_data, &heap_page_vpid);
 
-	  if (n_oids < VACUUM_MAX_OID_BUFFER_SIZE)
+	  /* Add page to page buffer */
+	  error_code =
+	    vacuum_add_page_to_buffer (&page_bufp, page_buffer, &n_pages,
+				       &page_buf_capacity, heap_page_vpid,
+				       &page_found);
+	  if (error_code != NO_ERROR)
 	    {
-	      COPY_OID (&oid_buffer[n_oids], &oid);
-	      n_oids++;
+	      goto end;
 	    }
-	  else
+	  if (page_found)
 	    {
-	      /* Full OID buffer, vacuum current objects */
-	      error_code =
-		vacuum_oids_from_heap (thread_p, oid_buffer, n_oids,
-				       threshold_mvccid);
-	      if (error_code != NO_ERROR)
-		{
-		  goto end;
-		}
-	      n_oids = 0;
-	      break;
+	      /* Page was already vacuumed */
+	      continue;
+	    }
+	  /* Vacuum heap page */
+	  error_code =
+	    vacuum_heap_page (thread_p, heap_page_vpid, threshold_mvccid,
+			      log_vacuum.vfid);
+	  if (error_code != NO_ERROR)
+	    {
+	      goto end;
 	    }
 	}
       else if (LOG_IS_MVCC_BTREE_OPERATION (log_record_data.rcvindex))
@@ -1933,38 +1864,7 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 	  btree_rv_read_keyval_info_nocopy (thread_p, undo_data,
 					    undo_data_size, &btid_int,
 					    &class_oid, &oid, &mvcc_header,
-					    &key_value, true, &is_ghost,
-					    &class_locked);
-	  if (is_ghost)
-	    {
-	      /* Index was deleted? Vacuum cannot do anything here, proceed
-	       * to previous MVCC operation.
-	       */
-	      vacuum_er_log (VACUUM_ER_LOG_BTREE | VACUUM_ER_LOG_WARNING
-			     | VACUUM_ER_LOG_WORKER,
-			     "VACUUM WARNING: thread(%d): "
-			     "index couldn't be found\n",
-			     thread_get_current_entry_index ());
-	      if (class_locked)
-		{
-		  lock_unlock_object (thread_p, &class_oid,
-				      oid_Root_class_oid, SCH_S_LOCK, true);
-		  class_locked = false;
-		}
-	      continue;
-	    }
-	  assert (!OID_ISNULL (&oid) && !OID_ISNULL (&class_oid));
-
-	  if (!class_locked)
-	    {
-	      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_BTREE
-			     | VACUUM_ER_LOG_WORKER,
-			     "VACUUM ERROR: thread(%d): failed locking "
-			     "class(%d, %d, %d)\n",
-			     thread_get_current_entry_index (),
-			     class_oid.volid, class_oid.pageid,
-			     class_oid.slotid);
-	    }
+					    &key_value);
 
 	  /* Vacuum b-tree */
 	  unique = BTREE_IS_UNIQUE (btid_int.unique_pk);
@@ -2014,10 +1914,6 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 	      er_clear ();
 	      error_code = NO_ERROR;
 	    }
-	  /* Unlock class */
-	  lock_unlock_object (thread_p, &class_oid, oid_Root_class_oid,
-			      SCH_S_LOCK, true);
-	  class_locked = false;
 
 	  /* Clear key value */
 	  db_value_clear (&key_value);
@@ -2032,23 +1928,6 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
   vacuum_complete = true;
 
 end:
-  if (class_locked)
-    {
-      assert (!OID_ISNULL (&class_oid));
-      lock_unlock_object (thread_p, &class_oid, oid_Root_class_oid, IX_LOCK,
-			  true);
-    }
-  if (n_oids != 0)
-    {
-      error_code =
-	vacuum_oids_from_heap (thread_p, oid_buffer, n_oids,
-			       threshold_mvccid);
-      if (error_code != NO_ERROR)
-	{
-	  vacuum_complete = false;
-	}
-    }
-
   /* TODO: Check that if start_lsa can be set to a different value when
    *       vacuum is not complete, to avoid processing the same log data
    *       again.
@@ -2064,10 +1943,64 @@ end:
     }
   db_value_clear (&key_value);
 
+  if (page_bufp != NULL && page_bufp != page_buffer)
+    {
+      free (page_bufp);
+    }
+
   /* Unfix all pages now. Normally all pages should already be unfixed. */
   pgbuf_unfix_all (thread_p);
 
   return error_code;
+}
+
+/*
+ * vacuum_get_mvcc_delete_undo_vpid () - Get page VPID to vacuum based on
+ *					 recovery index and if the recovered
+ *					 object was a big one. For big records
+ *					 we need to vacuum the location of
+ *					 original object, while for the others
+ *					 we need to vacuum the page found in
+ *					 log data.
+ *
+ * return	  : Void.
+ * thread_p (in)  : Thread entry.
+ * log_datap (in) : Log data.
+ * undo_data (in) : Recovery data.
+ * vpid (out)	  : Page to be vacuumed.
+ */
+static void
+vacuum_get_mvcc_delete_undo_vpid (THREAD_ENTRY * thread_p,
+				  struct log_data *log_datap,
+				  char *undo_data, VPID * vpid)
+{
+  bool is_bigone;
+
+  assert (log_datap != NULL);
+  assert (vpid != NULL);
+
+  if (log_datap->rcvindex == RVHF_MVCC_DELETE)
+    {
+      assert (undo_data != 0);
+
+      /* Skip chn */
+      undo_data += sizeof (INT32);
+
+      is_bigone = *((bool *) undo_data);
+      undo_data += sizeof (is_bigone);
+
+      if (is_bigone)
+	{
+	  VPID_GET_FROM_OID (vpid, (OID *) undo_data);
+	  assert (!VPID_ISNULL (vpid));
+	  return;
+	}
+    }
+
+  vpid->pageid = log_datap->pageid;
+  vpid->volid = log_datap->volid;
+
+  assert (!VPID_ISNULL (vpid));
 }
 
 /*
@@ -2126,6 +2059,8 @@ vacuum_start_new_job (THREAD_ENTRY * thread_p, VACUUM_LOG_BLOCKID blockid)
 
   /* Run vacuum */
   (void) vacuum_process_log_block (thread_p, &local_entry);
+
+  thread_set_vacuum_worker_state (thread_p, VACUUM_WORKER_STATE_INACTIVE);
 
   if (tran_index != NULL_TRAN_INDEX)
     {
@@ -2219,7 +2154,9 @@ vacuum_process_log_record (THREAD_ENTRY * thread_p,
 			   char **undo_data_buffer,
 			   int *undo_data_buffer_size,
 			   char **undo_data_ptr, int *undo_data_size,
-			   LOG_LSA * next_log_lsa_p)
+			   struct log_vacuum_info *vacuum_info,
+			   bool * is_file_dropped,
+			   INT32 * prev_dropped_files_version)
 {
   LOG_RECORD_HEADER *log_rec_header = NULL;
   struct log_mvcc_undoredo *mvcc_undoredo = NULL;
@@ -2233,11 +2170,14 @@ vacuum_process_log_record (THREAD_ENTRY * thread_p,
   assert (log_lsa_p != NULL && log_page_p != NULL);
   assert (log_record_data != NULL);
   assert (mvccid != NULL);
+  assert (is_file_dropped != NULL);
+  assert (prev_dropped_files_version != NULL);
 
   *undo_data_ptr = NULL;
   *undo_data_size = 0;
 
-  LSA_SET_NULL (next_log_lsa_p);
+  LSA_SET_NULL (&vacuum_info->prev_mvcc_op_log_lsa);
+  VFID_SET_NULL (&vacuum_info->vfid);
 
   /* Get log record header */
   log_rec_header = LOG_GET_LOG_RECORD_HEADER (log_page_p, log_lsa_p);
@@ -2258,8 +2198,11 @@ vacuum_process_log_record (THREAD_ENTRY * thread_p,
       *log_record_data = mvcc_undo->undo.data;
       /* Get undo data length */
       ulength = mvcc_undo->undo.length;
+
       /* Copy LSA for next MVCC operation */
-      LSA_COPY (next_log_lsa_p, &mvcc_undo->vacuum_info.prev_mvcc_op_log_lsa);
+      LSA_COPY (&vacuum_info->prev_mvcc_op_log_lsa,
+		&mvcc_undo->vacuum_info.prev_mvcc_op_log_lsa);
+      VFID_COPY (&vacuum_info->vfid, &mvcc_undo->vacuum_info.vfid);
 
       LOG_READ_ADD_ALIGN (thread_p, sizeof (*mvcc_undo), log_lsa_p,
 			  log_page_p);
@@ -2278,9 +2221,11 @@ vacuum_process_log_record (THREAD_ENTRY * thread_p,
       *log_record_data = mvcc_undoredo->undoredo.data;
       /* Get undo data length */
       ulength = mvcc_undoredo->undoredo.ulength;
+
       /* Copy LSA for next MVCC operation */
-      LSA_COPY (next_log_lsa_p,
+      LSA_COPY (&vacuum_info->prev_mvcc_op_log_lsa,
 		&mvcc_undoredo->vacuum_info.prev_mvcc_op_log_lsa);
+      VFID_COPY (&vacuum_info->vfid, &mvcc_undoredo->vacuum_info.vfid);
 
       LOG_READ_ADD_ALIGN (thread_p, sizeof (*mvcc_undoredo), log_lsa_p,
 			  log_page_p);
@@ -2293,7 +2238,30 @@ vacuum_process_log_record (THREAD_ENTRY * thread_p,
       return ER_FAILED;
     }
 
-  if (!LOG_IS_MVCC_BTREE_OPERATION (log_record_data->rcvindex))
+  if (*prev_dropped_files_version != vacuum_Dropped_files_version)
+    {
+      *prev_dropped_files_version = vacuum_Dropped_files_version;
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES | VACUUM_ER_LOG_WORKER,
+		     "VACUUM: Worker(%d) update min version to %d",
+		     thread_get_current_tran_index (),
+		     *prev_dropped_files_version);
+      thread_set_vacuum_worker_drop_file_version (thread_p,
+						  *prev_dropped_files_version);
+    }
+  *is_file_dropped =
+    vacuum_is_file_dropped (thread_p, &vacuum_info->vfid, *mvccid);
+  if (*is_file_dropped)
+    {
+      /* Nothing to do */
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES | VACUUM_ER_LOG_WORKER,
+		     "VACUUM: Worker(%d) skips vacuuming file (%d, %d)",
+		     thread_get_current_tran_index (),
+		     vacuum_info->vfid.volid, vacuum_info->vfid.fileid);
+      return NO_ERROR;
+    }
+
+  if (!LOG_IS_MVCC_BTREE_OPERATION (log_record_data->rcvindex)
+      && log_record_data->rcvindex != RVHF_MVCC_DELETE)
     {
       /* No need to unpack undo data */
       return NO_ERROR;
@@ -2468,45 +2436,40 @@ vacuum_load_data_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid)
 }
 
 /*
- * vacuum_load_dropped_classes_indexes_from_disk () - Loads dropped classes or
- *						      indexes from disk.
+ * vacuum_load_dropped_files_from_disk () - Loads dropped files from disk.
  *
  * return	 : Error code.
  * thread_p (in) : Thread entry.
  * vfid (in)	 : File identifier.
- * type (in)	 : Dropped class or index.
  */
 static int
-vacuum_load_dropped_classes_indexes_from_disk (THREAD_ENTRY * thread_p,
-					       VFID * vfid, DROPPED_TYPE type)
+vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p, VFID * vfid)
 {
-  VACUUM_DROPPED_ENTRIES_PAGE *page = NULL;
+  VACUUM_DROPPED_FILES_PAGE *page = NULL;
   VPID vpid;
-  VPID *dropped_cls_btid_vpidp = VACUUM_DROPPED_ENTRIES_VPID_PTR (type);
   INT16 page_count;
-  INT32 *countp = VACUUM_DROPPED_ENTRIES_COUNT_PTR (type);
 #if !defined (NDEBUG)
-  VACUUM_TRACK_DROPPED_ENTRIES *track_head = NULL, *track_tail = NULL;
-  VACUUM_TRACK_DROPPED_ENTRIES *track_new = NULL;
+  VACUUM_TRACK_DROPPED_FILES *track_head = NULL, *track_tail = NULL;
+  VACUUM_TRACK_DROPPED_FILES *track_new = NULL;
 #endif
 
   assert (vfid != NULL);
-  assert (type == DROPPED_CLASS || type == DROPPED_INDEX);
 
   /* Save vfid */
-  VFID_COPY (VACUUM_DROPPED_ENTRIES_VFID_PTR (type), vfid);
+  VFID_COPY (&vacuum_Dropped_files_vfid, vfid);
 
   /* Save first page vpid. */
-  if (file_find_nthpages (thread_p, vfid, dropped_cls_btid_vpidp, 0, 1) < 1)
+  if (file_find_nthpages (thread_p, vfid, &vacuum_Dropped_files_vpid, 0, 1) <
+      1)
     {
       assert (false);
       return ER_FAILED;
     }
-  assert (!VPID_ISNULL (dropped_cls_btid_vpidp));
+  assert (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
 
   /* Save total count. */
-  *countp = 0;
-  VPID_COPY (&vpid, dropped_cls_btid_vpidp);
+  vacuum_Dropped_files_count = 0;
+  VPID_COPY (&vpid, &vacuum_Dropped_files_vpid);
   for (; !VPID_ISNULL (&vpid);)
     {
       page =
@@ -2518,17 +2481,17 @@ vacuum_load_dropped_classes_indexes_from_disk (THREAD_ENTRY * thread_p,
 	}
       /* Get next page VPID and current page count */
       VPID_COPY (&vpid, &page->next_page);
-      page_count = page->n_dropped_entries;
-      *countp += (INT32) page_count;
+      page_count = page->n_dropped_files;
+      vacuum_Dropped_files_count += (INT32) page_count;
 
 #if !defined (NDEBUG)
       track_new =
-	(VACUUM_TRACK_DROPPED_ENTRIES *)
-	malloc (VACUUM_TRACK_DROPPED_ENTRIES_SIZE);
+	(VACUUM_TRACK_DROPPED_FILES *)
+	malloc (VACUUM_TRACK_DROPPED_FILES_SIZE);
       if (track_new == NULL)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
-		  1, VACUUM_TRACK_DROPPED_ENTRIES_SIZE);
+		  1, VACUUM_TRACK_DROPPED_FILES_SIZE);
 	  /* TODO: Free already allocated tracked pages */
 	  vacuum_unfix_dropped_entries_page (thread_p, page);
 	  return ER_OUT_OF_VIRTUAL_MEMORY;
@@ -2550,33 +2513,25 @@ vacuum_load_dropped_classes_indexes_from_disk (THREAD_ENTRY * thread_p,
     }
 
 #if !defined(NDEBUG)
-  if (type == DROPPED_CLASS)
-    {
-      vacuum_Track_dropped_classes = track_head;
-    }
-  else
-    {
-      vacuum_Track_dropped_indexes = track_head;
-    }
+  vacuum_Track_dropped_files = track_head;
 #endif
 
   return NO_ERROR;
 }
 
 /*
- * vacuum_load_from_disk () - Load vacuum data and dropped classes/indexes
+ * vacuum_load_from_disk () - Load vacuum data and dropped files
  *			      from disk.
  *
  * return		     : Error code.
  * thread_p (in)	     : Thread entry.
  * vacuum_data_vfid (in)     : Vacuum data file identifier.
- * dropped_classes_vfid (in) : Dropped classes file identifier.
+ * dropped_files_vfid (in) : Dropped classes file identifier.
  * dropped_indexes_vfid (in) : Dropped indexes file identifier.
  */
 int
 vacuum_load_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid,
-		       VFID * dropped_classes_vfid,
-		       VFID * dropped_indexes_vfid)
+		       VFID * dropped_files_vfid)
 {
   int error_code;
 
@@ -2591,17 +2546,11 @@ vacuum_load_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid,
       return error_code;
     }
   error_code =
-    vacuum_load_dropped_classes_indexes_from_disk (thread_p,
-						   dropped_classes_vfid,
-						   DROPPED_CLASS);
+    vacuum_load_dropped_files_from_disk (thread_p, dropped_files_vfid);
   if (error_code != NO_ERROR)
     {
       return error_code;
     }
-  error_code =
-    vacuum_load_dropped_classes_indexes_from_disk (thread_p,
-						   dropped_indexes_vfid,
-						   DROPPED_INDEX);
   return error_code;
 }
 
@@ -2734,18 +2683,16 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
  */
 int
 vacuum_init_vacuum_files (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid,
-			  VFID * dropped_classes_vfid,
-			  VFID * dropped_indexes_vfid)
+			  VFID * dropped_files_vfid)
 {
   VPID vpid;
   int vol_fd;
   VACUUM_DATA *vacuum_data_p = NULL;
-  VACUUM_DROPPED_ENTRIES_PAGE *dropped_cls_btid_page = NULL;
+  VACUUM_DROPPED_FILES_PAGE *dropped_files_page = NULL;
   char page_buf[IO_MAX_PAGE_SIZE];
 
   assert (mvcc_Enabled);
-  assert (vacuum_data_vfid != NULL && dropped_classes_vfid != NULL
-	  && dropped_indexes_vfid != NULL);
+  assert (vacuum_data_vfid != NULL && dropped_files_vfid != NULL);
 
   /* Initialize vacuum data file */
   /* Get first page in file */
@@ -2776,45 +2723,24 @@ vacuum_init_vacuum_files (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid,
       return ER_FAILED;
     }
 
-  /* Initialize dropped classes */
-  if (file_find_nthpages (thread_p, dropped_classes_vfid, &vpid, 0, 1) < 0)
+  /* Initialize dropped files */
+  if (file_find_nthpages (thread_p, dropped_files_vfid, &vpid, 0, 1) < 0)
     {
       assert (false);
       return ER_FAILED;
     }
-  dropped_cls_btid_page =
+  dropped_files_page =
     vacuum_fix_dropped_entries_page (thread_p, &vpid, PGBUF_LATCH_WRITE);
-  if (dropped_cls_btid_page == NULL)
+  if (dropped_files_page == NULL)
     {
       assert (false);
       return ER_FAILED;
     }
   /* Pack VPID of next page as NULL OID and count as 0 */
-  VPID_SET_NULL (&dropped_cls_btid_page->next_page);
-  dropped_cls_btid_page->n_dropped_entries = 0;
+  VPID_SET_NULL (&dropped_files_page->next_page);
+  dropped_files_page->n_dropped_files = 0;
   /* Set dirty page and free */
-  vacuum_set_dirty_dropped_entries_page (thread_p, dropped_cls_btid_page,
-					 FREE);
-
-  /* Initialize dropped indexes */
-  if (file_find_nthpages (thread_p, dropped_indexes_vfid, &vpid, 0, 1) < 0)
-    {
-      assert (false);
-      return ER_FAILED;
-    }
-  dropped_cls_btid_page =
-    vacuum_fix_dropped_entries_page (thread_p, &vpid, PGBUF_LATCH_WRITE);
-  if (dropped_cls_btid_page == NULL)
-    {
-      assert (false);
-      return ER_FAILED;
-    }
-  /* Pack VPID of next page as NULL OID and count as 0 */
-  VPID_SET_NULL (&dropped_cls_btid_page->next_page);
-  dropped_cls_btid_page->n_dropped_entries = 0;
-  /* Set dirty page and free */
-  vacuum_set_dirty_dropped_entries_page (thread_p, dropped_cls_btid_page,
-					 FREE);
+  vacuum_set_dirty_dropped_entries_page (thread_p, dropped_files_page, FREE);
 
   return NO_ERROR;
 }
@@ -3109,10 +3035,15 @@ vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
   save_n_entries = vacuum_Data->n_table_entries;
   do
     {
-      /* The vacuum data capacity should cover all blocks */
-      assert (vacuum_Data->n_table_entries < VACUUM_DATA_TABLE_MAX_SIZE
-	      ||
-	      LOCK_FREE_CIRCULAR_QUEUE_IS_EMPTY (vacuum_Block_data_buffer));
+      if (vacuum_Data->n_table_entries >= VACUUM_DATA_TABLE_MAX_SIZE)
+	{
+	  /* Do not consume anything */
+	  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_MASTER
+			 | VACUUM_ER_LOG_VACUUM_DATA,
+			 "VACUUM: Fatal error: vacuum data is full!!!");
+	  break;
+	}
+
       /* Position entry pointer at the end of the vacuum data table */
       entry = VACUUM_DATA_GET_ENTRY (vacuum_Data->n_table_entries);
       /* Get a block from buffer */
@@ -3169,94 +3100,6 @@ vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 				    vacuum_Data->n_table_entries -
 				    save_n_entries);
     }
-}
-
-/*
- * vacuum_consume_dropped_class_buffer_log_blocks () - Append new blocks from
- *                                  log block data from buffer (if any).
- *
- * return	 : Void.
- * thread_p (in) : Thread entry.
- *
- */
-static void
-vacuum_consume_dropped_class_buffer_log_blocks (THREAD_ENTRY * thread_p)
-{
-  int i = 0;
-  VACUUM_DROPPED_ENTRY *drop_data_entry = NULL;
-
-  if (vacuum_Dropped_class_buffer == NULL
-      || vacuum_Dropped_class_buffer->dropped_entries == NULL
-      || vacuum_Dropped_class_buffer->n_dropped_entries == 0)
-    {
-      return;
-    }
-
-  (void) pthread_mutex_lock (&vacuum_Dropped_class_buffer->mutex);
-
-  /* Consume blocks data from buffer and append them to log */
-  for (i = 0; i < vacuum_Dropped_class_buffer->n_dropped_entries; i++)
-    {
-      drop_data_entry = &vacuum_Dropped_class_buffer->dropped_entries[i];
-      if (drop_data_entry == NULL)
-	{
-	  pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return;
-	}
-
-      vacuum_add_dropped_class (thread_p,
-				&drop_data_entry->dropped_cls_btid.class_oid,
-				drop_data_entry->mvccid);
-    }
-  vacuum_Dropped_class_buffer->n_dropped_entries = 0;
-  pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
-
-  return;
-}
-
-/*
- * vacuum_consume_dropped_index_buffer_log_blocks () - Append new blocks from
- *                                  log block data from buffer (if any).
- *
- * return	 : Void.
- * thread_p (in) : Thread entry.
- *
- */
-static void
-vacuum_consume_dropped_index_buffer_log_blocks (THREAD_ENTRY * thread_p)
-{
-  int i = 0;
-  VACUUM_DROPPED_ENTRY *drop_data_entry = NULL;
-
-  if (vacuum_Dropped_index_buffer == NULL
-      || vacuum_Dropped_index_buffer->dropped_entries == NULL
-      || vacuum_Dropped_index_buffer->n_dropped_entries == 0)
-    {
-      return;
-    }
-
-  (void) pthread_mutex_lock (&vacuum_Dropped_index_buffer->mutex);
-
-  /* Consume blocks data from buffer and append them to log */
-  for (i = 0; i < vacuum_Dropped_index_buffer->n_dropped_entries; i++)
-    {
-      drop_data_entry = &vacuum_Dropped_index_buffer->dropped_entries[i];
-      if (drop_data_entry == NULL)
-	{
-	  pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	  return;
-	}
-
-      vacuum_add_dropped_index (thread_p,
-				&drop_data_entry->dropped_cls_btid.btid,
-				drop_data_entry->mvccid);
-    }
-  vacuum_Dropped_index_buffer->n_dropped_entries = 0;
-  pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
-
-  return;
 }
 
 /*
@@ -3636,106 +3479,74 @@ vacuum_update_oldest_mvccid (THREAD_ENTRY * thread_p)
   if (vacuum_Data->oldest_mvccid != oldest_mvccid)
     {
       /* Oldest MVCCID has changed. Update it and run cleanup on dropped
-       * classes/indexes.
+       * files.
        */
       vacuum_Data->oldest_mvccid = oldest_mvccid;
-      vacuum_cleanup_dropped_cls_btid (thread_p, DROPPED_CLASS);
-      vacuum_cleanup_dropped_cls_btid (thread_p, DROPPED_INDEX);
+      vacuum_cleanup_dropped_files (thread_p);
     }
 }
 
 /*
- * vacuum_compare_dropped_cls_btid () - Compare function used for dropped
- *					classes and indexes.
+ * vacuum_compare_dropped_files () - Compare two file identifiers.
  *
  * return    : Positive if the first argument is bigger, negative if it is
  *	       smaller and 0 if arguments are equal.
- * a (in)    : Pointer to a class OID or to a BTID.
- * b (in)    : Pointer to a class OID or to a BTID.
- * type (in) : Dropped class or dropped index.
+ * a (in)    : Pointer to a file identifier.
+ * b (in)    : Pointer to a a file identifier.
  */
 static int
-vacuum_compare_dropped_cls_btid (const void *a, const void *b,
-				 DROPPED_TYPE type)
+vacuum_compare_dropped_files (const void *a, const void *b)
 {
+  VFID *file_a = (VFID *) a;
+  VFID *file_b = (VFID *) b;
+  INT32 diff_fileid;
+
   assert (a != NULL && b != NULL);
-  assert (type == DROPPED_CLASS || type == DROPPED_INDEX);
 
-  if (type == DROPPED_CLASS)
+  diff_fileid = file_a->fileid - file_b->fileid;
+  if (diff_fileid != 0)
     {
-      return oid_compare (a, b);
+      return (int) diff_fileid;
     }
-  else
-    {
-      return btree_compare_btids (a, b);
-    }
+
+  return (int) (file_a->volid - file_b->volid);
 }
 
 /*
- * vacuum_add_dropped_class () - Tracks newly dropped classes.
- *
- * return	  : Error code.
- * thread_p (in)  : Thread entry.
- * class_oid (in) : Class identifier.
- * mvccid (in)	  : MVCCID for the transaction which dropped the class.
- *
- * NOTE: Vacuum keeps track of recently dropped classes so it can skip
- *	 vacuuming their heap files and b-trees. Once all the records
- *	 belonging to this class have been vacuumed or skipped, the class
- *	 can be removed.
- */
-int
-vacuum_add_dropped_class (THREAD_ENTRY * thread_p, OID * class_oid,
-			  MVCCID mvccid)
-{
-  return vacuum_add_dropped_cls_btid (thread_p, class_oid, mvccid,
-				      DROPPED_CLASS);
-}
-
-/*
- * vacuum_add_dropped_index () - Tracks newly dropped indexes.
- *
- * return	  : Error code.
- * thread_p (in)  : Thread entry.
- * btidp (in)	  : B-tree identifier.
- * mvccid (in)	  : MVCCID for the transaction which dropped the index.
- */
-int
-vacuum_add_dropped_index (THREAD_ENTRY * thread_p, BTID * btidp,
-			  MVCCID mvccid)
-{
-  return vacuum_add_dropped_cls_btid (thread_p, btidp, mvccid, DROPPED_INDEX);
-}
-
-/*
- * vacuum_add_dropped_cls_btid () - Add new dropped class/index.
+ * vacuum_add_dropped_file () - Add new dropped file.
  *
  * return	 : Error code.
  * thread_p (in) : Thread entry.
- * cls_btid (in) : Class OID or B-tree identifier.
+ * vfid (in)     : Class OID or B-tree identifier.
  * mvccid (in)	 : MVCCID.
- * type (in)	 : Dropped class or dropped index.
+ * type (in)	 : Dropped file.
  */
 static int
-vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
-			     MVCCID mvccid, DROPPED_TYPE type)
+vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
+			 LOG_RCV * rcv, LOG_LSA * postpone_ref_lsa)
 {
+  MVCCID save_mvccid;
   VPID vpid, prev_vpid;
-  INT32 *countp = VACUUM_DROPPED_ENTRIES_COUNT_PTR (type);
   int page_count, mem_size, npages = 0, compare;
   char *ptr = NULL;
-  char *temp_buf = VACUUM_DROPPED_ENTRIES_TMP_BUFFER (type);
-  VFID *file_vfidp = NULL;
-  VACUUM_DROPPED_ENTRIES_PAGE *page = NULL;
+  char *temp_buf = (char *) &vacuum_Dropped_files_tmp_buffer;
+  VACUUM_DROPPED_FILES_PAGE *page = NULL;
   INT16 min, max, mid, position;
+  LOG_DATA_ADDR addr;
+  LOG_TDES *tdes = LOG_FIND_CURRENT_TDES (thread_p);
 
 #if !defined (NDEBUG)
-  VACUUM_TRACK_DROPPED_ENTRIES *track_page =
-    VACUUM_DROPPED_CLS_BTID_TRACK_PTR (type);
-  VACUUM_TRACK_DROPPED_ENTRIES *new_track_page = NULL;
+  VACUUM_TRACK_DROPPED_FILES *track_page =
+    (VACUUM_TRACK_DROPPED_FILES *) vacuum_Track_dropped_files;
+  VACUUM_TRACK_DROPPED_FILES *new_track_page = NULL;
 #endif
 
-  VPID_COPY (&vpid, VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
+  assert (tdes != NULL);
+
+  addr.vfid = NULL;
+  addr.offset = -1;
+
+  VPID_COPY (&vpid, &vacuum_Dropped_files_vpid);
   while (!VPID_ISNULL (&vpid))
     {
       /* Unfix previous page */
@@ -3755,9 +3566,9 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
       VPID_COPY (&prev_vpid, &vpid);
       /* Get next vpid and page count */
       VPID_COPY (&vpid, &page->next_page);
-      page_count = page->n_dropped_entries;
+      page_count = page->n_dropped_files;
 
-      /* Dropped entries must be ordered. Look for the right position for the
+      /* dropped files must be ordered. Look for the right position for the
        * new entry.
        * The algorithm considers possible to have duplicate values in case of
        * dropped indexes, because btid may be reused. Although unlikely, it
@@ -3765,11 +3576,11 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
        * relatively short time, without being removed from the list of dropped
        * indexes.
        *
-       * Set position variable for adding new dropped entry.
+       * Set position variable for adding new dropped file.
        */
       if (page_count > 0)
 	{
-	  if (VACUUM_DROPPED_ENTRIES_PAGE_CAPACITY <= page_count)
+	  if (VACUUM_DROPPED_FILES_PAGE_CAPACITY <= page_count)
 	    {
 	      /* No room left for new entries, try next page */
 	      npages++;
@@ -3785,9 +3596,9 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 #endif
 	      continue;
 	    }
-	  /* Dropped entries are kept in ascending order */
+	  /* dropped files are kept in ascending order */
 	  /* Use a binary search to find the right position for the new
-	   * dropped entry. If a duplicate is found, just replace the previous
+	   * dropped file. If a duplicate is found, just replace the previous
 	   * MVCCID.
 	   */
 	  min = 0;
@@ -3805,9 +3616,8 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 
 	      /* Compare with mid value */
 	      compare =
-		vacuum_compare_dropped_cls_btid (cls_btid,
-						 &page->dropped_entries[mid].
-						 dropped_cls_btid, type);
+		vacuum_compare_dropped_files (vfid,
+					      &page->dropped_files[mid].vfid);
 	      if (compare == 0)
 		{
 		  /* Duplicate found, break loop */
@@ -3834,9 +3644,8 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 	       *    value still must be compared with the first entry.
 	       */
 	      compare =
-		vacuum_compare_dropped_cls_btid (cls_btid,
-						 &page->dropped_entries[0].
-						 dropped_cls_btid, type);
+		vacuum_compare_dropped_files (vfid,
+					      &page->dropped_files[0].vfid);
 	      if (compare == 0)
 		{
 		  /* Set mid to 0 to replace the MVCCID */
@@ -3865,46 +3674,44 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 	    {
 	      /* Same entry was already dropped, replace previous MVCCID */
 	      /* The equal entry must be at the current mid value */
-	      if (type != DROPPED_INDEX)
-		{
-		  /* this case is possible when you create and drop the same
-		   * class multiple times in the same transaction
-		   */
-
-		  vacuum_er_log (VACUUM_ER_LOG_WARNING
-				 | VACUUM_ER_LOG_DROPPED_CLASSES,
-				 "VACUUM ERROR: thread(%d): dropped class "
-				 "duplicate: class_oid(%d, %d, %d)\n",
-				 thread_get_current_entry_index (),
-				 ((OID *) cls_btid)->volid,
-				 ((OID *) cls_btid)->pageid,
-				 ((OID *) cls_btid)->slotid);
-		  vacuum_unfix_dropped_entries_page (thread_p, page);
-		  return NO_ERROR;
-		}
-
 	      /* Replace MVCCID */
-	      page->dropped_entries[mid].mvccid = mvccid;
+	      save_mvccid = page->dropped_files[mid].mvccid;
+	      page->dropped_files[mid].mvccid = mvccid;
 
-	      vacuum_log_add_dropped_cls_btid (thread_p, (PAGE_PTR) page,
-					       &page->dropped_entries[mid],
-					       mid, type, true);
+	      if (postpone_ref_lsa != NULL)
+		{
+		  /* Append run postpone */
+		  addr.pgptr = (PAGE_PTR) page;
+		  /* TODO: Add a name for this flag */
+		  addr.offset = mid | 0x8000;
+		  log_append_run_postpone (thread_p, RVVAC_DROPPED_FILE_ADD,
+					   &addr,
+					   pgbuf_get_vpid_ptr (addr.pgptr),
+					   rcv->length, rcv->data,
+					   postpone_ref_lsa);
+		}
+	      else
+		{
+		  /* Append compensate for undo record */
+		  addr.pgptr = (PAGE_PTR) page;
+
+		  log_append_compensate (thread_p, RVVAC_DROPPED_FILE_ADD,
+					 pgbuf_get_vpid_ptr (addr.pgptr),
+					 mid | 0x8000, addr.pgptr,
+					 rcv->length, rcv->data, tdes);
+		}
 
 #if !defined (NDEBUG)
 	      memcpy (&track_page->dropped_data_page, page, DB_PAGESIZE);
 #endif
-	      vacuum_er_log (VACUUM_ER_LOG_DROPPED_INDEXES,
-			     "VACUUM: thread(%d): add dropped btid: found"
-			     "duplicate btid(%d, %d %d) at position=%d, "
-			     "replace mvccid=%lld\n",
+	      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+			     "VACUUM: thread(%d): add dropped file: found "
+			     "duplicate vfid(%d, %d) at position=%d, "
+			     "replace mvccid=%lld with mvccid=%lld\n",
 			     thread_get_current_entry_index (),
-			     page->dropped_entries[mid].dropped_cls_btid.btid.
-			     root_pageid,
-			     page->dropped_entries[mid].dropped_cls_btid.btid.
-			     vfid.volid,
-			     page->dropped_entries[mid].dropped_cls_btid.btid.
-			     vfid.fileid, mid,
-			     page->dropped_entries[mid].mvccid);
+			     page->dropped_files[mid].vfid.volid,
+			     page->dropped_files[mid].vfid.fileid, mid,
+			     save_mvccid, page->dropped_files[mid].mvccid);
 	      vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
 	      return NO_ERROR;
 	    }
@@ -3916,73 +3723,64 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 	}
 
       /* Add new entry at position */
-      mem_size = (page_count - position) * sizeof (VACUUM_DROPPED_ENTRY);
+      mem_size = (page_count - position) * sizeof (VACUUM_DROPPED_FILE);
       if (mem_size > 0)
 	{
 	  if (npages == 0)
 	    {
 	      /* Use temporary buffer to move data. */
 	      /* Copy from max position to buffer. */
-	      memcpy (temp_buf, &page->dropped_entries[position], mem_size);
+	      memcpy (temp_buf, &page->dropped_files[position], mem_size);
 	      /* Copy from buffer to (max + 1) position. */
-	      memcpy (&page->dropped_entries[position + 1], temp_buf,
-		      mem_size);
+	      memcpy (&page->dropped_files[position + 1], temp_buf, mem_size);
 	    }
 	  else
 	    {
 	      /* Buffer can be used only when exclusive latch on the first
 	       * page is held. Use memmove instead.
 	       */
-	      memmove (&page->dropped_entries[position + 1],
-		       &page->dropped_entries[position], mem_size);
+	      memmove (&page->dropped_files[position + 1],
+		       &page->dropped_files[position], mem_size);
 	    }
 	}
       /* Increment page count */
-      page->n_dropped_entries++;
+      page->n_dropped_files++;
       /* Increment total count */
-      ATOMIC_INC_32 (countp, 1);
+      ATOMIC_INC_32 (&vacuum_Dropped_files_count, 1);
 
-      VACUUM_DROPPED_CLS_BTID_SET_VALUE (&page->dropped_entries[position].
-					 dropped_cls_btid, cls_btid, type);
-      page->dropped_entries[position].mvccid = mvccid;
+      VFID_COPY (&page->dropped_files[position].vfid, vfid);
+      page->dropped_files[position].mvccid = mvccid;
 
-      vacuum_log_add_dropped_cls_btid (thread_p, (PAGE_PTR) page,
-				       &page->dropped_entries[position],
-				       position, type, false);
+      if (postpone_ref_lsa != NULL)
+	{
+	  /* Append run postpone */
+	  addr.pgptr = (PAGE_PTR) page;
+	  addr.offset = position;
+	  log_append_run_postpone (thread_p, RVVAC_DROPPED_FILE_ADD, &addr,
+				   pgbuf_get_vpid_ptr (addr.pgptr),
+				   rcv->length, rcv->data, postpone_ref_lsa);
+	}
+      else
+	{
+	  /* Append compensate for undo record */
+	  addr.pgptr = (PAGE_PTR) page;
+
+	  log_append_compensate (thread_p, RVVAC_DROPPED_FILE_ADD,
+				 pgbuf_get_vpid_ptr (addr.pgptr),
+				 position, addr.pgptr, rcv->length,
+				 rcv->data, tdes);
+	}
 
 #if !defined (NDEBUG)
       memcpy (&track_page->dropped_data_page, page, DB_PAGESIZE);
 #endif
-      if (type == DROPPED_CLASS)
-	{
-	  vacuum_er_log (VACUUM_ER_LOG_DROPPED_CLASSES,
-			 "VACUUM: thread(%d): added new dropped "
-			 "class(%d, %d, %d) and mvccid=%lld to page=%d at"
-			 "position=%d\n", thread_get_current_entry_index (),
-			 page->dropped_entries[position].dropped_cls_btid.
-			 class_oid.volid,
-			 page->dropped_entries[position].dropped_cls_btid.
-			 class_oid.pageid,
-			 page->dropped_entries[position].dropped_cls_btid.
-			 class_oid.slotid,
-			 page->dropped_entries[position].mvccid, npages,
-			 position);
-	}
-      else
-	{
-	  vacuum_er_log (VACUUM_ER_LOG_DROPPED_INDEXES,
-			 "VACUUM: thread(%d): added new dropped "
-			 "index(%d, %d %d) and mvccid=%lld to page=%d at"
-			 "position=%d\n", thread_get_current_entry_index (),
-			 page->dropped_entries[position].dropped_cls_btid.
-			 btid.root_pageid,
-			 page->dropped_entries[position].dropped_cls_btid.
-			 btid.vfid.volid,
-			 page->dropped_entries[position].dropped_cls_btid.
-			 btid.vfid.fileid,
-			 page->dropped_entries[position].mvccid, npages,
-			 position);
-	}
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		     "VACUUM: thread(%d): added new dropped "
+		     "file(%d, %d) and mvccid=%lld to page=%d at"
+		     "position=%d\n", thread_get_current_entry_index (),
+		     page->dropped_files[position].vfid.volid,
+		     page->dropped_files[position].vfid.fileid,
+		     page->dropped_files[position].mvccid, npages, position);
       vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
       return NO_ERROR;
     }
@@ -3991,12 +3789,11 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
   /* Last page must be fixed */
   assert (page != NULL);
 
-  file_vfidp = VACUUM_DROPPED_ENTRIES_VFID_PTR (type);
-  if (npages >= file_get_numpages (thread_p, file_vfidp))
+  if (npages >= file_get_numpages (thread_p, &vacuum_Dropped_files_vfid))
     {
       /* Extend file */
-      if (file_alloc_pages (thread_p, file_vfidp, &vpid,
-			    VACUUM_DROPPED_ENTRIES_EXTEND_FILE_NPAGES,
+      if (file_alloc_pages (thread_p, &vacuum_Dropped_files_vfid, &vpid,
+			    VACUUM_DROPPED_FILES_EXTEND_FILE_NPAGES,
 			    &prev_vpid, NULL, NULL) == NULL)
 	{
 	  assert (false);
@@ -4004,7 +3801,8 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 	  return ER_FAILED;
 	}
     }
-  if (file_find_nthpages (thread_p, file_vfidp, &vpid, npages, 1) < 1)
+  if (file_find_nthpages
+      (thread_p, &vacuum_Dropped_files_vfid, &vpid, npages, 1) < 1)
     {
       /* Get next page in file */
       assert (false);
@@ -4013,8 +3811,7 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
     }
   /* Save a link to the new page in last page */
   VPID_COPY (&page->next_page, &vpid);
-  vacuum_log_set_next_page_dropped_cls_btid (thread_p, (PAGE_PTR) page, &vpid,
-					     type);
+  vacuum_log_dropped_files_set_next_page (thread_p, (PAGE_PTR) page, &vpid);
 
 #if !defined (NDEBUG)
   memcpy (&track_page->dropped_data_page, page, DB_PAGESIZE);
@@ -4030,26 +3827,25 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
     }
   /* Set page header: next page as NULL and count as 1 */
   VPID_SET_NULL (&page->next_page);
-  page->n_dropped_entries = 1;
+  page->n_dropped_files = 1;
 
-  /* Set class OID or btidp */
-  VACUUM_DROPPED_CLS_BTID_SET_VALUE (&page->dropped_entries[0].
-				     dropped_cls_btid, cls_btid, type);
+  /* Set vfid */
+  VFID_COPY (&page->dropped_files[0].vfid, vfid);
   /* Set MVCCID */
-  page->dropped_entries[0].mvccid = mvccid;
+  page->dropped_files[0].mvccid = mvccid;
 
-  vacuum_log_add_dropped_cls_btid (thread_p, (PAGE_PTR) page,
-				   &page->dropped_entries[0], 0, type, false);
+  ATOMIC_INC_32 (&vacuum_Dropped_files_count, 1);
+
 #if !defined(NDEBUG)
   if (track_page->next_tracked_page == NULL)
     {
       new_track_page =
-	(VACUUM_TRACK_DROPPED_ENTRIES *)
-	malloc (VACUUM_TRACK_DROPPED_ENTRIES_SIZE);
+	(VACUUM_TRACK_DROPPED_FILES *)
+	malloc (VACUUM_TRACK_DROPPED_FILES_SIZE);
       if (new_track_page == NULL)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
-		  1, VACUUM_TRACK_DROPPED_ENTRIES_SIZE);
+		  1, VACUUM_TRACK_DROPPED_FILES_SIZE);
 	  vacuum_unfix_dropped_entries_page (thread_p, page);
 	  return ER_FAILED;
 	}
@@ -4063,80 +3859,301 @@ vacuum_add_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
   track_page->next_tracked_page = new_track_page;
 #endif
 
-  if (type == DROPPED_CLASS)
+  if (postpone_ref_lsa != NULL)
     {
-      vacuum_er_log (VACUUM_ER_LOG_DROPPED_CLASSES,
-		     "VACUUM: thread(%d): added new dropped "
-		     "class(%d, %d, %d) and mvccid=%lld to page=%d at"
-		     "position=%d\n",
-		     thread_get_current_entry_index (),
-		     page->dropped_entries[0].dropped_cls_btid.
-		     class_oid.volid,
-		     page->dropped_entries[0].dropped_cls_btid.
-		     class_oid.pageid,
-		     page->dropped_entries[0].dropped_cls_btid.
-		     class_oid.slotid,
-		     page->dropped_entries[0].mvccid, npages, 0);
+      /* Append run postpone */
+      addr.pgptr = (PAGE_PTR) page;
+      addr.offset = 0;
+      log_append_run_postpone (thread_p, RVVAC_DROPPED_FILE_ADD, &addr,
+			       pgbuf_get_vpid_ptr (addr.pgptr), rcv->length,
+			       rcv->data, postpone_ref_lsa);
     }
   else
     {
-      vacuum_er_log (VACUUM_ER_LOG_DROPPED_INDEXES,
-		     "VACUUM: thread(%d): added new dropped "
-		     "index(%d, %d %d) and mvccid=%lld to page=%d at"
-		     "position=%d\n",
-		     thread_get_current_entry_index (),
-		     page->dropped_entries[0].dropped_cls_btid.
-		     btid.root_pageid,
-		     page->dropped_entries[0].dropped_cls_btid.
-		     btid.vfid.volid,
-		     page->dropped_entries[0].dropped_cls_btid.
-		     btid.vfid.fileid,
-		     page->dropped_entries[0].mvccid, npages, 0);
+      /* Append compensate for undo record */
+      addr.pgptr = (PAGE_PTR) page;
+
+      log_append_compensate (thread_p, RVVAC_DROPPED_FILE_ADD,
+			     pgbuf_get_vpid_ptr (addr.pgptr),
+			     0, addr.pgptr, rcv->length, rcv->data, tdes);
     }
+
+  vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		 "VACUUM: thread(%d): added new dropped "
+		 "file(%d, %d) and mvccid=%lld to page=%d at position=%d",
+		 thread_get_current_entry_index (),
+		 page->dropped_files[0].vfid.volid,
+		 page->dropped_files[0].vfid.fileid,
+		 page->dropped_files[0].mvccid, npages, 0);
   vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
   return NO_ERROR;
 }
 
 /*
- * vacuum_cleanup_dropped_cls_btid () - Clean unnecessary dropped entries.
+ * vacuum_log_add_dropped_file () - Append postpone/undo log for notifying
+ *				    vacuum of a file being dropped. Postpone
+ *				    is added when a class or index is dropped
+ *				    and undo when a class or index is created.
+ *
+ * return	 : Void.
+ * thread_p (in) : Thread entry.
+ * vfid (in)	 : Dropped file identifier.
+ * mvccid (in)	 : MVCC identifier for transaction.
+ */
+void
+vacuum_log_add_dropped_file (THREAD_ENTRY * thread_p, const VFID * vfid,
+			     MVCCID mvccid, bool pospone_or_undo)
+{
+  int offset = 0;
+  char log_data_buffer[sizeof (VFID) + sizeof (MVCCID)];
+  LOG_DATA_ADDR addr;
+
+  vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		 "VACUUM: Append %s log from dropped file (%d, %d) "
+		 "by transaction with MVCCID=%lld",
+		 pospone_or_undo ? "postpone" : "undo",
+		 vfid->volid, vfid->fileid, mvccid);
+
+  memcpy (log_data_buffer + offset, vfid, sizeof (VFID));
+  offset += sizeof (VFID);
+
+  memcpy (log_data_buffer + offset, &mvccid, sizeof (MVCCID));
+  offset += sizeof (MVCCID);
+
+  addr.offset = -1;
+  addr.pgptr = NULL;
+  addr.vfid = NULL;
+
+  if (pospone_or_undo == VACUUM_LOG_ADD_DROPPED_FILE_POSTPONE)
+    {
+      log_append_postpone (thread_p, RVVAC_DROPPED_FILE_ADD, &addr,
+			   offset, log_data_buffer);
+    }
+  else
+    {
+      log_append_undo_data (thread_p, RVVAC_DROPPED_FILE_ADD, &addr,
+			    offset, log_data_buffer);
+    }
+}
+
+/*
+ * vacuum_rv_undoredo_add_dropped_file () - Redo recovery used for adding dropped
+ *					files.
  *
  * return	 : Error code.
  * thread_p (in) : Thread entry.
- * type (in)	 : Dropped class or dropped index.
+ * rcv (in)	 : Recovery data.
+ */
+int
+vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
+{
+  MVCCID mvccid;
+  VFID *vfid = NULL;
+  VACUUM_DROPPED_FILES_PAGE *page = NULL;
+  int error = NO_ERROR, offset = 0;
+  INT16 position = rcv->offset & (~0x8000);
+  int mem_size;
+  bool replace = (rcv->offset & 0x8000) != 0;
+
+  vfid = (VFID *) (rcv->data + offset);
+  offset += sizeof (*vfid);
+
+  mvccid = *((MVCCID *) (rcv->data + offset));
+  offset += sizeof (mvccid);
+
+  page = (VACUUM_DROPPED_FILES_PAGE *) rcv->pgptr;
+
+  if (replace)
+    {
+      /* Should be the same VFID */
+      if (position >= page->n_dropped_files)
+	{
+	  /* Error! */
+	  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_DROPPED_FILES
+			 | VACUUM_ER_LOG_RECOVERY,
+			 "VACUUM: Dropped files recovery error: Invalid "
+			 "position %d (only %d entries in page) while "
+			 "replacing old entry with vfid=(%d, %d) mvccid=%lld",
+			 position, page->n_dropped_files, vfid->volid,
+			 vfid->fileid, mvccid);
+	  assert_release (false);
+	  return ER_FAILED;
+	}
+      if (!VFID_EQ (vfid, &page->dropped_files[position].vfid))
+	{
+	  /* Error! */
+	  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_DROPPED_FILES
+			 | VACUUM_ER_LOG_RECOVERY,
+			 "VACUUM: Dropped files recovery error: expected to "
+			 "find vfid (%d, %d) at position %d and found "
+			 "(%d, %d) with MVCCID=%d", vfid->volid, vfid->fileid,
+			 position, page->dropped_files[position].vfid.volid,
+			 page->dropped_files[position].vfid.fileid,
+			 page->dropped_files[position].mvccid);
+	  assert_release (false);
+	  return ER_FAILED;
+	}
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES | VACUUM_ER_LOG_RECOVERY,
+		     "VACUUM: Dropped files redo recovery, replace MVCCID for"
+		     " file (%d, %d) with %lld", vfid->volid, vfid->fileid,
+		     mvccid);
+      page->dropped_files[position].mvccid = mvccid;
+    }
+  else
+    {
+      if (position > page->n_dropped_files)
+	{
+	  /* Error! */
+	  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_DROPPED_FILES
+			 | VACUUM_ER_LOG_RECOVERY,
+			 "VACUUM: Dropped files recovery error: Invalid "
+			 "position %d (only %d entries in page) while "
+			 "inserting new entry vfid=(%d, %d) mvccid=%lld",
+			 position, page->n_dropped_files, vfid->volid,
+			 vfid->fileid, mvccid);
+	  assert_release (false);
+	  return ER_FAILED;
+	}
+      if (position < page->n_dropped_files)
+	{
+	  /* Make room for new record */
+	  mem_size =
+	    (page->n_dropped_files - position) * sizeof (VACUUM_DROPPED_FILE);
+	  memcpy (vacuum_Dropped_files_tmp_buffer,
+		  &page->dropped_files[position], mem_size);
+	  memcpy (&page->dropped_files[position + 1],
+		  vacuum_Dropped_files_tmp_buffer, mem_size);
+	}
+      /* Copy new dropped file */
+      VFID_COPY (&page->dropped_files[position].vfid, vfid);
+      page->dropped_files[position].mvccid = mvccid;
+
+      /* Increment number of files */
+      page->n_dropped_files++;
+
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES | VACUUM_ER_LOG_RECOVERY,
+		     "VACUUM: Dropped files redo recovery, insert new entry "
+		     "vfid=(%d, %d), mvccid=%lld at position %d",
+		     vfid->volid, vfid->fileid, mvccid, position);
+    }
+  return NO_ERROR;
+}
+
+/*
+ * vacuum_notify_dropped_file () - Add drop file used in recovery phase. Can
+ *				   be used in two ways: at run postpone phase
+ *				   for dropped heap files and indexes (if
+ *				   postpone_ref_lsa in not null); or at undo
+ *				   phase for created heap files and indexes.
+ *
+ * return		: Error code.
+ * thread_p (in)	: Thread entry.
+ * rcv (in)		: Recovery data.
+ * pospone_ref_lsa (in) : Reference LSA for running postpone. NULL if this is
+ *			  an undo for created heap files and indexes.
+ */
+int
+vacuum_notify_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
+			    LOG_LSA * pospone_ref_lsa)
+{
+  MVCCID mvccid;
+  VFID *vfid = NULL;
+  int error = NO_ERROR, offset = 0;
+#if defined (SERVER_MODE)
+  INT32 my_version, prev_version, workers_min_version;
+#endif
+
+  vfid = (VFID *) (rcv->data + offset);
+  offset += sizeof (*vfid);
+
+  mvccid = *((MVCCID *) (rcv->data + offset));
+  offset += sizeof (mvccid);
+
+  assert (!VFID_ISNULL (vfid));
+  assert (MVCCID_IS_VALID (mvccid));
+  assert (offset == rcv->length);
+
+  /* Add dropped file to current list */
+  error =
+    vacuum_add_dropped_file (thread_p, vfid, mvccid, rcv, pospone_ref_lsa);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+#if defined (SERVER_MODE)
+  /* Increment dropped files version and save a version for current change.
+   * It is not important to keep the versioning synchronized with the changes.
+   * It is only used to make sure that all workers have seen current change.
+   */
+  do
+    {
+      prev_version = vacuum_Dropped_files_version;
+      my_version = prev_version + 1;
+    }
+  while (!ATOMIC_CAS_32 (&vacuum_Dropped_files_version, prev_version,
+			 my_version));
+
+  vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		 "VACUUM: Added dropped file - vfid=(%d, %d), mvccid=%lld - "
+		 "Wait for all workers to see my_version=%d",
+		 vfid->volid, vfid->fileid, mvccid, my_version);
+
+  /* Wait until all workers have been notified of this change */
+  for (workers_min_version = thread_get_min_dropped_files_version ();
+       workers_min_version != -1 && workers_min_version < my_version;
+       workers_min_version = thread_get_min_dropped_files_version ())
+    {
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		     "VACUUM: not all workers saw my changes, "
+		     "workers min version=%d. Sleep and retry.",
+		     workers_min_version);
+      thread_sleep (1);
+    }
+  vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		 "VACUUM: All workers have been notified, min_version=%d",
+		 workers_min_version);
+#endif /* SERVER_MODE */
+
+  /* Success */
+  return NO_ERROR;
+}
+
+/*
+ * vacuum_cleanup_dropped_files () - Clean unnecessary dropped files.
+ *
+ * return	 : Error code.
+ * thread_p (in) : Thread entry.
  *
  * NOTE: All entries with an MVCCID older than vacuum_Data->oldest_mvccid are
  *	 removed. All records belonging to these entries must be either
  *	 vacuumed or skipped after drop.
  */
 static int
-vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, DROPPED_TYPE type)
+vacuum_cleanup_dropped_files (THREAD_ENTRY * thread_p)
 {
   VPID vpid;
-  VACUUM_DROPPED_ENTRIES_PAGE *page = NULL;
+  VACUUM_DROPPED_FILES_PAGE *page = NULL;
   int page_count, mem_size;
-  char *temp_buffer = VACUUM_DROPPED_ENTRIES_TMP_BUFFER (type);
-  INT32 *countp = VACUUM_DROPPED_ENTRIES_COUNT_PTR (type);
+  char *temp_buffer = (char *) &vacuum_Dropped_files_tmp_buffer;
   VPID last_page_vpid, last_non_empty_page_vpid;
-  INT16 removed_entries[VACUUM_DROPPED_ENTRIES_PAGE_MAX_CAPACITY];
+  INT16 removed_entries[VACUUM_DROPPED_FILES_MAX_PAGE_CAPACITY];
   INT16 n_removed_entries, i;
   bool is_first_page = true;
 #if !defined (NDEBUG)
-  VACUUM_TRACK_DROPPED_ENTRIES *track_page =
-    VACUUM_DROPPED_CLS_BTID_TRACK_PTR (type);
+  VACUUM_TRACK_DROPPED_FILES *track_page =
+    (VACUUM_TRACK_DROPPED_FILES *) vacuum_Track_dropped_files;
 #endif
 
-  assert (type == DROPPED_CLASS || type == DROPPED_INDEX);
-
-  if ((*countp) == 0)
+  if (vacuum_Dropped_files_count == 0)
     {
       /* Nothing to clean */
       return NO_ERROR;
     }
 
-  /* Clean each page of dropped entries */
-  VPID_COPY (&vpid, VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
-  VPID_COPY (&last_non_empty_page_vpid,
-	     VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
+  /* Clean each page of dropped files */
+  VPID_COPY (&vpid, &vacuum_Dropped_files_vpid);
+  VPID_COPY (&last_non_empty_page_vpid, &vacuum_Dropped_files_vpid);
   while (!VPID_ISNULL (&vpid))
     {
       /* Reset n_removed_entries */
@@ -4155,7 +4172,7 @@ vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, DROPPED_TYPE type)
 	}
       /* Get next page VPID */
       VPID_COPY (&vpid, &page->next_page);
-      page_count = page->n_dropped_entries;
+      page_count = page->n_dropped_files;
       if (page_count == 0)
 	{
 	  /* Page is empty */
@@ -4168,7 +4185,7 @@ vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, DROPPED_TYPE type)
       /* Check entries for cleaning. Start from the end of the array */
       for (i = page_count - 1; i >= 0; i--)
 	{
-	  if (mvcc_id_precedes (page->dropped_entries[i].mvccid,
+	  if (mvcc_id_precedes (page->dropped_files[i].mvccid,
 				vacuum_Data->oldest_mvccid))
 	    {
 	      /* Remove entry */
@@ -4176,38 +4193,37 @@ vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, DROPPED_TYPE type)
 	      if (i < page_count - 1)
 		{
 		  mem_size =
-		    (page_count - i - 1) * sizeof (VACUUM_DROPPED_ENTRY);
+		    (page_count - i - 1) * sizeof (VACUUM_DROPPED_FILE);
 		  if (is_first_page)
 		    {
 		      /* User buffer to move data */
-		      memcpy (temp_buffer, &page->dropped_entries[i + 1],
+		      memcpy (temp_buffer, &page->dropped_files[i + 1],
 			      mem_size);
-		      memcpy (&page->dropped_entries[i], temp_buffer,
-			      mem_size);
+		      memcpy (&page->dropped_files[i], temp_buffer, mem_size);
 		    }
 		  else
 		    {
 		      /* Buffer can only be used if exclusive latch on first
 		       * page is held. Use memmove instead.
 		       */
-		      memmove (&page->dropped_entries[i],
-			       &page->dropped_entries[i + 1], mem_size);
+		      memmove (&page->dropped_files[i],
+			       &page->dropped_files[i + 1], mem_size);
 		    }
 		}
 	    }
 	}
       if (n_removed_entries > 0)
 	{
-	  /* Update dropped entries global counter */
-	  ATOMIC_INC_32 (countp, -n_removed_entries);
+	  /* Update dropped files global counter */
+	  ATOMIC_INC_32 (&vacuum_Dropped_files_count, -n_removed_entries);
 
-	  /* Update dropped entries page counter */
-	  page->n_dropped_entries -= n_removed_entries;
+	  /* Update dropped files page counter */
+	  page->n_dropped_files -= n_removed_entries;
 
 	  /* Log changes */
-	  vacuum_log_cleanup_dropped_cls_btid (thread_p, (PAGE_PTR) page,
-					       removed_entries,
-					       n_removed_entries, type);
+	  vacuum_log_cleanup_dropped_files (thread_p, (PAGE_PTR) page,
+					    removed_entries,
+					    n_removed_entries);
 
 #if !defined (NDEBUG)
 	  /* Copy changes to tracker */
@@ -4241,97 +4257,59 @@ vacuum_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, DROPPED_TYPE type)
 	  return ER_FAILED;
 	}
       VPID_SET_NULL (&page->next_page);
-      vacuum_log_set_next_page_dropped_cls_btid (thread_p, (PAGE_PTR) page,
-						 &page->next_page, type);
+      vacuum_log_dropped_files_set_next_page (thread_p, (PAGE_PTR) page,
+					      &page->next_page);
       vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
     }
   return NO_ERROR;
 }
 
 /*
- * vacuum_is_class_dropped () - Check whether class is considered dropped in
- *				respect to MVCCID.
+ * vacuum_is_file_dropped () - Check whether file is considered dropped.
  *
- * return	  : True if class is considered dropped.
- * thread_p (in)  : Thread entry.
- * class_oid (in) : Class object identifier.
- * mvccid (in)	  : MVCCID.
- */
-bool
-vacuum_is_class_dropped (THREAD_ENTRY * thread_p, OID * class_oid,
-			 MVCCID mvccid)
-{
-  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
-    {
-      return false;
-    }
-  if (vacuum_find_dropped_cls_btid
-      (thread_p, class_oid, mvccid, DROPPED_CLASS) == false)
-    {
-      return vacuum_is_dropped_cls_btid_in_buffer (thread_p, class_oid,
-						   mvccid, DROPPED_CLASS);
-    }
-  return true;
-}
-
-/*
- * vacuum_is_index_dropped () - Check whether index is considered dropped in
- *				respect to MVCCID.
- *
- * return	  : True if class is considered dropped.
- * thread_p (in)  : Thread entry.
- * class_oid (in) : Class object identifier.
- * mvccid (in)	  : MVCCID.
- */
-bool
-vacuum_is_index_dropped (THREAD_ENTRY * thread_p, BTID * btid, MVCCID mvccid)
-{
-  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
-    {
-      return false;
-    }
-  if (vacuum_find_dropped_cls_btid (thread_p, btid, mvccid, DROPPED_INDEX)
-      == false)
-    {
-      return vacuum_is_dropped_cls_btid_in_buffer (thread_p, btid, mvccid,
-						   DROPPED_INDEX);
-    }
-  return true;
-}
-
-/*
- * vacuum_find_dropped_cls_btid () - Find the dropped class or index and check
- *				     whether the given MVCCID is older than or
- *				     equal to the MVCCID of dropped class.
- *				     Used by vacuum to detect records that
- *				     belong to dropped classes and indexes.
- *
- * return	 : True if record belong to a dropped class or index.
+ * return	 : True if file is considered dropped.
  * thread_p (in) : Thread entry.
- * cls_btid (in) : Class identifier or B-tree identifier.
+ * vfid (in)	 : File identifier.
+ * mvccid (in)	 : MVCCID.
+ */
+bool
+vacuum_is_file_dropped (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid)
+{
+  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
+    {
+      return false;
+    }
+  return vacuum_find_dropped_file (thread_p, vfid, mvccid);
+}
+
+/*
+ * vacuum_find_dropped_file () - Find the dropped file and check whether the
+ *				 given MVCCID is older than or equal to the
+ *				 MVCCID of dropped file.
+ *				 Used by vacuum to detect records that
+ *				 belong to dropped files.
+ *
+ * return	 : True if record belong to a dropped file.
+ * thread_p (in) : Thread entry.
+ * vfid (in)	 : File identifier.
  * mvccid (in)	 : MVCCID of checked record.
- * type (in)	 : Dropped class or dropped index.
  */
 static bool
-vacuum_find_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
-			      MVCCID mvccid, DROPPED_TYPE type)
+vacuum_find_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid)
 {
-  VACUUM_DROPPED_ENTRIES_PAGE *page = NULL;
-  VACUUM_DROPPED_ENTRY *dropped_entry = NULL;
+  VACUUM_DROPPED_FILES_PAGE *page = NULL;
+  VACUUM_DROPPED_FILE *dropped_file = NULL;
   VPID vpid;
-  INT32 *countp = VACUUM_DROPPED_ENTRIES_COUNT_PTR (type);
-  int mvccid_offset =
-    (type == DROPPED_CLASS) ? OR_OID_SIZE : OR_BTID_ALIGNED_SIZE;
   INT16 page_count;
 
-  if (*countp == 0)
+  if (vacuum_Dropped_files_count == 0)
     {
-      /* No dropped entries */
+      /* No dropped files */
       return false;
     }
 
-  /* Search for dropped entry in all pages. */
-  VPID_COPY (&vpid, VACUUM_DROPPED_ENTRIES_VPID_PTR (type));
+  /* Search for dropped file in all pages. */
+  VPID_COPY (&vpid, &vacuum_Dropped_files_vpid);
   while (!VPID_ISNULL (&vpid))
     {
       /* Fix current page */
@@ -4345,33 +4323,21 @@ vacuum_find_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 	}
       /* Copy next page VPID */
       VPID_COPY (&vpid, &page->next_page);
-      page_count = page->n_dropped_entries;
-      if (type == DROPPED_CLASS)
-	{
-	  /* Use oid_compare to find matching entry */
-	  dropped_entry =
-	    (VACUUM_DROPPED_ENTRY *) bsearch (cls_btid, page->dropped_entries,
-					      page_count,
-					      sizeof (VACUUM_DROPPED_ENTRY),
-					      oid_compare);
-	}
-      else
-	{
-	  /* Use btree_compare_btids to find matching entries */
-	  dropped_entry =
-	    (VACUUM_DROPPED_ENTRY *) bsearch (cls_btid, page->dropped_entries,
-					      page_count,
-					      sizeof (VACUUM_DROPPED_ENTRY),
-					      btree_compare_btids);
-	}
-      if (dropped_entry != NULL)
+      page_count = page->n_dropped_files;
+      /* Use compare VFID to find a matching entry */
+      dropped_file =
+	(VACUUM_DROPPED_FILE *) bsearch (vfid, page->dropped_files,
+					 page_count,
+					 sizeof (VACUUM_DROPPED_FILE),
+					 vacuum_compare_dropped_files);
+      if (dropped_file != NULL)
 	{
 	  /* Found matching entry.
-	   * Compare the given MVCCID with the MVCCID of dropped entry.
+	   * Compare the given MVCCID with the MVCCID of dropped file.
 	   */
-	  if (!mvcc_id_precedes (dropped_entry->mvccid, mvccid))
+	  if (!mvcc_id_precedes (dropped_file->mvccid, mvccid))
 	    {
-	      /* The record must belong to the dropped entry */
+	      /* The record must belong to the dropped file */
 	      vacuum_unfix_dropped_entries_page (thread_p, page);
 	      return true;
 	    }
@@ -4392,162 +4358,23 @@ vacuum_find_dropped_cls_btid (THREAD_ENTRY * thread_p, void *cls_btid,
 }
 
 /*
- * vacuum_log_add_dropped_cls_btid () - Log adding dropped entries.
- *
- * return		 : Void.
- * thread_p (in)	 : Thread entry.
- * page_p (in)		 : Page pointer.
- * dropped_cls_btid (in) : Newly added dropped entry.
- * position (in)	 : Position where the new dropped entry was added.
- * type (in)		 : Dropped class or b-tree identifier.
- * is_duplicate (in)	 : True if a duplicate of new dropped entry exists.
- *			   In this case only replacing MVCCID is required.
- */
-static void
-vacuum_log_add_dropped_cls_btid (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
-				 VACUUM_DROPPED_ENTRY * dropped_cls_btid,
-				 INT16 position, DROPPED_TYPE type,
-				 bool is_duplicate)
-{
-#define VACUUM_ADD_DROPPED_CLS_BTID_MAX_REDO_CRUMBS 3
-  LOG_DATA_ADDR addr;
-  LOG_CRUMB redo_crumbs[VACUUM_ADD_DROPPED_CLS_BTID_MAX_REDO_CRUMBS];
-  int n_redo_crumbs = 0;
-
-  /* Add dropped entry */
-  redo_crumbs[n_redo_crumbs].data = dropped_cls_btid;
-  redo_crumbs[n_redo_crumbs++].length = sizeof (*dropped_cls_btid);
-
-  /* Add dropped type */
-  redo_crumbs[n_redo_crumbs].data = &type;
-  redo_crumbs[n_redo_crumbs++].length = sizeof (type);
-
-  /* Add is_duplicate */
-  redo_crumbs[n_redo_crumbs].data = &is_duplicate;
-  redo_crumbs[n_redo_crumbs++].length = sizeof (is_duplicate);
-
-  assert (n_redo_crumbs <= VACUUM_ADD_DROPPED_CLS_BTID_MAX_REDO_CRUMBS);
-
-  /* Initialize log data address */
-  addr.pgptr = page_p;
-  addr.vfid = VACUUM_DROPPED_ENTRIES_VFID_PTR (type);
-  addr.offset = position;
-
-  /* Append redo log data */
-  log_append_redo_crumbs (thread_p, RVVAC_DROPPED_CLS_BTID_ADD, &addr,
-			  n_redo_crumbs, redo_crumbs);
-}
-
-/*
- * vacuum_rv_redo_add_dropped_cls_btid () - Recover adding dropped entry.
- *
- * return	 : Error code.
- * thread_p (in) : Thread entry.
- * rcv (in)	 : Recovery data.
- */
-int
-vacuum_rv_redo_add_dropped_cls_btid (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
-{
-  VACUUM_DROPPED_ENTRIES_PAGE *page =
-    (VACUUM_DROPPED_ENTRIES_PAGE *) rcv->pgptr;
-  VACUUM_DROPPED_ENTRY *new_entry = NULL;
-  INT32 *countp = NULL;
-  char *tmp_buffer = NULL;
-  int offset = 0, mem_size;
-  DROPPED_TYPE type;
-  INT16 position = rcv->offset;
-  bool is_duplicate;
-
-  /* Get recovery data */
-
-  /* Get dropped entry data */
-  new_entry = (VACUUM_DROPPED_ENTRY *) rcv->data;
-  offset = sizeof (*new_entry);
-
-  /* Get dropped entry type */
-  type = *((DROPPED_TYPE *) (rcv->data + offset));
-  offset += sizeof (type);
-
-  /* Get is duplicate */
-  is_duplicate = *((char *) (rcv->data + offset));
-  offset += sizeof (is_duplicate);
-
-  /* Check that all expected data was processed */
-  assert (offset == rcv->length);
-
-  /* Get count pointer and temporary buffer according to dropped type */
-  countp = VACUUM_DROPPED_ENTRIES_COUNT_PTR (type);
-  tmp_buffer = VACUUM_DROPPED_ENTRIES_TMP_BUFFER (type);
-
-  if (type == DROPPED_CLASS)
-    {
-      vacuum_er_log (VACUUM_ER_LOG_RECOVERY | VACUUM_ER_LOG_DROPPED_CLASSES,
-		     "Recovery of dropped classes: add class(%d, %d, %d), "
-		     "mvccid=%lld at position %d. (%s)",
-		     (int) new_entry->dropped_cls_btid.class_oid.volid,
-		     (int) new_entry->dropped_cls_btid.class_oid.pageid,
-		     (int) new_entry->dropped_cls_btid.class_oid.slotid,
-		     new_entry->mvccid, (int) position,
-		     is_duplicate ? "is duplicate" : "is not duplicate");
-    }
-  else
-    {
-      assert (type == DROPPED_INDEX);
-      vacuum_er_log (VACUUM_ER_LOG_RECOVERY | VACUUM_ER_LOG_DROPPED_INDEXES,
-		     "Recovery of dropped indexes: add btid(%d, %d %d), "
-		     "mvccid=%lld at position %d. (%s)",
-		     (int) new_entry->dropped_cls_btid.btid.root_pageid,
-		     (int) new_entry->dropped_cls_btid.btid.vfid.volid,
-		     (int) new_entry->dropped_cls_btid.btid.vfid.fileid,
-		     new_entry->mvccid, (int) position,
-		     is_duplicate ? "is duplicate" : "is not duplicate");
-    }
-
-  if (position < page->n_dropped_entries && !is_duplicate)
-    {
-      /* Move all entries starting with position to the right */
-      /* Use temporary buffer to move memory data */
-      mem_size =
-	(page->n_dropped_entries - position) * sizeof (VACUUM_DROPPED_ENTRY);
-      memcpy (tmp_buffer, &page->dropped_entries[position], mem_size);
-      memcpy (&page->dropped_entries[position + 1], tmp_buffer, mem_size);
-    }
-  /* Add new entry at position */
-  memcpy (&page->dropped_entries[position], new_entry,
-	  sizeof (VACUUM_DROPPED_ENTRY));
-  if (!is_duplicate)
-    {
-      /* Increment dropped entries page counter */
-      page->n_dropped_entries++;
-      /* Increment dropped entries global counter */
-      (*countp)++;
-    }
-
-  pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
-
-  return NO_ERROR;
-}
-
-/*
- * vacuum_log_cleanup_dropped_cls_btid () - Log dropped entries cleanup.
+ * vacuum_log_cleanup_dropped_files () - Log dropped files cleanup.
  *
  * return	  : Void.
  * thread_p (in)  : Thread entry.
  * page_p (in)	  : Page pointer.
- * indexes (in)	  : Indexes of cleaned up dropped entries.
- * n_indexes (in) : Total count of dropped entries.
- * type (in)	  : Dropped class or b-tree identifier.
+ * indexes (in)	  : Indexes of cleaned up dropped files.
+ * n_indexes (in) : Total count of dropped files.
  *
  * NOTE: Consider not logging cleanup. Cleanup can be done at database
  *	 restart.
  */
 static void
-vacuum_log_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
-				     INT16 * indexes, INT16 n_indexes,
-				     DROPPED_TYPE type)
+vacuum_log_cleanup_dropped_files (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
+				  INT16 * indexes, INT16 n_indexes)
 {
-#define VACUUM_CLEANUP_DROPPED_CLS_BTID_MAX_REDO_CRUMBS 3
-  LOG_CRUMB redo_crumbs[VACUUM_CLEANUP_DROPPED_CLS_BTID_MAX_REDO_CRUMBS];
+#define VACUUM_CLEANUP_DROPPED_FILES_MAX_REDO_CRUMBS 3
+  LOG_CRUMB redo_crumbs[VACUUM_CLEANUP_DROPPED_FILES_MAX_REDO_CRUMBS];
   LOG_DATA_ADDR addr;
   int n_redo_crumbs = 0;
 
@@ -4559,24 +4386,19 @@ vacuum_log_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
   redo_crumbs[n_redo_crumbs].data = indexes;
   redo_crumbs[n_redo_crumbs++].length = n_indexes * sizeof (*indexes);
 
-  /* Add dropped type */
-  redo_crumbs[n_redo_crumbs].data = &type;
-  redo_crumbs[n_redo_crumbs++].length = sizeof (type);
-
-  assert (n_redo_crumbs <= VACUUM_CLEANUP_DROPPED_CLS_BTID_MAX_REDO_CRUMBS);
+  assert (n_redo_crumbs <= VACUUM_CLEANUP_DROPPED_FILES_MAX_REDO_CRUMBS);
 
   /* Initialize log data address */
   addr.pgptr = page_p;
-  addr.vfid = VACUUM_DROPPED_ENTRIES_VFID_PTR (type);
+  addr.vfid = &vacuum_Dropped_files_vfid;
   addr.offset = 0;
 
-  log_append_redo_crumbs (thread_p, RVVAC_DROPPED_CLS_BTID_CLEANUP, &addr,
+  log_append_redo_crumbs (thread_p, RVVAC_DROPPED_FILE_CLEANUP, &addr,
 			  n_redo_crumbs, redo_crumbs);
 }
 
 /*
- * vacuum_rv_redo_cleanup_dropped_cls_btid () - Recover dropped entries
- *						cleanup.
+ * vacuum_rv_redo_cleanup_dropped_files () - Recover dropped files cleanup.
  *
  * return	 : Error code.
  * thread_p (in) : Thread entry,
@@ -4586,17 +4408,14 @@ vacuum_log_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
  *	 restart.
  */
 int
-vacuum_rv_redo_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					 LOG_RCV * rcv)
+vacuum_rv_redo_cleanup_dropped_files (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
   int offset = 0, mem_size;
-  VACUUM_DROPPED_ENTRIES_PAGE *page =
-    (VACUUM_DROPPED_ENTRIES_PAGE *) rcv->pgptr;
+  VACUUM_DROPPED_FILES_PAGE *page = (VACUUM_DROPPED_FILES_PAGE *) rcv->pgptr;
   INT32 *countp = NULL;
   char *tmp_buffer = NULL;
   INT16 *indexes;
   INT16 n_indexes, i;
-  DROPPED_TYPE type;
 
   /* Get recovery information */
 
@@ -4608,69 +4427,38 @@ vacuum_rv_redo_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p,
   indexes = (INT16 *) (rcv->data + offset);
   offset += sizeof (*indexes) * n_indexes;
 
-  /* Get dropped type */
-  type = *((DROPPED_TYPE *) (rcv->data + offset));
-  offset += sizeof (type);
-
   /* Check that all recovery data has been processed */
   assert (offset == rcv->length);
 
   /* Get count pointer and temporary buffer according to dropped type */
-  countp = VACUUM_DROPPED_ENTRIES_COUNT_PTR (type);
-  tmp_buffer = VACUUM_DROPPED_ENTRIES_TMP_BUFFER (type);
+  tmp_buffer = (char *) &vacuum_Dropped_files_tmp_buffer;
 
   /* Cleanup starting from last entry */
   for (i = 0; i < n_indexes; i++)
     {
       /* Remove entry at indexes[i] */
-      if (type == DROPPED_CLASS)
-	{
-	  vacuum_er_log (VACUUM_ER_LOG_RECOVERY
-			 | VACUUM_ER_LOG_DROPPED_CLASSES,
-			 "Recovery of dropped classes: remove "
-			 "class(%d, %d, %d), mvccid=%lld at position %d.",
-			 (int) page->dropped_entries[indexes[i]].
-			 dropped_cls_btid.class_oid.volid,
-			 (int) page->dropped_entries[indexes[i]].
-			 dropped_cls_btid.class_oid.pageid,
-			 (int) page->dropped_entries[indexes[i]].
-			 dropped_cls_btid.class_oid.slotid,
-			 page->dropped_entries[indexes[i]].mvccid,
-			 (int) indexes[i]);
-	}
-      else
-	{
-	  assert (type == DROPPED_INDEX);
-	  vacuum_er_log (VACUUM_ER_LOG_RECOVERY
-			 | VACUUM_ER_LOG_DROPPED_INDEXES,
-			 "Recovery of dropped indexes: remove "
-			 "btid(%d, %d %d), mvccid=%lld at position %d.",
-			 (int) page->dropped_entries[indexes[i]].
-			 dropped_cls_btid.btid.root_pageid,
-			 (int) page->dropped_entries[indexes[i]].
-			 dropped_cls_btid.btid.vfid.volid,
-			 (int) page->dropped_entries[indexes[i]].
-			 dropped_cls_btid.btid.vfid.fileid,
-			 page->dropped_entries[indexes[i]].mvccid,
-			 (int) indexes[i]);
-	}
+      vacuum_er_log (VACUUM_ER_LOG_RECOVERY | VACUUM_ER_LOG_DROPPED_FILES,
+		     "Recovery of dropped classes: remove "
+		     "file(%d, %d), mvccid=%lld at position %d.",
+		     (int) page->dropped_files[indexes[i]].vfid.volid,
+		     (int) page->dropped_files[indexes[i]].vfid.fileid,
+		     page->dropped_files[indexes[i]].mvccid,
+		     (int) indexes[i]);
       mem_size =
-	(page->n_dropped_entries -
-	 indexes[i]) * sizeof (VACUUM_DROPPED_ENTRY);
+	(page->n_dropped_files - indexes[i]) * sizeof (VACUUM_DROPPED_FILE);
       assert (mem_size >= 0);
       if (mem_size > 0)
 	{
-	  memcpy (tmp_buffer, &page->dropped_entries[indexes[i] + 1],
-		  mem_size);
-	  memcpy (&page->dropped_entries[indexes[i]], tmp_buffer, mem_size);
+	  memcpy (tmp_buffer, &page->dropped_files[indexes[i] + 1], mem_size);
+	  memcpy (&page->dropped_files[indexes[i]], tmp_buffer, mem_size);
 	}
 
-      /* Update dropped entries page counter */
-      page->n_dropped_entries--;
+      /* Update dropped files page counter */
+      page->n_dropped_files--;
     }
 
-  /* Update dropped entries global counter */
-  (*countp) -= n_indexes;
+  /* Update dropped files global counter */
+  vacuum_Dropped_files_count -= n_indexes;
 
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
 
@@ -4678,46 +4466,42 @@ vacuum_rv_redo_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p,
 }
 
 /*
- * vacuum_log_set_next_page_dropped_cls_btid () - Log changing link to next
- *						  page for dropped entries.
+ * vacuum_log_dropped_files_set_next_page () - Log changing link to next
+ *					       page for dropped files.
  *
  * return	  : Void.
  * thread_p (in)  : Thread entry.
  * page_p (in)	  : Page pointer.
  * next_page (in) : Next page VPID.
- * type (in)	  : Dropped class or b-tree identifier.
  */
 static void
-vacuum_log_set_next_page_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					   PAGE_PTR page_p, VPID * next_page,
-					   DROPPED_TYPE type)
+vacuum_log_dropped_files_set_next_page (THREAD_ENTRY * thread_p,
+					PAGE_PTR page_p, VPID * next_page)
 {
   LOG_DATA_ADDR addr;
 
   /* Initialize log data address */
   addr.pgptr = page_p;
-  addr.vfid = VACUUM_DROPPED_ENTRIES_VFID_PTR (type);
+  addr.vfid = &vacuum_Dropped_files_vfid;
   addr.offset = 0;
 
   /* Append log redo */
-  log_append_redo_data (thread_p, RVVAC_DROPPED_CLS_BTID_NEXT_PAGE, &addr,
+  log_append_redo_data (thread_p, RVVAC_DROPPED_FILE_NEXT_PAGE, &addr,
 			sizeof (*next_page), next_page);
 }
 
 /*
- * vacuum_rv_set_next_page_dropped_cls_btid () - Recover setting link to next
- *						 page for dropped entries.
+ * vacuum_rv_set_next_page_dropped_files () - Recover setting link to next
+ *					      page for dropped files.
  *
  * return	 : Error code.
  * thread_p (in) : Thread entry.
  * rcv (in)	 : Recovery data.
  */
 int
-vacuum_rv_set_next_page_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					  LOG_RCV * rcv)
+vacuum_rv_set_next_page_dropped_files (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
-  VACUUM_DROPPED_ENTRIES_PAGE *page =
-    (VACUUM_DROPPED_ENTRIES_PAGE *) rcv->pgptr;
+  VACUUM_DROPPED_FILES_PAGE *page = (VACUUM_DROPPED_FILES_PAGE *) rcv->pgptr;
 
   /* Set next page VPID */
   VPID_COPY (&page->next_page, (VPID *) rcv->data);
@@ -4726,7 +4510,7 @@ vacuum_rv_set_next_page_dropped_cls_btid (THREAD_ENTRY * thread_p,
   assert (rcv->length = sizeof (VPID));
 
   vacuum_er_log (VACUUM_ER_LOG_RECOVERY,
-		 "Set link for dropped entries from page(%d, %d) to "
+		 "Set link for dropped files from page(%d, %d) to "
 		 "page(%d, %d).", pgbuf_get_vpid_ptr (rcv->pgptr)->pageid,
 		 pgbuf_get_vpid_ptr (rcv->pgptr)->volid,
 		 page->next_page.volid, page->next_page.pageid);
@@ -4737,77 +4521,237 @@ vacuum_rv_set_next_page_dropped_cls_btid (THREAD_ENTRY * thread_p,
 }
 
 /*
- * vacuum_is_dropped_cls_btid_in_buffer () - Find the if the class or index
- *		    is in the dropped classes/indexes buffers that have not yet
- *		    been consumed
+ * vacuum_compare_vpids () - Compare two pages VPID for vacuum processing.
+ *			     Flags for reusable objects should be cleared
+ *			     first.
  *
- * return	 : True if found
- * thread_p (in) : Thread entry.
- * cls_btid (in) : Class identifier or B-tree identifier.
- * mvccid (in)	 : MVCCID of checked record.
- * type (in)	 : Dropped class or dropped index.
+ * return : Compare result (positive if first is bigger, negative if second is
+ *			    is bigger and 0 if they are equal).
+ * a (in) : Pointer to first VPID.
+ * b (in) : Pointer to second VPID.
  */
 static int
-vacuum_is_dropped_cls_btid_in_buffer (THREAD_ENTRY * thread_p, void *cls_btid,
-				      MVCCID mvccid, DROPPED_TYPE type)
+vacuum_compare_vpids (const void *a, const void *b)
 {
-  VACUUM_DROPPED_ENTRY *entry = NULL;
-  int i = 0;
+  VPID *vpid_a = (VPID *) a;
+  VPID *vpid_b = (VPID *) b;
+  INT32 pageid_diff;
 
-  if (type == DROPPED_CLASS)
+  pageid_diff = vpid_a->pageid - vpid_b->pageid;
+  if (pageid_diff != 0)
     {
-      OID *cls_oid = (OID *) cls_btid;
+      return (int) pageid_diff;
+    }
 
-      (void) pthread_mutex_lock (&vacuum_Dropped_class_buffer->mutex);
+  return (int) (vpid_a->volid - vpid_b->volid);
+}
 
-      for (i = 0; i < vacuum_Dropped_class_buffer->n_dropped_entries; i++)
+/*
+ * vacuum_add_page_to_buffer () - Add new page to the page buffer for vacuum
+ *				  processing.
+ *
+ * return	   : Error code.
+ * pages (in)	   : Buffer of pages.
+ * n_pages (in)	   : Current number of pages in buffer.
+ * vpid (in)	   : New page VPID.
+ * vpid_index (out): Pointer to where new VPID was added.
+ */
+/*
+ * vacuum_add_page_to_buffer () - Add new page to the page buffer for vacuum
+ *				  processing.
+ *
+ * return		: Error code.
+ * pages (in/out)	: Pointer to page buffer. Can be changed if the
+ *			  capacity is not enough.
+ * original_buffer (in) : Default page buffer.
+ * n_pages (in/out)	: Current number of pages. Will be updated if pages is
+ *			  added.
+ * capacity (in/out)	: Capacity of page buffer. Can be extended.
+ * vpid (in)		: VPID of new page.
+ * found (out)		: True if page already exists in buffer.
+ */
+static int
+vacuum_add_page_to_buffer (VPID ** pages, VPID * original_buffer,
+			   int *n_pages, int *capacity,
+			   VPID vpid, bool * found)
+{
+  int min = 0, max = (*n_pages) - 1;
+  int mid = 0;
+  int c = 0;
+  VPID tmp_buf[VACUUM_MAX_PAGE_BUFFER_SIZE];
+  VPID *page_buffer = NULL;
+  int mem_size;
+
+  assert (pages != NULL);
+  assert (*pages != NULL);
+  assert (n_pages != NULL);
+  assert (capacity != NULL);
+  assert (found != NULL);
+
+  /* Initialize found as false */
+  *found = false;
+  /* Initialize page buffer to current page buffer */
+  page_buffer = *pages;
+
+  if (*n_pages == 0)
+    {
+      /* Empty buffer, just add new page */
+      assert (*capacity > 0);
+      VPID_COPY (&page_buffer[0], &vpid);
+      *n_pages += 1;
+      /* Page was added */
+      return NO_ERROR;
+    }
+
+  /* Search for the given VPID position. */
+  while (min <= max)
+    {
+      mid = (min + max) / 2;
+      c = vacuum_compare_vpids (&page_buffer[mid], &vpid);
+      if (c == 0)
 	{
-	  entry = &vacuum_Dropped_class_buffer->dropped_entries[i];
-	  if (OID_EQ (cls_oid, &entry->dropped_cls_btid.class_oid))
-	    {
-	      if (!mvcc_id_precedes (entry->mvccid, mvccid))
-		{
-		  (void) pthread_mutex_unlock (&vacuum_Dropped_class_buffer->
-					       mutex);
-		  return true;
-		}
-	      else
-		{
-		  (void) pthread_mutex_unlock (&vacuum_Dropped_class_buffer->
-					       mutex);
-		  return false;
-		}
-	    }
+	  /* Already exists */
+	  return NO_ERROR;
 	}
-      (void) pthread_mutex_unlock (&vacuum_Dropped_class_buffer->mutex);
+      if (c < 0)
+	{
+	  /* Mid is smaller than new page, search after mid */
+	  min = mid + 1;
+	  mid++;
+	}
+      else
+	{
+	  /* Mid is bigger than new page, search before mid */
+	  max = mid - 1;
+	}
+    }
+
+  /* Not found, must add new entry page VPID */
+  if (*n_pages == *capacity)
+    {
+      /* Increase buffer size */
+      int new_capacity = (*capacity) * 2;
+      if (page_buffer == original_buffer)
+	{
+	  /* original_buffer is not allocated dynamically, use malloc for new
+	   * page buffer.
+	   */
+	  page_buffer = (VPID *) malloc (new_capacity * sizeof (VPID));
+	}
+      else
+	{
+	  /* Realloc page buffer */
+	  page_buffer =
+	    (VPID *) realloc (page_buffer, new_capacity * sizeof (VPID));
+	}
+      if (page_buffer == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, new_capacity * sizeof (VPID));
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      /* Copy old data */
+      memcpy (page_buffer, *pages, (*capacity) * sizeof (VPID));
+      /* Update page buffer and capacity */
+      *pages = page_buffer;
+      *capacity = new_capacity;
+    }
+
+  /* Add new page to mid position */
+
+  /* First move the pages from right of mid, one position to the right */
+  mem_size = ((*n_pages) - mid) * sizeof (VPID);
+  if (mem_size > 0)
+    {
+      /* Move everything from mid one position to the right */
+      if (mem_size <= sizeof (tmp_buf))
+	{
+	  /* Use tmp_buf to copy memory */
+	  memcpy (tmp_buf, &page_buffer[mid], mem_size);
+	  memcpy (&page_buffer[mid + 1], tmp_buf, mem_size);
+	}
+      else
+	{
+	  memmove (&page_buffer[mid + 1], &page_buffer[mid], mem_size);
+	}
+    }
+
+  /* Set new vpid to mid position */
+  VPID_COPY (&page_buffer[mid], &vpid);
+
+  /* Update n_pages and found */
+  *n_pages += 1;
+  *found = true;
+  return NO_ERROR;
+}
+
+/*
+ * vacuum_compare_dropped_files_version () - Compare two versions ID's of
+ *					     dropped files. Take into
+ *					     consideration that versions can
+ *					     overflow max value of INT32.
+ *
+ * return	  : Positive value if first version is considered bigger,
+ *		    negative if it is considered smaller and 0 if they are
+ *		    equal.
+ * version_a (in) : First version.
+ * version_b (in) : Second version.
+ */
+int
+vacuum_compare_dropped_files_version (INT32 version_a, INT32 version_b)
+{
+  INT32 max_int32_div_2 = 0x3FFFFFFF;
+
+  /* If both are positive or if both are negative return a-b */
+  if ((version_a >= 0 && version_b >= 0) || (version_a < 0 && version_b < 0))
+    {
+      return (int) (version_a - version_b);
+    }
+
+  /* If one is positive and the other negative we have to consider the case
+   * when version overflowed INT32 and the case when one just passed 0.
+   * In the first case, the positive value is considered smaller, while in the
+   * second case the negative value is considered smaller.
+   * The INT32 domain of values is split into 4 ranges:
+   * [-MAX_INT32, -MAX_INT32/2], [-MAX_INT32/2, 0], [0, MAX_INT32/2] and
+   * [MAX_INT32/2, MAX_INT32].
+   * We will consider the case when one value is in [-MAX_INT32, -MAX_INT32/2]
+   * and the other in [MAX_INT32/2, MAX_INT32] and the second case when the
+   * values are in [-MAX_INT32/2, 0] and [0, MAX_INT32].
+   * If the values are not in these ranges, the algorithm is flawed.
+   */
+  if (version_a >= 0)
+    {
+      /* 0x3FFFFFFF is MAX_INT32/2 */
+      if (version_a >= max_int32_div_2)
+	{
+	  assert (version_b <= -max_int32_div_2);
+	  /* In this case, version_a is considered smaller */
+	  return -1;
+	}
+      else
+	{
+	  assert (version_b >= -max_int32_div_2);
+	  /* In this case, version_b is considered smaller */
+	  return 1;
+	}
     }
   else
     {
-      BTID *btid = (BTID *) cls_btid;
-
-      (void) pthread_mutex_lock (&vacuum_Dropped_index_buffer->mutex);
-
-      for (i = 0; i < vacuum_Dropped_index_buffer->n_dropped_entries; i++)
+      if (version_b >= max_int32_div_2)
 	{
-	  entry = &vacuum_Dropped_index_buffer->dropped_entries[i];
-	  if (BTID_IS_EQUAL (btid, &entry->dropped_cls_btid.btid))
-	    {
-	      if (!mvcc_id_precedes (entry->mvccid, mvccid))
-		{
-		  (void) pthread_mutex_unlock (&vacuum_Dropped_index_buffer->
-					       mutex);
-		  return true;
-		}
-	      else
-		{
-		  (void) pthread_mutex_unlock (&vacuum_Dropped_index_buffer->
-					       mutex);
-		  return false;
-		}
-	    }
+	  assert (version_a <= -max_int32_div_2);
+	  /* In this case, version_a is considered bigger */
+	  return 1;
 	}
-      (void) pthread_mutex_unlock (&vacuum_Dropped_index_buffer->mutex);
+      else
+	{
+	  assert (version_a >= -max_int32_div_2);
+	  /* In this case, version_b is considered bigger */
+	  return -1;
+	}
     }
 
-  return false;
+  /* We shouldn't be here */
+  assert (false);
 }

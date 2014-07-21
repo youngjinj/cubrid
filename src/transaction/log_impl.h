@@ -803,36 +803,6 @@ struct log_mvcc_update_stats
   int topop_id;
 };
 
-/* LOG_DROPPED_CLS_BTID_ENTRY
- * Structure used to track dropped classes during transaction. They will be
- * passed to vacuum at commit.
- */
-typedef struct log_dropped_cls_btid_entry LOG_DROPPED_CLS_BTID_ENTRY;
-struct log_dropped_cls_btid_entry
-{
-  union
-  {
-    OID class_oid;		/* OID of dropped class */
-    BTID btid;			/* BTID of dropped b-tree */
-  } id;
-  MVCCID mvccid;		/* transaction MVCCID */
-  LOG_DROPPED_CLS_BTID_ENTRY *next;	/* Pointer to next item in list */
-};
-
-/* LOG_DROPPED_CLASSES_INDEXES
- * Tracker for all transaction dropped classes and indexes. All dropped
- * classes and indexes must be passed to vacuum at commit.
- */
-typedef struct log_dropped_classes_indexes LOG_DROPPED_CLASSES_INDEXES;
-struct log_dropped_classes_indexes
-{
-  LOG_DROPPED_CLS_BTID_ENTRY *dropped_classes;
-  LOG_DROPPED_CLS_BTID_ENTRY *dropped_indexes;
-  LOG_DROPPED_CLS_BTID_ENTRY *last_command_dropped_classes;
-  LOG_DROPPED_CLS_BTID_ENTRY *last_command_dropped_indexes;
-  LOG_DROPPED_CLS_BTID_ENTRY *free_dropped_cls_btid_entries;
-};
-
 typedef struct log_tdes LOG_TDES;
 struct log_tdes
 {
@@ -959,11 +929,6 @@ struct log_tdes
 					 * deleted records during last
 					 * command/transaction
 					 */
-  LOG_DROPPED_CLASSES_INDEXES log_dropped_cls_btids;	/* Collects data about
-							 * dropped classes and
-							 * indexes during
-							 * command/transaction.
-							 */
 };
 
 typedef struct log_addr_tdesarea LOG_ADDR_TDESAREA;
@@ -2466,11 +2431,4 @@ extern int logtb_mvcc_prepare_count_optim_classes (THREAD_ENTRY * thread_p,
 						   LC_PREFETCH_FLAGS * flags,
 						   int n_classes);
 extern void logtb_mvcc_reset_count_optim_state (THREAD_ENTRY * thread_p);
-
-extern int logtb_dropped_class (THREAD_ENTRY * thread_p,
-				const OID * class_oid);
-extern int logtb_dropped_index (THREAD_ENTRY * thread_p, const BTID * btidp);
-extern void xlogtb_update_transaction_dropped_cls_btid (THREAD_ENTRY *
-							thread_p,
-							bool success);
 #endif /* _LOG_IMPL_H_ */

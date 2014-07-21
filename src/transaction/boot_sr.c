@@ -130,8 +130,7 @@ struct boot_dbparm
   VOLID temp_last_volid;	/* Next temporary volume identifier. This goes
 				 * from a higher number to a lower number */
   VFID vacuum_data_vfid;	/* Vacuum data file identifier */
-  VFID dropped_classes_vfid;	/* Vacuum dropped classes file identifier */
-  VFID dropped_indexes_vfid;	/* Vacuum dropped indexes file identifier */
+  VFID dropped_files_vfid;	/* Vacuum dropped files file identifier */
 };
 
 #if defined(SERVER_MODE)
@@ -628,7 +627,7 @@ boot_add_volume (THREAD_ENTRY * thread_p, DBDEF_VOL_EXT_INFO * ext_info)
 
   if (heap_update
       (thread_p, &boot_Db_parm->hfid, &boot_Db_parm->rootclass_oid,
-       boot_Db_parm_oid, &recdes, NULL, &ignore_old, NULL, false) == NULL)
+       boot_Db_parm_oid, &recdes, NULL, &ignore_old, NULL, true) == NULL)
     {
       /* Return back our global area of system parameter */
       if (ext_info->purpose != DISK_TEMPVOL_TEMP_PURPOSE)
@@ -780,7 +779,7 @@ boot_remove_volume (THREAD_ENTRY * thread_p, VOLID volid)
   if (heap_update
       (thread_p, &boot_Db_parm->hfid, &boot_Db_parm->rootclass_oid,
        boot_Db_parm_oid, &recdes, NULL, &ignore_old, NULL,
-       false) != boot_Db_parm_oid)
+       true) != boot_Db_parm_oid)
     {
       boot_Db_parm->temp_nvols++;
       if (boot_Db_parm->temp_nvols == 1)
@@ -1801,7 +1800,7 @@ boot_remove_all_temp_volumes (THREAD_ENTRY * thread_p)
       if (heap_update
 	  (thread_p, &boot_Db_parm->hfid, &boot_Db_parm->rootclass_oid,
 	   boot_Db_parm_oid, &recdes, NULL, &old_object, NULL,
-	   false) != boot_Db_parm_oid
+	   true) != boot_Db_parm_oid
 	  || xtran_server_commit (thread_p, false) != TRAN_UNACTIVE_COMMITTED)
 	{
 	  error_code = ER_FAILED;
@@ -3549,8 +3548,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       /* Load vacuum info from disk and initialize vacuum routine */
       error_code =
 	vacuum_load_from_disk (thread_p, &boot_Db_parm->vacuum_data_vfid,
-			       &boot_Db_parm->dropped_classes_vfid,
-			       &boot_Db_parm->dropped_indexes_vfid);
+			       &boot_Db_parm->dropped_files_vfid);
       if (error_code != NO_ERROR)
 	{
 	  fileio_dismount_all (thread_p);
@@ -3622,7 +3620,7 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 	  (thread_p, (const HFID *) &boot_Db_parm->hfid,
 	   (const OID *) &boot_Db_parm->rootclass_oid,
 	   (const OID *) boot_Db_parm_oid, &recdes, NULL, &old_object, NULL,
-	   false) != boot_Db_parm_oid
+	   true) != boot_Db_parm_oid
 	  || xtran_server_commit (thread_p, false) != TRAN_UNACTIVE_COMMITTED)
 	{
 	  error_code = ER_FAILED;
@@ -5672,8 +5670,8 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
   int error_code;
   int vacuum_data_npages;
   DBDEF_VOL_EXT_INFO ext_info;
-  VFID vacuum_data_vfid, dropped_classes_vfid, dropped_indexes_vfid;
-  VPID vacuum_data_vpid, dropped_classes_vpid, dropped_indexes_vpid;
+  VFID vacuum_data_vfid, dropped_files_vfid;
+  VPID vacuum_data_vpid, dropped_files_vpid;
   bool ignore_old;
 
   assert (client_credential != NULL);
@@ -5756,8 +5754,7 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
   oid_set_root (&boot_Db_parm->rootclass_oid);
 
   VFID_SET_NULL (&boot_Db_parm->vacuum_data_vfid);
-  VFID_SET_NULL (&boot_Db_parm->dropped_classes_vfid);
-  VFID_SET_NULL (&boot_Db_parm->dropped_indexes_vfid);
+  VFID_SET_NULL (&boot_Db_parm->dropped_files_vfid);
 
   /* Create the needed files */
   if (file_tracker_create (thread_p, &boot_Db_parm->trk_vfid) == NULL
@@ -5810,27 +5807,23 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
       if (file_create
 	  (thread_p, &vacuum_data_vfid, vacuum_data_npages, FILE_HEAP, NULL,
 	   &vacuum_data_vpid, -vacuum_data_npages) == NULL
-	  || file_create (thread_p, &dropped_classes_vfid, 1, FILE_HEAP, NULL,
-			  &dropped_classes_vpid, 1) == NULL
-	  || file_create (thread_p, &dropped_indexes_vfid, 1, FILE_HEAP, NULL,
-			  &dropped_indexes_vpid, 1) == NULL)
+	  || file_create (thread_p, &dropped_files_vfid, 1, FILE_HEAP, NULL,
+			  &dropped_files_vpid, 1) == NULL)
 	{
 	  goto error;
 	}
       /* Save VFID's in boot_Db_parm */
       VFID_COPY (&boot_Db_parm->vacuum_data_vfid, &vacuum_data_vfid);
-      VFID_COPY (&boot_Db_parm->dropped_classes_vfid, &dropped_classes_vfid);
-      VFID_COPY (&boot_Db_parm->dropped_indexes_vfid, &dropped_indexes_vfid);
+      VFID_COPY (&boot_Db_parm->dropped_files_vfid, &dropped_files_vfid);
       if (heap_update (thread_p, &boot_Db_parm->hfid,
 		       &boot_Db_parm->rootclass_oid, boot_Db_parm_oid,
 		       &recdes, NULL, &ignore_old, NULL,
-		       false) != boot_Db_parm_oid)
+		       true) != boot_Db_parm_oid)
 	{
 	  goto error;
 	}
       if (vacuum_init_vacuum_files (thread_p, &vacuum_data_vfid,
-				    &dropped_classes_vfid,
-				    &dropped_indexes_vfid) != NO_ERROR)
+				    &dropped_files_vfid) != NO_ERROR)
 	{
 	  goto error;
 	}

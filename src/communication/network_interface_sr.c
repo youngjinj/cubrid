@@ -10484,43 +10484,6 @@ cleanup:
 }
 
 /*
- * slogtb_update_transaction_dropped_cls_btid () - If classes or indexes are
- *						   dropped during last
- *						   command, at the end of the
- *						   execution the transaction
- *						   must be notified.
- *
- * return	 : Void.
- * thread_p (in) : Thread entry.
- * rid (in)	 : Request identifier.
- * request (in)  : Request data.
- * reqlen (in)	 : Request data length.
- */
-void
-slogtb_update_transaction_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					    unsigned int rid,
-					    char *request, int reqlen)
-{
-  int success = 0;
-  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
-  char *reply = NULL, *ptr = NULL;
-
-  reply = OR_ALIGNED_BUF_START (a_reply);
-
-  or_unpack_int (request, &success);
-  xlogtb_update_transaction_dropped_cls_btid (thread_p, success != 0);
-
-
-  /* Send error code as reply */
-  (void) or_pack_int (reply, NO_ERROR);
-
-  /* For now no results are required, just fail/success */
-  css_send_data_to_client (thread_p->conn_entry, rid,
-			   OR_ALIGNED_BUF_START (a_reply),
-			   OR_ALIGNED_BUF_SIZE (a_reply));
-}
-
-/*
  * slogtb_invalidate_mvcc_snapshot () - Invalidates MVCC Snapshot.
  *
  * return	 :

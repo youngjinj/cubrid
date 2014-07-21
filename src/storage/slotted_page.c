@@ -5200,29 +5200,46 @@ spage_get_slot (PAGE_PTR page_p, PGSLOTID slot_id)
  */
 int
 spage_vacuum_slot (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slotid,
-		   OID * next_version)
+		   OID * next_version, bool reusable)
 {
   SPAGE_HEADER *page_header_p = (SPAGE_HEADER *) page_p;
   SPAGE_SLOT *slot_p = NULL;
   RECDES forward_recdes;
   int space_left;
+  int waste;
+  int free_space;
 
   SPAGE_VERIFY_HEADER (page_header_p);
 
   assert (spage_is_valid_anchor_type (page_header_p->anchor_type));
 
   slot_p = spage_find_slot (page_p, page_header_p, slotid, false);
-  if (next_version != NULL && !OID_ISNULL (next_version)
-      && (slot_p->record_type == REC_HOME
-	  || slot_p->record_type == REC_BIGONE
-	  || slot_p->record_type == REC_NEWHOME
-	  || slot_p->record_type == REC_MVCC_NEXT_VERSION
-	  || slot_p->record_type == REC_RELOCATION))
+  if (slot_p->record_type == REC_MVCC_NEXT_VERSION
+      || slot_p->record_type == REC_MARKDELETED
+      || slot_p->record_type == REC_DELETED_WILL_REUSE)
     {
+      /* Vacuum error log */
+      vacuum_er_log (VACUUM_ER_LOG_ERROR,
+		     "VACUUM: Object (%d, %d, %d) was already vacuumed",
+		     pgbuf_get_vpid_ptr (page_p)->volid,
+		     pgbuf_get_vpid_ptr (page_p)->pageid, slotid);
+      return NO_ERROR;
+    }
+  if (next_version != NULL && !OID_ISNULL (next_version))
+    {
+      /* Replace current record with an REC_MVCC_NEXT_VERSION which will
+       * point to next_version.
+       */
+      assert (slot_p->record_type == REC_HOME
+	      || slot_p->record_type == REC_BIGONE
+	      || slot_p->record_type == REC_NEWHOME
+	      || slot_p->record_type == REC_MVCC_NEXT_VERSION
+	      || slot_p->record_type == REC_RELOCATION);
       forward_recdes.length = OR_OID_SIZE;
       forward_recdes.data = (char *) next_version;
       space_left = slot_p->record_length - OR_OID_SIZE;
       assert (space_left >= 0);
+
       if (spage_update_record_in_place (page_p, page_header_p, slot_p,
 					&forward_recdes, -space_left)
 	  != SP_SUCCESS)
@@ -5237,14 +5254,28 @@ spage_vacuum_slot (THREAD_ENTRY * thread_p, PAGE_PTR page_p, PGSLOTID slotid,
       return NO_ERROR;
     }
 
-  if (spage_delete (thread_p, page_p, slotid) == NULL_SLOTID)
+  /* Slot is deleted */
+  page_header_p->num_records--;
+  waste = DB_WASTED_ALIGN (slot_p->record_length, page_header_p->alignment);
+  free_space = slot_p->record_length + waste;
+  page_header_p->total_free += free_space;
+
+  slot_p->offset_to_record = SPAGE_EMPTY_OFFSET;
+  if (reusable)
     {
-      return ER_FAILED;
+      slot_p->record_type = REC_DELETED_WILL_REUSE;
     }
   else
     {
-      return NO_ERROR;
+      slot_p->record_type = REC_MARKDELETED;
     }
+  SPAGE_VERIFY_HEADER (page_header_p);
+
+#ifdef SPAGE_DEBUG
+  spage_check (thread_p, page_p);
+#endif
+
+  return NO_ERROR;
 }
 
 /*

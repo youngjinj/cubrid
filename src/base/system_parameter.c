@@ -81,6 +81,7 @@
 #if !defined (CS_MODE)
 #include "session.h"
 #endif
+#include "vacuum.h"
 
 
 #define ER_LOG_FILE_DIR	"server"
@@ -1916,11 +1917,11 @@ static unsigned int prm_vacuum_log_block_pages_flag = 0;
 int PRM_VACUUM_WORKER_COUNT = 10;
 static int prm_vacuum_worker_count_default = 10;
 static int prm_vacuum_worker_count_lower = 1;
-static int prm_vacuum_worker_count_upper = 100;
+static int prm_vacuum_worker_count_upper = VACUUM_MAX_WORKER_COUNT;
 static unsigned int prm_vacuum_worker_count_flag = 0;
 
-int PRM_ER_LOG_VACUUM = 0;
-static int prm_er_log_vacuum_default = 0;
+int PRM_ER_LOG_VACUUM = 1;
+static int prm_er_log_vacuum_default = 1;
 static unsigned int prm_er_log_vacuum_flag = 0;
 
 bool PRM_DISABLE_VACUUM = false;

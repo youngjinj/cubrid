@@ -144,7 +144,10 @@ struct vacuum_thread_entry
 				 * assigned as job. is VACUUM_NULL_LOG_BLOCKID
 				 * if no job is assigned.
 				 */
-  bool is_in_process_log_phase;
+  INT32 drop_files_version;	/* last dropped file version seen by this
+				 * worker.
+				 */
+  VACUUM_WORKER_STATE state;
 };
 static VACUUM_WORKER_THREAD_ENTRY *thread_Vacuum_worker_thread_entries = NULL;
 static int thread_Vacuum_worker_count = -1;
@@ -430,8 +433,9 @@ thread_initialize_manager (void)
 	      thread_Vacuum_worker_thread_entries[i].monitor =
 		&thread_Vacuum_worker_threads[i];
 	      thread_Vacuum_worker_thread_entries[i].thread_p = NULL;
-	      thread_Vacuum_worker_thread_entries[i].is_in_process_log_phase =
-		false;
+	      thread_Vacuum_worker_thread_entries[i].state =
+		VACUUM_WORKER_STATE_INACTIVE;
+	      thread_Vacuum_worker_thread_entries[i].drop_files_version = -1;
 	    }
 	}
       else
@@ -1541,7 +1545,7 @@ thread_lock_entry_with_tran_index (int tran_index)
 int
 thread_unlock_entry (THREAD_ENTRY * thread_p)
 {
-  int r, i;
+  int r;
 
   assert (thread_p != NULL);
 
@@ -2942,7 +2946,7 @@ thread_is_process_log_for_vacuum (THREAD_ENTRY * thread_p)
     {
       return false;
     }
-  return vacuum_thread_p->is_in_process_log_phase;
+  return (vacuum_thread_p->state == VACUUM_WORKER_STATE_PROCESS_LOG);
 }
 
 /*
@@ -2960,8 +2964,8 @@ thread_is_vacuum_worker (THREAD_ENTRY * thread_p)
 };
 
 /*
- * thread_set_is_process_log_phase () - Set whether the vacuum worker is in
- *					process log phase.
+ * thread_set_vacuum_worker_state () - Set whether the vacuum worker is in
+ *				       process log phase.
  *
  * return		     : Error code.
  * thread_p (in)	     : Thread entry.
@@ -2969,8 +2973,8 @@ thread_is_vacuum_worker (THREAD_ENTRY * thread_p)
  *			       vacuum, false if worker vacuum database.
  */
 void
-thread_set_is_process_log_phase (THREAD_ENTRY * thread_p,
-				 bool is_process_log_phase)
+thread_set_vacuum_worker_state (THREAD_ENTRY * thread_p,
+				VACUUM_WORKER_STATE new_state)
 {
   VACUUM_WORKER_THREAD_ENTRY *vacuum_thread_p =
     thread_get_vacuum_thread_entry (thread_p);
@@ -2980,7 +2984,71 @@ thread_set_is_process_log_phase (THREAD_ENTRY * thread_p,
       assert (false);
       return;
     }
-  vacuum_thread_p->is_in_process_log_phase = is_process_log_phase;
+  vacuum_thread_p->state = new_state;
+}
+
+/*
+ * thread_set_vacuum_worker_drop_file_version () - Set dropped file version to
+ *						   vacuum worker thread.
+ *
+ * return	 : Void.
+ * thread_p (in) : Thread entry.
+ * version (in)	 : New version.
+ */
+void
+thread_set_vacuum_worker_drop_file_version (THREAD_ENTRY * thread_p,
+					    INT32 version)
+{
+  VACUUM_WORKER_THREAD_ENTRY *vacuum_thread_p =
+    thread_get_vacuum_thread_entry (thread_p);
+  if (vacuum_thread_p == NULL)
+    {
+      /* TODO: Add vacuum error logging */
+      assert (false);
+      return;
+    }
+  vacuum_thread_p->drop_files_version = version;
+}
+
+/*
+ * thread_get_min_dropped_files_version () - Get the current minimum of
+ *					     dropped file version seen by
+ *					     active vacuum worker threads.
+ *
+ * return : Minimum dropped files version of all active workers.
+ */
+INT32
+thread_get_min_dropped_files_version (void)
+{
+  int i;
+  INT32 min_version = -1;
+  VACUUM_WORKER_THREAD_ENTRY *vacuum_thread_p = NULL;
+
+  /* TODO: Give an appropriate name for the reserved min_version starting
+   * value
+   */
+
+  if (thread_Vacuum_worker_count <= 0)
+    {
+      /* No workers are active */
+      return min_version;
+    }
+
+  for (i = 0; i < thread_Vacuum_worker_count; i++)
+    {
+      vacuum_thread_p = &thread_Vacuum_worker_thread_entries[i];
+      if ((vacuum_thread_p->state != VACUUM_WORKER_STATE_INACTIVE)
+	  && (min_version == -1
+	      || vacuum_compare_dropped_files_version (min_version,
+						       vacuum_thread_p->
+						       drop_files_version) >
+	      0))
+	{
+	  min_version = vacuum_thread_p->drop_files_version;
+	}
+    }
+
+  return min_version;
 }
 
 /*
@@ -3338,7 +3406,7 @@ thread_check_ha_delay_info_thread (void *arg_p)
 	  wakeup_time.tv_sec += 1;
 	  tmp_usec -= 1000000;
 	}
-      wakeup_time.tv_nsec = tmp_usec * 1000;
+      wakeup_time.tv_nsec = (int) tmp_usec * 1000;
 
       rv = pthread_mutex_lock (&thread_Check_ha_delay_info_thread.lock);
       thread_Check_ha_delay_info_thread.is_running = false;
@@ -3650,7 +3718,7 @@ thread_flush_control_thread (void *arg_p)
 	  wakeup_time.tv_sec += 1;
 	  tmp_usec -= 1000000;
 	}
-      wakeup_time.tv_nsec = tmp_usec * 1000;
+      wakeup_time.tv_nsec = (int) tmp_usec * 1000;
 
       rv = pthread_mutex_lock (&thread_Flush_control_thread.lock);
       thread_Flush_control_thread.is_running = false;
@@ -3788,7 +3856,8 @@ thread_log_flush_thread (void *arg_p)
       rv = pthread_mutex_unlock (&thread_Log_flush_thread.lock);
 
       gettimeofday (&wakeup_time, NULL);
-      total_elapsed_time += timeval_diff_in_msec (&wakeup_time, &wait_time);
+      total_elapsed_time +=
+	(int) timeval_diff_in_msec (&wakeup_time, &wait_time);
 
       if (tsd_ptr->shutdown)
 	{
@@ -3883,7 +3952,6 @@ thread_get_log_clock_msec (void)
 {
   struct timeval tv;
 #if defined(HAVE_ATOMIC_BUILTINS)
-  int rv;
 
   if (thread_Log_clock_thread.is_available == true)
     {
@@ -4269,7 +4337,7 @@ xthread_kill_or_interrupt_tran (THREAD_ENTRY * thread_p, int tran_index,
   if (has_authorization == false)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_KILL_TR_NOT_ALLOWED, 1,
-		  tran_index);
+	      tran_index);
       return ER_KILL_TR_NOT_ALLOWED;
     }
 

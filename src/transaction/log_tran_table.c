@@ -161,21 +161,6 @@ static int logtb_create_unique_stats_from_repr (THREAD_ENTRY * thread_p,
 						LOG_MVCC_CLASS_UPDATE_STATS *
 						class_stats);
 
-static LOG_DROPPED_CLS_BTID_ENTRY
-  * logtb_alloc_dropped_cls_btid_entry (LOG_DROPPED_CLASSES_INDEXES *
-					log_dropped_cls_btid);
-static void logtb_free_dropped_cls_btid_entry (LOG_DROPPED_CLASSES_INDEXES *
-					       log_dropped_cls_btid,
-					       LOG_DROPPED_CLS_BTID_ENTRY *
-					       entry);
-static void logtb_free_dropped_classes_indexes (LOG_DROPPED_CLASSES_INDEXES *
-						log_dropped_cls_btid);
-static void
-logtb_clear_log_dropped_classes_indexes (LOG_DROPPED_CLASSES_INDEXES *
-					 log_dropped_cls_btid);
-static int logtb_notify_vacuum_dropped_entries (THREAD_ENTRY * thread_p,
-						bool abort);
-
 /*
  * logtb_realloc_topops_stack - realloc stack of top system operations
  *
@@ -653,8 +638,6 @@ logtb_undefine_trantable (THREAD_ENTRY * thread_p)
 
 	      logtb_clear_tdes (thread_p, tdes);
 	      logtb_mvcc_free_update_stats (&tdes->log_upd_stats);
-	      logtb_free_dropped_classes_indexes (&tdes->
-						  log_dropped_cls_btids);
 	      csect_finalize_critical_section (&tdes->cs_topop);
 	      if (tdes->topops.max != 0)
 		{
@@ -1798,7 +1781,6 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   tdes->suppress_replication = 0;
 
   logtb_mvcc_clear_update_stats (&tdes->log_upd_stats);
-  logtb_clear_log_dropped_classes_indexes (&tdes->log_dropped_cls_btids);
 
   assert (tdes->mvcc_info == NULL || tdes->mvcc_info->mvcc_id == MVCCID_NULL);
   if (BOOT_WRITE_ON_STANDY_CLIENT_TYPE (tdes->client.client_type))
@@ -1899,12 +1881,6 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
   tdes->log_upd_stats.crt_tran_entries = NULL;
   tdes->log_upd_stats.free_entries = NULL;
   tdes->log_upd_stats.topop_id = -1;
-
-  tdes->log_dropped_cls_btids.dropped_classes = NULL;
-  tdes->log_dropped_cls_btids.dropped_indexes = NULL;
-  tdes->log_dropped_cls_btids.last_command_dropped_classes = NULL;
-  tdes->log_dropped_cls_btids.last_command_dropped_indexes = NULL;
-  tdes->log_dropped_cls_btids.free_dropped_cls_btid_entries = NULL;
 }
 
 /*
@@ -4095,450 +4071,6 @@ logtb_mvcc_update_tran_class_stats (THREAD_ENTRY * thread_p,
 }
 
 /*
- * logtb_alloc_dropped_cls_btid_entry () - Allocate a new dropped class/index
- *					   entry.
- *
- * return		     : Class/index entry or NULL if failed.
- * log_dropped_cls_btid (in) : Log dropped classes/indexes handler.
- */
-static LOG_DROPPED_CLS_BTID_ENTRY *
-logtb_alloc_dropped_cls_btid_entry (LOG_DROPPED_CLASSES_INDEXES *
-				    log_dropped_cls_btid)
-{
-  LOG_DROPPED_CLS_BTID_ENTRY *new_entry = NULL;
-  assert (log_dropped_cls_btid != NULL);
-
-  if (log_dropped_cls_btid->free_dropped_cls_btid_entries == NULL)
-    {
-      /* Allocate a new entry */
-      new_entry =
-	(LOG_DROPPED_CLS_BTID_ENTRY *)
-	malloc (sizeof (LOG_DROPPED_CLS_BTID_ENTRY));
-      if (new_entry == NULL)
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
-		  1, sizeof (LOG_DROPPED_CLS_BTID_ENTRY));
-	  return NULL;
-	}
-    }
-  else
-    {
-      /* Reuse an entry from the list of free entries */
-      new_entry = log_dropped_cls_btid->free_dropped_cls_btid_entries;
-      log_dropped_cls_btid->free_dropped_cls_btid_entries =
-	log_dropped_cls_btid->free_dropped_cls_btid_entries->next;
-    }
-  return new_entry;
-}
-
-/*
- * logtb_free_dropped_cls_btid_entry () - "Free" dropped class/index entry.
- *					  It is appended to the log dropped
- *					  classes/indexes list of free
- *					  entries.
- *
- * return		     : Void.
- * log_dropped_cls_btid (in) : Log dropped classes/indexes handler.
- * entry (in)		     : Dropped class/index entry.
- */
-static void
-logtb_free_dropped_cls_btid_entry (LOG_DROPPED_CLASSES_INDEXES *
-				   log_dropped_cls_btid,
-				   LOG_DROPPED_CLS_BTID_ENTRY * entry)
-{
-  assert (log_dropped_cls_btid != NULL && entry != NULL);
-
-  entry->next = log_dropped_cls_btid->free_dropped_cls_btid_entries;
-  log_dropped_cls_btid->free_dropped_cls_btid_entries = entry;
-}
-
-/*
- * logtb_free_dropped_classes_indexes () - Free a log dropped classes/index
- *					   structure.
- *
- * return		     : Void.
- * log_dropped_cls_btid (in) : Log dropped classes/index handler.
- */
-static void
-logtb_free_dropped_classes_indexes (LOG_DROPPED_CLASSES_INDEXES *
-				    log_dropped_cls_btid)
-{
-  LOG_DROPPED_CLS_BTID_ENTRY *entry = NULL, *save_next = NULL;
-
-  assert (log_dropped_cls_btid != NULL);
-
-  if (log_dropped_cls_btid == NULL)
-    {
-      return;
-    }
-
-  for (entry = log_dropped_cls_btid->dropped_classes; entry != NULL;
-       entry = save_next)
-    {
-      save_next = entry->next;
-      free (entry);
-    }
-  log_dropped_cls_btid->dropped_classes = NULL;
-  for (entry = log_dropped_cls_btid->dropped_indexes; entry != NULL;
-       entry = save_next)
-    {
-      save_next = entry->next;
-      free (entry);
-    }
-  log_dropped_cls_btid->dropped_indexes = NULL;
-  for (entry = log_dropped_cls_btid->last_command_dropped_classes;
-       entry != NULL; entry = save_next)
-    {
-      save_next = entry->next;
-      free (entry);
-    }
-  log_dropped_cls_btid->last_command_dropped_classes = NULL;
-  for (entry = log_dropped_cls_btid->last_command_dropped_indexes;
-       entry != NULL; entry = save_next)
-    {
-      save_next = entry->next;
-      free (entry);
-    }
-  log_dropped_cls_btid->last_command_dropped_indexes = NULL;
-  for (entry = log_dropped_cls_btid->free_dropped_cls_btid_entries;
-       entry != NULL; entry = save_next)
-    {
-      save_next = entry->next;
-      free (entry);
-    }
-  log_dropped_cls_btid->free_dropped_cls_btid_entries = NULL;
-}
-
-/*
- * logtb_clear_log_dropped_classes_indexes () - Add all list of class/index
- *						entries to the list of free
- *						class/index entries.
- *
- * return		     : Void.
- * log_dropped_cls_btid (in) : Log dropped classes/indexes handler.
- */
-static void
-logtb_clear_log_dropped_classes_indexes (LOG_DROPPED_CLASSES_INDEXES *
-					 log_dropped_cls_btid)
-{
-  LOG_DROPPED_CLS_BTID_ENTRY *entry = NULL, *save_next = NULL;
-
-  assert (log_dropped_cls_btid != NULL);
-
-  for (entry = log_dropped_cls_btid->dropped_classes; entry != NULL;
-       entry = save_next)
-    {
-      save_next = entry->next;
-      logtb_free_dropped_cls_btid_entry (log_dropped_cls_btid, entry);
-    }
-  log_dropped_cls_btid->dropped_classes = NULL;
-  for (entry = log_dropped_cls_btid->dropped_indexes; entry != NULL;
-       entry = save_next)
-    {
-      save_next = entry->next;
-      logtb_free_dropped_cls_btid_entry (log_dropped_cls_btid, entry);
-    }
-  log_dropped_cls_btid->dropped_indexes = NULL;
-  for (entry = log_dropped_cls_btid->last_command_dropped_classes;
-       entry != NULL; entry = save_next)
-    {
-      save_next = entry->next;
-      logtb_free_dropped_cls_btid_entry (log_dropped_cls_btid, entry);
-    }
-  log_dropped_cls_btid->last_command_dropped_classes = NULL;
-  for (entry = log_dropped_cls_btid->last_command_dropped_indexes;
-       entry != NULL; entry = save_next)
-    {
-      save_next = entry->next;
-      logtb_free_dropped_cls_btid_entry (log_dropped_cls_btid, entry);
-    }
-  log_dropped_cls_btid->last_command_dropped_indexes = NULL;
-}
-
-/*
- * logtb_dropped_class () - Called when a class is dropped.
- *
- * return	  : Error code.
- * thread_p (in)  : Thread entry.
- * class_oid (in) : Class object identifier.
- */
-int
-logtb_dropped_class (THREAD_ENTRY * thread_p, const OID * class_oid)
-{
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  LOG_DROPPED_CLS_BTID_ENTRY *dropped_class = NULL;
-
-  if (!mvcc_Enabled)
-    {
-      /* This is required only for vacuum/MVCC */
-      return NO_ERROR;
-    }
-
-  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
-    {
-      return NO_ERROR;
-    }
-
-  if (tdes == NULL)
-    {
-      assert (false);
-      return ER_FAILED;
-    }
-
-  dropped_class =
-    logtb_alloc_dropped_cls_btid_entry (&tdes->log_dropped_cls_btids);
-  if (dropped_class == NULL)
-    {
-      assert (false);
-      return ER_FAILED;
-    }
-  COPY_OID (&dropped_class->id.class_oid, class_oid);
-  dropped_class->mvccid = logtb_get_current_mvccid (thread_p);
-
-  /* Append new entry to the list of command's dropped classes */
-  dropped_class->next =
-    tdes->log_dropped_cls_btids.last_command_dropped_classes;
-  tdes->log_dropped_cls_btids.last_command_dropped_classes = dropped_class;
-
-  vacuum_er_log (VACUUM_ER_LOG_DROPPED_CLASSES,
-		 "VACUUM: thread(%d): drop class(%d, %d, %d)\n",
-		 thread_get_current_entry_index (),
-		 class_oid->volid, class_oid->pageid, class_oid->slotid);
-
-  return NO_ERROR;
-}
-
-/*
- * logtb_dropped_index () - Called when an index is dropped.
- *
- * return	  : Error code.
- * thread_p (in)  : Thread entry.
- * btidp (in) : B-tree identifier.
- */
-int
-logtb_dropped_index (THREAD_ENTRY * thread_p, const BTID * btidp)
-{
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  LOG_DROPPED_CLS_BTID_ENTRY *dropped_index = NULL;
-
-  if (!mvcc_Enabled)
-    {
-      /* This is required only for vacuum/MVCC */
-      return NO_ERROR;
-    }
-
-  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
-    {
-      return NO_ERROR;
-    }
-
-  if (tdes == NULL)
-    {
-      assert (false);
-      return ER_FAILED;
-    }
-
-  dropped_index =
-    logtb_alloc_dropped_cls_btid_entry (&tdes->log_dropped_cls_btids);
-  if (dropped_index == NULL)
-    {
-      assert (false);
-      return ER_FAILED;
-    }
-  BTID_COPY (&dropped_index->id.btid, btidp);
-  dropped_index->mvccid = logtb_get_current_mvccid (thread_p);
-
-  /* Append new entry to the list of command's dropped indexes */
-  dropped_index->next =
-    tdes->log_dropped_cls_btids.last_command_dropped_indexes;
-  tdes->log_dropped_cls_btids.last_command_dropped_indexes = dropped_index;
-
-  vacuum_er_log (VACUUM_ER_LOG_DROPPED_CLASSES,
-		 "VACUUM: thread(%d): drop index(%d, %d %d)\n",
-		 thread_get_current_entry_index (),
-		 btidp->root_pageid, btidp->vfid.volid, btidp->vfid.fileid);
-
-  return NO_ERROR;
-}
-
-/*
- * xlogtb_update_transaction_dropped_cls_btid () - Handle dropped classes and
- *						   indexes when command
- *						   execution is finished.
- *
- * return		: Void.
- * thread_p (in)	: Thread entry.
- * cancel_command (in)  : True if command execution had an error and had to be
- *			  canceled.
- */
-void
-xlogtb_update_transaction_dropped_cls_btid (THREAD_ENTRY * thread_p,
-					    bool success)
-{
-  LOG_DROPPED_CLS_BTID_ENTRY *entry = NULL, *save_next = NULL;
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-  bool at_least_one = false;
-
-  if (!mvcc_Enabled)
-    {
-      /* This is required only for vacuum/MVCC */
-      return;
-    }
-
-  if (tdes == NULL)
-    {
-      assert (false);
-      return;
-    }
-
-  at_least_one =
-    tdes->log_dropped_cls_btids.last_command_dropped_classes != NULL
-    || tdes->log_dropped_cls_btids.last_command_dropped_indexes != NULL;
-  if (success)
-    {
-      /* Add last command dropped classes/indexes to transaction lists */
-      for (entry = tdes->log_dropped_cls_btids.last_command_dropped_classes;
-	   entry != NULL; entry = save_next)
-	{
-	  save_next = entry->next;
-
-	  vacuum_er_log (VACUUM_ER_LOG_DROPPED_CLASSES,
-			 "VACUUM: thread(%d) dropped class(%d, %d, %d) saved "
-			 "for transaction\n",
-			 thread_get_current_entry_index (),
-			 entry->id.class_oid.volid,
-			 entry->id.class_oid.pageid,
-			 entry->id.class_oid.slotid);
-
-	  /* Add to dropped list classes */
-	  entry->next = tdes->log_dropped_cls_btids.dropped_classes;
-	  tdes->log_dropped_cls_btids.dropped_classes = entry;
-	}
-      for (entry = tdes->log_dropped_cls_btids.last_command_dropped_indexes;
-	   entry != NULL; entry = save_next)
-	{
-	  save_next = entry->next;
-
-	  vacuum_er_log (VACUUM_ER_LOG_DROPPED_INDEXES,
-			 "VACUUM: thread(%d) dropped index(%d, %d %d) saved "
-			 "for transaction\n",
-			 thread_get_current_entry_index (),
-			 entry->id.btid.root_pageid,
-			 entry->id.btid.vfid.volid,
-			 entry->id.btid.vfid.fileid);
-
-	  /* Add to dropped list indexes */
-	  entry->next = tdes->log_dropped_cls_btids.dropped_indexes;
-	  tdes->log_dropped_cls_btids.dropped_indexes = entry;
-	}
-    }
-  else
-    {
-      /* Free last command dropped classes/indexes */
-      for (entry = tdes->log_dropped_cls_btids.last_command_dropped_classes;
-	   entry != NULL; entry = save_next)
-	{
-	  save_next = entry->next;
-
-	  vacuum_er_log (VACUUM_ER_LOG_DROPPED_CLASSES,
-			 "VACUUM: thread(%d) dropped class(%d, %d, %d) "
-			 "discarded\n",
-			 thread_get_current_entry_index (),
-			 entry->id.class_oid.volid,
-			 entry->id.class_oid.pageid,
-			 entry->id.class_oid.slotid);
-
-	  /* Add to free entry list */
-	  entry->next =
-	    tdes->log_dropped_cls_btids.free_dropped_cls_btid_entries;
-	  tdes->log_dropped_cls_btids.free_dropped_cls_btid_entries = entry;
-	  at_least_one = true;
-	}
-      for (entry = tdes->log_dropped_cls_btids.last_command_dropped_indexes;
-	   entry != NULL; entry = save_next)
-	{
-	  save_next = entry->next;
-
-	  vacuum_er_log (VACUUM_ER_LOG_DROPPED_INDEXES,
-			 "VACUUM: thread(%d) dropped index(%d, %d %d) "
-			 "discarded\n",
-			 thread_get_current_entry_index (),
-			 entry->id.btid.root_pageid,
-			 entry->id.btid.vfid.volid,
-			 entry->id.btid.vfid.fileid);
-
-	  /* Add to free entry list */
-	  entry->next =
-	    tdes->log_dropped_cls_btids.free_dropped_cls_btid_entries;
-	  tdes->log_dropped_cls_btids.free_dropped_cls_btid_entries = entry;
-	}
-    }
-  tdes->log_dropped_cls_btids.last_command_dropped_classes = NULL;
-  tdes->log_dropped_cls_btids.last_command_dropped_indexes = NULL;
-
-  if (!at_least_one)
-    {
-      vacuum_er_log (VACUUM_ER_LOG_DROPPED_CLS_BTID | VACUUM_ER_LOG_WARNING,
-		     "VACUUM WARNING: thread(%d): update transaction dropped "
-		     "classes/indexes: no class/index were dropped\n",
-		     thread_get_current_entry_index ());
-    }
-}
-
-/*
- * logtb_notify_vacuum_dropped_entries () - When transaction is finished,
- *					    notify vacuum of dropped classes
- *					    and indexes.
- *
- * return	 : Error code.
- * thread_p (in) : Thread entry.
- * abort (in)	 : True if transaction is aborted.
- */
-static int
-logtb_notify_vacuum_dropped_entries (THREAD_ENTRY * thread_p, bool abort)
-{
-  int error_code = NO_ERROR;
-  LOG_DROPPED_CLS_BTID_ENTRY *entry = NULL;
-  LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
-
-  if (!mvcc_Enabled)
-    {
-      /* This is required only for vacuum/MVCC */
-      return NO_ERROR;
-    }
-
-  if (tdes == NULL)
-    {
-      assert (false);
-      return ER_FAILED;
-    }
-
-  if (abort)
-    {
-      /* Do nothing */
-      return NO_ERROR;
-    }
-
-  assert (tdes->log_dropped_cls_btids.last_command_dropped_classes == NULL
-	  && tdes->log_dropped_cls_btids.last_command_dropped_indexes ==
-	  NULL);
-
-  if (vacuum_produce_log_block_dropped_classes (thread_p,
-						tdes->log_dropped_cls_btids.
-						dropped_classes) != NO_ERROR)
-    {
-      return ER_FAILED;
-    }
-  if (vacuum_produce_log_block_dropped_indexes (thread_p,
-						tdes->log_dropped_cls_btids.
-						dropped_indexes) != NO_ERROR)
-    {
-      return ER_FAILED;
-    }
-  return NO_ERROR;
-}
-
-/*
  * logtb_get_mvcc_snapshot_data - Obtain a new snapshot for current
  *				  transaction descriptor.
  *
@@ -4956,7 +4488,7 @@ logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
  *
  * return: bool
  *
- *   thread_p(in): thred entry
+ *   thread_p(in): thread entry
  *   mvccid(in): MVCC id
  */
 bool
@@ -5086,7 +4618,7 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
        * transaction is taking a snapshot.
        */
       (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
-      
+
       head_null_mvccids = mvcc_table->head_null_mvccids;
 
       /* update highest completed mvccid */
@@ -5171,16 +4703,7 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
     }
   MVCC_CLEAR_SNAPSHOT_DATA (p_mvcc_snapshot);
 
-  if (!committed)
-    {
-      /* Stop here */
-      return;
-    }
-
   logtb_mvcc_clear_update_stats (&tdes->log_upd_stats);
-
-  logtb_notify_vacuum_dropped_entries (thread_p, !committed);
-  logtb_clear_log_dropped_classes_indexes (&tdes->log_dropped_cls_btids);
 }
 
 #if defined(ENABLE_UNUSED_FUNCTION)

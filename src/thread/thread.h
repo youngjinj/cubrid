@@ -81,7 +81,8 @@ typedef void THREAD_ENTRY;
 
 #define thread_is_process_log_for_vacuum(thread_p) false
 #define thread_is_vacuum_worker(thread_p) false
-#define thread_set_is_process_log_phase(thread_p, is_process_log_phase)
+#define thread_set_vacuum_worker_state(thread_p, state)
+#define thread_set_vacuum_worker_drop_file_version(thread_p, version)
 #define thread_get_vacuum_worker_count() (0)
 
 #else /* !SERVER_MODE */
@@ -310,6 +311,16 @@ typedef int (*CSS_THREAD_FN) (THREAD_ENTRY * thrd, CSS_THREAD_ARG);
 
 extern DAEMON_THREAD_MONITOR thread_Log_flush_thread;
 
+typedef enum vacuum_worker_state VACUUM_WORKER_STATE;
+enum vacuum_worker_state
+{
+  VACUUM_WORKER_STATE_INACTIVE,	/* Vacuum worker is inactive */
+  VACUUM_WORKER_STATE_PROCESS_LOG,	/* Vacuum worker processes log data */
+  VACUUM_WORKER_STATE_EXECUTE	/* Vacuum worker executes cleanup based
+				 * on processed data
+				 */
+};
+
 #if !defined(HPUX)
 extern int thread_set_thread_entry_info (THREAD_ENTRY * entry);
 #endif /* not HPUX */
@@ -403,8 +414,12 @@ extern bool thread_is_page_flush_thread_available (void);
 
 extern bool thread_is_process_log_for_vacuum (THREAD_ENTRY * thread_p);
 extern bool thread_is_vacuum_worker (THREAD_ENTRY * thread_p);
-extern void thread_set_is_process_log_phase (THREAD_ENTRY * thread_p,
-					     bool is_process_log_phase);
+extern void thread_set_vacuum_worker_state (THREAD_ENTRY * thread_p,
+					    VACUUM_WORKER_STATE new_state);
+extern void thread_set_vacuum_worker_drop_file_version (THREAD_ENTRY *
+							thread_p,
+							INT32 version);
+extern INT32 thread_get_min_dropped_files_version (void);
 extern int thread_get_vacuum_worker_count (void);
 
 extern bool thread_auto_volume_expansion_thread_is_running (void);

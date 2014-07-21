@@ -29,6 +29,7 @@
 #include "storage_common.h"
 #include "recovery.h"
 #include "system_parameter.h"
+#include "log_impl.h"
 
 /* Vacuum logging function (can only be used when SERVER_MODE is defined).
  */
@@ -40,21 +41,18 @@
 						 */
 #define VACUUM_ER_LOG_BTREE		8	/* Log vacuum b-trees */
 #define VACUUM_ER_LOG_HEAP		16	/* Log vacuum heap */
-#define VACUUM_ER_LOG_DROPPED_CLASSES	32	/* Log dropped classes */
-#define VACUUM_ER_LOG_DROPPED_INDEXES	64	/* Log dropped indexes */
-#define VACUUM_ER_LOG_VACUUM_DATA	128	/* Log vacuum data */
-#define VACUUM_ER_LOG_WORKER		256	/* Log vacuum worker specific
+#define VACUUM_ER_LOG_DROPPED_FILES	32	/* Log dropped classes */
+#define VACUUM_ER_LOG_VACUUM_DATA	64	/* Log vacuum data */
+#define VACUUM_ER_LOG_WORKER		128	/* Log vacuum worker specific
 						 * activity.
 						 */
-#define VACUUM_ER_LOG_MASTER		512	/* Log vacuum master specific
+#define VACUUM_ER_LOG_MASTER		256	/* Log vacuum master specific
 						 * activity.
 						 */
-#define VACUUM_ER_LOG_RECOVERY		1024	/* Log recovery of vacuum data
+#define VACUUM_ER_LOG_RECOVERY		512	/* Log recovery of vacuum data
 						 * and dropped classes/indexes
 						 */
 
-#define VACUUM_ER_LOG_DROPPED_CLS_BTID	\
-  (VACUUM_ER_LOG_DROPPED_CLASSES + VACUUM_ER_LOG_DROPPED_INDEXES)	/* Log dropped classes/indexes */
 #define VACUUM_ER_LOG_VERBOSE		0xFFFFFFFF	/* Log all activity
 							 * related to vacuum.
 							 */
@@ -78,14 +76,17 @@ typedef INT64 VACUUM_LOG_BLOCKID;
    (page_id) / VACUUM_LOG_PAGES_PER_BLOCK : \
    VACUUM_NULL_LOG_BLOCKID)
 
+#define VACUUM_MAX_WORKER_COUNT	  20
+
+#define VACUUM_LOG_ADD_DROPPED_FILE_POSTPONE true
+#define VACUUM_LOG_ADD_DROPPED_FILE_UNDO false
+
 extern int vacuum_init_vacuum_files (THREAD_ENTRY * thread_p,
 				     VFID * vacuum_data_vfid,
-				     VFID * dropped_classes_vfid,
-				     VFID * dropped_indexes_vfid);
+				     VFID * dropped_files_vfid);
 extern int vacuum_load_from_disk (THREAD_ENTRY * thread_p,
 				  VFID * vacuum_data_vfid,
-				  VFID * dropped_classes_vfid,
-				  VFID * dropped_indexes_vfid);
+				  VFID * dropped_files_vfid);
 extern int vacuum_initialize (THREAD_ENTRY * thread_p);
 extern void vacuum_finalize (THREAD_ENTRY * thread_p);
 extern int vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
@@ -101,8 +102,10 @@ extern void vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 extern LOG_PAGEID vacuum_data_get_first_log_pageid (THREAD_ENTRY * thread_p);
 extern LOG_PAGEID vacuum_data_get_last_log_pageid (THREAD_ENTRY * thread_p);
 
-extern int vacuum_rv_redo_remove_oids_from_heap_page (THREAD_ENTRY * thread_p,
-						      LOG_RCV * rcv);
+extern int vacuum_rv_redo_vacuum_heap_page (THREAD_ENTRY * thread_p,
+					    LOG_RCV * rcv);
+extern int vacuum_rv_redo_remove_ovf_insid (THREAD_ENTRY * thread_p,
+					    LOG_RCV * rcv);
 extern int vacuum_rv_redo_remove_data_entries (THREAD_ENTRY * thread_p,
 					       LOG_RCV * rcv);
 extern int vacuum_rv_redo_append_block_data (THREAD_ENTRY * thread_p,
@@ -115,27 +118,26 @@ extern void vacuum_set_vacuum_data_lsa (THREAD_ENTRY * thread_p,
 extern void vacuum_get_vacuum_data_lsa (THREAD_ENTRY * thread_p,
 					LOG_LSA * vacuum_data_lsa);
 
-extern int vacuum_add_dropped_class (THREAD_ENTRY * thread_p, OID * class_oid,
-				     MVCCID mvccid);
-extern int vacuum_add_dropped_index (THREAD_ENTRY * thread_p, BTID * btidp,
-				     MVCCID mvccid);
-extern bool vacuum_is_class_dropped (THREAD_ENTRY * thread_p, OID * class_oid,
-				     MVCCID mvccid);
-extern bool vacuum_is_index_dropped (THREAD_ENTRY * thread_p, BTID * btid,
-				     MVCCID mvccid);
-extern int vacuum_rv_redo_add_dropped_cls_btid (THREAD_ENTRY * thread_p,
+extern bool vacuum_is_file_dropped (THREAD_ENTRY * thread_p, VFID * vfid,
+				    MVCCID mvccid);
+extern int vacuum_notify_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
+				       LOG_LSA * postpone_ref_lsa);
+extern int vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p,
 						LOG_RCV * rcv);
-extern int vacuum_rv_redo_cleanup_dropped_cls_btid (THREAD_ENTRY * thread_p,
-						    LOG_RCV * rcv);
-extern int vacuum_rv_set_next_page_dropped_cls_btid (THREAD_ENTRY * thread_p,
-						     LOG_RCV * rcv);
+extern void vacuum_log_add_dropped_file (THREAD_ENTRY * thread_p,
+					 const VFID * vfid,
+					 MVCCID mvccid,
+					 bool postpone_or_undo);
+extern int vacuum_rv_redo_cleanup_dropped_files (THREAD_ENTRY * thread_p,
+						 LOG_RCV * rcv);
+extern int vacuum_rv_set_next_page_dropped_files (THREAD_ENTRY * thread_p,
+						  LOG_RCV * rcv);
 
 extern int xvacuum (THREAD_ENTRY * thread_p, int num_classes,
 		    OID * class_oids);
-extern int vacuum_produce_log_block_dropped_classes (THREAD_ENTRY * thread_p,
-						     void * entries);
-extern int vacuum_produce_log_block_dropped_indexes (THREAD_ENTRY * thread_p,
-						     void * entries);
+
+extern int vacuum_compare_dropped_files_version (INT32 version_a,
+						 INT32 version_b);
 
 #if defined (SERVER_MODE)
 extern void vacuum_master_start (void);

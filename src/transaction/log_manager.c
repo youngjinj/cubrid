@@ -4367,11 +4367,16 @@ log_can_skip_redo_logging (LOG_RCVINDEX rcvindex,
       return false;
     }
 
+  if (rcvindex == RVVAC_DROPPED_FILE_ADD)
+    {
+      return false;
+    }
+
   /*
    * Operation level redo can be skipped on temporary pages. For example,
    * those of temporary files
    */
-  if (pgbuf_is_lsa_temporary (addr->pgptr) == true)
+  if (addr->pgptr != NULL && pgbuf_is_lsa_temporary (addr->pgptr) == true)
     {
       return true;
     }
@@ -9473,7 +9478,11 @@ log_rollback_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
        * redo/CLR log to describe the undo. This in turn will be transalated
        * to a compensating record.
        */
-      if (!RCV_IS_LOGICAL_LOG (rcv_vpid, rcvindex))
+      if (rcvindex == RVVAC_DROPPED_FILE_ADD)
+	{
+	  rv_err = vacuum_notify_dropped_file (thread_p, rcv, NULL);
+	}
+      else if (!RCV_IS_LOGICAL_LOG (rcv_vpid, rcvindex))
 	{
 	  log_append_compensate (thread_p, rcvindex, rcv_vpid,
 				 rcv->offset, rcv->pgptr, rcv->length,
@@ -10500,16 +10509,23 @@ log_run_postpone_op (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
 
   LOG_READ_ADD_ALIGN (thread_p, sizeof (struct log_redo), log_lsa, log_pgptr);
 
-  if (rcv_vpid.volid == NULL_VOLID
-      || rcv_vpid.pageid == NULL_PAGEID
-      || (disk_isvalid_page (thread_p, rcv_vpid.volid,
-			     rcv_vpid.pageid) != DISK_VALID))
+  if (rcvindex == RVVAC_DROPPED_FILE_ADD)
     {
-      return NO_ERROR;
+      rcv.pgptr = NULL;
     }
+  else
+    {
+      if (rcv_vpid.volid == NULL_VOLID
+	  || rcv_vpid.pageid == NULL_PAGEID
+	  || (disk_isvalid_page (thread_p, rcv_vpid.volid,
+				 rcv_vpid.pageid) != DISK_VALID))
+	{
+	  return NO_ERROR;
+	}
 
-  rcv.pgptr = pgbuf_fix_with_retry (thread_p, &rcv_vpid, OLD_PAGE,
-				    PGBUF_LATCH_WRITE, 10);
+      rcv.pgptr = pgbuf_fix_with_retry (thread_p, &rcv_vpid, OLD_PAGE,
+					PGBUF_LATCH_WRITE, 10);
+    }
 
   /* GET AFTER DATA */
 
@@ -10563,6 +10579,13 @@ log_run_postpone_op (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
       if (rcvindex == RVDK_IDDEALLOC_WITH_VOLHEADER)
 	{
 	  (void) disk_rv_alloctable_with_volheader (thread_p, &rcv, &ref_lsa);
+	}
+      else if (rcvindex == RVVAC_DROPPED_FILE_ADD)
+	{
+	  /* We don't know yet in which page the dropped file will end up so
+	   * we have to do a special call here.
+	   */
+	  (void) vacuum_notify_dropped_file (thread_p, &rcv, &ref_lsa);
 	}
       else
 	{

@@ -955,10 +955,6 @@ net_server_init (void)
   req_p = &net_Requests[NET_SERVER_INVALIDATE_MVCC_SNAPSHOT];
   req_p->processing_function = slogtb_invalidate_mvcc_snapshot;
   req_p->name = "NET_SERVER_INVALIDATE_MVCC_SNAPSHOT";
-
-  req_p = &net_Requests[NET_SERVER_UPDATE_DROP_CLS_BTID];
-  req_p->processing_function = slogtb_update_transaction_dropped_cls_btid;
-  req_p->name = "NET_SERVER_INVALIDATE_MVCC_SNAPSHOT";
 }
 
 #if defined(CUBRID_DEBUG)

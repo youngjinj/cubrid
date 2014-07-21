@@ -28,6 +28,7 @@
 #include "heap_file.h"
 #include "page_buffer.h"
 #include "overflow_file.h"
+#include "vacuum.h"
 
 #define MVCC_IS_REC_INSERTER_ACTIVE(thread_p, rec_header_p) \
   (logtb_is_active_mvccid (thread_p, (rec_header_p)->mvcc_ins_id))
@@ -150,7 +151,11 @@ mvcc_satisfies_snapshot (THREAD_ENTRY * thread_p,
   else
     {
       /* The record is deleted */
-      if (MVCC_IS_REC_DELETED_BY_ME (thread_p, rec_header))
+      if (MVCC_IS_REC_INSERTER_IN_SNAPSHOT (thread_p, rec_header, snapshot))
+	{
+	  return false;
+	}
+      else if (MVCC_IS_REC_DELETED_BY_ME (thread_p, rec_header))
 	{
 	  /* The record was deleted by current transaction and it is not
 	   * visible anymore.

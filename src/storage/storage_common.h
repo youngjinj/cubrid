@@ -272,7 +272,6 @@ struct mvcc_relocate_delete_info
 {
   OID *mvcc_delete_oid;		/* MVCC delete oid */
   OID *next_version;		/* MVCC next version */
-  MVCCID *mvcc_del_id;		/* MVCC delete id */
 };
 
 typedef struct lorecdes LORECDES;	/* Work area descriptor */

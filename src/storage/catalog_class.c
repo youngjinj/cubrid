@@ -3958,10 +3958,10 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 
   if (heap_update
       (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
-       false) == NULL)
+       true) == NULL)
     {
-      assert (er_errid () != NO_ERROR);
       error = er_errid ();
+      assert (error != NO_ERROR);
       goto error;
     }
 
@@ -4248,6 +4248,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 	  goto error;
 	}
 
+      /* update in place */
       if (heap_update
 	  (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
 	   true) == NULL)
@@ -5241,7 +5242,7 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   /* heap update new object */
   if (heap_update
       (thread_p, hfid_p, class_oid_p, new_oid, &record, NULL, &old, scan_p,
-       false) == NULL)
+       true) == NULL)
     {
       error = er_errid ();
       goto error;

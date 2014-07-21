@@ -1792,9 +1792,6 @@ do_alter (PARSER_CONTEXT * parser, PT_NODE * alter)
       do_semantic_checks = true;
     }
 
-  /* TODO: Can we restrict this only to alters that can cause index drops? */
-  (void) log_update_drop_cls_btid (true);
-
   return error_code;
 
 error_exit:
@@ -1802,8 +1799,6 @@ error_exit:
     {
       tran_abort_upto_system_savepoint (UNIQUE_SAVEPOINT_MULTIPLE_ALTER);
     }
-  /* TODO: Can we restrict this only to alters that can cause index drops? */
-  (void) log_update_drop_cls_btid (false);
 
   return error_code;
 }
@@ -2357,11 +2352,9 @@ do_drop (PARSER_CONTEXT * parser, PT_NODE * statement)
 	}
     }
 
-  error = log_update_drop_cls_btid (true);
   return error;
 
 error_exit:
-  (void) log_update_drop_cls_btid (false);
   if (error != ER_LK_UNILATERALLY_ABORTED)
     {
       tran_abort_upto_system_savepoint (UNIQUE_SAVEPOINT_DROP_ENTITY);
@@ -2651,8 +2644,6 @@ do_rename (const PARSER_CONTEXT * parser, const PT_NODE * statement)
 	}
     }
 
-  log_update_drop_cls_btid (true);
-
   return error;
 
 error_exit:
@@ -2660,8 +2651,6 @@ error_exit:
     {
       tran_abort_upto_system_savepoint (UNIQUE_SAVEPOINT_RENAME);
     }
-
-  log_update_drop_cls_btid (false);
 
   return error;
 }
@@ -3114,15 +3103,6 @@ do_drop_index (PARSER_CONTEXT * parser, const PT_NODE * statement)
 				 statement->info.index.function_expr,
 				 obj, DO_INDEX_DROP);
 
-  /* Notify server whether index was dropped successfully */
-  if (error_code == NO_ERROR)
-    {
-      (void) log_update_drop_cls_btid (true);
-    }
-  else
-    {
-      (void) log_update_drop_cls_btid (false);
-    }
   return error_code;
 }
 
@@ -3468,8 +3448,6 @@ end:
       free_and_init (attrs_prefix_length);
     }
 
-  log_update_drop_cls_btid (error == NO_ERROR);
-
   return error;
 
 error_exit:
@@ -3619,8 +3597,9 @@ do_alter_index (PARSER_CONTEXT * parser, const PT_NODE * statement)
     }
   else
     {
-      error = ER_FAILED;
+      return ER_FAILED;
     }
+
   return error;
 }
 
@@ -8998,7 +8977,6 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
   bool do_rollback_on_error = false;
   bool do_abort_class_on_error = false;
   bool do_flush_class_mop = false;
-  bool is_old_class_dropped = false;
   int charset = LANG_SYS_CODESET;
   int collation_id = LANG_SYS_COLLATION;
   PT_NODE *tbl_opt_charset, *tbl_opt_coll, *cs_node, *coll_node;
@@ -9109,7 +9087,6 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
 	    }
 	  do_rollback_on_error = true;
 
-	  is_old_class_dropped = true;
 	  error = drop_class_name (class_name, false);
 	  if (error != NO_ERROR)
 	    {
@@ -9305,10 +9282,6 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
 	}
     }
 
-  if (is_old_class_dropped)
-    {
-      (void) log_update_drop_cls_btid (true);
-    }
   return error;
 
 error_exit:
@@ -9325,10 +9298,7 @@ error_exit:
     {
       tran_abort_upto_system_savepoint (UNIQUE_SAVEPOINT_CREATE_ENTITY);
     }
-  if (is_old_class_dropped)
-    {
-      (void) log_update_drop_cls_btid (false);
-    }
+
   return error;
 }
 

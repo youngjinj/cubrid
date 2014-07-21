@@ -6017,7 +6017,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 
       if (heap_update
 	  (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
-	   scan_cache, false) == NULL)
+	   scan_cache, true) == NULL)
 	{
 	  /*
 	   * Problems updating the object...Maybe, the transaction should be
@@ -6208,27 +6208,56 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		}
 	      else
 		{
-		  MVCC_REC_HEADER old_rec_header;
-
 		  oldrecdes = &copy_recdes;
 
-		  or_mvcc_get_header (oldrecdes, &old_rec_header);
-		  if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, &old_rec_header))
+		  if (is_update_inplace == false)
 		    {
-		      /* When the row was inserted by me then just overwrite */
-		      is_update_inplace = true;
+		      LOG_TDES *tdes;
+
+		      /* if savepoint used, can't update in place, since may
+		       * corrupt unique B-tree. An improvement may be done
+		       * here by checking whether the class has unique index.
+		       */
+		      tdes = LOG_FIND_CURRENT_TDES (thread_p);
+		      if (LSA_ISNULL (&tdes->savept_lsa))
+			{
+			  MVCC_REC_HEADER old_rec_header;
+			  or_mvcc_get_header (oldrecdes, &old_rec_header);
+			  if (MVCC_IS_REC_INSERTED_BY_ME
+			      (thread_p, &old_rec_header))
+			    {
+			      /* When the row was inserted by me then just overwrite */
+			      is_update_inplace = true;
+			    }
+			}
 		    }
 		}
 	      COPY_OID (oid, &last_oid);
 	    }
 	  else
 	    {
-	      MVCC_REC_HEADER old_rec_header;
-	      or_mvcc_get_header (oldrecdes, &old_rec_header);
-	      if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, &old_rec_header))
+	      if (is_update_inplace == false)
 		{
-		  /* When the row was inserted by me then just overwrite */
-		  is_update_inplace = true;
+		  LOG_TDES *tdes;
+
+		  /* if savepoint used, can't update in place, since may
+		   * corrupt unique B-tree. An improvement may be done
+		   * here by checking whether the class has unique index.
+		   */
+
+		  tdes = LOG_FIND_CURRENT_TDES (thread_p);
+		  if (LSA_ISNULL (&tdes->savept_lsa))
+		    {
+		      MVCC_REC_HEADER old_rec_header;
+
+		      or_mvcc_get_header (oldrecdes, &old_rec_header);
+		      if (MVCC_IS_REC_INSERTED_BY_ME
+			  (thread_p, &old_rec_header))
+			{
+			  /* When the row was inserted by me then just overwrite */
+			  is_update_inplace = true;
+			}
+		    }
 		}
 	    }
 	}
@@ -6958,13 +6987,6 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
 	      error_code = ER_FAILED;
 	    }
 	  goto error;
-	}
-      if (OID_IS_ROOTOID (&class_oid))
-	{
-	  /* Dropped a class object. Collect it and if transaction is
-	   * committed, vacuum will be notified.
-	   */
-	  logtb_dropped_class (thread_p, oid);
 	}
       deleted = true;
     }
@@ -9021,7 +9043,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   bool do_insert_only = false;
   OID *inst_oids[2];
   RECDES *recs[2];
-  bool same_key = true;
+  bool same_key = true, same_oid = true;
   int c = DB_UNK;
   BTREE_LOCKED_KEYS locked_keys;
   bool use_mvcc = false;
@@ -9295,45 +9317,44 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 
       if (use_mvcc && !OID_EQ (old_oid, new_oid))
 	{
-	  /* Even if the key isn't change, if the OID is changed we still need
-	   * to do delete/insert b-tree operations.
-	   */
+	  same_oid = false;
+	}
+      else
+	{
+	  same_oid = true;
+	}
+
+      same_key = true;		/* init */
+      if ((new_isnull && !old_isnull) || (old_isnull && !new_isnull))
+	{
 	  same_key = false;
 	}
       else
 	{
-	  same_key = true;	/* init */
-	  if ((new_isnull && !old_isnull) || (old_isnull && !new_isnull))
+	  if (!(new_isnull && old_isnull))
 	    {
-	      same_key = false;
-	    }
-	  else
-	    {
-	      if (!(new_isnull && old_isnull))
+	      c =
+		btree_compare_key (old_key, new_key, key_domain, 0, 1, NULL);
+
+	      if (c == DB_UNK)
 		{
-		  c =
-		    btree_compare_key (old_key, new_key, key_domain, 0, 1,
-				       NULL);
+		  assert (er_errid () != NO_ERROR);
+		  error_code = er_errid ();
+		  goto error;
+		}
 
-		  if (c == DB_UNK)
-		    {
-		      assert (er_errid () != NO_ERROR);
-		      error_code = er_errid ();
-		      goto error;
-		    }
-
-		  if (c != DB_EQ)
-		    {
-		      same_key = false;
-		    }
+	      if (c != DB_EQ)
+		{
+		  same_key = false;
 		}
 	    }
 	}
+
 #if defined(ENABLE_SYSTEMTAP)
       CUBRID_IDX_UPDATE_START (classname, index->btname);
 #endif /* ENABLE_SYSTEMTAP */
 
-      if (!same_key || do_delete_only || do_insert_only)
+      if (!same_key || !same_oid || do_delete_only || do_insert_only)
 	{
 	  if (i < 1 || !locator_was_index_already_applied (new_attrinfo,
 							   &index->btid, i))
@@ -9458,9 +9479,10 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 #endif /* ENABLE_SYSTEMTAP */
 
 	  /* In MVCC need to check for specified update attributes */
-	  if (!locator_Dont_check_foreign_key
+	  if (!locator_Dont_check_foreign_key && !same_key
 	      && index->type == BTREE_PRIMARY_KEY && index->fk && found_btid)
 	    {
+	      assert (do_insert_only == false && do_delete_only == false);
 	      error_code = locator_check_primary_key_update (thread_p,
 							     index, old_key);
 	      if (error_code != NO_ERROR)
@@ -13520,7 +13542,6 @@ locator_prefetch_index_page_internal (THREAD_ENTRY * thread_p, BTID * btid,
   KEY_VAL_RANGE key_val_range;
   INDX_SCAN_ID isid;
   BTID tmp_btid = *btid;
-  BTREE_SCAN bt_scan;
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
 

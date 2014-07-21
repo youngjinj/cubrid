@@ -27,7 +27,6 @@
 #ident "$Id$"
 #include "thread.h"
 #include "storage_common.h"
-#include "vacuum.h"
 
 /* MVCC Header Macros */
 #define MVCC_GET_INSID(header)   \
