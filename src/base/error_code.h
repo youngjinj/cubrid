@@ -244,7 +244,7 @@
 #define ER_TP_INCOMPATIBLE_DOMAINS                  -179	/* not used */
 #define ER_TP_INCOMPATIBLE_VALUE                    -180
 #define ER_TP_CANT_COERCE                           -181
-#define ER_TP_CANT_COERCE_OVERFLOW                  -182	/* not used */
+#define ER_TP_CANT_COERCE_OVERFLOW                  -182
 
 #define ER_NET_DATASIZE_MISMATCH                    -183
 #define ER_NET_CANT_ALLOC_BUFFER                    -184
@@ -1469,7 +1469,7 @@
 
 #define ER_DIAG_NOT_SPAGE                           -1151
 
-#define ER_KILL_TR_NOT_OWNED                        -1152
+#define ER_KILL_TR_NOT_ALLOWED                      -1152
 
 #define ER_MVCC_NOT_SATISFIED_REEVALUATION	    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001

@@ -1218,13 +1218,8 @@ $ LOADDB
 1149 Cannot find the page %1$d of volume %2$d.
 1150 Context requires compatible collations.
 1151 The page %1$d of volume %2$d is not a slotted page.
-1152 The transaction %1$d cannot be killed because it is owned by another user.
-2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
-2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 MVCC can't get snapshot
-2003 Isolation level value in MVCC must be 2, 4, 5 or 6.
-2004 Serializable conflict due to concurent update
-2005 마지막 에러
+1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
+1153 마지막 에러
 
 $set 6 MSGCAT_SET_INTERNAL
 1 에러 서브 시스템에 에러 발생(라인 %1$d):
@@ -1667,6 +1662,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 288 분할 테이블 내의 모든 분할을 제거하는 것은 허용되지 않습니다. 'DROP TABLE' 구문을 사용하십시오.
 289 The expression including %1$s is not allowed in this context.
 290 Transaction id is not an integer.
+291 Subquery is not allowed in ORDER BY FOR clause.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 가상 메모리 없음: %1$d 바이트를 할당할 수 없습니다.

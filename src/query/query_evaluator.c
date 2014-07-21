@@ -1981,96 +1981,109 @@ eval_pred (THREAD_ENTRY * thread_p, PRED_EXPR * pr, VAL_DESCR * vd,
 	  break;
 
 	case T_ALSM_EVAL_TERM:
-	  et_alsm = &pr->pe.eval_term.et.et_alsm;
+	  {
+	    DB_TYPE rhs_type = DB_TYPE_UNKNOWN;
+	    bool rhs_is_set = false;
 
-	  /*
-	   * Note: According to ANSI, if the set or list file is empty,
-	   * the result of comparison is true/false for ALL/SOME,
-	   * regardless of whether lhs value is bound or not.
-	   */
-	  if (et_alsm->elemset->type != TYPE_LIST_ID)
-	    {
-	      /* fetch set (group of items) value */
-	      if (fetch_peek_dbval (thread_p, et_alsm->elemset, vd, NULL,
-				    obj_oid, NULL, &peek_val2) != NO_ERROR)
-		{
-		  return V_ERROR;
-		}
-	      else if (db_value_is_null (peek_val2))
-		{
-		  return V_UNKNOWN;
-		}
+	    et_alsm = &pr->pe.eval_term.et.et_alsm;
 
-	      if (set_size (DB_GET_SET (peek_val2)) == 0)
-		{
-		  /* empty set */
-		  return (et_alsm->eq_flag == F_ALL) ? V_TRUE : V_FALSE;
-		}
-	    }
-	  else
-	    {
-	      /* execute linked query */
-	      EXECUTE_REGU_VARIABLE_XASL (thread_p, et_alsm->elemset, vd);
-	      if (CHECK_REGU_VARIABLE_XASL_STATUS (et_alsm->elemset) !=
-		  XASL_SUCCESS)
-		{
-		  return V_ERROR;
-		}
-	      else
-		{
-		  /* check of empty list file */
-		  srlist_id = et_alsm->elemset->value.srlist_id;
-		  if (srlist_id->list_id->tuple_cnt == 0)
-		    {
-		      return (et_alsm->eq_flag == F_ALL) ? V_TRUE : V_FALSE;
-		    }
-		}
-	    }
+	    /*
+	     * Note: According to ANSI, if the set or list file is empty,
+	     * the result of comparison is true/false for ALL/SOME,
+	     * regardless of whether lhs value is bound or not.
+	     */
+	    if (et_alsm->elemset->type != TYPE_LIST_ID)
+	      {
+		/* fetch rhs value */
+		if (fetch_peek_dbval (thread_p, et_alsm->elemset, vd, NULL,
+				      obj_oid, NULL, &peek_val2) != NO_ERROR)
+		  {
+		    return V_ERROR;
+		  }
+		else if (db_value_is_null (peek_val2))
+		  {
+		    return V_UNKNOWN;
+		  }
 
-	  /* fetch item value */
-	  if (fetch_peek_dbval (thread_p, et_alsm->elem, vd, NULL, obj_oid,
-				NULL, &peek_val1) != NO_ERROR)
-	    {
-	      return V_ERROR;
-	    }
-	  else if (db_value_is_null (peek_val1))
-	    {
-	      return V_UNKNOWN;
-	    }
+		rhs_type = DB_VALUE_TYPE (peek_val2);
+		rhs_is_set = TP_IS_SET_TYPE (rhs_type);
+		if (rhs_is_set && set_size (DB_GET_SET (peek_val2)) == 0)
+		  {
+		    /* empty set */
+		    return (et_alsm->eq_flag == F_ALL) ? V_TRUE : V_FALSE;
+		  }
+	      }
+	    else
+	      {
+		/* execute linked query */
+		EXECUTE_REGU_VARIABLE_XASL (thread_p, et_alsm->elemset, vd);
+		if (CHECK_REGU_VARIABLE_XASL_STATUS (et_alsm->elemset) !=
+		    XASL_SUCCESS)
+		  {
+		    return V_ERROR;
+		  }
+		else
+		  {
+		    /* check of empty list file */
+		    srlist_id = et_alsm->elemset->value.srlist_id;
+		    if (srlist_id->list_id->tuple_cnt == 0)
+		      {
+			return (et_alsm->eq_flag == F_ALL) ? V_TRUE : V_FALSE;
+		      }
+		  }
+	      }
 
-	  if (et_alsm->elemset->type == TYPE_LIST_ID)
-	    {
-	      /* rhs value is a list, use list evaluation routines */
-	      srlist_id = et_alsm->elemset->value.srlist_id;
-	      if (et_alsm->eq_flag == F_ALL)
-		{
-		  result = eval_all_list_eval (thread_p, peek_val1,
-					       srlist_id->list_id,
-					       et_alsm->rel_op);
-		}
-	      else
-		{
-		  result = eval_some_list_eval (thread_p, peek_val1,
-						srlist_id->list_id,
-						et_alsm->rel_op);
-		}
-	    }
-	  else
-	    {
-	      /* rhs value is a set, use set evaluation routines */
-	      if (et_alsm->eq_flag == F_ALL)
-		{
-		  result = eval_all_eval (peek_val1,
-					  DB_GET_SET (peek_val2),
-					  et_alsm->rel_op);
-		}
-	      else
-		{
-		  result = eval_some_eval (peek_val1,
-					   DB_GET_SET (peek_val2),
-					   et_alsm->rel_op);
-		}
-	    }
+	    /* fetch lhs value */
+	    if (fetch_peek_dbval (thread_p, et_alsm->elem, vd, NULL, obj_oid,
+				  NULL, &peek_val1) != NO_ERROR)
+	      {
+		return V_ERROR;
+	      }
+	    else if (db_value_is_null (peek_val1))
+	      {
+		return V_UNKNOWN;
+	      }
+
+	    if (et_alsm->elemset->type == TYPE_LIST_ID)
+	      {
+		/* rhs value is a list, use list evaluation routines */
+		srlist_id = et_alsm->elemset->value.srlist_id;
+		if (et_alsm->eq_flag == F_ALL)
+		  {
+		    result = eval_all_list_eval (thread_p, peek_val1,
+						 srlist_id->list_id,
+						 et_alsm->rel_op);
+		  }
+		else
+		  {
+		    result = eval_some_list_eval (thread_p, peek_val1,
+						  srlist_id->list_id,
+						  et_alsm->rel_op);
+		  }
+	      }
+	    else if (rhs_is_set)
+	      {
+		/* rhs value is a set, use set evaluation routines */
+		if (et_alsm->eq_flag == F_ALL)
+		  {
+		    result = eval_all_eval (peek_val1,
+					    DB_GET_SET (peek_val2),
+					    et_alsm->rel_op);
+		  }
+		else
+		  {
+		    result = eval_some_eval (peek_val1,
+					     DB_GET_SET (peek_val2),
+					     et_alsm->rel_op);
+		  }
+	      }
+	    else
+	      {
+		/* other cases, use general evaluation routines */
+		result = eval_value_rel_cmp (peek_val1, peek_val2,
+					     et_alsm->rel_op);
+	      }
+	  }
 	  break;
 
 	case T_LIKE_EVAL_TERM:
@@ -2898,6 +2911,76 @@ eval_data_filter (THREAD_ENTRY * thread_p, OID * oid, RECDES * recdesp,
 }
 
 /*
+ * eval_set_last_version () - set last versions
+ *   return: error code
+ * 	 class_oid(in): class OID
+ *	 scan_cache(in): scan cache
+ *	 regu_list_last_version(in) : constant regu variable list, used to fetch
+ *				    object last version
+ *
+ * Note: This function replace OID contained in each DB_VALUE with the latest
+ *	  version. The DB_VALUE is pointed by constant regu variables.
+ */
+int
+eval_set_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
+		       HEAP_SCANCACHE * scan_cache,
+		       REGU_VARIABLE_LIST regu_list_last_version)
+{
+
+  /* TO DO - add into a function */
+  REGU_VARIABLE_LIST regup;
+  RECDES mvcc_last_record;
+  DB_VALUE *peek_dbval;
+  OID mvcc_updated_oid;
+
+
+  for (regup = regu_list_last_version; regup != NULL;
+       regup = regu_list_last_version->next)
+    {
+      if (regup->value.type != TYPE_CONSTANT)
+	{
+	  return ER_FAILED;
+	}
+
+      assert (regup->value.type == TYPE_CONSTANT);
+      peek_dbval = regup->value.value.dbvalptr;
+
+      if (DB_IS_NULL (peek_dbval))
+	{
+	  continue;
+	}
+
+      if (DB_VALUE_DOMAIN_TYPE (peek_dbval) != DB_TYPE_OID)
+	{
+	  return ER_FAILED;
+	}
+
+      mvcc_last_record.data = NULL;
+      if (heap_get_last (thread_p,
+			 DB_GET_OID (peek_dbval), &mvcc_last_record,
+			 scan_cache, true, NULL_CHN,
+			 &mvcc_updated_oid) != S_SUCCESS)
+	{
+	  if (er_errid () == ER_HEAP_NODATA_NEWADDRESS
+	      || er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+	    {
+	      er_clear ();	/* clear ER_HEAP_NODATA_NEWADDRESS */
+	      continue;
+	    }
+	  return er_errid ();
+	}
+
+      if (!OID_ISNULL (&mvcc_updated_oid)
+	  && !OID_EQ (&mvcc_updated_oid, DB_GET_OID (peek_dbval)))
+	{
+	  DB_MAKE_OID (peek_dbval, &mvcc_updated_oid);
+	}
+    }
+
+  return NO_ERROR;
+}
+
+/*
  * eval_key_filter () -
  *   return: DB_LOGICAL (V_TRUE, V_FALSE, V_UNKNOWN or V_ERROR)
  * 	 value(in): pointer to DB_VALUE (key value)
@@ -3110,74 +3193,4 @@ eval_key_filter (THREAD_ENTRY * thread_p, DB_VALUE * value,
     }
 
   return ev_res;
-}
-
-/*
- * eval_set_last_version () - set last versions
- *   return: error code
- * 	 class_oid(in): class OID
- *	 scan_cache(in): scan cache
- *	 regu_list_last_version(in) : constant regu variable list, used to fetch
- *				    object last version
- *
- * Note: This function replace OID contained in each DB_VALUE with the latest
- *	  version. The DB_VALUE is pointed by constant regu variables.
- */
-int
-eval_set_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
-		       HEAP_SCANCACHE * scan_cache,
-		       REGU_VARIABLE_LIST regu_list_last_version)
-{
-
-  /* TO DO - add into a function */
-  REGU_VARIABLE_LIST regup;
-  RECDES mvcc_last_record;
-  DB_VALUE *peek_dbval;
-  OID mvcc_updated_oid;
-
-
-  for (regup = regu_list_last_version; regup != NULL;
-       regup = regu_list_last_version->next)
-    {
-      if (regup->value.type != TYPE_CONSTANT)
-	{
-	  return ER_FAILED;
-	}
-
-      assert (regup->value.type == TYPE_CONSTANT);
-      peek_dbval = regup->value.value.dbvalptr;
-
-      if (DB_IS_NULL (peek_dbval))
-	{
-	  continue;
-	}
-
-      if (DB_VALUE_DOMAIN_TYPE (peek_dbval) != DB_TYPE_OID)
-	{
-	  return ER_FAILED;
-	}
-
-      mvcc_last_record.data = NULL;
-      if (heap_get_last (thread_p,
-			 DB_GET_OID (peek_dbval), &mvcc_last_record,
-			 scan_cache, true, NULL_CHN,
-			 &mvcc_updated_oid) != S_SUCCESS)
-	{
-	  if (er_errid () == ER_HEAP_NODATA_NEWADDRESS
-	      || er_errid () == ER_HEAP_UNKNOWN_OBJECT)
-	    {
-	      er_clear ();	/* clear ER_HEAP_NODATA_NEWADDRESS */
-	      continue;
-	    }
-	  return er_errid ();
-	}
-
-      if (!OID_ISNULL (&mvcc_updated_oid)
-	  && !OID_EQ (&mvcc_updated_oid, DB_GET_OID (peek_dbval)))
-	{
-	  DB_MAKE_OID (peek_dbval, &mvcc_updated_oid);
-	}
-    }
-
-  return NO_ERROR;
 }

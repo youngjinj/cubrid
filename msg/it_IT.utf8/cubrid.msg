@@ -1217,13 +1217,8 @@ $ LOADDB
 1148 Le dimensioni del filter predicate stream cache(%1$d) supera il max(%2$d). È stata aggiunta una nuova voce anche se nulla è vittimizzato perché tutte le voci della cache sono già utilizzate.
 1149 Impossibile trovare la pagina %1$d del volume %2$d.
 1150 Contesto richiede collations compatibili.
-1151 The transaction %1$d cannot be killed because it is owned by another user.
-2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
-2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 MVCC can't get snapshot
-2003 Isolation level value in MVCC must be 2, 4, 5 or 6.
-2004 Serializable conflict due to concurent update
-2005 Ultimo errore
+1151 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
+1152 Ultimo errore
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Errore nel sottosistema di errore (linea %1$d):
@@ -1666,6 +1661,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 288 Cannot remove all partitions, use DROP TABLE instead.
 289 The expression including %1$s is not allowed in this context.
 290 Transaction id is not an integer.
+291 Subquery is not allowed in ORDER BY FOR clause.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Fuori di memoria virtuale: Impossibile allocare %1$d byte.

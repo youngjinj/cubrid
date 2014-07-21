@@ -577,6 +577,67 @@
 
 /* Copy the first part of user declarations.  */
 #line 26 "../../src/parser/csql_grammar.y"
+/*%CODE_REQUIRES_START%*/
+#include "parser.h"
+
+/* 
+ * The default YYLTYPE structure is extended so that locations can hold
+ * context information
+ */
+typedef struct YYLTYPE
+{
+
+  int first_line;
+  int first_column;
+  int last_line;
+  int last_column;
+  int buffer_pos; /* position in the buffer being parsed */
+
+} YYLTYPE;
+#define YYLTYPE_IS_DECLARED 1
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+} container_2;
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+  PT_NODE *c3;
+} container_3;
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+  PT_NODE *c3;
+  PT_NODE *c4;
+} container_4;
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+  PT_NODE *c3;
+  PT_NODE *c4;
+  PT_NODE *c5;
+  PT_NODE *c6;
+  PT_NODE *c7;
+  PT_NODE *c8;
+  PT_NODE *c9;
+  PT_NODE *c10;
+} container_10;
+
+void csql_yyerror_explicit (int line, int column);
+void csql_yyerror (const char *s);
+
+extern int g_msg[1024];
+extern int msg_ptr;
+extern int yybuffer_pos;
+/*%CODE_END%*/#line 88 "../../src/parser/csql_grammar.y"
 
 #define YYMAXDEPTH	1000000
 
@@ -591,6 +652,7 @@
 #include <math.h>
 #include <errno.h>
 
+#include "chartype.h"
 #include "parser.h"
 #include "parser_message.h"
 #include "dbdef.h"
@@ -829,41 +891,6 @@ static int parser_select_level = -1;
 /* handle inner increment exprs in select list */
 static PT_NODE *parser_hidden_incr_list = NULL;
 
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-} container_2;
-
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-  PT_NODE *c3;
-} container_3;
-
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-  PT_NODE *c3;
-  PT_NODE *c4;
-} container_4;
-
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-  PT_NODE *c3;
-  PT_NODE *c4;
-  PT_NODE *c5;
-  PT_NODE *c6;
-  PT_NODE *c7;
-  PT_NODE *c8;
-  PT_NODE *c9;
-  PT_NODE *c10;
-} container_10;
-
 #define PT_EMPTY INT_MAX
 
 #if defined(WINDOWS)
@@ -930,9 +957,6 @@ typedef enum
   SERIAL_CYCLE,
   SERIAL_CACHE,
 } SERIAL_DEFINE;
-
-void csql_yyerror_explicit (int line, int column);
-void csql_yyerror (const char *s);
 
 FUNCTION_MAP *keyword_offset (const char *name);
 
@@ -1055,11 +1079,6 @@ static PT_NODE *pt_set_collation_modifier (PARSER_CONTEXT *parser,
 					   PT_NODE *node, PT_NODE *coll_node);
 
 
-int g_msg[1024];
-int msg_ptr;
-
-int yybuffer_pos;
-
 #define push_msg(a) _push_msg(a, __LINE__)
 
 void _push_msg (int code, int line);
@@ -1070,22 +1089,6 @@ int g_query_string_len;
 PT_NODE *g_last_stmt;
 int g_original_buffer_len;
 
-
-/* 
- * The default YYLTYPE structure is extended so that locations can hold
- * context information
- */
-typedef struct YYLTYPE
-{
-
-  int first_line;
-  int first_column;
-  int last_line;
-  int last_column;
-  int buffer_pos; /* position in the buffer being parsed */
-
-} YYLTYPE;
-#define YYLTYPE_IS_DECLARED 1
 
 /*
  * The behavior of location propagation when a rule is matched must
@@ -1128,7 +1131,7 @@ typedef struct YYLTYPE
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE 
-#line 582 "../../src/parser/csql_grammar.y"
+#line 586 "../../src/parser/csql_grammar.y"
 {
   int number;
   bool boolean;
@@ -1140,7 +1143,7 @@ typedef union YYSTYPE
   container_10 c10;
 }
 /* Line 2604 of glr.c.  */
-#line 1144 "../../src/parser/csql_grammar.h"
+#line 1147 "../../src/parser/csql_grammar.h"
 	YYSTYPE;
 # define YYSTYPE_IS_DECLARED 1
 # define YYSTYPE_IS_TRIVIAL 1

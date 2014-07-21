@@ -324,7 +324,6 @@ extern DB_SESSION *db_open_buffer_local (const char *buffer);
 extern int db_compile_statement_local (DB_SESSION * session);
 extern int db_execute_statement_local (DB_SESSION * session,
 				       int stmt, DB_QUERY_RESULT ** result);
-
 extern int db_open_buffer_and_compile_first_statement (const char *CSQL_query,
 						       DB_QUERY_ERROR *
 						       query_error,
@@ -342,7 +341,6 @@ extern int db_compile_and_execute_queries_internal (const char *CSQL_query,
 						    int execute,
 						    QUERY_EXEC_MODE exec_mode,
 						    bool is_new_statement);
-
 extern void db_close_session_local (DB_SESSION * session);
 extern int db_savepoint_transaction_internal (const char *savepoint_name);
 extern int db_drop_set_attribute_domain (MOP class_,

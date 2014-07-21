@@ -3340,11 +3340,14 @@ qfile_combine_two_list (THREAD_ENTRY * thread_p, QFILE_LIST_ID * lhs_file_p,
       distinct_or_all = Q_ALL;
     }
 
-  lhs_file_p =
-    qfile_sort_list (thread_p, lhs_file_p, NULL, distinct_or_all, true);
-  if (lhs_file_p == NULL)
+  if (lhs_file_p->tuple_cnt > 1)
     {
-      goto error;
+      lhs_file_p =
+	qfile_sort_list (thread_p, lhs_file_p, NULL, distinct_or_all, true);
+      if (lhs_file_p == NULL)
+	{
+	  goto error;
+	}
     }
 
   if (qfile_open_list_scan (lhs_file_p, &lhs_scan_id) != NO_ERROR)
@@ -3355,11 +3358,14 @@ qfile_combine_two_list (THREAD_ENTRY * thread_p, QFILE_LIST_ID * lhs_file_p,
 
   if (rhs_file_p)
     {
-      rhs_file_p = qfile_sort_list (thread_p, rhs_file_p, NULL,
-				    distinct_or_all, true);
-      if (rhs_file_p == NULL)
+      if (rhs_file_p->tuple_cnt > 1)
 	{
-	  goto error;
+	  rhs_file_p = qfile_sort_list (thread_p, rhs_file_p, NULL,
+					distinct_or_all, true);
+	  if (rhs_file_p == NULL)
+	    {
+	      goto error;
+	    }
 	}
 
       if (qfile_open_list_scan (rhs_file_p, &rhs_scan_id) != NO_ERROR)
@@ -4580,6 +4586,10 @@ qfile_initialize_sort_key_info (SORTKEY_INFO * key_info_p, SORT_LIST * list_p,
       SORT_LIST *p;
       for (i = 0, p = list_p; p; i++, p = p->next)
 	{
+	  assert_release (p->pos_descr.pos_no >= 0);
+	  assert_release (p->pos_descr.dom != NULL);
+	  assert_release (p->pos_descr.dom->type != DB_TYPE_VARIABLE);
+
 	  subkey = &key_info_p->key[i];
 	  subkey->col = p->pos_descr.pos_no;
 	  subkey->col_dom = p->pos_descr.dom;

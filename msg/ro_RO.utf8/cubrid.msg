@@ -1218,13 +1218,8 @@ $ LOADDB
 1149 Pagina %1$d a volumului %2$d nu poate fi găsită.
 1150 Contextul necesită colaţii compatibile.
 1151 The page %1$d of volume %2$d is not a slotted page.
-1152 The transaction %1$d cannot be killed because it is owned by another user.
-2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
-2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 MVCC can't get snapshot
-2003 Isolation level value in MVCC must be 2, 4, 5 or 6.
-2004 Serializable conflict due to concurent update
-2005 Ultima eroare
+1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
+1153 Ultima eroare
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Eroare în subsistemul de erori (linia %1$d):
@@ -1667,6 +1662,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 288 Nu se pot şterge toate partiţiile, folosiţi DROP TABLE în schimb.
 289 The expression including %1$s is not allowed in this context.
 290 Transaction id is not an integer.
+291 Subquery is not allowed in ORDER BY FOR clause.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Memorie virtuală epuizată: nu s-au putut aloca %1$d bytes.

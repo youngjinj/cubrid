@@ -1795,6 +1795,7 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   tdes->waiting_for_res = NULL;
   tdes->tran_abort_reason = TRAN_NORMAL;
   tdes->num_exec_queries = 0;
+  tdes->suppress_replication = 0;
 
   logtb_mvcc_clear_update_stats (&tdes->log_upd_stats);
   logtb_clear_log_dropped_classes_indexes (&tdes->log_dropped_cls_btids);

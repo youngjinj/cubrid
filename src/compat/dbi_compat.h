@@ -1469,7 +1469,7 @@
 
 #define ER_DIAG_NOT_SPAGE                           -1151
 
-#define ER_KILL_TR_NOT_OWNED                        -1152
+#define ER_KILL_TR_NOT_ALLOWED                      -1152
 
 #define ER_MVCC_ROW_ALREADY_DELETED		    -2000
 #define ER_MVCC_ROW_INVALID_FOR_DELETE		    -2001

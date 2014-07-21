@@ -4603,6 +4603,8 @@ btree_search_nonleaf_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
   /* binary search the node to find the child page pointer to be followed */
   c = 0;
+
+  /* for non-compressed midxkey; separator is not compressed */
   left_start_col = right_start_col = 0;
 
   left = 2;			/* Ignore dummy key (neg-inf or 1st key) */
@@ -4618,9 +4620,9 @@ btree_search_nonleaf_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	  return ER_FAILED;
 	}
 
-      btree_read_record (thread_p, btid, page_ptr, &rec, &temp_key,
-			 &non_leaf_rec, BTREE_NON_LEAF_NODE, &clear_key,
-			 &offset, PEEK_KEY_VALUE, NULL);
+      btree_read_record_helper (thread_p, btid, &rec, &temp_key,
+				&non_leaf_rec, BTREE_NON_LEAF_NODE,
+				&clear_key, &offset, PEEK_KEY_VALUE);
 
       if (DB_VALUE_DOMAIN_TYPE (key) == DB_TYPE_MIDXKEY)
 	{
@@ -19301,6 +19303,7 @@ error:
  *		      when search
  *   cls_oid(in):
  *   oid(in): Object identifier to be updated
+ *   new_oid(in): Object identifier after it was updated
  *   op_type(in):
  *   unique_stat_info(in):
  *   unique(in):
@@ -19396,7 +19399,16 @@ btree_update (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * old_key,
 	isvalid = btree_keyoid_checkscan_check (thread_p,
 						&bt_checkscan,
 						cls_oid, old_key, oid);
-	assert (isvalid == DISK_INVALID);	/* not found */
+
+	if (er_errid () == ER_INTERRUPTED)
+	  {
+	    /* in case of user interrupt */
+	    ;			/* do not check isvalid */
+	  }
+	else
+	  {
+	    assert (isvalid == DISK_INVALID);	/* not found */
+	  }
       }
 
     if (!DB_IS_NULL (new_key) && !btree_multicol_key_is_null (new_key))
@@ -19404,7 +19416,16 @@ btree_update (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * old_key,
 	isvalid = btree_keyoid_checkscan_check (thread_p,
 						&bt_checkscan,
 						cls_oid, new_key, new_oid);
-	assert (isvalid == DISK_VALID);	/* found */
+
+	if (er_errid () == ER_INTERRUPTED)
+	  {
+	    /* in case of user interrupt */
+	    ;			/* do not check isvalid */
+	  }
+	else
+	  {
+	    assert (isvalid == DISK_VALID);	/* found */
+	  }
       }
 
     /* close the index check-scan */
@@ -28341,6 +28362,9 @@ get_oidcnt_and_oidptr:
     case BTREE_GETOID_AGAIN_WITH_CHECK:
       goto get_oidcnt_and_oidptr;
 
+    case BTREE_RESTART_SCAN:
+      bts->restart_scan = 1;
+      /* fall through */
     case BTREE_GOTO_END_OF_SCAN:
       goto end_of_scan;
 
@@ -28609,14 +28633,6 @@ start_locking:
 	   * current query is based on some classes
 	   * contained in the class hierarchy.
 	   */
-	  if (!mvcc_Enabled && btrs_helper.cp_oid_cnt > 1)
-	    {
-	      er_log_debug (ARG_FILE_LINE,
-			    "cp_oid_cnt > 1 in an unique index\n"
-			    "index inconsistency.(unique violation).\n");
-	      assert (false);
-	      goto error;
-	    }
 
 	  for (i = 0; i < btrs_helper.cp_oid_cnt; i++)
 	    {
@@ -28701,6 +28717,9 @@ start_locking:
 	      /* Fall through */
 	      break;
 
+	    case BTREE_RESTART_SCAN:
+	      bts->restart_scan = 1;
+	      /* fall through */
 	    case BTREE_GOTO_END_OF_SCAN:
 	      goto end_of_scan;
 
@@ -28809,6 +28828,9 @@ start_locking:
 	      break;
 	    case BTREE_GOTO_LOCKING_DONE:
 	      goto locking_done;
+	    case BTREE_RESTART_SCAN:
+	      bts->restart_scan = 1;
+	      /* fall trough */
 	    case BTREE_GOTO_END_OF_SCAN:
 	      goto end_of_scan;
 	    case BTREE_GETOID_AGAIN_WITH_CHECK:
@@ -30106,7 +30128,8 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 	    {
 	      return ER_FAILED;
 	    }
-	  if (*which_action == BTREE_GOTO_END_OF_SCAN)
+	  if (*which_action == BTREE_GOTO_END_OF_SCAN
+	      || *which_action == BTREE_RESTART_SCAN)
 	    {
 	      return NO_ERROR;
 	    }
@@ -30398,7 +30421,8 @@ btree_handle_current_oid_and_locks (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 	    {
 	      return ER_FAILED;
 	    }
-	  if (*which_action == BTREE_GOTO_END_OF_SCAN)
+	  if (*which_action == BTREE_GOTO_END_OF_SCAN
+	      || *which_action == BTREE_RESTART_SCAN)
 	    {
 	      return NO_ERROR;
 	    }

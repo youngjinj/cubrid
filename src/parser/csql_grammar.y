@@ -23,6 +23,68 @@
 
 
 
+%{/*%CODE_REQUIRES_START%*/
+#include "parser.h"
+
+/* 
+ * The default YYLTYPE structure is extended so that locations can hold
+ * context information
+ */
+typedef struct YYLTYPE
+{
+
+  int first_line;
+  int first_column;
+  int last_line;
+  int last_column;
+  int buffer_pos; /* position in the buffer being parsed */
+
+} YYLTYPE;
+#define YYLTYPE_IS_DECLARED 1
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+} container_2;
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+  PT_NODE *c3;
+} container_3;
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+  PT_NODE *c3;
+  PT_NODE *c4;
+} container_4;
+
+typedef struct
+{
+  PT_NODE *c1;
+  PT_NODE *c2;
+  PT_NODE *c3;
+  PT_NODE *c4;
+  PT_NODE *c5;
+  PT_NODE *c6;
+  PT_NODE *c7;
+  PT_NODE *c8;
+  PT_NODE *c9;
+  PT_NODE *c10;
+} container_10;
+
+void csql_yyerror_explicit (int line, int column);
+void csql_yyerror (const char *s);
+
+extern int g_msg[1024];
+extern int msg_ptr;
+extern int yybuffer_pos;
+/*%CODE_END%*/%}
+
 %{
 #define YYMAXDEPTH	1000000
 
@@ -37,6 +99,7 @@
 #include <math.h>
 #include <errno.h>
 
+#include "chartype.h"
 #include "parser.h"
 #include "parser_message.h"
 #include "dbdef.h"
@@ -275,41 +338,6 @@ static int parser_select_level = -1;
 /* handle inner increment exprs in select list */
 static PT_NODE *parser_hidden_incr_list = NULL;
 
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-} container_2;
-
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-  PT_NODE *c3;
-} container_3;
-
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-  PT_NODE *c3;
-  PT_NODE *c4;
-} container_4;
-
-typedef struct
-{
-  PT_NODE *c1;
-  PT_NODE *c2;
-  PT_NODE *c3;
-  PT_NODE *c4;
-  PT_NODE *c5;
-  PT_NODE *c6;
-  PT_NODE *c7;
-  PT_NODE *c8;
-  PT_NODE *c9;
-  PT_NODE *c10;
-} container_10;
-
 #define PT_EMPTY INT_MAX
 
 #if defined(WINDOWS)
@@ -376,9 +404,6 @@ typedef enum
   SERIAL_CYCLE,
   SERIAL_CACHE,
 } SERIAL_DEFINE;
-
-void csql_yyerror_explicit (int line, int column);
-void csql_yyerror (const char *s);
 
 FUNCTION_MAP *keyword_offset (const char *name);
 
@@ -501,11 +526,6 @@ static PT_NODE *pt_set_collation_modifier (PARSER_CONTEXT *parser,
 					   PT_NODE *node, PT_NODE *coll_node);
 
 
-int g_msg[1024];
-int msg_ptr;
-
-int yybuffer_pos;
-
 #define push_msg(a) _push_msg(a, __LINE__)
 
 void _push_msg (int code, int line);
@@ -516,22 +536,6 @@ int g_query_string_len;
 PT_NODE *g_last_stmt;
 int g_original_buffer_len;
 
-
-/* 
- * The default YYLTYPE structure is extended so that locations can hold
- * context information
- */
-typedef struct YYLTYPE
-{
-
-  int first_line;
-  int first_column;
-  int last_line;
-  int last_column;
-  int buffer_pos; /* position in the buffer being parsed */
-
-} YYLTYPE;
-#define YYLTYPE_IS_DECLARED 1
 
 /*
  * The behavior of location propagation when a rule is matched must
@@ -4076,6 +4080,16 @@ extended_table_spec_list
 			$$ = ctn;
 
 		DBG_PRINT}}
+	| '(' extended_table_spec_list join_table_spec ')'
+		{{
+
+			container_2 ctn;
+			PT_NODE *n1 = CONTAINER_AT_0 ($2);
+			PT_NODE *n2 = $3;
+			SET_CONTAINER_2 (ctn, parser_make_link (n1, n2), FROM_NUMBER (1));
+			$$ = ctn;
+
+		DBG_PRINT}}
 	| table_spec
 		{{
 
@@ -6606,7 +6620,7 @@ show_stmt
 kill_stmt
 	: KILL arg_value_list
 		{{
-			PT_NODE *node = parser_new_node (this_parser, PT_KILL);
+			PT_NODE *node = parser_new_node (this_parser, PT_KILL_STMT);
 
 			if (node)
 			  {
@@ -6620,7 +6634,7 @@ kill_stmt
 	| KILL kill_type arg_value_list
 		{{
 			int type = $2;
-			PT_NODE *node = parser_new_node (this_parser, PT_KILL);
+			PT_NODE *node = parser_new_node (this_parser, PT_KILL_STMT);
 
 			if (node)
 			  {
@@ -11498,8 +11512,8 @@ select_expression
 		{{
                         
 			PT_NODE *node = parser_pop_orderby_node ();
-			$$ = node;
-			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+			$<node>$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($<node>$, @$.buffer_pos)
             
             DBG_PRINT}}
      table_op select_or_subquery
@@ -11591,8 +11605,8 @@ select_expression_without_values_query
 		{{
                         
 			PT_NODE *node = parser_pop_orderby_node ();
-			$$ = node;
-			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+			$<node>$ = node;
+			PARSER_SAVE_ERR_CONTEXT ($<node>$, @$.buffer_pos)
             
             DBG_PRINT}}
      table_op select_or_subquery_without_values_query
@@ -13574,7 +13588,24 @@ opt_for_search_condition
 	: /* empty */
 		{ $$ = NULL; }
 	| For search_condition
-		{ $$ = $2; }
+		{{
+			PT_NODE *node = $2;
+			bool subquery_flag = false;
+			if (node)
+			  {
+			    (void) parser_walk_tree (this_parser, node,
+						     pt_check_subquery_pre, NULL,
+						     pt_check_subquery_post,
+						     &subquery_flag);
+			    if (subquery_flag)
+			      {
+				PT_ERRORm(this_parser, node,
+					  MSGCAT_SET_PARSER_SEMANTIC,
+					  MSGCAT_SEMANTIC_SUBQUERY_NOT_ALLOWED_IN_ORDERBY_FOR_CLAUSE);
+			     }
+			  }
+			$$ = $2;
+		DBG_PRINT}}
 	;
 
 sort_spec_list
@@ -23079,6 +23110,12 @@ PT_HINT parser_hint_table[] = {
   {"RELEASE_LOCK", NULL, PT_HINT_REL_LOCK}
   ,
   {"QUERY_CACHE", NULL, PT_HINT_QUERY_CACHE}
+  ,
+  {"SQL_CACHE", NULL, PT_HINT_QUERY_CACHE}
+    ,
+  {"QUERY_NO_CACHE", NULL, PT_HINT_QUERY_NO_CACHE}
+  ,
+  {"SQL_NO_CACHE", NULL, PT_HINT_QUERY_NO_CACHE}
   ,
   {"REEXECUTE", NULL, PT_HINT_REEXECUTE}
   ,

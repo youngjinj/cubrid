@@ -1218,13 +1218,8 @@ $ LOADDB
 1149 ボリューム%2$dのページ%1$dを見つかりませんん。
 1150 コンテキストは、互換性のある照合順序を必要とします。
 1151 ボリューム%2$dのページ%1$dは、slotted pageではありません。
-1152 The transaction %1$d cannot be killed because it is owned by another user.
-2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
-2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 MVCC can't get snapshot
-2003 Isolation level value in MVCC must be 2, 4, 5 or 6.
-2004 Serializable conflict due to concurent update
-2005 ラストエラー
+1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
+1153 ラストエラー
 
 $set 6 MSGCAT_SET_INTERNAL
 1 エラーサブシステムにエラー発生(ライン %1$d):
@@ -1667,6 +1662,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 288 すべてのパーティションを削除することはできません、代わりにDROP TABLEを使用してください。
 289 %1$sの式はこのコンテキストでは許可されません。
 290 Transaction id is not an integer.
+291 Subquery is not allowed in ORDER BY FOR clause.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 バチャールメモリーが足りません。: %1$dバイトがアロケーションできません。

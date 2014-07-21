@@ -5154,7 +5154,7 @@ pt_init_apply_f (void)
   pt_apply_func_array[PT_TUPLE_VALUE] = pt_apply_tuple_value;
   pt_apply_func_array[PT_QUERY_TRACE] = pt_apply_query_trace;
   pt_apply_func_array[PT_INSERT_VALUE] = pt_apply_insert_value;
-  pt_apply_func_array[PT_KILL] = pt_apply_kill;
+  pt_apply_func_array[PT_KILL_STMT] = pt_apply_kill;
 
   pt_apply_f = pt_apply_func_array;
 }
@@ -5269,8 +5269,7 @@ pt_init_init_f (void)
   pt_init_func_array[PT_TUPLE_VALUE] = pt_init_tuple_value;
   pt_init_func_array[PT_QUERY_TRACE] = pt_init_query_trace;
   pt_init_func_array[PT_INSERT_VALUE] = pt_init_insert_value;
-  pt_init_func_array[PT_KILL] = pt_init_kill;
-  pt_init_func_array[PT_VACUUM] = pt_init_vacuum;
+  pt_init_func_array[PT_KILL_STMT] = pt_init_kill;
 
   pt_init_f = pt_init_func_array;
 }
@@ -16525,10 +16524,10 @@ pt_print_value (PARSER_CONTEXT * parser, PT_NODE * p)
 	  switch (p->type_enum)
 	    {
 	    case PT_TYPE_FLOAT:
-	      sprintf (s, "%#0.*g", FLT_DIG, p->info.value.data_value.f);
+	      OBJ_SPRINT_DB_FLOAT (s, p->info.value.data_value.f);
 	      break;
 	    case PT_TYPE_DOUBLE:
-	      sprintf (s, "%#0.*g", DBL_DIG, p->info.value.data_value.d);
+	      OBJ_SPRINT_DB_DOUBLE (s, p->info.value.data_value.d);
 	      break;
 	    case PT_TYPE_NUMERIC:
 	      strcpy (s, p->info.value.data_value.str->bytes);

@@ -1218,13 +1218,8 @@ $ LOADDB
 1149 Impossible de trouver la page %1$d du volume %2$d.
 1150 Contexte oblige à avoir classements compatibles.
 1151 The page %1$d of volume %2$d is not a slotted page.
-1152 The transaction %1$d cannot be killed because it is owned by another user.
-2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
-2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 MVCC can't get snapshot
-2003 Isolation level value in MVCC must be 2, 4, 5 or 6.
-2004 Serializable conflict due to concurent update
-2005 Dernière erreur
+1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
+1153 Dernière erreur
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Erreur dans le sous-système d'erreur (ligne %1$d):
@@ -1667,6 +1662,7 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 288 Vous ne pouvez pas supprimer toutes les partitions, utilisez DROP TABLE.
 289 The expression including %1$s is not allowed in this context.
 290 Transaction id is not an integer.
+291 Subquery is not allowed in ORDER BY FOR clause.
 
 $set 9 MSGCAT_SET_PARSER_RUNTIME
 1 Mémoire virtuelle épuisée: impossible d'allouer %1$d octets.
