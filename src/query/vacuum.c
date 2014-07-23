@@ -267,6 +267,7 @@ LOG_LSA vacuum_Data_oldest_not_flushed_lsa;
 #define VACUUM_UPDATE_OLDEST_NOT_FLUSHED_LSA() \
   do									      \
     {									      \
+      assert (!LSA_ISNULL (&vacuum_Data->crt_lsa));			      \
       if (LSA_ISNULL (&vacuum_Data_oldest_not_flushed_lsa))		      \
 	{								      \
 	  LSA_COPY (&vacuum_Data_oldest_not_flushed_lsa, &vacuum_Data->crt_lsa); \
@@ -2602,6 +2603,9 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
 
   if (LSA_ISNULL (&vacuum_Data_oldest_not_flushed_lsa))
     {
+      vacuum_er_log (VACUUM_ER_LOG_WARNING | VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: Vacuum data is not flushed to disk because "
+		     "there are no changes since last flush.");
       if (!is_vacuum_data_locked)
 	{
 	  VACUUM_UNLOCK_DATA ();
@@ -2613,6 +2617,14 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
   if (flush_to_lsa != NULL
       && LSA_GT (&vacuum_Data_oldest_not_flushed_lsa, flush_to_lsa))
     {
+      vacuum_er_log (VACUUM_ER_LOG_WARNING | VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: Vacuum data is not flused to disk because "
+		     "flush_to_lsa (%lld, %d) is less than oldest vacuum "
+		     "data unflushed lsa (%lld, %d).",
+		     (long long int) flush_to_lsa->pageid,
+		     (int) flush_to_lsa->pageid,
+		     (long long int) vacuum_Data_oldest_not_flushed_lsa.pageid,
+		     (int) vacuum_Data_oldest_not_flushed_lsa.offset);
       if (!is_vacuum_data_locked)
 	{
 	  VACUUM_UNLOCK_DATA ();
@@ -2624,11 +2636,15 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
   if (prev_chkpt_lsa != NULL
       && LSA_LE (&vacuum_Data_oldest_not_flushed_lsa, prev_chkpt_lsa))
     {
+      /* Conservative safety check */
+      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM ERROR: Vacuum data oldest unflused lsa is older "
+		     "than previous checkpoint!");
       if (!is_vacuum_data_locked)
 	{
 	  VACUUM_UNLOCK_DATA ();
 	}
-      /* Conservative safety check */
+      
       assert (false);
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
       return ER_FAILED;
@@ -2645,6 +2661,8 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
 			  vacuum_Data_vpid.pageid, n_pages, IO_PAGESIZE)
       == NULL)
     {
+      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: Flushing data failed! Could not write to disk.");
       if (oldest_not_flushed_lsa != NULL
 	  && (LSA_ISNULL (oldest_not_flushed_lsa)
 	      || LSA_LT (&vacuum_Data_oldest_not_flushed_lsa,
@@ -2662,6 +2680,11 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
     }
 
   /* Successful flush, reset vacuum_Data_oldest_not_flushed_lsa */
+  vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		 "VACUUM: Vacuum data was successfully flushed at LSA "
+		 "(%lld, %d).",
+		 (long long int) vacuum_Data->crt_lsa.pageid,
+		 (int) vacuum_Data->crt_lsa.offset);
   LSA_SET_NULL (&vacuum_Data_oldest_not_flushed_lsa);
   if (!is_vacuum_data_locked)
     {
@@ -2765,6 +2788,10 @@ vacuum_set_vacuum_data_lsa (THREAD_ENTRY * thread_p,
     }
   assert (vacuum_data_lsa != NULL);
   LSA_COPY (&vacuum_Data->crt_lsa, vacuum_data_lsa);
+  vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		 "VACUUM: Set vacuum data lsa to (%lld, %d).",
+		 (long long int) vacuum_data_lsa->pageid,
+		 (int) vacuum_data_lsa->offset);
 }
 
 /*
@@ -3280,7 +3307,7 @@ vacuum_log_append_block_data (THREAD_ENTRY * thread_p,
   VFID null_vfid;
   LOG_DATA_ADDR addr;
   LOG_CRUMB redo_crumbs[MAX_LOG_APPEND_BLOCK_DATA_CRUMBS];
-  int n_redo_crumbs = 0;
+  int n_redo_crumbs = 0, i;
 
   /* Initialize addr */
   addr.pgptr = NULL;
@@ -3292,6 +3319,19 @@ vacuum_log_append_block_data (THREAD_ENTRY * thread_p,
   redo_crumbs[n_redo_crumbs].data = new_entries;
   redo_crumbs[n_redo_crumbs].length = sizeof (*new_entries) * n_new_entries;
   n_redo_crumbs++;
+
+  for (i = 0; i < n_new_entries; i++)
+    {
+      vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: Log append new vacuum data: "
+		     "blockid=%lld, oldest_mvccid=%lld, newest_mvccid=%lld, "
+		     "start_lsa=(%lld, %d).",
+		     new_entries[i].blockid,
+		     new_entries[i].oldest_mvccid,
+		     new_entries[i].newest_mvccid,
+		     (long long int) new_entries[i].start_lsa.pageid,
+		     (int) new_entries[i].start_lsa.offset);
+    }
 
   assert (n_redo_crumbs <= MAX_LOG_APPEND_BLOCK_DATA_CRUMBS);
 

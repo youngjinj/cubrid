@@ -2246,7 +2246,7 @@ logtb_set_user_name (int tran_index, const char *user_name)
  * return:
  */
 void
-logtb_set_current_user_name (THREAD_ENTRY * thread_p, const char * user_name)
+logtb_set_current_user_name (THREAD_ENTRY * thread_p, const char *user_name)
 {
   logtb_set_user_name (LOG_FIND_THREAD_TRAN_INDEX (thread_p), user_name);
 }
@@ -4602,22 +4602,18 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
     }
   if (MVCCID_IS_VALID (curr_mvcc_info->mvcc_id))
     {
-      /* reflect accumulated statistics to B-trees
-       * temporary reflected before acquiring CSECT_TRAN_TABLE critical section,
-       * in order to not affect the performance
-       */
-      if (committed
-	  && logtb_mvcc_reflect_unique_statistics (thread_p) != NO_ERROR)
-	{
-	  assert (false);
-	}
-
       /* lock CSECT_TRAN_TABLE while clearing mvccid
        * and updating highest_completed_mvccid in order to not remove this
        * mvccid from set of "running" mvccids while other concurrent
        * transaction is taking a snapshot.
        */
       (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+
+      if (committed
+	  && logtb_mvcc_reflect_unique_statistics (thread_p) != NO_ERROR)
+	{
+	  assert (false);
+	}
 
       head_null_mvccids = mvcc_table->head_null_mvccids;
 

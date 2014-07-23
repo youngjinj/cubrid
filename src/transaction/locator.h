@@ -110,19 +110,26 @@ typedef enum
   (operation == LC_FLUSH_UPDATE || operation == LC_FLUSH_UPDATE_PRUNE \
    || operation == LC_FLUSH_UPDATE_PRUNE_VERIFY)
 
-#define LC_FLAG_HAS_INDEX	0x00000001	/* Used for flushing, set if
-						 * object has index
-						 */
-#define LC_FLAG_UPDATED_BY_ME	0x00000002	/* Used by MVCC to identify
-						 * that an object was updated
-						 * by current transaction.
-						 */
+#define LC_FLAG_HAS_INDEX_MASK  0x05
+#define LC_ONEOBJ_GET_INDEX_FLAG(obj)  \
+  ((obj)->flag & LC_FLAG_HAS_INDEX_MASK)
 
-#define LC_ONEOBJ_HAS_INDEX(obj)  \
-  (((obj)->flag & LC_FLAG_HAS_INDEX) != 0)
+#define LC_FLAG_HAS_INDEX	0x01	/* Used for flushing, set if
+					 * object has index
+					 */
+#define LC_FLAG_UPDATED_BY_ME	0x02	/* Used by MVCC to identify
+					 * that an object was updated
+					 * by current transaction.
+					 */
+#define LC_FLAG_HAS_UNIQUE_INDEX 0x04	/* Used for flushing, set if
+					 * object has unique index
+					 */
 
 #define LC_ONEOBJ_SET_HAS_INDEX(obj)  \
   (obj)->flag |= LC_FLAG_HAS_INDEX
+
+#define LC_ONEOBJ_SET_HAS_UNIQUE_INDEX(obj)  \
+  (obj)->flag |= LC_FLAG_HAS_UNIQUE_INDEX
 
 #define LC_ONEOBJ_IS_UPDATED_BY_ME(obj)  \
   (((obj)->flag & LC_FLAG_UPDATED_BY_ME) != 0)

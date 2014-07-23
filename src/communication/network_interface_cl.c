@@ -4464,7 +4464,7 @@ boot_check_db_consistency (int check_flag, OID * oids, int num_oids,
   request_size = OR_INT_SIZE;	/* check_flag */
   request_size += OR_INT_SIZE;	/* num_oid */
   request_size += (OR_OID_SIZE * num_oids);
-  request_size += OR_BTID_SIZE;
+  request_size += OR_BTID_ALIGNED_SIZE;
 
   request = (char *) malloc (request_size);
   if (request == NULL)

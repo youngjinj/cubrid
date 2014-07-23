@@ -4778,6 +4778,7 @@ locator_mflush (MOP mop, void *mf)
   LC_COPYAREA_OPERATION operation;	/* Flush operation to be executed:
 					 * insert, update, delete, etc. */
   bool has_index;		/* is an index maintained on the instances? */
+  bool has_unique_index;	/* is an unique maintained on the instances? */
   int status;
   bool decache;
   WS_MAP_STATUS map_status;
@@ -4900,6 +4901,7 @@ locator_mflush (MOP mop, void *mf)
 	{
 	  hfid = sm_Root_class_hfid;
 	  has_index = false;
+	  has_unique_index = false;
 	}
       else
 	{
@@ -4923,6 +4925,8 @@ locator_mflush (MOP mop, void *mf)
 	    }
 	  hfid = mflush->hfid;
 	  has_index = sm_has_indexes (mflush->class_obj);
+	  has_unique_index =
+	    sm_class_has_unique_constraint (mflush->class_mop, true);
 	}
     }
   else if (object == NULL)
@@ -4973,6 +4977,7 @@ locator_mflush (MOP mop, void *mf)
       if (locator_is_root (class_mop))
 	{
 	  has_index = false;
+	  has_unique_index = false;
 	  if (locator_class_to_disk (mflush, object, &has_index,
 				     &round_length, &map_status) != NO_ERROR)
 	    {
@@ -5006,6 +5011,8 @@ locator_mflush (MOP mop, void *mf)
 	      return map_status;
 	    }
 	  hfid = mflush->hfid;
+	  has_unique_index =
+	    sm_class_has_unique_constraint (mflush->class_mop, true);
 	}
     }
 
@@ -5129,6 +5136,11 @@ locator_mflush (MOP mop, void *mf)
   if (has_index)
     {
       LC_ONEOBJ_SET_HAS_INDEX (mflush->obj);
+    }
+
+  if (has_unique_index)
+    {
+      LC_ONEOBJ_SET_HAS_UNIQUE_INDEX (mflush->obj);
     }
 
   HFID_COPY (&mflush->obj->hfid, hfid);

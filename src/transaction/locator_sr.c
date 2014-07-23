@@ -236,8 +236,7 @@ static int locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid,
 				PRUNING_CONTEXT * context,
 				MVCC_REEV_DATA * mvcc_reev_data);
 static int locator_delete_force_for_moving (THREAD_ENTRY * thread_p,
-					    HFID * hfid,
-					    OID * oid,
+					    HFID * hfid, OID * oid,
 					    BTID * search_btid,
 					    bool
 					    search_btid_duplicate_key_locked,
@@ -6215,11 +6214,11 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		      LOG_TDES *tdes;
 
 		      /* if savepoint used, can't update in place, since may
-		       * corrupt unique B-tree. An improvement may be done
-		       * here by checking whether the class has unique index.
+		       * corrupt unique B-tree.
 		       */
 		      tdes = LOG_FIND_CURRENT_TDES (thread_p);
-		      if (LSA_ISNULL (&tdes->savept_lsa))
+		      if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX)
+			  || LSA_ISNULL (&tdes->savept_lsa))
 			{
 			  MVCC_REC_HEADER old_rec_header;
 			  or_mvcc_get_header (oldrecdes, &old_rec_header);
@@ -6241,12 +6240,12 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		  LOG_TDES *tdes;
 
 		  /* if savepoint used, can't update in place, since may
-		   * corrupt unique B-tree. An improvement may be done
-		   * here by checking whether the class has unique index.
+		   * corrupt unique B-tree.
 		   */
 
 		  tdes = LOG_FIND_CURRENT_TDES (thread_p);
-		  if (LSA_ISNULL (&tdes->savept_lsa))
+		  if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX)
+		      || LSA_ISNULL (&tdes->savept_lsa))
 		    {
 		      MVCC_REC_HEADER old_rec_header;
 
@@ -7193,7 +7192,7 @@ locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 	    {
 	      repl_info = REPL_INFO_TYPE_STMT_NORMAL;
 	    }
-	  has_index = LC_ONEOBJ_HAS_INDEX (obj);
+	  has_index = LC_ONEOBJ_GET_INDEX_FLAG (obj);
 
 	  if (mvcc_Enabled)
 	    {
@@ -7451,7 +7450,7 @@ xlocator_force (THREAD_ENTRY * thread_p, LC_COPYAREA * force_area,
 	    }
 	}
 
-      has_index = LC_ONEOBJ_HAS_INDEX (obj);
+      has_index = LC_ONEOBJ_GET_INDEX_FLAG (obj);
 
       /* delete old row must be set to true for system classes and false for
        * others, therefore it must be updated for each object.
@@ -7648,6 +7647,7 @@ xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
   int force_count;
   int last_repr_id = -1;
   int old_chn = -1;
+  int local_has_index;
 
   memset (&old_recdes, 0, sizeof (RECDES));
 
@@ -7752,13 +7752,18 @@ xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
    *       given as NULL argument, investigate if should be handled
    *       differently.
    */
+  local_has_index = LC_FLAG_HAS_UNIQUE_INDEX;
+  if (has_index)
+    {
+      local_has_index |= LC_FLAG_HAS_INDEX;
+    }
   error_code = locator_update_force (thread_p, &hfid, class_oid,
 				     &unique_oid, NULL, NULL, false,
-				     &old_recdes, recdes, has_index, NULL,
-				     0, SINGLE_ROW_UPDATE,
+				     &old_recdes, recdes, local_has_index,
+				     NULL, 0, SINGLE_ROW_UPDATE,
 				     force_scancache, &force_count, false,
-				     REPL_INFO_TYPE_STMT_NORMAL,
-				     pruning_type, NULL, NULL, false);
+				     REPL_INFO_TYPE_STMT_NORMAL, pruning_type,
+				     NULL, NULL, false);
   if (error_code == NO_ERROR)
     {
       /* monitor */
@@ -8062,15 +8067,23 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 	}
       else
 	{
+	  int has_index;
 	  assert (LC_IS_FLUSH_UPDATE (operation));
 	  /* MVCC snapshot no needed for now
 	   * scan_cache->mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
 	   */
+	  has_index = LC_FLAG_HAS_INDEX;
+	  if (heap_attrinfo_check_unique_index (thread_p, attr_info,
+						att_id, n_att_id))
+	    {
+	      has_index |= LC_FLAG_HAS_UNIQUE_INDEX;
+	    }
+
 	  error_code =
 	    locator_update_force (thread_p, &class_hfid, &class_oid, oid,
 				  NULL, search_btid,
 				  search_btid_duplicate_key_locked,
-				  old_recdes, &new_recdes, true, att_id,
+				  old_recdes, &new_recdes, has_index, att_id,
 				  n_att_id, op_type, scan_cache, force_count,
 				  not_check_fk, repl_info, pruning_type,
 				  pcontext, mvcc_reev_data,

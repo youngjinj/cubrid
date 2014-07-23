@@ -2212,6 +2212,12 @@ obj_delete (MOP op)
 	  goto error_exit;
 	}
 
+      if (base_op->decached == 0
+	  && op->is_vid && class_->class_type == SM_VCLASS_CT)
+	{
+	  base_op = ws_mvcc_latest_version (base_op);
+	}
+
       /* in some cases, the object has been decached in before
        * trigger. we need fetch it again.
        */
@@ -2236,6 +2242,11 @@ obj_delete (MOP op)
       if (error != NO_ERROR)
 	{
 	  goto error_exit;
+	}
+
+      if (op->decached == 0)
+	{
+	  op = ws_mvcc_latest_version (op);
 	}
 
       /* in some cases, the object has been decached in before

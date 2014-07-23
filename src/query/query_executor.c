@@ -7850,15 +7850,23 @@ qexec_next_scan_block (THREAD_ENTRY * thread_p, XASL_NODE * xasl)
       if ((xasl->curr_spec->type == TARGET_CLASS
 	   || xasl->curr_spec->type == TARGET_CLASS_ATTR)
 	  && xasl->curr_spec->parts != NULL
-	  && xasl->curr_spec->curent == NULL)
+	  && xasl->curr_spec->curent == NULL
+	  && xasl->curr_spec->access != INDEX_NODE_INFO)
 	{
 	  /* initialize the scan_id for partitioned classes */
-	  if (xasl->curr_spec->access == SEQUENTIAL)
+	  if (xasl->curr_spec->access == SEQUENTIAL
+	      || xasl->curr_spec->access == SEQUENTIAL_RECORD_INFO)
 	    {
 	      class_oid = &xasl->curr_spec->s_id.s.hsid.cls_oid;
 	      class_hfid = &xasl->curr_spec->s_id.s.hsid.hfid;
 	    }
-	  else if (xasl->curr_spec->access == INDEX)
+	  else if (xasl->curr_spec->access == SEQUENTIAL_PAGE_SCAN)
+	    {
+	      class_oid = &xasl->curr_spec->s_id.s.hpsid.cls_oid;
+	      class_hfid = &xasl->curr_spec->s_id.s.hpsid.hfid;
+	    }
+	  else if (xasl->curr_spec->access == INDEX
+		   || xasl->curr_spec->access == INDEX_KEY_INFO)
 	    {
 	      class_oid = &xasl->curr_spec->s_id.s.isid.cls_oid;
 	      class_hfid = &xasl->curr_spec->s_id.s.isid.hfid;
@@ -9716,8 +9724,8 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   UPDATE_ASSIGNMENT *assign = NULL;
   SCAN_CODE xb_scan;
   SCAN_CODE ls_scan;
-  XASL_NODE *aptr, *scan_ptr = NULL;
-  DB_VALUE *valp;
+  XASL_NODE *aptr = NULL, *scan_ptr = NULL;
+  DB_VALUE *valp = NULL;
   QPROC_DB_VALUE_LIST vallist;
   int assign_idx = 0;
   int rc;
@@ -9726,7 +9734,7 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   OID *class_oid = NULL;
   UPDDEL_CLASS_INFO_INTERNAL *internal_classes = NULL, *internal_class = NULL;
   ACCESS_SPEC_TYPE *specp = NULL;
-  SCAN_ID *s_id;
+  SCAN_ID *s_id = NULL;
   LOG_LSA lsa;
   int savepoint_used = 0;
   int satisfies_constraints;
@@ -9753,6 +9761,7 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   UPDDEL_MVCC_COND_REEVAL *mvcc_reev_classes = NULL, *mvcc_reev_class = NULL;
   UPDATE_MVCC_REEV_ASSIGNMENT *mvcc_reev_assigns = NULL;
 
+  mvcc_upddel_reev_data.copyarea = NULL;
   SET_MVCC_UPDATE_REEV_DATA (&mvcc_reev_data, &mvcc_upddel_reev_data, V_TRUE,
 			     NULL);
   class_oid_cnt = update->no_classes;

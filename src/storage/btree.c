@@ -28263,18 +28263,7 @@ start_locking:
       goto locking_done;
     }
 
-  if (mvcc_Enabled == true)
-    {
-      /* In MVCC, there is not need to search from previous key, when resume
-       * after unconditional locking. That's because at least one OID of current
-       * key is visible, so can't be removed.
-       */
-      btrs_helper.read_prev_key = false;
-    }
-  else
-    {
-      btrs_helper.read_prev_key = true;
-    }
+  btrs_helper.read_prev_key = true;
 
   if (bts->read_uncommitted)
     {

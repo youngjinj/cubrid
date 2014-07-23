@@ -711,4 +711,7 @@ extern int heap_rv_mvcc_undo_delete_relocation (THREAD_ENTRY * thread_p,
 extern bool heap_is_big_length (int length);
 extern int heap_get_class_oid_from_page (THREAD_ENTRY * thread_p,
 					 PAGE_PTR page_p, OID * class_oid);
+extern bool heap_attrinfo_check_unique_index (THREAD_ENTRY * thread_p,
+					      HEAP_CACHE_ATTRINFO * attr_info,
+					      ATTR_ID * att_id, int n_att_id);
 #endif /* _HEAP_FILE_H_ */

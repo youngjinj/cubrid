@@ -29242,3 +29242,47 @@ heap_insert_into_page (THREAD_ENTRY * thread_p, RECDES * recdes,
   /* Insert failed */
   return ER_FAILED;
 }
+
+/*
+ * heap_attrinfo_check_unique_index () - check whether exists an unique index on
+ *					specified attributes
+ *   return: true, if there is an index containing specified attributes
+ *   thread_p(in): thread entry
+ *   attr_info(in): attribute info
+ *   att_id(in): attribute ids
+ *   n_att_id(in): count attributes
+ */
+bool
+heap_attrinfo_check_unique_index (THREAD_ENTRY * thread_p,
+				  HEAP_CACHE_ATTRINFO * attr_info,
+				  ATTR_ID * att_id, int n_att_id)
+{
+  OR_INDEX *index;
+  int num_btids, i, j, k;
+
+  if (attr_info == NULL || att_id == NULL)
+    {
+      return false;
+    }
+
+  num_btids = attr_info->last_classrepr->n_indexes;
+  for (i = 0; i < num_btids; i++)
+    {
+      index = &(attr_info->last_classrepr->indexes[i]);
+      if (btree_is_unique_type (index->type))
+	{
+	  for (j = 0; j < n_att_id; j++)
+	    {
+	      for (k = 0; k < index->n_atts; k++)
+		{
+		  if (att_id[j] == (ATTR_ID) (index->atts[k]->id))
+		    {		/* the index key_type has updated attr */
+		      return true;
+		    }
+		}
+	    }
+	}
+    }
+
+  return false;
+}
