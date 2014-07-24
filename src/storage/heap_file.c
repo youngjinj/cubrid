@@ -868,6 +868,24 @@ static HEAP_STATS_BESTSPACE_CACHE heap_Bestspace_cache_area =
 
 static HEAP_STATS_BESTSPACE_CACHE *heap_Bestspace = NULL;
 
+#if defined (NDEBUG)
+static PAGE_PTR heap_scan_pb_lock_and_fetch (THREAD_ENTRY * thread_p,
+					     VPID * vpid_ptr, int new_page,
+					     LOCK lock,
+					     HEAP_SCANCACHE * scan_cache);
+#else /* !NDEBUG */
+#define heap_scan_pb_lock_and_fetch(...) \
+  heap_scan_pb_lock_and_fetch_debug (__VA_ARGS__, ARG_FILE_LINE)
+
+static PAGE_PTR heap_scan_pb_lock_and_fetch_debug (THREAD_ENTRY * thread_p,
+						   VPID * vpid_ptr,
+						   int new_page, LOCK lock,
+						   HEAP_SCANCACHE *
+						   scan_cache,
+						   const char * caller_file,
+						   const int caller_line);
+#endif /* !NDEBUG */
+
 static int heap_scancache_update_hinted_when_lots_space (THREAD_ENTRY *
 							 thread_p,
 							 HEAP_SCANCACHE *,
@@ -1728,11 +1746,6 @@ end:
  * Scan page buffer and latch page manipulation
  */
 
-static PAGE_PTR heap_scan_pb_lock_and_fetch (THREAD_ENTRY * thread_p,
-					     VPID * vpid_ptr, int new_page,
-					     LOCK lock,
-					     HEAP_SCANCACHE * scan_cache);
-
 /*
  * heap_scan_pb_lock_and_fetch () -
  *   return:
@@ -1740,14 +1753,28 @@ static PAGE_PTR heap_scan_pb_lock_and_fetch (THREAD_ENTRY * thread_p,
  *   new_page(in):
  *   lock(in):
  *   scan_cache(in):
+ *
+ * NOTE: Because this function is called in too many places and because it
+ *	 is useful where a page was fixed for debug purpose, we pass the
+ *	 caller file/line arguments to pgbuf_fix.
  */
+#if defined (NDEBUG)
 static PAGE_PTR
 heap_scan_pb_lock_and_fetch (THREAD_ENTRY * thread_p, VPID * vpid_ptr,
 			     int new_page, LOCK lock,
 			     HEAP_SCANCACHE * scan_cache)
+#else /* !NDEBUG */
+static PAGE_PTR
+heap_scan_pb_lock_and_fetch_debug (THREAD_ENTRY * thread_p, VPID * vpid_ptr,
+				   int new_page, LOCK lock,
+				   HEAP_SCANCACHE * scan_cache,
+				   const char * caller_file,
+				   const int caller_line)
+#endif /* !NDEBUG */
 {
   PAGE_PTR pgptr = NULL;
   LOCK page_lock;
+  PGBUF_LATCH_MODE page_latch_mode;
 
   if (scan_cache != NULL)
     {
@@ -1769,14 +1796,22 @@ heap_scan_pb_lock_and_fetch (THREAD_ENTRY * thread_p, VPID * vpid_ptr,
 
   if (page_lock == S_LOCK)
     {
-      pgptr = pgbuf_fix (thread_p, vpid_ptr, new_page, PGBUF_LATCH_READ,
-			 PGBUF_UNCONDITIONAL_LATCH);
+      page_latch_mode = PGBUF_LATCH_READ;
     }
   else
     {
-      pgptr = pgbuf_fix (thread_p, vpid_ptr, new_page, PGBUF_LATCH_WRITE,
-			 PGBUF_UNCONDITIONAL_LATCH);
+      page_latch_mode = PGBUF_LATCH_WRITE;
     }
+
+#if defined (NDEBUG)
+  pgptr =
+    pgbuf_fix_release (thread_p, vpid_ptr, new_page, PGBUF_LATCH_READ,
+		       PGBUF_UNCONDITIONAL_LATCH);
+#else /* !NDEBUG */
+  pgptr =
+    pgbuf_fix_debug (thread_p, vpid_ptr, new_page, PGBUF_LATCH_READ,
+		     PGBUF_UNCONDITIONAL_LATCH, caller_file, caller_line);
+#endif /* !NDEBUG */
 
   if (pgptr != NULL)
     {
