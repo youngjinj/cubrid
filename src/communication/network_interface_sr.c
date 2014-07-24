@@ -8403,18 +8403,27 @@ sbtree_get_key_type (THREAD_ENTRY * thread_p, unsigned int rid,
       return_error_to_client (thread_p, rid);
     }
 
-  /* Send key type to client */
-  reply_data_size = or_packed_domain_size (key_type, 0);
-  reply_data = (char *) malloc (reply_data_size);
-  if (reply_data == NULL)
+  if (key_type != NULL)
     {
-      error = ER_OUT_OF_VIRTUAL_MEMORY;
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, reply_data_size);
-      reply_data_size = 0;
+      /* Send key type to client */
+      reply_data_size = or_packed_domain_size (key_type, 0);
+      reply_data = (char *) malloc (reply_data_size);
+      if (reply_data == NULL)
+	{
+	  error = ER_OUT_OF_VIRTUAL_MEMORY;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, reply_data_size);
+	  reply_data_size = 0;
+	}
+      else
+	{
+	  (void) or_pack_domain (reply_data, key_type, 0, 0);
+	}
     }
   else
     {
-      (void) or_pack_domain (reply_data, key_type, 0, 0);
+      reply_data_size = 0;
+      reply_data = NULL;
+      error = (error == NO_ERROR) ? ER_FAILED : error;
     }
   ptr = or_pack_int (reply, reply_data_size);
   ptr = or_pack_int (ptr, error);

@@ -4823,9 +4823,11 @@ btree_search_leaf_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       /* key not exists, should be inserted in the current middle record */
       *slot_id = middle;
 
+#if 0
       er_log_debug (ARG_FILE_LINE,
 		    "btree_search_leaf_page: key not exists, "
 		    "should be inserted in the current middle record.");
+#endif
 
       return false;
     }
@@ -4834,9 +4836,11 @@ btree_search_leaf_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       /* key not exists, should be inserted in the record right to the middle */
       *slot_id = middle + 1;
 
+#if 0
       er_log_debug (ARG_FILE_LINE,
 		    "btree_search_leaf_page: key not exists, "
 		    "should be inserted in the record right to the middle.");
+#endif
 
       return false;
     }
@@ -6706,7 +6710,12 @@ xbtree_get_key_type (THREAD_ENTRY * thread_p, BTID btid,
 
   root_header = btree_get_root_header (root_page);
   or_init (&buf, root_header->packed_key_domain, -1);
-  (void) or_get_domain (&buf, *key_type, NULL);
+  *key_type = or_get_domain (&buf, NULL, NULL);
+
+  if (*key_type == NULL)
+    {
+      return ER_FAILED;
+    }
 
   pgbuf_unfix (thread_p, root_page);
 
