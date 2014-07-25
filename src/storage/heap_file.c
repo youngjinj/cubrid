@@ -1805,11 +1805,11 @@ heap_scan_pb_lock_and_fetch_debug (THREAD_ENTRY * thread_p, VPID * vpid_ptr,
 
 #if defined (NDEBUG)
   pgptr =
-    pgbuf_fix_release (thread_p, vpid_ptr, new_page, PGBUF_LATCH_READ,
+    pgbuf_fix_release (thread_p, vpid_ptr, new_page, page_latch_mode,
 		       PGBUF_UNCONDITIONAL_LATCH);
 #else /* !NDEBUG */
   pgptr =
-    pgbuf_fix_debug (thread_p, vpid_ptr, new_page, PGBUF_LATCH_READ,
+    pgbuf_fix_debug (thread_p, vpid_ptr, new_page, page_latch_mode,
 		     PGBUF_UNCONDITIONAL_LATCH, caller_file, caller_line);
 #endif /* !NDEBUG */
 
