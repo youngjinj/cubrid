@@ -3961,6 +3961,8 @@ pt_show_binopcode (PT_OP_TYPE n)
       return "default ";
     case PT_LIST_DBS:
       return "list_dbs ";
+    case PT_SYS_GUID:
+      return "sys_guid ";
     case PT_OID_OF_DUPLICATE_KEY:
       return "oid_of_duplicate_key ";
     case PT_BIT_TO_BLOB:
@@ -4009,6 +4011,8 @@ pt_show_binopcode (PT_OP_TYPE n)
       return "trace_stats";
     case PT_INDEX_PREFIX:
       return "index_prefix ";
+    case PT_SLEEP:
+      return "sleep ";
     default:
       return "unknown opcode";
     }
@@ -10281,8 +10285,8 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
 	{
 	  q = pt_append_nulstring (parser, q, " using ");
 	  q = pt_append_nulstring (parser, q, lang_get_codeset_name
-				   (p->info.expr.arg2->
-				    info.value.data_value.i));
+				   (p->info.expr.arg2->info.value.
+				    data_value.i));
 	}
       q = pt_append_nulstring (parser, q, ")");
       break;
@@ -11879,6 +11883,10 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
       q = pt_append_nulstring (parser, q, " list_dbs() ");
       break;
 
+    case PT_SYS_GUID:
+      q = pt_append_nulstring (parser, q, " sys_guid() ");
+      break;
+
     case PT_PATH_EXPR_SET:
       r1 = pt_print_bytes_l (parser, p->info.expr.arg1);
       q = pt_append_varchar (parser, q, r1);
@@ -11942,8 +11950,8 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
 	{
 	  q = pt_append_nulstring (parser, q, " using ");
 	  q = pt_append_nulstring (parser, q, lang_get_codeset_name
-				   (p->info.expr.arg2->
-				    info.value.data_value.i));
+				   (p->info.expr.arg2->info.value.
+				    data_value.i));
 	}
       q = pt_append_nulstring (parser, q, ")");
       break;
@@ -12192,6 +12200,13 @@ pt_print_expr (PARSER_CONTEXT * parser, PT_NODE * p)
 
       q = pt_append_nulstring (parser, q, ", ");
       r1 = pt_print_bytes (parser, p->info.expr.arg3);
+      q = pt_append_varchar (parser, q, r1);
+
+      q = pt_append_nulstring (parser, q, ")");
+      break;
+    case PT_SLEEP:
+      q = pt_append_nulstring (parser, q, " sleep(");
+      r1 = pt_print_bytes (parser, p->info.expr.arg1);
       q = pt_append_varchar (parser, q, r1);
 
       q = pt_append_nulstring (parser, q, ")");
@@ -13290,8 +13305,7 @@ pt_print_isolation_lvl (PARSER_CONTEXT * parser, PT_NODE * p)
 	      b = pt_append_nulstring (parser, b, ",");
 	    }
 	  b = pt_append_nulstring (parser, b,
-				   pt_show_misc_type (p->info.
-						      isolation_lvl.
+				   pt_show_misc_type (p->info.isolation_lvl.
 						      instances));
 	  b = pt_append_nulstring (parser, b, " instances ");
 	}

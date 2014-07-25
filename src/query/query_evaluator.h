@@ -119,6 +119,7 @@ typedef enum
   SHOWSTMT_INDEX_CAPACITY,
   SHOWSTMT_ALL_INDEXES_HEADER,
   SHOWSTMT_ALL_INDEXES_CAPACITY,
+  SHOWSTMT_GLOBAL_CRITICAL_SECTIONS,
 
   /* append the new show statement types in here */
 
@@ -442,7 +443,9 @@ typedef enum
   T_SHA_TWO,
   T_INDEX_PREFIX,
   T_TO_BASE64,
-  T_FROM_BASE64
+  T_FROM_BASE64,
+  T_SYS_GUID,
+  T_SLEEP
 } OPERATOR_TYPE;		/* arithmetic operator types */
 
 typedef struct pred_expr PRED_EXPR;

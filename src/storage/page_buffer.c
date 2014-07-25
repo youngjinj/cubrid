@@ -2811,6 +2811,7 @@ end:
  *   flush_upto_lsa(in):
  *   prev_chkpt_redo_lsa(in): Redo_LSA of previous checkpoint
  *   smallest_lsa(out): Smallest LSA of a dirty buffer in buffer pool
+ *   flushed_page_cnt(out): The number of flushed pages
  *
  * Note: The function flushes and dirty unfixed page whose LSA is smaller that
  *       the last_chkpt_lsa, it returns the smallest_lsa from the remaining
@@ -2823,14 +2824,14 @@ int
 pgbuf_flush_checkpoint_debug (THREAD_ENTRY * thread_p,
 			      const LOG_LSA * flush_upto_lsa,
 			      const LOG_LSA * prev_chkpt_redo_lsa,
-			      LOG_LSA * smallest_lsa,
+			      LOG_LSA * smallest_lsa, int *flushed_page_cnt,
 			      const char *caller_file, int caller_line)
 #else /* NDEBUG */
 int
 pgbuf_flush_checkpoint (THREAD_ENTRY * thread_p,
 			const LOG_LSA * flush_upto_lsa,
 			const LOG_LSA * prev_chkpt_redo_lsa,
-			LOG_LSA * smallest_lsa)
+			LOG_LSA * smallest_lsa, int *flushed_page_cnt)
 #endif				/* NDEBUG */
 {
   PGBUF_BCB *bufptr;
@@ -2838,12 +2839,18 @@ pgbuf_flush_checkpoint (THREAD_ENTRY * thread_p,
   bool done_flush;
   PAGE_PTR pgptr;
   VPID vpid;
+  int flushed_page_cnt_local = 0;
 #if defined(SERVER_MODE)
   int sleep_msecs;
   int rv;
 
   sleep_msecs = prm_get_integer_value (PRM_ID_LOG_CHECKPOINT_SLEEP_MSECS);
 #endif /* SERVER_MODE */
+
+  if (flushed_page_cnt != NULL)
+    {
+      *flushed_page_cnt = -1;
+    }
 
   /* Things must be truly flushed up to this lsa */
   logpb_flush_log_for_wal (thread_p, flush_upto_lsa);
@@ -2895,6 +2902,7 @@ pgbuf_flush_checkpoint (THREAD_ENTRY * thread_p,
 	{
 	  if (pgbuf_flush_page_with_wal (thread_p, bufptr) == NO_ERROR)
 	    {
+	      flushed_page_cnt_local++;
 	      done_flush = true;
 	    }
 	}
@@ -2968,6 +2976,10 @@ pgbuf_flush_checkpoint (THREAD_ENTRY * thread_p,
 
 		  pthread_mutex_unlock (&bufptr->BCB_mutex);
 		}
+	      else		/* If the result of pgbuf_flush_with_wal() is success, then */
+		{
+		  flushed_page_cnt_local++;
+		}
 
 	      if (pgptr != NULL)
 		{
@@ -2982,6 +2994,11 @@ pgbuf_flush_checkpoint (THREAD_ENTRY * thread_p,
 	  return ER_FAILED;
 	}
 #endif /* SERVER_MODE */
+    }
+
+  if (flushed_page_cnt != NULL)
+    {
+      *flushed_page_cnt = flushed_page_cnt_local;
     }
 
   return NO_ERROR;

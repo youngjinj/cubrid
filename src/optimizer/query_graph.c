@@ -1141,8 +1141,10 @@ build_query_graph_function_index (PARSER_CONTEXT * parser, PT_NODE * tree,
 	    }
 
 	  if (entity != NULL && entity->info.spec.entity_name
-	      && ((cls = sm_find_class (entity->info.spec.entity_name->info.
-					name.original)) != NULL))
+	      &&
+	      ((cls =
+		sm_find_class (entity->info.spec.entity_name->info.
+			       name.original)) != NULL))
 	    {
 	      constraints = sm_class_constraints (cls);
 	      k = 0;
@@ -1154,7 +1156,8 @@ build_query_graph_function_index (PARSER_CONTEXT * parser, PT_NODE * tree,
 			parser_print_function_index_expr (env->parser, tree);
 
 		      if (expr_str != NULL
-			  && !intl_identifier_casecmp (expr_str, constraints->
+			  && !intl_identifier_casecmp (expr_str,
+						       constraints->
 						       func_index_info->
 						       expr_str))
 			{
@@ -1177,16 +1180,17 @@ build_query_graph_function_index (PARSER_CONTEXT * parser, PT_NODE * tree,
 			      seg = qo_insert_segment (node, NULL, tree, env,
 						       expr_str);
 			      QO_SEG_FUNC_INDEX (seg) = true;
-			      QO_SEG_NAME (seg) = strdup (constraints->
-							  func_index_info->
-							  expr_str);
+			      QO_SEG_NAME (seg) =
+				strdup
+				(constraints->func_index_info->expr_str);
 			      if (QO_SEG_NAME (seg) == NULL)
 				{
 				  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 					  ER_OUT_OF_VIRTUAL_MEMORY,
-					  1, strlen (constraints->
-						     func_index_info->
-						     expr_str) + 1);
+					  1,
+					  strlen
+					  (constraints->func_index_info->
+					   expr_str) + 1);
 				  *continue_walk = PT_STOP_WALK;
 				  return tree;
 				}
@@ -3424,6 +3428,8 @@ get_opcode_rank (PT_OP_TYPE opcode)
     case PT_INDEX_CARDINALITY:
     case PT_TO_BASE64:
     case PT_FROM_BASE64:
+    case PT_SYS_GUID:
+    case PT_SLEEP:
 
       return RANK_EXPR_HEAVY;
       /* special case operator */
@@ -5162,8 +5168,8 @@ qo_get_attr_info_func_index (QO_ENV * env, QO_SEGMENT * seg,
 		    {
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_OUT_OF_VIRTUAL_MEMORY, 1,
-			      SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->
-							   pkeys_size));
+			      SIZEOF_ATTR_CUM_STATS_PKEYS
+			      (cum_statsp->pkeys_size));
 		      qo_free_attr_info (env, attr_infop);
 		      return NULL;
 		    }
@@ -5392,8 +5398,8 @@ qo_get_attr_info (QO_ENV * env, QO_SEGMENT * seg)
 		{
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			  ER_OUT_OF_VIRTUAL_MEMORY, 1,
-			  SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->
-						       pkeys_size));
+			  SIZEOF_ATTR_CUM_STATS_PKEYS
+			  (cum_statsp->pkeys_size));
 		  qo_free_attr_info (env, attr_infop);
 		  return NULL;
 		}
@@ -5702,8 +5708,8 @@ qo_get_index_info (QO_ENV * env, QO_NODE * node)
 		{
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			  ER_OUT_OF_VIRTUAL_MEMORY, 1,
-			  SIZEOF_ATTR_CUM_STATS_PKEYS (cum_statsp->
-						       pkeys_size));
+			  SIZEOF_ATTR_CUM_STATS_PKEYS
+			  (cum_statsp->pkeys_size));
 		  return;	/* give up */
 		}
 

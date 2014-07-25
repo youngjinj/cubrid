@@ -140,6 +140,8 @@ typedef enum
 
 #define MAX_TOKEN_SIZE 16000
 
+#define GUID_STANDARD_BYTES_LENGTH 16
+
 static int qstr_trim (MISC_OPERAND tr_operand,
 		      const unsigned char *trim,
 		      int trim_length,
@@ -2702,8 +2704,9 @@ db_string_sha_one (DB_VALUE const *src, DB_VALUE * result)
       if (QSTR_IS_ANY_CHAR (val_type))
 	{
 	  error_status =
-	    sha_one (NULL, DB_PULL_STRING (src), DB_GET_STRING_SIZE (src),
-		     &result_strp, &result_len);
+	    crypt_sha_one (NULL, DB_PULL_STRING (src),
+			   DB_GET_STRING_SIZE (src), &result_strp,
+			   &result_len);
 	  if (error_status != NO_ERROR)
 	    {
 	      goto error;
@@ -2788,8 +2791,8 @@ db_string_sha_two (DB_VALUE const *src, DB_VALUE const *hash_len,
   if (QSTR_IS_ANY_CHAR (src_type))
     {
       error_status =
-	sha_two (NULL, DB_PULL_STRING (src), DB_GET_STRING_LENGTH (src), len,
-		 &result_strp, &result_len);
+	crypt_sha_two (NULL, DB_PULL_STRING (src), DB_GET_STRING_LENGTH (src),
+		       len, &result_strp, &result_len);
       if (error_status != NO_ERROR)
 	{
 	  goto error;
@@ -2865,10 +2868,11 @@ db_string_aes_encrypt (DB_VALUE const *src, DB_VALUE const *key,
   if (QSTR_IS_ANY_CHAR (src_type) && QSTR_IS_ANY_CHAR (key_type))
     {
       error_status =
-	aes_default_encrypt (NULL, DB_PULL_STRING (src),
-			     DB_GET_STRING_LENGTH (src), DB_PULL_STRING (key),
-			     DB_GET_STRING_LENGTH (key), &result_strp,
-			     &result_len);
+	crypt_aes_default_encrypt (NULL, DB_PULL_STRING (src),
+				   DB_GET_STRING_LENGTH (src),
+				   DB_PULL_STRING (key),
+				   DB_GET_STRING_LENGTH (key), &result_strp,
+				   &result_len);
       if (error_status != NO_ERROR)
 	{
 	  goto error;
@@ -2937,10 +2941,11 @@ db_string_aes_decrypt (DB_VALUE const *src, DB_VALUE const *key,
   if (QSTR_IS_ANY_CHAR (src_type) && QSTR_IS_ANY_CHAR (key_type))
     {
       error_status =
-	aes_default_decrypt (NULL, DB_PULL_STRING (src),
-			     DB_GET_STRING_LENGTH (src), DB_PULL_STRING (key),
-			     DB_GET_STRING_LENGTH (key), &result_strp,
-			     &result_len);
+	crypt_aes_default_decrypt (NULL, DB_PULL_STRING (src),
+				   DB_GET_STRING_LENGTH (src),
+				   DB_PULL_STRING (key),
+				   DB_GET_STRING_LENGTH (key), &result_strp,
+				   &result_len);
       if (error_status != NO_ERROR)
 	{
 	  goto error;
@@ -25119,6 +25124,81 @@ error:
   return error_code;
 }
 
+/*
+ * db_guid() - Generate a type 4 (randomly generated) UUID.
+ *   return: error code or NO_ERROR
+ *   thread_p(in): thread context
+ *   result(out): HEX encoded UUID string
+ * Note:
+ */
+int
+db_guid (THREAD_ENTRY * thread_p, DB_VALUE * result)
+{
+  int i = 0, error_code = NO_ERROR;
+  const char hex_digit[] = "0123456789ABCDEF";
+  char guid_bytes[GUID_STANDARD_BYTES_LENGTH];
+  char *guid_hex = NULL;
+
+  if (result == NULL)
+    {
+      error_code = ER_OBJ_INVALID_ARGUMENTS;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 0);
+      goto error;
+    }
+
+  DB_MAKE_NULL (result);
+
+  /* Generate random bytes */
+  error_code =
+    crypt_generate_random_bytes (thread_p, guid_bytes,
+				 GUID_STANDARD_BYTES_LENGTH);
+
+  if (error_code != NO_ERROR)
+    {
+      goto error;
+    }
+
+  /* Clear UUID version field */
+  guid_bytes[6] &= 0x0F;
+  /* Set UUID version according to UUID version 4 protocol */
+  guid_bytes[6] |= 0x40;
+
+  /* Clear variant field */
+  guid_bytes[8] &= 0x3f;
+  /* Set variant according to UUID version 4 protocol */
+  guid_bytes[8] |= 0x80;
+
+  guid_hex =
+    (char *) db_private_alloc (thread_p, GUID_STANDARD_BYTES_LENGTH * 2 + 1);
+  if (guid_hex == NULL)
+    {
+      error_code = er_errid ();
+      goto error;
+    }
+
+  guid_hex[GUID_STANDARD_BYTES_LENGTH * 2] = '\0';
+
+  /* Encode the bytes to HEX */
+  for (i = 0; i < GUID_STANDARD_BYTES_LENGTH; i++)
+    {
+      guid_hex[i * 2] = hex_digit[(guid_bytes[i] >> 4) & 0xF];
+      guid_hex[i * 2 + 1] = hex_digit[(guid_bytes[i] & 0xF)];
+    }
+
+  DB_MAKE_STRING (result, guid_hex);
+  result->need_clear = true;
+
+  return NO_ERROR;
+
+error:
+  if (prm_get_bool_value (PRM_ID_RETURN_NULL_ON_FUNCTION_ERRORS))
+    {
+      er_clear ();
+      error_code = NO_ERROR;
+    }
+
+  return error_code;
+}
 
 /*
  * db_ascii() - return ASCII code of first character in string

@@ -515,6 +515,7 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
     case T_INET_NTOA:
     case T_CHARSET:
     case T_COLLATION:
+    case T_SLEEP:
       /* fetch rhs value */
       if (fetch_peek_dbval (thread_p, arithptr->rightptr,
 			    vd, NULL, obj_oid, tpl, &peek_right) != NO_ERROR)
@@ -612,6 +613,7 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
     case T_LAST_INSERT_ID:
     case T_LIST_DBS:
     case T_TRACE_STATS:
+    case T_SYS_GUID:
       /* nothing to fetch */
       break;
 
@@ -3703,6 +3705,13 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
 	}
       break;
 
+    case T_SYS_GUID:
+      if (db_guid (thread_p, arithptr->value) != NO_ERROR)
+	{
+	  goto error;
+	}
+      break;
+
     case T_TYPEOF:
       if (db_typeof_dbval (arithptr->value, peek_right) != NO_ERROR)
 	{
@@ -3795,6 +3804,13 @@ fetch_peek_arith (THREAD_ENTRY * thread_p, REGU_VARIABLE * regu_var,
     case T_INDEX_PREFIX:
       if (db_string_index_prefix (peek_left, peek_right, peek_third,
 				  arithptr->value) != NO_ERROR)
+	{
+	  goto error;
+	}
+      break;
+
+    case T_SLEEP:
+      if (db_sleep (arithptr->value, peek_right) != NO_ERROR)
 	{
 	  goto error;
 	}

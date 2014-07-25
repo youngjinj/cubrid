@@ -7169,6 +7169,12 @@ btree_check_pages (THREAD_ENTRY * thread_p, BTID_INT * btid,
       goto error;
     }
 
+  if (spage_check (thread_p, pg_ptr) != NO_ERROR)
+    {
+      vld = DISK_ERROR;
+      goto error;
+    }
+
   /* Verify subtree child pages */
 
   key_cnt = btree_node_number_of_keys (pg_ptr);
@@ -7176,6 +7182,7 @@ btree_check_pages (THREAD_ENTRY * thread_p, BTID_INT * btid,
   header = btree_get_node_header (pg_ptr);
   if (header == NULL)
     {
+      vld = DISK_ERROR;
       goto error;
     }
 

@@ -8284,8 +8284,7 @@ qo_is_iscan (QO_PLAN * plan)
   if (plan
       && plan->plan_type == QO_PLANTYPE_SCAN
       && (plan->plan_un.scan.scan_method == QO_SCANMETHOD_INDEX_SCAN
-	  || plan->plan_un.scan.scan_method ==
-	  QO_SCANMETHOD_INDEX_SCAN_INSPECT))
+	  || plan->plan_un.scan.scan_method == QO_SCANMETHOD_INDEX_SCAN_INSPECT))
     {
       return true;
     }

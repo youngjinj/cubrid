@@ -292,7 +292,9 @@ static FUNCTION_MAP functions[] = {
   {"trace_stats", PT_TRACE_STATS},
   {"str_to_date", PT_STR_TO_DATE},
   {"to_base64", PT_TO_BASE64},
-  {"from_base64", PT_FROM_BASE64}
+  {"from_base64", PT_FROM_BASE64},
+  {"sys_guid", PT_SYS_GUID},
+  {"sleep", PT_SLEEP}
 };
 
 
@@ -665,6 +667,8 @@ int g_original_buffer_len;
 %type <number> opt_if_not_exists
 %type <number> opt_if_exists
 %type <number> show_type
+%type <number> show_type_of_like
+%type <number> show_type_of_where
 %type <number> show_type_arg1
 %type <number> show_type_arg1_opt
 %type <number> show_type_arg_named
@@ -1438,6 +1442,7 @@ int g_original_buffer_len;
 %token <cptr> COLUMNS
 %token <cptr> COMMITTED
 %token <cptr> COST
+%token <cptr> CRITICAL
 %token <cptr> CUME_DIST
 %token <cptr> DATE_ADD
 %token <cptr> DATE_SUB
@@ -1515,9 +1520,11 @@ int g_original_buffer_len;
 %token <cptr> REUSE_OID
 %token <cptr> REVERSE
 %token <cptr> ROW_NUMBER
+%token <cptr> SECTIONS
 %token <cptr> SEPARATOR
 %token <cptr> SERIAL
 %token <cptr> SHOW
+%token <cptr> SLEEP
 %token <cptr> SLOTS
 %token <cptr> SLOTTED
 %token <cptr> STABILITY
@@ -6544,7 +6551,7 @@ show_stmt
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}						
-	| SHOW show_type LIKE expression_
+	| SHOW show_type_of_like LIKE expression_
 		{{
 
 			const int like_where_syntax = 1;  /* is LIKE */
@@ -6557,7 +6564,7 @@ show_stmt
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}						
-	| SHOW show_type WHERE search_condition
+	| SHOW show_type_of_where WHERE search_condition
 		{{
 			const int like_where_syntax = 2;  /* is WHERE */
 			int type = $2;
@@ -6649,6 +6656,24 @@ kill_stmt
 	;
 
 show_type
+	: ACCESS STATUS
+		{{
+			$$ = SHOWSTMT_ACCESS_STATUS;
+		}}
+	| CRITICAL SECTIONS
+		{{
+			$$ = SHOWSTMT_GLOBAL_CRITICAL_SECTIONS;
+		}}
+	;
+
+show_type_of_like
+	: ACCESS STATUS
+		{{
+			$$ = SHOWSTMT_ACCESS_STATUS;
+		}}
+	;
+
+show_type_of_where
 	: ACCESS STATUS
 		{{
 			$$ = SHOWSTMT_ACCESS_STATUS;
@@ -19574,6 +19599,15 @@ identifier
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
 
 		DBG_PRINT}}
+	| CRITICAL
+		{{
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
 	| CUME_DIST
 		{{
 			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
@@ -20177,6 +20211,16 @@ identifier
 
 		DBG_PRINT}}
 	| ROW_NUMBER
+		{{
+
+			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
+			if (p)
+			  p->info.name.original = $1;
+			$$ = p;
+			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos)
+
+		DBG_PRINT}}
+	| SECTIONS
 		{{
 
 			PT_NODE *p = parser_new_node (this_parser, PT_NAME);
@@ -23252,6 +23296,21 @@ parser_keyword_func (const char *name, PT_NODE * args)
       parser_cannot_prepare = true;
       return parser_make_expression (this_parser, key->op, NULL, NULL, NULL);
 
+    case PT_SYS_GUID:
+      {
+        PT_NODE *expr;
+        if (c != 0)
+          {
+            return NULL;
+          }
+        parser_cannot_cache = true;
+
+        expr = parser_make_expression (this_parser, key->op, NULL, NULL, NULL);
+        expr->do_not_fold = 1;
+
+        return expr;
+      }
+
       /* arg 0 or 1 */
     case PT_RAND:
     case PT_RANDOM:
@@ -24254,6 +24313,21 @@ parser_keyword_func (const char *name, PT_NODE * args)
       if (c != 0)
 	return NULL;
       node = parser_make_expression (this_parser, key->op, NULL, NULL, NULL);
+      return node;
+      
+    case PT_SLEEP:
+      if (c != 1)
+        {
+      	  return NULL;
+        }
+      
+      a1 = args;
+      node = parser_make_expression (this_parser, key->op, a1, NULL, NULL);
+      if (node != NULL)
+        {
+          node->do_not_fold = 1;
+        }
+      
       return node;
 
     default:

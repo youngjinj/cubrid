@@ -4314,8 +4314,9 @@ pt_to_aggregate_node (PARSER_CONTEXT * parser, PT_NODE * tree,
 	      if (group_concat_sep_node_save != NULL)
 		{
 		  if (group_concat_sep_node_save->node_type == PT_VALUE
-		      && PT_IS_STRING_TYPE (group_concat_sep_node_save->
-					    type_enum))
+		      &&
+		      PT_IS_STRING_TYPE
+		      (group_concat_sep_node_save->type_enum))
 		    {
 		      pr_clone_value (&group_concat_sep_node_save->info.value.
 				      db_value,
@@ -6379,10 +6380,10 @@ pt_make_regu_hostvar (PARSER_CONTEXT * parser, const PT_NODE * node)
 	      if (TP_IS_CHAR_TYPE (exptyp))
 		{
 		  db_string_put_cs_and_collation (val,
-						  TP_DOMAIN_CODESET (regu->
-								     domain),
-						  TP_DOMAIN_COLLATION (regu->
-								       domain));
+						  TP_DOMAIN_CODESET
+						  (regu->domain),
+						  TP_DOMAIN_COLLATION
+						  (regu->domain));
 		}
 	    }
 	  else if (typ != exptyp
@@ -8102,7 +8103,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		       || node->info.expr.op == PT_CHARSET
 		       || node->info.expr.op == PT_COLLATION
 		       || node->info.expr.op == PT_TO_BASE64
-		       || node->info.expr.op == PT_FROM_BASE64)
+		       || node->info.expr.op == PT_FROM_BASE64
+		       || node->info.expr.op == PT_SLEEP)
 		{
 		  r1 = NULL;
 
@@ -8330,6 +8332,7 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		       || node->info.expr.op == PT_LOCAL_TRANSACTION_ID
 		       || node->info.expr.op == PT_ROW_COUNT
 		       || node->info.expr.op == PT_LIST_DBS
+		       || node->info.expr.op == PT_SYS_GUID
 		       || node->info.expr.op == PT_LAST_INSERT_ID)
 		{
 		  domain = pt_xasl_node_to_domain (parser, node);
@@ -9601,8 +9604,8 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 			domain = pt_xasl_data_type_to_domain (parser,
 							      node->info.
 							      expr.cast_type);
-			assert (domain->collation_id
-				== PT_GET_COLLATION_MODIFIER (node));
+			assert (domain->collation_id ==
+				PT_GET_COLLATION_MODIFIER (node));
 			/* COLLATE modifier eliminates extra T_CAST operator
 			 * with some exceptions:
 			 * 1. argument is PT_NAME; attributes may be
@@ -9695,6 +9698,11 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 
 		case PT_LIST_DBS:
 		  regu = pt_make_regu_arith (NULL, NULL, NULL, T_LIST_DBS,
+					     domain);
+		  break;
+
+		case PT_SYS_GUID:
+		  regu = pt_make_regu_arith (NULL, NULL, NULL, T_SYS_GUID,
 					     domain);
 		  break;
 
@@ -9807,6 +9815,10 @@ pt_to_regu_variable (PARSER_CONTEXT * parser, PT_NODE * node, UNBOX unbox)
 		case PT_INDEX_PREFIX:
 		  regu =
 		    pt_make_regu_arith (r1, r2, r3, T_INDEX_PREFIX, domain);
+		  break;
+
+		case PT_SLEEP:
+		  regu = pt_make_regu_arith (r1, r2, r3, T_SLEEP, domain);
 		  break;
 
 		default:
@@ -12510,8 +12522,10 @@ pt_to_index_info (PARSER_CONTEXT * parser, DB_OBJECT * class_,
     {
       indx_infop->func_idx_col_id = -1;
 
-      rc = pt_create_iss_range (indx_infop, index_entryp->constraints->
-				attributes[0]->domain);
+      rc =
+	pt_create_iss_range (indx_infop,
+			     index_entryp->constraints->
+			     attributes[0]->domain);
     }
   if (rc != NO_ERROR)
     {
@@ -18274,7 +18288,8 @@ parser_generate_xasl_proc (PARSER_CONTEXT * parser, PT_NODE * node,
 			   && spec->info.spec.path_entities->info.spec.
 			   flat_entity_list != NULL)
 		    {
-		      entity_list = spec->info.spec.path_entities->info.spec.
+		      entity_list =
+			spec->info.spec.path_entities->info.spec.
 			flat_entity_list;
 		    }
 		  else
@@ -21022,8 +21037,8 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 			  int count = 0;
 
 			  class_info->lob_attr_ids[j] =
-			    regu_int_array_alloc (class_info->
-						  no_lob_attrs[j]);
+			    regu_int_array_alloc (class_info->no_lob_attrs
+						  [j]);
 			  if (!class_info->lob_attr_ids[j])
 			    {
 			      goto error_return;
@@ -21883,8 +21898,8 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   /* store number of ORDER BY keys in XASL tree */
   update->no_orderby_keys =
     pt_length_of_list (aptr_statement->info.query.q.select.list) -
-    pt_length_of_select_list (aptr_statement->info.query.q.select.
-			      list, EXCLUDE_HIDDEN_COLUMNS);
+    pt_length_of_select_list (aptr_statement->info.query.q.select.list,
+			      EXCLUDE_HIDDEN_COLUMNS);
   assert (update->no_orderby_keys >= 0);
 
   /* generate xasl for non-null constraints predicates */
@@ -23823,8 +23838,8 @@ pt_ordbynum_to_key_limit_multiple_ranges (PARSER_CONTEXT * parser,
     }
 
   scan = pt_find_oid_scan_block (xasl,
-				 &(subplan->plan_un.scan.index->
-				   head->class_->oid));
+				 &(subplan->plan_un.scan.index->head->
+				   class_->oid));
   if (scan == NULL)
     {
       goto error_exit;
