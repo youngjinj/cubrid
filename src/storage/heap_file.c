@@ -8960,6 +8960,7 @@ try_again:
   if (scan_cache != NULL && scan_cache->cache_last_fix_page == true)
     {
       scan_cache->pgptr = addr.pgptr;
+      addr.pgptr = NULL;
     }
   else
     {
@@ -9340,6 +9341,7 @@ try_again:
 	}
       else if (addr.pgptr == NULL)
 	{
+	  assert (forward_addr.pgptr == NULL && hdr_pgptr == NULL);
 	  goto try_again;
 	}
 
@@ -9677,6 +9679,7 @@ try_again:
 		}
 	      else if (addr.pgptr == NULL)
 		{
+		  assert (hdr_pgptr == NULL);
 		  goto try_again;
 		}
 	    }
@@ -11911,6 +11914,8 @@ try_again:
    * page
    */
 
+  assert (pgptr == NULL);
+
   if (scan_cache != NULL && scan_cache->cache_last_fix_page == true
       && scan_cache->pgptr != NULL)
     {
@@ -12111,7 +12116,7 @@ try_again:
 			      ER_PAGE_LATCH_ABORTED, 2, forward_vpid.volid,
 			      forward_vpid.pageid);
 		    }
-		  scan = S_DOESNT_EXIST;
+		  scan = S_ERROR;
 		  goto end;
 		}
 
@@ -12119,9 +12124,9 @@ try_again:
 	    }
 	}
 
-      (void) pgbuf_check_page_ptype (thread_p, forward_pgptr, PAGE_HEAP);
-
       assert (pgptr != NULL && forward_pgptr != NULL);
+
+      (void) pgbuf_check_page_ptype (thread_p, forward_pgptr, PAGE_HEAP);
 
       type = spage_get_record_type (forward_pgptr, forward_oid.slotid);
       if (mvcc_Enabled && type == REC_MVCC_NEXT_VERSION)
@@ -12649,11 +12654,7 @@ heap_get_mvcc_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 	case REC_NEWHOME:
 	  if (!newhome_allowed)
 	    {
-	      /* REC_RELOCATED can be used two ways:
-	       * 1. Followed by a REC_NEWHOME.
-	       * 2. Followed by other other REC_RELOCATIONS or REC_HOMES (MVCC
-	       *    only).
-	       * REC_NEWHOME is allowed only if it is preceded by a
+	      /* REC_NEWHOME is allowed only if it is preceded by a
 	       * REC_RELOCATION.
 	       */
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,

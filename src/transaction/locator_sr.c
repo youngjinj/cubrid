@@ -8487,7 +8487,7 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 		    btree_get_locked_keys (&btid, search_btid,
 					   search_btid_duplicate_key_locked);
 		}
-	      else
+	      else if (use_mvcc)
 		{
 		  mvcc_args_p = &mvcc_args;
 		  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;

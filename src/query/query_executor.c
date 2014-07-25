@@ -2456,7 +2456,7 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 
 	  pg_cnt +=
 	    qexec_clear_regu_list (xasl_p, p->s_id.s.isid.
-				   regu_list_last_version, final);	  
+				   regu_list_last_version, final);
 
 	  if (p->s_id.s.isid.indx_cov.output_val_list != NULL)
 	    {
@@ -8480,8 +8480,8 @@ qexec_prune_spec (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec,
   else
     {
       if ((spec->access == SEQUENTIAL
-	  || spec->access == S_HEAP_SCAN_RECORD_INFO
-	  || spec->access == S_HEAP_PAGE_SCAN)
+	   || spec->access == S_HEAP_SCAN_RECORD_INFO
+	   || spec->access == S_HEAP_PAGE_SCAN)
 	  && (!mvcc_Enabled || spec->where_pred == NULL))
 	{
 	  lock = X_LOCK;
@@ -8573,7 +8573,8 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
   qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_pred);
   qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_rest);
   qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_key);
-  qexec_reset_regu_variable_list (spec->s.cls_node.cls_regu_list_last_version);
+  qexec_reset_regu_variable_list (spec->s.cls_node.
+				  cls_regu_list_last_version);
   qexec_reset_pred_expr (spec->where_pred);
   qexec_reset_pred_expr (spec->where_key);
 
@@ -10621,7 +10622,7 @@ qexec_process_unique_stats (THREAD_ENTRY * thread_p, OID * class_oid,
 	}
     }
 
-  if (mvcc_Enabled)
+  if (mvcc_Enabled && !heap_is_mvcc_disabled_for_class (class_oid))
     {
       /* find statistics for current class */
       class_stats = logtb_mvcc_find_class_stats (thread_p, class_oid, true);
@@ -10715,7 +10716,9 @@ qexec_process_partition_unique_stats (THREAD_ENTRY * thread_p,
       unique_stat_info = scan_cache->scan_cache.index_stat_info;
       if (unique_stat_info != NULL)
 	{
-	  if (mvcc_Enabled && !OID_ISNULL (&scan_cache->scan_cache.class_oid))
+	  if (mvcc_Enabled && !OID_ISNULL (&scan_cache->scan_cache.class_oid)
+	      && !heap_is_mvcc_disabled_for_class (&scan_cache->scan_cache.
+						   class_oid))
 	    {
 	      class_stats =
 		logtb_mvcc_find_class_stats (thread_p,

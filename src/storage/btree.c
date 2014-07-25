@@ -6712,12 +6712,12 @@ xbtree_get_key_type (THREAD_ENTRY * thread_p, BTID btid,
   or_init (&buf, root_header->packed_key_domain, -1);
   *key_type = or_get_domain (&buf, NULL, NULL);
 
+  pgbuf_unfix (thread_p, root_page);
+
   if (*key_type == NULL)
     {
       return ER_FAILED;
     }
-
-  pgbuf_unfix (thread_p, root_page);
 
   return NO_ERROR;
 }
@@ -11694,7 +11694,7 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	  if (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
 	      || op_type == SINGLE_ROW_MODIFY)
 	    {
-	      if (mvcc_Enabled)
+	      if (mvcc_Enabled && !heap_is_mvcc_disabled_for_class (cls_oid))
 		{
 		  if (logtb_mvcc_update_class_unique_stats
 		      (thread_p, &btid_int.topclass_oid, btid, 0, -1, -1,
@@ -11766,7 +11766,7 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
       if (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
 	  || op_type == SINGLE_ROW_MODIFY)
 	{
-	  if (mvcc_Enabled)
+	  if (mvcc_Enabled && !heap_is_mvcc_disabled_for_class (cls_oid))
 	    {
 	      if (logtb_mvcc_update_class_unique_stats
 		  (thread_p, &btid_int.topclass_oid, btid, -1, -1, 0,
@@ -17799,7 +17799,8 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 	{
 	  if (BTREE_INSERT_IS_LOGICAL_DELETE (p_mvcc_rec_header))
 	    {
-	      assert (mvcc_Enabled == true);
+	      assert (mvcc_Enabled == true
+		      && !heap_is_mvcc_disabled_for_class (cls_oid));
 	      if (op_type == SINGLE_ROW_DELETE || op_type == SINGLE_ROW_UPDATE
 		  || op_type == SINGLE_ROW_MODIFY)
 		{
@@ -17824,7 +17825,7 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
 		   || op_type == SINGLE_ROW_UPDATE
 		   || op_type == SINGLE_ROW_MODIFY)
 	    {
-	      if (mvcc_Enabled)
+	      if (mvcc_Enabled && !heap_is_mvcc_disabled_for_class (cls_oid))
 		{
 		  if (logtb_mvcc_update_class_unique_stats
 		      (thread_p, &btid_int.topclass_oid, btid, 0, 1, 1,
@@ -17915,7 +17916,7 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
       else if (op_type == SINGLE_ROW_INSERT || op_type == SINGLE_ROW_UPDATE
 	       || op_type == SINGLE_ROW_MODIFY)
 	{
-	  if (mvcc_Enabled)
+	  if (mvcc_Enabled && !heap_is_mvcc_disabled_for_class (cls_oid))
 	    {
 	      if (logtb_mvcc_update_class_unique_stats
 		  (thread_p, &btid_int.topclass_oid, btid, 1, 1, 0,
@@ -23403,9 +23404,7 @@ btree_get_next_key_info (THREAD_ENTRY * thread_p,
 end:
   if (bts->C_page != NULL)
     {
-#if defined (SERVER_MODE)
       LSA_COPY (&bts->cur_leaf_lsa, pgbuf_get_lsa (bts->C_page));
-#endif /* SERVER_MODE */
       pgbuf_unfix_and_init (thread_p, bts->C_page);
     }
 
@@ -24875,6 +24874,11 @@ btree_rv_keyval_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 
   assert (!OID_ISNULL (&cls_oid));
   assert (!OID_ISNULL (&oid));
+
+  if (p_mvcc_header->mvcc_flag == 0)
+    {
+      p_mvcc_header = NULL;
+    }
 
   if (btree_insert (thread_p, btid.sys_btid, &key, &cls_oid, &oid,
 		    SINGLE_ROW_MODIFY, (BTREE_UNIQUE_STATS *) NULL,
