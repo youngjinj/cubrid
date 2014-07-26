@@ -3072,7 +3072,8 @@ help_class_names (const char *qualifier)
 	  for (i = 0, m = mops; i < count; i++, m = m->next)
 	    {
 	      owner = db_get_owner (m->op);
-	      if (!requested_owner || requested_owner == owner)
+	      if (!requested_owner
+		  || ws_is_same_object (requested_owner, owner))
 		{
 		  cname = db_get_class_name (m->op);
 		  buffer[0] = '\0';

@@ -537,7 +537,8 @@ ws_find_reference_mop (MOP owner, int attid, WS_REFERENCE * refobj,
 
   for (m = ws_Reference_mops; m != NULL && found == NULL; m = m->hash_link)
     {
-      if (WS_GET_REFMOP_OWNER (m) == owner && WS_GET_REFMOP_ID (m) == attid)
+      if (ws_is_same_object (WS_GET_REFMOP_OWNER (m), owner)
+	  && WS_GET_REFMOP_ID (m) == attid)
 	found = m;
     }
   if (found == NULL)

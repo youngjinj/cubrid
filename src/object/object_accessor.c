@@ -1292,7 +1292,7 @@ get_set_value (MOP op, SM_ATTRIBUTE * att, char *mem,
    * make sure set has proper ownership tags, this shouldn't happen
    * in normal circumstances
    */
-  if (set != NULL && set->owner != owner)
+  if (set != NULL && !ws_is_same_object (set->owner, owner))
     {
       if (set_connect (set, owner, att->id, att->domain))
 	{

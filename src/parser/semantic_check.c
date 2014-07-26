@@ -1552,7 +1552,7 @@ pt_check_user_owns_class (PARSER_CONTEXT * parser, PT_NODE * cls_ref)
     }
 
   owner = db_get_owner (cls);
-  result = (owner == result ? result : NULL);
+  result = (ws_is_same_object (owner, result) ? result : NULL);
   if (!result)
     {
       PT_ERRORmf2 (parser, cls_ref, MSGCAT_SET_PARSER_SEMANTIC,

@@ -1055,7 +1055,7 @@ remove_user_cache_references (MOP user)
 
   for (u = Au_user_cache; u != NULL; u = u->next)
     {
-      if (u->user == user)
+      if (ws_is_same_object (u->user, user))
 	{
 	  u->user = NULL;
 	}
@@ -1549,7 +1549,7 @@ au_get_new_auth (MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type)
 	}
 
       if ((obj_get (au_obj, "grantee", &value) != NO_ERROR)
-	  || (db_get_object (&value) != user))
+	  || !ws_is_same_object (db_get_object (&value), user))
 	{
 	  continue;
 	}
@@ -4113,7 +4113,7 @@ au_grant (MOP user, MOP class_mop, DB_AUTH type, bool grant_option)
   else if ((error = au_fetch_class_force (class_mop, &classobj,
 					  AU_FETCH_READ)) == NO_ERROR)
     {
-      if (classobj->owner == user)
+      if (ws_is_same_object (classobj->owner, user))
 	{
 	  error = ER_AU_CANT_GRANT_OWNER;
 	  er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, error, 0);
@@ -4654,7 +4654,7 @@ au_revoke (MOP user, MOP class_mop, DB_AUTH type)
   error = au_fetch_class_force (class_mop, &classobj, AU_FETCH_READ);
   if (error == NO_ERROR)
     {
-      if (classobj->owner == user)
+      if (ws_is_same_object (classobj->owner, user))
 	{
 	  error = ER_AU_CANT_REVOKE_OWNER;
 	  er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, error, 0);
@@ -6988,7 +6988,7 @@ find_or_add_user (CLASS_AUTH * auth, MOP user_obj)
   CLASS_USER *u, *last;
 
   for (u = auth->users, last = NULL;
-       u != NULL && u->obj != user_obj; u = u->next)
+       u != NULL && !ws_is_same_object (u->obj, user_obj); u = u->next)
     {
       last = u;
     }
@@ -7025,10 +7025,11 @@ add_class_grant (CLASS_AUTH * auth, MOP source, MOP user, int cache)
 
   u = find_or_add_user (auth, source);
 
-  for (g = u->grants; g != NULL && g->user->obj != user; g = g->next);
+  for (g = u->grants; g != NULL && !ws_is_same_object (g->user->obj, user);
+       g = g->next);
   if (g == NULL)
     {
-      if (source != user)
+      if (!ws_is_same_object (source, user))
 	{
 	  gu = find_or_add_user (auth, user);
 	  g = make_class_grant (gu, cache);
