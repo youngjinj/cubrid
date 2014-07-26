@@ -585,18 +585,23 @@ btree_rv_mvcc_save_increments (OID * class_oid, BTID * btid,
 
   assert (recdes != NULL
 	  && recdes->area_size >=
-	  (3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE));
-  recdes->length = 3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE;
+	  ((3 * OR_INT_SIZE) + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE));
+
+  recdes->length = (3 * OR_INT_SIZE) + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE;
   datap = (char *) recdes->data;
 
   OR_PUT_OID (datap, class_oid);
   datap += OR_OID_SIZE;
+
   OR_PUT_BTID (datap, btid);
-  datap += OR_BTID_SIZE;
+  datap += OR_BTID_ALIGNED_SIZE;
+
   OR_PUT_INT (datap, key_delta);
   datap += OR_INT_SIZE;
+
   OR_PUT_INT (datap, oid_delta);
   datap += OR_INT_SIZE;
+
   OR_PUT_INT (datap, null_delta);
   datap += OR_INT_SIZE;
 

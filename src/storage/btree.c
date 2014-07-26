@@ -23727,6 +23727,8 @@ btree_rv_save_keyval (BTID_INT * btid, DB_VALUE * key, OID * cls_oid,
 	    case MVCC_BTREE_RELOCATE_OBJ_AND_MVCC_INFO:
 	      size += 2 * OR_MVCCID_SIZE;
 	      break;
+	    default:
+	      break;
 	    }
 	}
     }
@@ -23770,6 +23772,8 @@ btree_rv_save_keyval (BTID_INT * btid, DB_VALUE * key, OID * cls_oid,
 	    case MVCC_BTREE_RELOCATE_OBJ_AND_MVCC_INFO:
 	      datap = or_pack_mvccid (datap, mvcc_args->insert_mvccid);
 	      datap = or_pack_mvccid (datap, mvcc_args->delete_mvccid);
+	      break;
+	    default:
 	      break;
 	    }
 	}
@@ -23862,18 +23866,24 @@ btree_rv_mvcc_undo_redo_increments_update (THREAD_ENTRY * thread_p,
   OID class_oid;
   BTID btid;
 
-  assert (recv->length >= 3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE);
+  assert (recv->length >=
+	  (3 * OR_INT_SIZE) + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE);
+
   /* unpack the root statistics */
   datap = (char *) recv->data;
 
   OR_GET_OID (datap, &class_oid);
   datap += OR_OID_SIZE;
+
   OR_GET_BTID (datap, &btid);
-  datap += OR_BTID_SIZE;
+  datap += OR_BTID_ALIGNED_SIZE;
+
   num_keys = OR_GET_INT (datap);
   datap += OR_INT_SIZE;
+
   num_oids = OR_GET_INT (datap);
   datap += OR_INT_SIZE;
+
   num_nulls = OR_GET_INT (datap);
   datap += OR_INT_SIZE;
 
@@ -23890,9 +23900,7 @@ error:
   er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
 
   return ER_GENERIC_ERROR;
-
 }
-
 
 /*
  * btree_rv_roothdr_undo_update () -

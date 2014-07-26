@@ -10832,6 +10832,8 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   SET_MVCC_UPDATE_REEV_DATA (&mvcc_reev_data, &mvcc_upddel_reev_data, V_TRUE,
 			     NULL);
 
+  mvcc_upddel_reev_data.copyarea = NULL;
+
   /* Allocate memory for oids, hfids and attributes cache info of all classes
    * used in update */
   error =

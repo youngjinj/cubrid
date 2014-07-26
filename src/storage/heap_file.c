@@ -25162,7 +25162,11 @@ try_again:
 	    {
 	      goto error;
 	    }
-	  or_mvcc_get_header (&recdes, recdes_header);
+
+	  if (or_mvcc_get_header (&recdes, recdes_header) != NO_ERROR)
+	    {
+	      goto error;
+	    }
 	}
 
       if (!MVCCID_IS_EQUAL (MVCC_GET_DELID (recdes_header), del_mvccid))
@@ -25191,7 +25195,7 @@ end:
 	{
 	  /* release acquired lock */
 	  assert (satisfies_delete_result == DELETE_RECORD_DELETED);
-	  lock_unlock_object (thread_p, oid, class_oid, lock, true);
+	  lock_unlock_object (thread_p, oid, class_oid, lock, false);
 	  record_locked = false;
 	}
 
@@ -26932,6 +26936,10 @@ try_again:
 		  goto end;
 		}
 	    }
+	  else
+	    {
+	      goto error;
+	    }
 	}
 
       if (scan == S_SUCCESS)
@@ -26964,6 +26972,10 @@ try_again:
 	  /* get the data after locking */
 	  scan = spage_get_record (forward_pgptr, forward_oid.slotid, recdes,
 				   ispeeking);
+	  if (scan != S_SUCCESS)
+	    {
+	      goto error;
+	    }
 	}
 
 
@@ -27075,6 +27087,10 @@ try_again:
 		}
 	      assert (spage_get_record_type (pgptr, oid->slotid));
 	    }
+	  else
+	    {
+	      goto error;
+	    }
 	}
 
       if (scan == S_SUCCESS)
@@ -27107,6 +27123,10 @@ try_again:
 
 	  /* get the data after locking */
 	  scan = spage_get_record (pgptr, oid->slotid, recdes, ispeeking);
+	  if (scan != S_SUCCESS)
+	    {
+	      goto error;
+	    }
 	}
 
 
@@ -28076,6 +28096,34 @@ heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
     {
     case DELETE_RECORD_CAN_DELETE:
       /* row successfully locked */
+#if !defined (NDEBUG)
+      if (recdes != NULL && recdes->data != NULL
+	  && class_oid != NULL
+	  && !heap_is_mvcc_disabled_for_class (class_oid))
+	{
+	  if ((mvcc_reev_data == NULL)
+	      || (((MVCC_REEV_DATA *) mvcc_reev_data)->filter_result ==
+		  V_TRUE))
+	    {
+	      MVCC_REC_HEADER rec_header;
+	      or_mvcc_get_header (recdes, &rec_header);
+	      assert ((!MVCC_IS_FLAG_SET
+		       (&rec_header, OR_MVCC_FLAG_VALID_DELID)
+		       || !MVCCID_IS_VALID (MVCC_GET_DELID (&rec_header)))
+		      &&
+		      (!MVCC_IS_FLAG_SET
+		       (&rec_header, OR_MVCC_FLAG_VALID_NEXT_VERSION)
+		       || OID_ISNULL (&MVCC_GET_NEXT_VERSION (&rec_header))));
+
+	      if (!MVCC_IS_REC_INSERTED_BY_ME (thread_p, &rec_header))
+		{
+		  assert (lock_get_object_lock (oid, class_oid,
+						LOG_FIND_THREAD_TRAN_INDEX
+						(thread_p)) == X_LOCK);
+		}
+	    }
+	}
+#endif
       return scan_code;
 
     case DELETE_RECORD_DELETED:
@@ -28119,6 +28167,34 @@ heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
   if (scan_code == S_SUCCESS)
     {
       COPY_OID (oid, &latest_version);
+#if !defined (NDEBUG)
+      if (recdes != NULL && recdes->data != NULL
+	  && class_oid != NULL
+	  && !heap_is_mvcc_disabled_for_class (class_oid))
+	{
+	  if ((mvcc_reev_data == NULL)
+	      || (((MVCC_REEV_DATA *) mvcc_reev_data)->filter_result ==
+		  V_TRUE))
+	    {
+	      MVCC_REC_HEADER rec_header;
+	      or_mvcc_get_header (recdes, &rec_header);
+	      assert ((!MVCC_IS_FLAG_SET
+		       (&rec_header, OR_MVCC_FLAG_VALID_DELID)
+		       || !MVCCID_IS_VALID (MVCC_GET_DELID (&rec_header)))
+		      &&
+		      (!MVCC_IS_FLAG_SET
+		       (&rec_header, OR_MVCC_FLAG_VALID_NEXT_VERSION)
+		       || OID_ISNULL (&MVCC_GET_NEXT_VERSION (&rec_header))));
+
+	      if (!MVCC_IS_REC_INSERTED_BY_ME (thread_p, &rec_header))
+		{
+		  assert (lock_get_object_lock (oid, class_oid,
+						LOG_FIND_THREAD_TRAN_INDEX
+						(thread_p)) == X_LOCK);
+		}
+	    }
+	}
+#endif
     }
   else if (scan_code == S_SNAPSHOT_NOT_SATISFIED)
     {

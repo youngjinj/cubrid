@@ -7977,14 +7977,27 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
        */
       if (mvcc_Enabled)
 	{
+	  MVCC_SNAPSHOT *saved_mvcc_snapshot = NULL;
 	  /* The oid has been already locked in select phase, however need to
 	   * get the last object that may differ by the current one in case that
 	   * transaction updates same OID many times during command execution
 	   */
+
+	  if (scan_cache && scan_cache->mvcc_snapshot != NULL)
+	    {
+	      saved_mvcc_snapshot = scan_cache->mvcc_snapshot;
+	      scan_cache->mvcc_snapshot = NULL;
+	    }
+
 	  scan =
 	    heap_mvcc_get_version_for_delete (thread_p, hfid, oid, &class_oid,
 					      &copy_recdes, scan_cache, COPY,
 					      NULL);
+
+	  if (saved_mvcc_snapshot != NULL)
+	    {
+	      scan_cache->mvcc_snapshot = saved_mvcc_snapshot;
+	    }
 	}
       else
 	{

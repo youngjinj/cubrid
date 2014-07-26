@@ -2470,9 +2470,18 @@ log_append_redo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex,
   /*
    * If we are not in a top system operation, the transaction is unactive, and
    * the transaction is not in the process of been aborted, we do nothing.
+   * 
+   * NOTE: One exception for this case is the recovery of vacuum data buffer.
+   *	   Because the buffer may not have been empty during the crash, the
+   *	   data in the buffer cannot be recovered using log records. It is
+   *	   however rebuilt in a similar manner as it is built online (by
+   *	   processing undo and undoredo log records of MVCC operations).
+   *	   At the end of redo recovery phase, the recovered data is consumed
+   *	   and added to vacuum data, operations that needs logging.
    */
   if (tdes->topops.last < 0
-      && !LOG_ISTRAN_ACTIVE (tdes) && !LOG_ISTRAN_ABORTED (tdes))
+      && !LOG_ISTRAN_ACTIVE (tdes) && !LOG_ISTRAN_ABORTED (tdes)
+      && !LOG_IS_VACUUM_DATA_BUFFER_RECOVERY (rcvindex))
     {
       /*
        * We do not log anything when the transaction is unactive and it is not

@@ -261,20 +261,6 @@ vacuum_data_get_entry (int block_index)
  */
 LOG_LSA vacuum_Data_oldest_not_flushed_lsa;
 
-/* Macro called after logging any changes on vacuum data. Updates oldest
- * lsa for vacuum data that is not flushed to disk.
- */
-#define VACUUM_UPDATE_OLDEST_NOT_FLUSHED_LSA() \
-  do									      \
-    {									      \
-      assert (!LSA_ISNULL (&vacuum_Data->crt_lsa));			      \
-      if (LSA_ISNULL (&vacuum_Data_oldest_not_flushed_lsa))		      \
-	{								      \
-	  LSA_COPY (&vacuum_Data_oldest_not_flushed_lsa, &vacuum_Data->crt_lsa); \
-	}								      \
-    }									      \
-  while (0)
-
 /* A lock-free buffer used for communication between logger transactions and
  * auto-vacuum master. It is advisable to avoid synchronizing running
  * transactions with vacuum threads and for this reason the block data is not
@@ -2680,12 +2666,15 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
     }
 
   /* Successful flush, reset vacuum_Data_oldest_not_flushed_lsa */
+  LSA_SET_NULL (&vacuum_Data_oldest_not_flushed_lsa);
   vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
 		 "VACUUM: Vacuum data was successfully flushed at LSA "
+		 "(%lld, %d). Reset vacuum_Data_oldest_not_flushed_lsa to "
 		 "(%lld, %d).",
 		 (long long int) vacuum_Data->crt_lsa.pageid,
-		 (int) vacuum_Data->crt_lsa.offset);
-  LSA_SET_NULL (&vacuum_Data_oldest_not_flushed_lsa);
+		 (int) vacuum_Data->crt_lsa.offset,
+		 (long long int) vacuum_Data_oldest_not_flushed_lsa.pageid,
+		 (int) vacuum_Data_oldest_not_flushed_lsa.offset);
   if (!is_vacuum_data_locked)
     {
       VACUUM_UNLOCK_DATA ();
@@ -2792,6 +2781,27 @@ vacuum_set_vacuum_data_lsa (THREAD_ENTRY * thread_p,
 		 "VACUUM: Set vacuum data lsa to (%lld, %d).",
 		 (long long int) vacuum_data_lsa->pageid,
 		 (int) vacuum_data_lsa->offset);
+
+  assert (!LSA_ISNULL (&vacuum_Data->crt_lsa));
+  if (LSA_ISNULL (&vacuum_Data_oldest_not_flushed_lsa))
+    {
+      LSA_COPY (&vacuum_Data_oldest_not_flushed_lsa, &vacuum_Data->crt_lsa);
+      vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: Updated vacuum data's oldest unflushed lsa to "
+		     "(%lld, %d).",
+		     (long long int) vacuum_Data_oldest_not_flushed_lsa.pageid,
+		     (int) vacuum_Data_oldest_not_flushed_lsa.offset);
+    }
+  else
+    {
+      vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: No need to update vacuum data oldest unflushed "
+		     "lsa. It already is (%lld, %d).",
+		     (long long int) vacuum_Data_oldest_not_flushed_lsa.pageid,
+		     (int) vacuum_Data_oldest_not_flushed_lsa.offset);
+      assert (LSA_LT (&vacuum_Data_oldest_not_flushed_lsa,
+		      &vacuum_Data->crt_lsa));
+    }
 }
 
 /*
@@ -3201,6 +3211,12 @@ vacuum_log_remove_data_entries (THREAD_ENTRY * thread_p,
   LOG_CRUMB redo_crumbs[MAX_LOG_DISCARD_BLOCK_DATA_CRUMBS];
   int n_redo_crumbs = 0;
 
+#if !defined (NDEBUG)
+  LOG_LSA prev_lsa;
+
+  LSA_COPY (&prev_lsa, &vacuum_Data->crt_lsa);
+#endif
+
   /* Initialize addr */
   addr.pgptr = NULL;
   addr.offset = 0;
@@ -3225,7 +3241,7 @@ vacuum_log_remove_data_entries (THREAD_ENTRY * thread_p,
   log_append_redo_crumbs (thread_p, RVVAC_LOG_BLOCK_REMOVE, &addr,
 			  n_redo_crumbs, redo_crumbs);
 
-  VACUUM_UPDATE_OLDEST_NOT_FLUSHED_LSA ();
+  assert (LSA_LT (&prev_lsa, &vacuum_Data->crt_lsa));
 }
 
 /*
@@ -3309,6 +3325,12 @@ vacuum_log_append_block_data (THREAD_ENTRY * thread_p,
   LOG_CRUMB redo_crumbs[MAX_LOG_APPEND_BLOCK_DATA_CRUMBS];
   int n_redo_crumbs = 0, i;
 
+#if !defined (NDEBUG)
+  LOG_LSA prev_lsa;
+
+  LSA_COPY (&prev_lsa, &vacuum_Data->crt_lsa);
+#endif
+
   /* Initialize addr */
   addr.pgptr = NULL;
   addr.offset = 0;
@@ -3338,7 +3360,7 @@ vacuum_log_append_block_data (THREAD_ENTRY * thread_p,
   log_append_redo_crumbs (thread_p, RVVAC_LOG_BLOCK_APPEND, &addr,
 			  n_redo_crumbs, redo_crumbs);
 
-  VACUUM_UPDATE_OLDEST_NOT_FLUSHED_LSA ();
+  assert (LSA_LT (&prev_lsa, &vacuum_Data->crt_lsa));
 }
 
 /*
@@ -3423,6 +3445,13 @@ vacuum_log_update_block_data (THREAD_ENTRY * thread_p,
   LOG_CRUMB redo_crumbs[MAX_LOG_UPDATE_BLOCK_DATA_CRUMBS];
   int n_redo_crumbs = 0;
 
+#if !defined (NDEBUG)
+  LOG_LSA prev_lsa;
+
+  LSA_COPY (&prev_lsa, &vacuum_Data->crt_lsa);
+#endif
+
+
   /* Initialize addr */
   addr.pgptr = NULL;
   addr.offset = 0;
@@ -3442,7 +3471,7 @@ vacuum_log_update_block_data (THREAD_ENTRY * thread_p,
   log_append_redo_crumbs (thread_p, RVVAC_LOG_BLOCK_MODIFY, &addr,
 			  n_redo_crumbs, redo_crumbs);
 
-  VACUUM_UPDATE_OLDEST_NOT_FLUSHED_LSA ();
+  assert (LSA_LT (&prev_lsa, &vacuum_Data->crt_lsa));
 }
 
 /*

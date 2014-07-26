@@ -208,6 +208,7 @@ class_is_system_class (THREAD_ENTRY * thread_p, const OID * class_oid,
       != S_SUCCESS)
     {
       assert (0);
+      heap_scancache_end (thread_p, &scan_cache);
       return ER_FAILED;
     }
   *is_system_class_p = orc_class_is_system_class (&recdes);

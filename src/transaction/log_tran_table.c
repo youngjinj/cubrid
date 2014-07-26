@@ -3818,39 +3818,34 @@ logtb_mvcc_update_class_unique_stats (THREAD_ENTRY * thread_p,
       return ER_FAILED;
     }
 
-  error =
-    logtb_mvcc_update_btid_unique_stats (thread_p, class_stats, btid, n_keys,
-					 n_oids, n_nulls);
+  error = logtb_mvcc_update_btid_unique_stats (thread_p, class_stats, btid,
+					       n_keys, n_oids, n_nulls);
 
   if (write_to_log)
     {
-      char copy_rec_buf1[3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE +
-			 BTREE_MAX_ALIGN];
-      char copy_rec_buf[3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE +
-			BTREE_MAX_ALIGN];
-      RECDES copy_rec1, copy_rec;
+      char undo_rec_buf[3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE +
+			MAX_ALIGNMENT];
+      char redo_rec_buf[3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE +
+			MAX_ALIGNMENT];
+      RECDES undo_rec, redo_rec;
 
-      /* copy_rec_buf1 is undo, copy_rec_buf is redo  */
-      copy_rec1.area_size = 3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE;
+      undo_rec.area_size = ((3 * OR_INT_SIZE) + OR_OID_SIZE
+			    + OR_BTID_ALIGNED_SIZE);
+      undo_rec.data = PTR_ALIGN (undo_rec_buf, MAX_ALIGNMENT);
 
-      copy_rec1.data = PTR_ALIGN (copy_rec_buf1, BTREE_MAX_ALIGN);
-
-      copy_rec.area_size = 3 * OR_INT_SIZE + OR_OID_SIZE + OR_BTID_SIZE;
-
-      copy_rec.data = PTR_ALIGN (copy_rec_buf, BTREE_MAX_ALIGN);
+      redo_rec.area_size = ((3 * OR_INT_SIZE) + OR_OID_SIZE
+			    + OR_BTID_ALIGNED_SIZE);
+      redo_rec.data = PTR_ALIGN (redo_rec_buf, MAX_ALIGNMENT);
 
       btree_rv_mvcc_save_increments (class_oid, btid, -n_keys, -n_oids,
-				     -n_nulls, &copy_rec1);
-
+				     -n_nulls, &undo_rec);
       btree_rv_mvcc_save_increments (class_oid, btid, n_keys, n_oids, n_nulls,
-				     &copy_rec);
-
+				     &redo_rec);
 
       log_append_undoredo_data2 (thread_p, RVBT_MVCC_INCREMENTS_UPD,
-				 NULL,
-				 NULL, -1,
-				 copy_rec1.length, copy_rec.length,
-				 copy_rec1.data, copy_rec.data);
+				 NULL, NULL, -1,
+				 undo_rec.length, redo_rec.length,
+				 undo_rec.data, redo_rec.data);
     }
 
   return error;
@@ -4269,6 +4264,12 @@ logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p)
   MVCCID_FORWARD (lowest_active_mvccid);
 
   elem = mvcc_table->head_writers;
+  if (elem == NULL)
+    {
+      /* No writers, point to first reader */
+      elem = mvcc_table->head_null_mvccids;
+    }
+
   /* heap_readers is the next node after tail writer or null */
   while (elem != NULL)
     {
