@@ -2964,7 +2964,8 @@ catcls_expand_or_value_by_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p)
 	  if (DB_VALUE_TYPE (&element) == DB_TYPE_OID)
 	    {
 	      oid_p = DB_PULL_OID (&element);
-	      (void) heap_get_class_oid (thread_p, &class_oid, oid_p, true);
+	      (void) heap_get_class_oid (thread_p, &class_oid, oid_p,
+					 NEED_SNAPSHOT);
 
 	      if (!OID_EQ (&class_oid, &ct_Class.classoid))
 		{
@@ -3956,9 +3957,8 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
       goto error;
     }
 
-  if (heap_update
-      (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
-       true) == NULL)
+  if (heap_update (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old,
+		   scan_p, HEAP_UPDATE_IN_PLACE) == NULL)
     {
       error = er_errid ();
       assert (error != NO_ERROR);
@@ -4240,7 +4240,6 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
       if (locator_update_index (thread_p, &record, &old_record, NULL, 0,
 				oid_p, oid_p, class_oid_p, NULL, false,
 				SINGLE_ROW_UPDATE, scan_p, false,
-				false,
 				REPL_INFO_TYPE_STMT_NORMAL) != NO_ERROR)
 	{
 	  assert (er_errid () != NO_ERROR);
@@ -4249,9 +4248,8 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
 	}
 
       /* update in place */
-      if (heap_update
-	  (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL, &old, scan_p,
-	   true) == NULL)
+      if (heap_update (thread_p, hfid_p, class_oid_p, oid_p, &record, NULL,
+		       &old, scan_p, HEAP_UPDATE_IN_PLACE) == NULL)
 	{
 	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
@@ -5240,9 +5238,8 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
     }
 
   /* heap update new object */
-  if (heap_update
-      (thread_p, hfid_p, class_oid_p, new_oid, &record, NULL, &old, scan_p,
-       true) == NULL)
+  if (heap_update (thread_p, hfid_p, class_oid_p, new_oid, &record, NULL,
+		   &old, scan_p, HEAP_UPDATE_IN_PLACE) == NULL)
     {
       error = er_errid ();
       goto error;
@@ -5251,7 +5248,7 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   /* give up setting updated attr info */
   if (locator_update_index (thread_p, &record, &old_record, NULL, 0,
 			    oid_p, new_oid, class_oid_p, NULL, false,
-			    SINGLE_ROW_UPDATE, scan_p, false, false,
+			    SINGLE_ROW_UPDATE, scan_p, false,
 			    REPL_INFO_TYPE_STMT_NORMAL) != NO_ERROR)
     {
       error = er_errid ();

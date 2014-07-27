@@ -245,9 +245,6 @@ struct heap_spacecache
 };
 #endif
 
-enum
-{ END_SCAN, CONTINUE_SCAN };
-
 typedef struct heap_idx_elements_info HEAP_IDX_ELEMENTS_INFO;
 struct heap_idx_elements_info
 {
@@ -255,6 +252,19 @@ struct heap_idx_elements_info
   int has_single_col;		/* class has single column index */
   int has_multi_col;		/* class has multi-column index  */
 };
+
+typedef enum heap_update_style HEAP_UPDATE_STYLE;
+enum heap_update_style
+{
+  HEAP_UPDATE_MVCC_STYLE = 0,	/* MVCC update style */
+  HEAP_UPDATE_IN_PLACE = 1	/* non-MVCC in-place update style */
+};
+
+enum
+{ END_SCAN, CONTINUE_SCAN };
+
+enum
+{ DONT_NEED_SNAPSHOT, NEED_SNAPSHOT };
 
 extern int heap_classrepr_decache (THREAD_ENTRY * thread_p,
 				   const OID * class_oid);
@@ -276,7 +286,7 @@ extern const OID *heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
 			       const OID * class_oid, const OID * oid,
 			       RECDES * recdes, OID * new_oid,
 			       bool * old, HEAP_SCANCACHE * scan_cache,
-			       bool update_in_place);
+			       HEAP_UPDATE_STYLE update_in_place);
 extern const OID *heap_mvcc_update_to_row_version (THREAD_ENTRY * thread_p,
 						   const HFID * hfid,
 						   const OID * class_oid,

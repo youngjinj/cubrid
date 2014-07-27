@@ -4147,7 +4147,7 @@ db_is_query_async_executable (DB_SESSION * session, int stmt_ndx)
  *	 MVCC, snapshot must be invalidated only on commit/rollback.
  */
 void
-db_invalidate_mvcc_snapshot_after_statement ()
+db_invalidate_mvcc_snapshot_after_statement (void)
 {
   if (!prm_get_bool_value (PRM_ID_MVCC_ENABLED))
     {

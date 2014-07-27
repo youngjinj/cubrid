@@ -625,9 +625,10 @@ boot_add_volume (THREAD_ENTRY * thread_p, DBDEF_VOL_EXT_INFO * ext_info)
   recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
   recdes.data = (char *) boot_Db_parm;
 
-  if (heap_update
-      (thread_p, &boot_Db_parm->hfid, &boot_Db_parm->rootclass_oid,
-       boot_Db_parm_oid, &recdes, NULL, &ignore_old, NULL, true) == NULL)
+  if (heap_update (thread_p, &boot_Db_parm->hfid,
+		   &boot_Db_parm->rootclass_oid, boot_Db_parm_oid,
+		   &recdes, NULL, &ignore_old, NULL,
+		   HEAP_UPDATE_IN_PLACE) == NULL)
     {
       /* Return back our global area of system parameter */
       if (ext_info->purpose != DISK_TEMPVOL_TEMP_PURPOSE)
@@ -776,10 +777,10 @@ boot_remove_volume (THREAD_ENTRY * thread_p, VOLID volid)
   recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
   recdes.data = (char *) boot_Db_parm;
 
-  if (heap_update
-      (thread_p, &boot_Db_parm->hfid, &boot_Db_parm->rootclass_oid,
-       boot_Db_parm_oid, &recdes, NULL, &ignore_old, NULL,
-       true) != boot_Db_parm_oid)
+  if (heap_update (thread_p, &boot_Db_parm->hfid,
+		   &boot_Db_parm->rootclass_oid, boot_Db_parm_oid, &recdes,
+		   NULL, &ignore_old, NULL,
+		   HEAP_UPDATE_IN_PLACE) != boot_Db_parm_oid)
     {
       boot_Db_parm->temp_nvols++;
       if (boot_Db_parm->temp_nvols == 1)
@@ -1797,10 +1798,10 @@ boot_remove_all_temp_volumes (THREAD_ENTRY * thread_p)
       boot_Db_parm->temp_last_volid = NULL_VOLID;
       recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
       recdes.data = (char *) boot_Db_parm;
-      if (heap_update
-	  (thread_p, &boot_Db_parm->hfid, &boot_Db_parm->rootclass_oid,
-	   boot_Db_parm_oid, &recdes, NULL, &old_object, NULL,
-	   true) != boot_Db_parm_oid
+      if (heap_update (thread_p, &boot_Db_parm->hfid,
+		       &boot_Db_parm->rootclass_oid, boot_Db_parm_oid,
+		       &recdes, NULL, &old_object, NULL,
+		       HEAP_UPDATE_IN_PLACE) != boot_Db_parm_oid
 	  || xtran_server_commit (thread_p, false) != TRAN_UNACTIVE_COMMITTED)
 	{
 	  error_code = ER_FAILED;
@@ -3616,11 +3617,11 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
       recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
       recdes.data = (char *) boot_Db_parm;
 
-      if (heap_update
-	  (thread_p, (const HFID *) &boot_Db_parm->hfid,
-	   (const OID *) &boot_Db_parm->rootclass_oid,
-	   (const OID *) boot_Db_parm_oid, &recdes, NULL, &old_object, NULL,
-	   true) != boot_Db_parm_oid
+      if (heap_update (thread_p, (const HFID *) &boot_Db_parm->hfid,
+		       (const OID *) &boot_Db_parm->rootclass_oid,
+		       (const OID *) boot_Db_parm_oid, &recdes, NULL,
+		       &old_object, NULL,
+		       HEAP_UPDATE_IN_PLACE) != boot_Db_parm_oid
 	  || xtran_server_commit (thread_p, false) != TRAN_UNACTIVE_COMMITTED)
 	{
 	  error_code = ER_FAILED;
@@ -5818,7 +5819,7 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
       if (heap_update (thread_p, &boot_Db_parm->hfid,
 		       &boot_Db_parm->rootclass_oid, boot_Db_parm_oid,
 		       &recdes, NULL, &ignore_old, NULL,
-		       true) != boot_Db_parm_oid)
+		       HEAP_UPDATE_IN_PLACE) != boot_Db_parm_oid)
 	{
 	  goto error;
 	}

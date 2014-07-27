@@ -11129,7 +11129,7 @@ cvacuum (int num_classes, OID * class_oids)
  * return : Error code.
  */
 int
-log_invalidate_mvcc_snapshot ()
+log_invalidate_mvcc_snapshot (void)
 {
 #if defined(CS_MODE)
   int err = NO_ERROR;

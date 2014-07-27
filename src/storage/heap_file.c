@@ -882,7 +882,7 @@ static PAGE_PTR heap_scan_pb_lock_and_fetch_debug (THREAD_ENTRY * thread_p,
 						   int new_page, LOCK lock,
 						   HEAP_SCANCACHE *
 						   scan_cache,
-						   const char * caller_file,
+						   const char *caller_file,
 						   const int caller_line);
 #endif /* !NDEBUG */
 
@@ -1780,9 +1780,9 @@ static PAGE_PTR
 heap_scan_pb_lock_and_fetch_debug (THREAD_ENTRY * thread_p, VPID * vpid_ptr,
 				   int new_page, LOCK lock,
 				   HEAP_SCANCACHE * scan_cache,
-				   const char * caller_file,
+				   const char *caller_file,
 				   const int caller_line)
-#endif /* !NDEBUG */
+#endif				/* !NDEBUG */
 {
   PAGE_PTR pgptr = NULL;
   LOCK page_lock;
@@ -7678,14 +7678,15 @@ heap_insert (THREAD_ENTRY * thread_p, const HFID * hfid, OID * class_oid,
  *                it is set to false (i.e., only the address was stored)
  *   scan_cache(in/out): Scan cache used to estimate the best space pages
  *                       between heap changes.
- *   update_in_place(in): if true, then enforce an update in-place. Otherwise,
- *			  update using MVCC style.
+ *   update_in_place(in): if HEAP_UPDATE_IN_PLACE then enforce an update in-place. 
+ *                        Otherwise, update using MVCC style.
  */
 const OID *
 heap_update (THREAD_ENTRY * thread_p, const HFID * hfid,
 	     const OID * class_oid, const OID * oid,
 	     RECDES * recdes, OID * new_oid,
-	     bool * old, HEAP_SCANCACHE * scan_cache, bool update_in_place)
+	     bool * old, HEAP_SCANCACHE * scan_cache,
+	     HEAP_UPDATE_STYLE update_in_place)
 {
   VPID vpid;			/* Volume and page identifiers */
   VPID *vpidptr_incache;
@@ -14260,8 +14261,11 @@ heap_does_exist (THREAD_ENTRY * thread_p, OID * class_oid, const OID * oid)
 	       * Caller does not know the class of the object. Get the class
 	       * identifier from disk
 	       */
+	      bool need_snapshot =
+		((class_oid != NULL) ? NEED_SNAPSHOT : DONT_NEED_SNAPSHOT);
+
 	      if (heap_get_class_oid (thread_p, class_oid, oid,
-				      class_oid != NULL) == NULL)
+				      need_snapshot) == NULL)
 		{
 		  doesexist = false;
 		  break;
@@ -16825,7 +16829,8 @@ heap_get_class_partitions (THREAD_ENTRY * thread_p, const OID * class_oid,
    * partition information can be found for this class. We will get the OID of
    * the _db_partition class here because we will need it later
    */
-  if (heap_get_class_oid (thread_p, &_db_part_oid, &part_info, false) == NULL)
+  if (heap_get_class_oid (thread_p, &_db_part_oid, &part_info,
+			  DONT_NEED_SNAPSHOT) == NULL)
     {
       error = ER_FAILED;
       goto cleanup;

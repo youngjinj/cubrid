@@ -921,7 +921,7 @@ extern DB_CLASS_MODIFICATION_STATUS db_has_modified_class (DB_SESSION *
 							   session,
 							   int stmt_id);
 
-extern void db_invalidate_mvcc_snapshot_after_statement ();
+extern void db_invalidate_mvcc_snapshot_after_statement (void);
 
 extern int db_query_get_info (DB_QUERY_RESULT * result,
 			      int *done, int *count,

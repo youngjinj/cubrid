@@ -8099,7 +8099,7 @@ qdata_get_class_of_function (THREAD_ENTRY * thread_p,
 
   instance_oid_p = DB_PULL_OID (val_p);
   if (heap_get_class_oid (thread_p, &class_oid, instance_oid_p,
-			  false) == NULL)
+			  DONT_NEED_SNAPSHOT) == NULL)
     {
       return ER_FAILED;
     }

@@ -5406,7 +5406,8 @@ xbtree_find_multi_uniques (THREAD_ENTRY * thread_p, OID * class_oid,
 
 		  /* find the class oid for found oid */
 		  if (heap_get_class_oid (thread_p, &found_class_oid,
-					  &found_oids[idx], true) == NULL)
+					  &found_oids[idx],
+					  NEED_SNAPSHOT) == NULL)
 		    {
 		      error = ER_FAILED;
 		      result = BTREE_ERROR_OCCURRED;
@@ -11826,7 +11827,8 @@ btree_delete (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
     {
       if (is_active)
 	{
-	  if (heap_get_class_oid (thread_p, &class_oid, oid, false) == NULL)
+	  if (heap_get_class_oid (thread_p, &class_oid, oid,
+				  DONT_NEED_SNAPSHOT) == NULL)
 	    {
 	      goto error;
 	      /* nextkey_lock_request = true; goto start_point; */
@@ -17969,7 +17971,8 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
     {
       if (is_active)
 	{
-	  if (heap_get_class_oid (thread_p, &class_oid, oid, false) == NULL)
+	  if (heap_get_class_oid (thread_p, &class_oid, oid,
+				  DONT_NEED_SNAPSHOT) == NULL)
 	    {
 	      goto error;
 	    }
@@ -28252,7 +28255,7 @@ get_oidcnt_and_oidptr:
 	{
 	  BTREE_GET_OID (btrs_helper.rec_oid_ptr, &temp_oid);
 	  if (heap_get_class_oid (thread_p, &bts->cls_oid, &temp_oid,
-				  false) == NULL)
+				  DONT_NEED_SNAPSHOT) == NULL)
 	    {
 	      goto error;
 	    }

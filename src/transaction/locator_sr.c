@@ -2091,8 +2091,8 @@ locator_find_lockset_missing_class_oids (THREAD_ENTRY * thread_p,
        * Caller does not know the class identifier of the requested object.
        * Get the class identifier from disk
        */
-      if (heap_get_class_oid (thread_p, &class_oid, &reqobjs[i].oid, true)
-	  == NULL)
+      if (heap_get_class_oid (thread_p, &class_oid, &reqobjs[i].oid,
+			      NEED_SNAPSHOT) == NULL)
 	{
 	  /*
 	   * Unable to find the class of the object. Remove the object from
@@ -2377,7 +2377,8 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
        * Caller does not know the class of the object. Get the class
        * identifier from disk
        */
-      if (heap_get_class_oid (thread_p, class_oid, oid, true) == NULL)
+      if (heap_get_class_oid (thread_p, class_oid, oid, NEED_SNAPSHOT) ==
+	  NULL)
 	{
 	  /* Unable to find the class of the object.. return */
 	  *fetch_area = NULL;
@@ -2639,7 +2640,8 @@ xlocator_get_class (THREAD_ENTRY * thread_p, OID * class_oid, int class_chn,
        * Caller does not know the class of the object. Get the class identifier
        * from disk
        */
-      if (heap_get_class_oid (thread_p, class_oid, oid, true) == NULL)
+      if (heap_get_class_oid (thread_p, class_oid, oid, NEED_SNAPSHOT) ==
+	  NULL)
 	{
 	  /*
 	   * Unable to find out the class identifier.
@@ -3912,7 +3914,8 @@ xlocator_does_exist (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
        * from disk
        */
       class_chn = CHN_UNKNOWN_ATCLIENT;
-      if (heap_get_class_oid (thread_p, class_oid, oid, true) == NULL)
+      if (heap_get_class_oid (thread_p, class_oid, oid, NEED_SNAPSHOT) ==
+	  NULL)
 	{
 	  /* Unable to find the class of the object.. return */
 	  return LC_DOESNOT_EXIST;
@@ -5682,9 +5685,9 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 
 	      recdes = &new_recdes;
 	      /* Cache object has been updated, we need update the value again */
-	      if (heap_update
-		  (thread_p, &real_hfid, &real_class_oid, oid, recdes, NULL,
-		   &isold_object, local_scan_cache, true) == NULL)
+	      if (heap_update (thread_p, &real_hfid, &real_class_oid, oid,
+			       recdes, NULL, &isold_object, local_scan_cache,
+			       HEAP_UPDATE_IN_PLACE) == NULL)
 		{
 		  assert (er_errid () != NO_ERROR);
 		  error_code = er_errid ();
@@ -6014,9 +6017,9 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	    }
 	}
 
-      if (heap_update
-	  (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
-	   scan_cache, true) == NULL)
+      if (heap_update (thread_p, hfid, class_oid, oid, recdes, NULL,
+		       &isold_object, scan_cache,
+		       HEAP_UPDATE_IN_PLACE) == NULL)
 	{
 	  /*
 	   * Problems updating the object...Maybe, the transaction should be
@@ -6351,7 +6354,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	  /* make sure we use the correct class oid - we could be dealing
 	   * with a classoid resulted from a unique btid pruning
 	   */
-	  if (heap_get_class_oid (thread_p, class_oid, oid, false) == NULL)
+	  if (heap_get_class_oid (thread_p, class_oid, oid,
+				  DONT_NEED_SNAPSHOT) == NULL)
 	    {
 	      goto error;
 	    }
@@ -6402,9 +6406,9 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
       if (!is_update_inplace)
 	{
 	  /* in MVCC update heap and then indexes */
-	  if (heap_update
-	      (thread_p, hfid, class_oid, oid, recdes, new_oid_p,
-	       &isold_object, local_scan_cache, false) == NULL)
+	  if (heap_update (thread_p, hfid, class_oid, oid, recdes, new_oid_p,
+			   &isold_object, local_scan_cache,
+			   HEAP_UPDATE_MVCC_STYLE) == NULL)
 	    {
 	      /*
 	       * Problems updating the object...Maybe, the transaction should be
@@ -6436,8 +6440,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		    locator_update_index (thread_p, recdes, oldrecdes,
 					  att_id, n_att_id, oid, new_oid_p,
 					  class_oid, NULL, false, op_type,
-					  local_scan_cache, true, true,
-					  repl_info);
+					  local_scan_cache, true, repl_info);
 		}
 	      else
 		{
@@ -6450,7 +6453,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 					  att_id, n_att_id, oid, oid,
 					  class_oid, search_btid,
 					  search_btid_duplicate_key_locked,
-					  op_type, local_scan_cache, true,
+					  op_type, local_scan_cache,
 					  true, repl_info);
 		}
 	      if (error_code != NO_ERROR)
@@ -6517,9 +6520,9 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
        * heap */
       if (is_update_inplace)
 	{
-	  if (heap_update
-	      (thread_p, hfid, class_oid, oid, recdes, NULL, &isold_object,
-	       local_scan_cache, true) == NULL)
+	  if (heap_update (thread_p, hfid, class_oid, oid, recdes, NULL,
+			   &isold_object, local_scan_cache,
+			   HEAP_UPDATE_IN_PLACE) == NULL)
 	    {
 	      /*
 	       * Problems updating the object...Maybe, the transaction should be
@@ -9028,7 +9031,6 @@ end:
  *					   search_btid
  *   op_type(in):
  *   scan_cache(in):
- *   data_update(in):
  *   need_replication(in): true if replication is needed.
  *
  * Note: Updatet the index entries of the given object.
@@ -9039,7 +9041,7 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 		      OID * old_oid, OID * new_oid, OID * class_oid,
 		      BTID * search_btid,
 		      bool search_btid_duplicate_key_locked, int op_type,
-		      HEAP_SCANCACHE * scan_cache, bool data_update,
+		      HEAP_SCANCACHE * scan_cache,
 		      bool need_replication, REPL_INFO_TYPE repl_info)
 {
   HEAP_CACHE_ATTRINFO space_attrinfo[2];
@@ -11016,8 +11018,8 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 	       * check to make sure that the OID is one of the OIDs from our
 	       * list of classes.
 	       */
-	      if (heap_get_class_oid (thread_p, &cl_oid, &oid_area[i], true)
-		  == NULL)
+	      if (heap_get_class_oid (thread_p, &cl_oid, &oid_area[i],
+				      NEED_SNAPSHOT) == NULL)
 		{
 		  (void) heap_scancache_end (thread_p, &isid.scan_cache);
 		  goto error;

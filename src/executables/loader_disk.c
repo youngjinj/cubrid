@@ -436,10 +436,8 @@ disk_update_instance (MOP classop, DESC_OBJ * obj, OID * oid)
 	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
-      else
-	if (heap_update
-	    (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL, &oldflag, NULL,
-	     false) != oid)
+      else if (heap_update (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL,
+			    &oldflag, NULL, HEAP_UPDATE_MVCC_STYLE) != oid)
 	{
 	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
@@ -609,10 +607,8 @@ disk_update_instance_using_mobj (MOP classop, MOBJ classobj,
 	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
 	}
-      else
-	if (heap_update
-	    (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL, &oldflag, NULL,
-	     false) != oid)
+      else if (heap_update (NULL, hfid, WS_OID (classop), oid, Diskrec, NULL,
+			    &oldflag, NULL, HEAP_UPDATE_MVCC_STYLE) != oid)
 	{
 	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();

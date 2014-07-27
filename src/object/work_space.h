@@ -765,8 +765,8 @@ extern WS_FLUSH_ERR *ws_get_error_from_error_link (void);
 extern void ws_clear_all_errors_of_error_link (void);
 extern void ws_free_flush_error (WS_FLUSH_ERR * flush_err);
 
-extern int ws_get_mvcc_snapshot_version ();
-extern void ws_increment_mvcc_snapshot_version ();
+extern int ws_get_mvcc_snapshot_version (void);
+extern void ws_increment_mvcc_snapshot_version (void);
 extern bool ws_is_mop_fetched_with_current_snapshot (MOP mop);
 extern MOP ws_mvcc_latest_version (MOP mop);
 

@@ -592,5 +592,5 @@ extern int csession_drop_session_variables (DB_VALUE * variables,
 					    const int count);
 
 extern int cvacuum (int num_classes, OID * class_oids);
-extern int log_invalidate_mvcc_snapshot ();
+extern int log_invalidate_mvcc_snapshot (void);
 #endif /* _NETWORK_INTERFACE_CL_H_ */

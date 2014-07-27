@@ -11614,8 +11614,8 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 	      bool found_partition = false;
 
 	      /* get actual class oid */
-	      if (heap_get_class_oid
-		  (thread_p, &pruned_oid, &unique_oid, false) == NULL)
+	      if (heap_get_class_oid (thread_p, &pruned_oid, &unique_oid,
+				      DONT_NEED_SNAPSHOT) == NULL)
 		{
 		  goto error_exit;
 		}
@@ -11921,8 +11921,8 @@ qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
 	  if (pruning_type != DB_NOT_PARTITIONED_CLASS && is_global_index)
 	    {
 	      /* get actual class oid */
-	      if (heap_get_class_oid
-		  (thread_p, &class_oid, &unique_oid, false) == NULL)
+	      if (heap_get_class_oid (thread_p, &class_oid, &unique_oid,
+				      DONT_NEED_SNAPSHOT) == NULL)
 		{
 		  goto error_exit;
 		}
@@ -11971,7 +11971,8 @@ qexec_oid_of_duplicate_key_update (THREAD_ENTRY * thread_p,
 		{
 		  /* find the class to which unique_oid belongs to */
 		  if (heap_get_class_oid (thread_p, &pruned_class,
-					  &unique_oid, false) == NULL)
+					  &unique_oid,
+					  DONT_NEED_SNAPSHOT) == NULL)
 		    {
 		      goto error_exit;
 		    }
@@ -13840,7 +13841,7 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      ACCESS_SPEC_TYPE *specp;
 
 	      if (heap_get_class_oid (thread_p, &class_oid_buf, oid,
-				      false) == NULL)
+				      DONT_NEED_SNAPSHOT) == NULL)
 		{
 		  goto exit_on_error;
 		}

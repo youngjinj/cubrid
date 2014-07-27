@@ -5804,7 +5804,7 @@ ws_set_error_into_error_link (LC_COPYAREA_ONEOBJ * obj)
  * return : Current snapshot version.
  */
 int
-ws_get_mvcc_snapshot_version ()
+ws_get_mvcc_snapshot_version (void)
 {
   return ws_MVCC_snapshot_version;
 }
@@ -5815,7 +5815,7 @@ ws_get_mvcc_snapshot_version ()
  * return : Void.
  */
 void
-ws_increment_mvcc_snapshot_version ()
+ws_increment_mvcc_snapshot_version (void)
 {
   ws_MVCC_snapshot_version++;
 }
