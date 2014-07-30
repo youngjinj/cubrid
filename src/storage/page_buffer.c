@@ -1083,6 +1083,7 @@ pgbuf_fix_with_retry (THREAD_ENTRY * thread_p, const VPID * vpid, int newpg,
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		  ER_PAGE_LATCH_ABORTED, 2, vpid->volid, vpid->pageid);
+	  assert (0);
 	  break;
 	}
     }
@@ -5586,6 +5587,9 @@ er_set_return:
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 	      ER_PAGE_LATCH_TIMEDOUT, 2, bufptr->vpid.volid,
 	      bufptr->vpid.pageid);
+
+      /* FIXME: remove it. temporarily added for debugging */
+      assert (0);
 
       pthread_mutex_unlock (&bufptr->BCB_mutex);
       if (logtb_is_current_active (thread_p) == true)

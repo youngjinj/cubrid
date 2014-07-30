@@ -343,6 +343,7 @@ static int rv;
 		  ER_PAGE_LATCH_ABORTED, 2, home_vpid.volid,  \
 		  home_vpid.pageid);  \
 		  error_code = ER_PAGE_LATCH_ABORTED; \
+		  assert (0); \
 		  } \
 	      } \
 	  } \
@@ -398,6 +399,7 @@ static int rv;
 			  ER_PAGE_LATCH_ABORTED, 2, (home_vpid).volid,  \
 			  (home_vpid).pageid);  \
 			error_code = ER_PAGE_LATCH_ABORTED; \
+			assert (0); \
 		      } \
 		  }	\
 	      } \
@@ -456,6 +458,7 @@ static int rv;
 				  ER_PAGE_LATCH_ABORTED, 2, \
 				  (home_vpid).volid, (home_vpid).pageid);	\
 			  error_code = ER_PAGE_LATCH_ABORTED; \
+			  assert (0); \
 			} \
 		    } \
 		}	\
@@ -483,6 +486,7 @@ static int rv;
 			      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, \
 				      ER_PAGE_LATCH_ABORTED, 2, (fwd_vpid).volid, \
 				      (fwd_vpid).pageid); \
+			      assert (0); \
 			    } \
 			} \
 		    } \
@@ -12123,6 +12127,7 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, forward_vpid.volid,
 			      forward_vpid.pageid);
+		      assert (0);
 		    }
 		  scan = S_ERROR;
 		  goto end;
@@ -25397,6 +25402,7 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
 			      vpid.pageid);
+		      assert (0);
 		    }
 
 		  goto error;
@@ -25655,6 +25661,7 @@ try_again:
 			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 				  ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
 				  vpid.pageid);
+			  assert (0);
 			}
 
 		      goto error;
@@ -25763,6 +25770,7 @@ try_again:
 			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 				  ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
 				  vpid.pageid);
+			  assert (0);
 			}
 
 		      goto error;
@@ -26846,6 +26854,7 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, forward_vpid.volid,
 			      forward_vpid.pageid);
+		      assert (0);
 		    }
 		  return S_ERROR;
 		}
@@ -27202,6 +27211,7 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, forward_vpid.volid,
 			      forward_vpid.pageid);
+		      assert (0);
 		    }
 		  return S_ERROR;
 		}

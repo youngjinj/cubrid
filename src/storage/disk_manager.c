@@ -4602,6 +4602,10 @@ disk_dealloc_sector (THREAD_ENTRY * thread_p, INT16 volid, INT32 sectid,
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		  ER_PAGE_LATCH_ABORTED, 2, vpid.volid, vpid.pageid);
+
+	  /* FIXME: remove it. temporarily added for debugging */
+	  assert (0);
+
 	  goto exit_on_error;
 	}
     }
@@ -4733,6 +4737,10 @@ disk_dealloc_page (THREAD_ENTRY * thread_p, INT16 volid, INT32 pageid,
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		  ER_PAGE_LATCH_ABORTED, 2, vpid.volid, vpid.pageid);
+
+	  /* FIXME: remove it. temporarily added for debugging */
+	  assert (0);
+
 	  return ER_FAILED;
 	}
     }
@@ -4848,6 +4856,10 @@ disk_id_dealloc (THREAD_ENTRY * thread_p, INT16 volid, INT32 at_pg1,
 	    {
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_PAGE_LATCH_ABORTED, 2, vpid.volid, vpid.pageid);
+
+	  /* FIXME: remove it. temporarily added for debugging */
+	  assert (0);
+
 	      break;
 	    }
 	}
