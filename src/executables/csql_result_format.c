@@ -293,7 +293,7 @@ static char *string_to_string (const char *string_value,
 			       char string_delimiter,
 			       char string_introducer, int length,
 			       int *result_length);
-static int get_object_print_format ();
+static int get_object_print_format (void);
 
 /*
  * add_commas() - counts the digits in this string and adds the commas
@@ -1652,7 +1652,7 @@ csql_db_value_as_string (DB_VALUE * value, int *length)
 }
 
 static int
-get_object_print_format ()
+get_object_print_format (void)
 {
   return prm_get_bool_value (PRM_ID_OBJECT_PRINT_FORMAT_OID) ?
     OBJECT_FORMAT_OID : OBJECT_FORMAT_CLASSNAME;
