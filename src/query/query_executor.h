@@ -349,7 +349,6 @@ struct access_spec_node
   QPROC_SINGLE_FETCH single_fetch;	/* open scan in single fetch mode */
   DB_VALUE *s_dbval;		/* single fetch mode db_value */
   ACCESS_SPEC_TYPE *next;	/* next access specification */
-  int lock_hint;		/* lock hint */
   PARTITION_SPEC_TYPE *parts;	/* partitions of the current spec */
   PARTITION_SPEC_TYPE *curent;	/* current partition */
   bool pruned;			/* true if partition pruning has been

@@ -527,7 +527,6 @@ extern int btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
 				bool is_all_class_srch);
 extern int btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
 			       SCAN_OPERATION_TYPE scan_op_type,
-			       int lock_hint,
 			       BTREE_SCAN * BTS,
 			       KEY_VAL_RANGE * key_val_range, int num_classes,
 			       OID * class_oids_ptr, OID * oids_ptr,

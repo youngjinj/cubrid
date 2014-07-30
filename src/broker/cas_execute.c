@@ -9604,7 +9604,7 @@ get_client_result_cache_lifetime (DB_SESSION * session, int stmt_id)
 
   if (shm_appl->jdbc_cache == 0
       || db_get_statement_type (session, stmt_id) != CUBRID_STMT_SELECT
-      || cas_default_isolation_level == TRAN_REP_CLASS_REP_INSTANCE
+      || cas_default_isolation_level == TRAN_REPEATABLE_READ
       || cas_default_isolation_level == TRAN_SERIALIZABLE)
     {
       return -1;

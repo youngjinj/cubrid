@@ -261,14 +261,7 @@ _op_db_login (nvplist * out, nvplist * in, int ha_mode, char *_dbmt_error)
       return -1;
     }
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      db_set_isolation (TRAN_COMMIT_CLASS_COMMIT_INSTANCE);
-    }
-  else
-    {
-      db_set_isolation (TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE);
-    }
+  db_set_isolation (TRAN_READ_COMMITTED);
 
   db_set_lock_timeout (1);
 

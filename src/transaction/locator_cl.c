@@ -383,7 +383,7 @@ locator_cache_lock (MOP mop, MOBJ ignore_notgiven_object, void *xcache_lock)
     }
 
 
-  if (cache_lock->isolation != TRAN_REP_CLASS_REP_INSTANCE
+  if (cache_lock->isolation != TRAN_REPEATABLE_READ
       && cache_lock->isolation != TRAN_SERIALIZABLE
       && class_mop != NULL && class_mop == sm_Root_class_mop)
     {
@@ -590,7 +590,7 @@ locator_cache_lock_set (MOP mop, MOBJ ignore_notgiven_object, void *xlockset)
   if (found == true)
     {
 
-      if (TM_TRAN_ISOLATION () != TRAN_REP_CLASS_REP_INSTANCE
+      if (TM_TRAN_ISOLATION () != TRAN_REPEATABLE_READ
 	  && TM_TRAN_ISOLATION () != TRAN_SERIALIZABLE
 	  && class_mop != NULL && class_mop == sm_Root_class_mop)
 	{
@@ -1264,7 +1264,7 @@ locator_lock_set (int num_mops, MOP * vector_mop, LOCK reqobj_inst_lock,
 	  if (class_mop == sm_Root_class_mop)
 	    {
 	      lock = reqobj_class_lock;
-	      if (TM_TRAN_ISOLATION () != TRAN_REP_CLASS_REP_INSTANCE
+	      if (TM_TRAN_ISOLATION () != TRAN_REPEATABLE_READ
 		  && TM_TRAN_ISOLATION () != TRAN_SERIALIZABLE)
 		{
 		  /* Demote share locks to intention locks */
@@ -1735,7 +1735,7 @@ locator_lock_nested (MOP mop, LOCK lock, int prune_level,
 	  class_mop = ws_class_mop (mop);
 	  if (class_mop == sm_Root_class_mop)
 	    {
-	      if (TM_TRAN_ISOLATION () != TRAN_REP_CLASS_REP_INSTANCE
+	      if (TM_TRAN_ISOLATION () != TRAN_REPEATABLE_READ
 		  && TM_TRAN_ISOLATION () != TRAN_SERIALIZABLE)
 		{
 		  /* Demote share locks to intention locks */
@@ -1924,7 +1924,7 @@ locator_lock_class_of_instance (MOP inst_mop, MOP * class_mop, LOCK lock)
 
   if (*class_mop != NULL)
     {
-      if (TM_TRAN_ISOLATION () != TRAN_REP_CLASS_REP_INSTANCE
+      if (TM_TRAN_ISOLATION () != TRAN_REPEATABLE_READ
 	  && TM_TRAN_ISOLATION () != TRAN_SERIALIZABLE)
 	{
 	  /* Demote share locks to intention locks */
@@ -3200,7 +3200,6 @@ static LC_FIND_CLASSNAME
 locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
 {
   OID class_oid;		/* Class object identifier */
-  TRAN_ISOLATION isolation;	/* Client isolation level */
   LOCK current_lock;
   LC_FIND_CLASSNAME found = LC_CLASSNAME_EXIST;
 
@@ -3221,7 +3220,7 @@ locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
     {
       found = locator_find_class_by_oid (class_mop, classname,
 					 &class_oid, lock);
-      goto end;
+      return found;
     }
 
   current_lock = ws_get_lock (*class_mop);
@@ -3229,28 +3228,15 @@ locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
     {
       found = locator_find_class_by_oid (class_mop, classname,
 					 &class_oid, lock);
-      goto end;
-    }
-
-  isolation = TM_TRAN_ISOLATION ();
-  if ((current_lock == S_LOCK || current_lock == IS_LOCK
-       || current_lock == SCH_S_LOCK)
-      && (isolation == TRAN_COMMIT_CLASS_COMMIT_INSTANCE
-	  || isolation == TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE))
-    {
-      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false
-	      || isolation != TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE);
-      found = locator_find_class_by_oid (class_mop, classname,
-					 &class_oid, lock);
-      goto end;
+      return found;
     }
 
   if (WS_IS_DELETED (*class_mop))
     {
       er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
 	      ER_LC_UNKNOWN_CLASSNAME, 1, classname);
-      found = LC_CLASSNAME_DELETED;
       *class_mop = NULL;
+      found = LC_CLASSNAME_DELETED;
     }
   else
     {
@@ -3261,7 +3247,6 @@ locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
 	}
     }
 
-end:
   return found;
 }
 
@@ -6395,7 +6380,7 @@ locator_synch_isolation_incons (void)
   LC_COPYAREA *fetch_area;	/* Area where objects are received */
   int more_synch;
 
-  if (TM_TRAN_ISOLATION () == TRAN_REP_CLASS_REP_INSTANCE
+  if (TM_TRAN_ISOLATION () == TRAN_REPEATABLE_READ
       || TM_TRAN_ISOLATION () == TRAN_SERIALIZABLE)
     {
       return;
@@ -6484,7 +6469,6 @@ locator_lockhint_classes (int num_classes, const char **many_classnames,
 			  LOCK * many_locks, int *need_subclasses,
 			  LC_PREFETCH_FLAGS * flags, int quit_on_errors)
 {
-  TRAN_ISOLATION isolation;	/* Client isolation level                   */
   MOP class_mop = NULL;		/* The mop of a class                       */
   MOBJ class_obj = NULL;	/* The class object of above mop            */
   LOCK current_lock;		/* The lock granted to above class          */
@@ -6557,18 +6541,9 @@ locator_lockhint_classes (int num_classes, const char **many_classnames,
 	      assert (conv_lock != NA_LOCK);
 	    }
 
-	  isolation = TM_TRAN_ISOLATION ();
-
 	  if (class_mop == NULL || current_lock == NULL_LOCK
-	      || ((isolation == TRAN_COMMIT_CLASS_COMMIT_INSTANCE
-		   || isolation == TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE)
-		  && (current_lock == S_LOCK || current_lock == IS_LOCK
-		      || current_lock == SCH_S_LOCK))
 	      || current_lock != conv_lock)
 	    {
-	      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false
-		      || (isolation != TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
-			  && isolation != TRAN_REP_CLASS_UNCOMMIT_INSTANCE));
 	      need_call_server = true;
 	      continue;
 	    }

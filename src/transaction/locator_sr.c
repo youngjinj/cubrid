@@ -1894,7 +1894,7 @@ locator_check_class_names (THREAD_ENTRY * thread_p)
     }
   if (heap_scancache_start (thread_p, &scan_cache, root_hfid,
 			    oid_Root_class_oid, true, false,
-			    LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+			    mvcc_snapshot) != NO_ERROR)
     {
       goto error;
     }
@@ -2450,7 +2450,7 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
 
   error_code =
     heap_scancache_start (thread_p, &nxobj.area_scancache, NULL, NULL, false,
-			  false, LOCKHINT_NONE, mvcc_snapshot);
+			  false, mvcc_snapshot);
   if (error_code != NO_ERROR)
     {
       nxobj.mobjs = NULL;
@@ -2782,8 +2782,7 @@ xlocator_fetch_all (THREAD_ENTRY * thread_p, const HFID * hfid, LOCK * lock,
 
   /* Start a scan cursor for getting several classes */
   error_code = heap_scancache_start (thread_p, &scan_cache, hfid, class_oid,
-				     true, false, LOCKHINT_NONE,
-				     mvcc_snapshot);
+				     true, false, mvcc_snapshot);
   if (error_code != NO_ERROR)
     {
       if (*lock != NULL_LOCK)
@@ -3044,7 +3043,7 @@ xlocator_fetch_lockset (THREAD_ENTRY * thread_p, LC_LOCKSET * lockset,
   /* Start a scan cursor for getting several classes */
   error_code =
     heap_scancache_start (thread_p, &nxobj.area_scancache, NULL, NULL, true,
-			  false, LOCKHINT_NONE, NULL);
+			  false, NULL);
   if (error_code != NO_ERROR)
     {
       lock_unlock_objects_lock_set (thread_p, lockset);
@@ -3459,7 +3458,7 @@ locator_all_reference_lockset (THREAD_ENTRY * thread_p,
 
   /* Start a scan cursor for getting several classes */
   if (heap_scancache_start (thread_p, &scan_cache, NULL, NULL, true,
-			    false, LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+			    false, mvcc_snapshot) != NO_ERROR)
     {
       goto error;
     }
@@ -4502,7 +4501,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 
 	  error_code = heap_scancache_start (thread_p, &isid.scan_cache,
 					     &hfid, &fkref->self_oid, true,
-					     true, LOCKHINT_NONE, NULL);
+					     true, NULL);
 	  if (error_code != NO_ERROR)
 	    {
 	      db_private_free_and_init (thread_p, oid_buf);
@@ -4521,8 +4520,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 
 	      BTREE_INIT_SCAN (&bt_scan);
 	      oid_cnt = btree_range_search (thread_p, &fkref->self_btid,
-					    S_DELETE, LOCKHINT_NONE,
-					    &bt_scan,
+					    S_DELETE, &bt_scan,
 					    &key_val_range,
 					    1, &fkref->self_oid,
 					    isid.oid_list.oidp, oid_buf_size,
@@ -4889,8 +4887,7 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
 	}
 
       error_code = heap_scancache_start (thread_p, &isid.scan_cache, &hfid,
-					 &fkref->self_oid, true, true,
-					 LOCKHINT_NONE, NULL);
+					 &fkref->self_oid, true, true, NULL);
       if (error_code != NO_ERROR)
 	{
 	  db_private_free_and_init (thread_p, oid_buf);
@@ -4910,7 +4907,7 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
       do
 	{
 	  oid_cnt = btree_range_search (thread_p, &fkref->self_btid,
-					S_UPDATE, LOCKHINT_NONE, &bt_scan,
+					S_UPDATE, &bt_scan,
 					&key_val_range,
 					1,
 					&fkref->self_oid, isid.oid_list.oidp,
@@ -5201,7 +5198,7 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 
 	  error_code = heap_scancache_start (thread_p, &isid.scan_cache,
 					     &hfid, &fkref->self_oid, true,
-					     true, LOCKHINT_NONE, NULL);
+					     true, NULL);
 	  if (error_code != NO_ERROR)
 	    {
 	      db_private_free_and_init (thread_p, oid_buf);
@@ -5220,8 +5217,7 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 	    {
 	      BTREE_INIT_SCAN (&bt_scan);
 	      oid_cnt = btree_range_search (thread_p, &fkref->self_btid,
-					    S_UPDATE, LOCKHINT_NONE,
-					    &bt_scan,
+					    S_UPDATE, &bt_scan,
 					    &key_val_range,
 					    1, &fkref->self_oid,
 					    isid.oid_list.oidp, oid_buf_size,
@@ -9779,8 +9775,7 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
 
   /* Start a scan cursor */
   error_code = heap_scancache_start (thread_p, &scan_cache, hfid,
-				     class_oid, false, false, LOCKHINT_NONE,
-				     mvcc_snapshot);
+				     class_oid, false, false, mvcc_snapshot);
   if (error_code != NO_ERROR)
     {
       free_and_init (copy_rec.data);
@@ -10290,7 +10285,7 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 
   /* Start a scan cursor and a class attribute information */
   if (heap_scancache_start (thread_p, &scan_cache, hfid, class_oid, true,
-			    false, LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+			    false, mvcc_snapshot) != NO_ERROR)
     {
       return DISK_ERROR;
     }
@@ -10496,7 +10491,7 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
   scan_init_iss (&isid);
 
   if (heap_scancache_start (thread_p, &isid.scan_cache, hfid, class_oid, true,
-			    true, LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+			    true, mvcc_snapshot) != NO_ERROR)
     {
       isallvalid = DISK_ERROR;
       goto error;
@@ -10510,7 +10505,6 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
     {
       /* search index */
       oid_cnt = btree_range_search (thread_p, btid, S_SELECT,
-				    LOCKHINT_NONE,
 				    &bt_scan, &key_val_range,
 				    1, class_oid,
 				    isid.oid_list.oidp,
@@ -10756,8 +10750,7 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
 
       /* Start a scan cursor and a class attribute information */
       if (heap_scancache_start (thread_p, &scan_cache[j], hfid, class_oid,
-				true, false, LOCKHINT_NONE,
-				mvcc_snapshot) != NO_ERROR)
+				true, false, mvcc_snapshot) != NO_ERROR)
 	{
 	  goto error;
 	}
@@ -10934,7 +10927,7 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
   isid.copy_buf_len = DBVAL_BUFSIZE;
 
   if (heap_scancache_start (thread_p, &isid.scan_cache, hfid, class_oid, true,
-			    true, LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+			    true, mvcc_snapshot) != NO_ERROR)
     {
       goto error;
     }
@@ -10948,7 +10941,7 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid,
     {
       /* search index */
       oid_cnt = btree_range_search (thread_p, btid, S_SELECT,
-				    LOCKHINT_NONE, &bt_scan, &key_val_range,
+				    &bt_scan, &key_val_range,
 				    0, (OID *) NULL, isid.oid_list.oidp,
 				    ISCAN_OID_BUFFER_SIZE,
 				    NULL, &isid, true, false, NULL, NULL,
@@ -11459,8 +11452,7 @@ locator_check_all_entries_of_all_btrees (THREAD_ENTRY * thread_p, bool repair)
 
   root_hfid = boot_find_root_heap ();
   if (heap_scancache_start (thread_p, &scan, root_hfid, oid_Root_class_oid,
-			    true, false, LOCKHINT_NONE,
-			    mvcc_snapshot) != NO_ERROR)
+			    true, false, mvcc_snapshot) != NO_ERROR)
     {
       return DISK_ERROR;
     }
@@ -11559,7 +11551,7 @@ locator_guess_sub_classes (THREAD_ENTRY * thread_p,
    */
 
   error_code = heap_scancache_start (thread_p, &scan_cache, NULL, NULL,
-				     true, false, LOCKHINT_NONE, NULL);
+				     true, false, NULL);
   if (error_code != NO_ERROR)
     {
       return error_code;
@@ -12359,7 +12351,7 @@ xlocator_fetch_lockhint_classes (THREAD_ENTRY * thread_p,
    */
 
   error_code = heap_scancache_start (thread_p, &nxobj.area_scancache, NULL,
-				     NULL, true, false, LOCKHINT_NONE, NULL);
+				     NULL, true, false, NULL);
   if (error_code != NO_ERROR)
     {
       lock_unlock_classes_lock_hint (thread_p, lockhint);
@@ -12740,8 +12732,7 @@ xlocator_check_fk_validity (THREAD_ENTRY * thread_p, OID * cls_oid,
   aligned_midxkey_buf = PTR_ALIGN (midxkey_buf, MAX_ALIGNMENT);
 
   error_code = heap_scancache_start (thread_p, &scan_cache, hfid, cls_oid,
-				     true, false, LOCKHINT_NONE,
-				     mvcc_snapshot);
+				     true, false, mvcc_snapshot);
   if (error_code != NO_ERROR)
     {
       return error_code;
@@ -13020,8 +13011,7 @@ xlocator_lock_and_fetch_all (THREAD_ENTRY * thread_p, const HFID * hfid,
 
   /* Start a scan cursor for getting several classes */
   error_code = heap_scancache_start (thread_p, &scan_cache, hfid, class_oid,
-				     true, false, LOCKHINT_NONE,
-				     mvcc_snapshot);
+				     true, false, mvcc_snapshot);
   if (error_code != NO_ERROR)
     {
       goto error;

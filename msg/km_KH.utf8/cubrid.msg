@@ -1219,7 +1219,12 @@ $ LOADDB
 1150 Context requires compatible collations.
 1151 The page %1$d of volume %2$d is not a slotted page.
 1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
-1153 Last Error
+2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
+2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+2002 MVCC can't get snapshot
+2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+2004 Serializable conflict due to concurent update
+2005 Last Error
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Error in error subsystem (line %1$d):
@@ -1669,11 +1674,11 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 2 Transaction isolation level must be 1, 2, 3, 4, 5 or 6.
 3 Timeout value must be -1, 0, or >0.
 4 Isolation level set to:\n
-5          READ COMMITTED SCHEMA, READ UNCOMMITTED INSTANCES.\n
-6          READ COMMITTED SCHEMA, READ COMMITTED INSTANCES.\n
-7          REPEATABLE READ SCHEMA, READ UNCOMMITTED INSTANCES.\n
-8          REPEATABLE READ SCHEMA, READ COMMITTED INSTANCES.\n
-9          REPEATABLE READ SCHEMA, REPEATABLE READ INSTANCES.\n
+5          Unknown isolation.\n
+6          Unknown isolation.\n
+7          Unknown isolation.\n
+8          READ COMMITTED\n
+9          REPEATABLE READ\n
 10 A non-updatable query is not allowed in a db_query_execute_oid call.
 11 Transaction timed out waiting for locks.
 12 Attempted to access host variable with index %1$d when only %2$d \ninput host variables were given.
@@ -1743,7 +1748,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 The owner or DBA can only alter the definition of the target serial.
 78 It is not allowed for users to modify the serial object created by an auto increment constraint.
 79 Invalid isolation level: %1$s schema, %2$s instances.
-80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
+80 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** invalid cache ***

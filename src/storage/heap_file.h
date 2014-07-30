@@ -306,7 +306,6 @@ extern int heap_scancache_start (THREAD_ENTRY * thread_p,
 				 HEAP_SCANCACHE * scan_cache,
 				 const HFID * hfid, const OID * class_oid,
 				 int cache_last_fix_page, int is_indexscan,
-				 int lock_hint,
 				 MVCC_SNAPSHOT * mvcc_snapshot);
 extern int heap_scancache_start_modify (THREAD_ENTRY * thread_p,
 					HEAP_SCANCACHE * scan_cache,
@@ -373,7 +372,6 @@ extern int heap_cmp (THREAD_ENTRY * thread_p, const OID * oid,
 extern int heap_scanrange_start (THREAD_ENTRY * thread_p,
 				 HEAP_SCANRANGE * scan_range,
 				 const HFID * hfid, const OID * class_oid,
-				 int lock_hint,
 				 MVCC_SNAPSHOT * mvcc_snapshot);
 extern void heap_scanrange_end (THREAD_ENTRY * thread_p,
 				HEAP_SCANRANGE * scan_range);

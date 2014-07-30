@@ -666,6 +666,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 		   int func_pred_stream_size, int func_col_id,
 		   int func_attr_index_start)
 {
+  LOG_TDES *tdes = NULL;
   SORT_ARGS sort_args_info, *sort_args;
   LOAD_ARGS load_args_info, *load_args;
   int init_pgcnt, i, first_alloc_nthpage;
@@ -831,12 +832,18 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   if (heap_scancache_start (thread_p, &sort_args->hfscan_cache,
 			    &sort_args->hfids[cur_class],
 			    &sort_args->class_ids[cur_class],
-			    true, false, LOCKHINT_BUILD_INDEX, mvcc_snapshot)
-      != NO_ERROR)
+			    true, false, mvcc_snapshot) != NO_ERROR)
     {
       goto error;
     }
   sort_args->scancache_inited = 1;
+
+  /* After building index acquire lock on table, the transaction has deadlock priority */
+  tdes = LOG_FIND_CURRENT_TDES (thread_p);
+  if (tdes)
+    {
+      tdes->has_deadlock_priority = true;
+    }
 
   if (heap_attrinfo_start (thread_p, &sort_args->class_ids[cur_class],
 			   sort_args->n_attrs,
@@ -3113,8 +3120,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	      if (heap_scancache_start (thread_p, &sort_args->hfscan_cache,
 					&sort_args->hfids[cur_class],
 					&sort_args->class_ids[cur_class],
-					true, false,
-					LOCKHINT_NONE, mvcc_snapshot)
+					true, false, mvcc_snapshot)
 		  != NO_ERROR)
 		{
 		  return SORT_ERROR_OCCURRED;

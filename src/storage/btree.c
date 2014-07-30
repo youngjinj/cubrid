@@ -536,7 +536,7 @@ static PAGE_PTR btree_find_boundary_leaf (THREAD_ENTRY * thread_p,
 					  BTREE_BOUNDARY where);
 static int btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
 				 BTID * btid, int readonly_purpose,
-				 int lock_hint, OID * class_oid,
+				 OID * class_oid,
 				 KEY_VAL_RANGE * key_val_range,
 				 FILTER_INFO * filter,
 				 bool need_construct_btid_int, char *copy_buf,
@@ -20291,8 +20291,7 @@ btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
 
   if (isidp->mvcc_need_locks)
     {
-      rc = lock_scan (thread_p, class_oid, true, LOCKHINT_NONE, &class_lock,
-		      &scanid_bit);
+      rc = lock_scan (thread_p, class_oid, true, &class_lock, &scanid_bit);
       if (rc != LK_GRANTED)
 	{
 	  return ER_FAILED;
@@ -20305,7 +20304,7 @@ btree_keyval_search (THREAD_ENTRY * thread_p, BTID * btid,
   num_classes = (is_all_class_srch) ? 0 : 1;
 
   rc =
-    btree_range_search (thread_p, btid, scan_op_type, LOCKHINT_NONE, BTS,
+    btree_range_search (thread_p, btid, scan_op_type, BTS,
 			key_val_range, num_classes, class_oid, oids_ptr,
 			oids_size, filter, isidp, true, false, NULL, NULL,
 			false, 0);
@@ -20623,7 +20622,6 @@ btree_coerce_key (DB_VALUE * keyp, int keysize,
  *   bts(in): pointer to B+-tree scan structure
  *   btid(in): B+-tree identifier
  *   readonly_purpose(in):
- *   lock_hint(in):
  *   cls_oid(in): class oid (NULL_OID or valid OID)
  *   key1(in): the lower bound key value of key range
  *   key2(in): the upper bound key value of key range
@@ -20639,7 +20637,7 @@ btree_coerce_key (DB_VALUE * keyp, int keysize,
  */
 static int
 btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
-		      BTID * btid, int readonly_purpose, int lock_hint,
+		      BTID * btid, int readonly_purpose,
 		      OID * class_oid, KEY_VAL_RANGE * key_val_range,
 		      FILTER_INFO * filter,
 		      bool need_construct_btid_int, char *copy_buf,
@@ -20687,16 +20685,6 @@ btree_initialize_bts (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
   else
     {
       bts->read_uncommitted = false;
-      if (!for_update)
-	{
-	  if (((bts->tran_isolation == TRAN_REP_CLASS_UNCOMMIT_INSTANCE ||
-		bts->tran_isolation == TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE)
-	       && readonly_purpose)
-	      || (lock_hint & LOCKHINT_READ_UNCOMMITTED))
-	    {
-	      bts->read_uncommitted = true;
-	    }
-	}
     }
 
   assert (need_construct_btid_int == true
@@ -23243,12 +23231,10 @@ btree_make_pseudo_oid (int p, short s, short v, BTID * btid, OID * oid)
  * TODO: Handle unique on hierarchy indexes.
  */
 SCAN_CODE
-btree_get_next_key_info (THREAD_ENTRY * thread_p,
-			 BTID * btid,
-			 BTREE_SCAN * bts,
-			 int num_classes,
-			 OID * class_oids_ptr,
-			 INDX_SCAN_ID * index_scan_id_p, DB_VALUE ** key_info)
+btree_get_next_key_info (THREAD_ENTRY * thread_p, BTID * btid,
+			 BTREE_SCAN * bts, int num_classes,
+			 OID * class_oids_ptr, INDX_SCAN_ID * index_scan_id_p,
+			 DB_VALUE ** key_info)
 {
   int error_code = NO_ERROR;
   SCAN_CODE result = S_SUCCESS;
@@ -23290,8 +23276,8 @@ btree_get_next_key_info (THREAD_ENTRY * thread_p,
       /* first btree_get_next_key_info call, initialize bts */
       error_code =
 	btree_initialize_bts (thread_p, bts, btid, 1,
-			      LOCKHINT_READ_UNCOMMITTED, class_oids_ptr, NULL,
-			      NULL, false, index_scan_id_p->copy_buf,
+			      class_oids_ptr, NULL, NULL, false,
+			      index_scan_id_p->copy_buf,
 			      index_scan_id_p->copy_buf_len, false,
 			      index_scan_id_p->mvcc_need_locks);
       if (error_code != NO_ERROR)
@@ -27992,7 +27978,6 @@ error:
  * btree_range_search () -
  *   return: OIDs count
  *   btid(in): B+-tree identifier
- *   lock_hint(in):
  *   bts(in): B+-tree scan structure
  *   key1(in): the lower bound key value of key range
  *   key2(in): the upper bound key value of key range
@@ -28012,7 +27997,7 @@ error:
  */
 int
 btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
-		    SCAN_OPERATION_TYPE scan_op_type, int lock_hint,
+		    SCAN_OPERATION_TYPE scan_op_type,
 		    BTREE_SCAN * bts, KEY_VAL_RANGE * key_val_range,
 		    int num_classes, OID * class_oids_ptr, OID * oids_ptr,
 		    int oids_size, FILTER_INFO * filter,
@@ -28113,7 +28098,7 @@ btree_range_search (THREAD_ENTRY * thread_p, BTID * btid,
 
       /* initialize the bts */
       if (btree_initialize_bts (thread_p, bts, btid, readonly_purpose,
-				lock_hint, class_oids_ptr, key_val_range,
+				class_oids_ptr, key_val_range,
 				filter, need_construct_btid_int,
 				index_scan_id_p->copy_buf,
 				index_scan_id_p->copy_buf_len,
@@ -28550,8 +28535,8 @@ start_locking:
     {				/* bts->read_uncommitted == false */
       /*
        * bts->tran_isolation :
-       * TRAN_REP_CLASS_COMMIT_INSTANCE, TRAN_COMMIT_CLASS_COMMIT_INSTANCE
-       * TRAN_REP_CLASS_REP_INSTANCE
+       * TRAN_READ_COMMITTED
+       * TRAN_REPEATABLE_READ
        * TRAN_SERIALIZABLE
        */
 

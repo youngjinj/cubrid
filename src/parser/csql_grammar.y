@@ -607,7 +607,6 @@ int g_original_buffer_len;
 %type <boolean> opt_cascade_constraints
 %type <number> opt_replace
 %type <number> opt_of_inner_left_right
-%type <number> opt_with_read_uncommitted
 %type <number> opt_class_type
 %type <number> opt_of_attr_column_method
 %type <number> opt_of_constraint_index_key
@@ -4250,7 +4249,7 @@ table_spec
 		DBG_PRINT}}
 
 original_table_spec
-	: class_spec opt_as_identifier_attr_name opt_table_spec_index_hint_list opt_with_read_uncommitted
+	: class_spec opt_as_identifier_attr_name opt_table_spec_index_hint_list 
 		{{
 			PT_NODE *range_var = NULL;
 			PT_NODE *ent = $1;
@@ -4346,11 +4345,6 @@ original_table_spec
 			      {
 				/* push back node */
 				parser_push_hint_node (stmt);
-			      }
-
-			    if ($4)
-			      {
-				ent->info.spec.lock_hint |= LOCKHINT_READ_UNCOMMITTED;
 			      }
 			  }
 
@@ -4502,21 +4496,6 @@ opt_table_spec_index_hint_list
 
 			$$ = $1;
 			PARSER_SAVE_ERR_CONTEXT ($$, @$.buffer_pos);
-
-		DBG_PRINT}}
-	;
-
-opt_with_read_uncommitted
-	: /* empty */
-		{{
-
-			$$ = 0;
-
-		DBG_PRINT}}
-	| WITH '(' READ UNCOMMITTED ')'
-		{{
-
-			$$ = 1;
 
 		DBG_PRINT}}
 	;
@@ -10166,10 +10145,11 @@ isolation_level_spec
 		{{
 
 			container_4 ctn;
+			PT_MISC_TYPE schema = PT_REPEATABLE_READ;
 			PT_MISC_TYPE level = 0;
 			level = $1;
 
-			SET_CONTAINER_4 (ctn, NULL, FROM_NUMBER (PT_NO_ISOLATION_LEVEL),
+			SET_CONTAINER_4 (ctn, NULL, FROM_NUMBER (schema),
 					 FROM_NUMBER (level), FROM_NUMBER (0));
 			$$ = ctn;
 
@@ -10183,12 +10163,6 @@ isolation_level_spec
 			int error = 0;
 
 			schema = $1;
-
-			if ($1 == PT_READ_UNCOMMITTED)
-			  {
-			    schema = PT_READ_COMMITTED;
-			    error = -1;
-			  }
 
 			level = PT_NO_ISOLATION_LEVEL;
 
@@ -10223,12 +10197,6 @@ isolation_level_spec
 			level = $4;
 			schema = $1;
 
-			if ($1 == PT_READ_UNCOMMITTED)
-			  {
-			    schema = PT_READ_COMMITTED;
-			    error = -1;
-			  }
-
 			SET_CONTAINER_4 (ctn, NULL, FROM_NUMBER (schema), FROM_NUMBER (level),
 					 FROM_NUMBER (error));
 			$$ = ctn;
@@ -10243,12 +10211,6 @@ isolation_level_spec
 
 			level = $1;
 			schema = $4;
-
-			if ($4 == PT_READ_UNCOMMITTED)
-			  {
-			    schema = PT_READ_COMMITTED;
-			    error = -1;
-			  }
 
 			SET_CONTAINER_4 (ctn, NULL, FROM_NUMBER (schema), FROM_NUMBER (level),
 					 FROM_NUMBER (error));
@@ -10273,12 +10235,6 @@ isolation_level_name
 		{{
 
 			$$ = PT_READ_COMMITTED;
-
-		DBG_PRINT}}
-	| READ UNCOMMITTED
-		{{
-
-			$$ = PT_READ_UNCOMMITTED;
 
 		DBG_PRINT}}
 	;

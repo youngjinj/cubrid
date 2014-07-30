@@ -822,11 +822,8 @@ logtb_am_i_dba_client (THREAD_ENTRY * thread_p)
  *                      lock. Negative value is infinite
  *   isolation(in): Isolation level. One of the following:
  *                         TRAN_SERIALIZABLE
- *                         TRAN_REP_CLASS_REP_INSTANCE
- *                         TRAN_REP_CLASS_COMMIT_INSTANCE
- *                         TRAN_REP_CLASS_UNCOMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_COMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
+ *                         TRAN_REPEATABLE_READ
+ *                         TRAN_READ_COMMITTED
  *
  * Note:Assign a transaction index for a sequence of transactions
  *              (i.e., a client) and initialize the state structure for the
@@ -973,11 +970,8 @@ logtb_set_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
  *                      is timed out. Negative value is infinite.
  *   isolation(in): Isolation level. One of the following:
  *                         TRAN_SERIALIZABLE
- *                         TRAN_REP_CLASS_REP_INSTANCE
- *                         TRAN_REP_CLASS_COMMIT_INSTANCE
- *                         TRAN_REP_CLASS_UNCOMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_COMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
+ *                         TRAN_REPEATABLE_READ
+ *                         TRAN_READ_COMMITTED
  *
  * Note:Allocate a transaction index for a sequence of transactions
  *              (i.e., a client) and initialize the state structure for the
@@ -2756,11 +2750,8 @@ logtb_find_interrupt (int tran_index, bool * interrupt)
  *
  *   isolation(in): New Isolation level. One of the following:
  *                         TRAN_SERIALIZABLE
- *                         TRAN_REP_CLASS_REP_INSTANCE
- *                         TRAN_REP_CLASS_COMMIT_INSTANCE
- *                         TRAN_REP_CLASS_UNCOMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_COMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
+ *                         TRAN_REPEATABLE_READ
+ *                         TRAN_READ_COMMITTED
  *   unlock_by_isolation(in): unlock by isolation during reset
  *
  * Note:Reset the default isolation level for the current transaction
@@ -4220,7 +4211,7 @@ xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
   LOG_TDES *tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
 
   if (!mvcc_Enabled || tdes == NULL || tdes->mvcc_info == NULL
-      || tdes->isolation >= TRAN_REP_READ)
+      || tdes->isolation >= TRAN_REPEATABLE_READ)
     {
       /* Nothing to do */
       return;

@@ -4505,8 +4505,6 @@ xts_process_access_spec_type (char *ptr, const ACCESS_SPEC_TYPE * access_spec)
 
   ptr = or_pack_int (ptr, access_spec->access);
 
-  ptr = or_pack_int (ptr, access_spec->lock_hint);
-
   if (access_spec->access == SEQUENTIAL
       || access_spec->access == SEQUENTIAL_RECORD_INFO
       || access_spec->access == SEQUENTIAL_PAGE_SCAN)
@@ -6536,7 +6534,6 @@ xts_sizeof_access_spec_type (const ACCESS_SPEC_TYPE * access_spec)
 
   size += OR_INT_SIZE +		/* type */
     OR_INT_SIZE +		/* access */
-    OR_INT_SIZE +		/* lock_hint */
     OR_INT_SIZE +		/* flags */
     PTR_SIZE +			/* index_ptr */
     PTR_SIZE +			/* where_key */

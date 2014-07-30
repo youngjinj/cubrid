@@ -1219,7 +1219,12 @@ $ LOADDB
 1150 Contexte oblige à avoir classements compatibles.
 1151 The page %1$d of volume %2$d is not a slotted page.
 1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
-1153 Dernière erreur
+2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
+2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+2002 MVCC can't get snapshot
+2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+2004 Serializable conflict due to concurent update
+2005 Dernière erreur
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Erreur dans le sous-système d'erreur (ligne %1$d):
@@ -1669,11 +1674,11 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 2 Niveau d'isolement de la transaction doit être de 1, 2, 3, 4, 5 ou 6.
 3 Valeur du délai d'expiration doit être -1, 0 ou >0.
 4 Niveaux d'isolation définie à:\n
-5          READ COMMITTED SCHEMA, READ UNCOMMITTED INSTANCES.\n
-6          READ COMMITTED SCHEMA, READ COMMITTED INSTANCES.\n
-7          REPEATABLE READ SCHEMA, READ UNCOMMITTED INSTANCES.\n
-8          REPEATABLE READ SCHEMA, READ COMMITTED INSTANCES.\n
-9          REPEATABLE READ SCHEMA, REPEATABLE READ INSTANCES.\n
+5          Unknown isolation.\n
+6          Unknown isolation.\n
+7          Unknown isolation.\n
+8          READ COMMITTED\n
+9          REPEATABLE READ\n
 10 Une requête non modifiable est interdite dans un appel db_query_execute_oid.
 11 Un délai d'expiration s'est passé pour transaction en attente des verrous.
 12 Tentative d'accès à le variable hôte de l'index %1$d lorsque seulement\n%2$d variables d'entrée ont été donnés.
@@ -1743,7 +1748,8 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 Seulement le propriétaire ou DBA peut modifier la définition de la série cible.
 78 Il est interdit aux utilisateurs de modifier l'objet serialisé créée par une contrainte d'incrémentation automatique.
 79 Niveau d'isolement invalid: schéma %1$s, %2$s instances.
-80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
+80 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** cache invalide ***

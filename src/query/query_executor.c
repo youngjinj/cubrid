@@ -7420,7 +7420,6 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 				   mvcc_select_lock_needed,
 				   scan_op_type,
 				   fixed,
-				   curr_spec->lock_hint,
 				   grouped,
 				   curr_spec->single_fetch,
 				   curr_spec->s_dbval,
@@ -7449,8 +7448,7 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 	}
       else if (scan_type == S_HEAP_PAGE_SCAN)
 	{
-	  if (scan_open_heap_page_scan (thread_p, s_id, curr_spec->lock_hint,
-					val_list, vd,
+	  if (scan_open_heap_page_scan (thread_p, s_id, val_list, vd,
 					&ACCESS_SPEC_CLS_OID (curr_spec),
 					&ACCESS_SPEC_HFID (curr_spec),
 					curr_spec->where_pred, scan_type,
@@ -7504,7 +7502,6 @@ qexec_open_scan (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * curr_spec,
 				    mvcc_select_lock_needed,
 				    scan_op_type,
 				    fixed,
-				    curr_spec->lock_hint,
 				    grouped,
 				    curr_spec->single_fetch,
 				    curr_spec->s_dbval,
@@ -8622,8 +8619,8 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 
       error =
 	scan_open_heap_scan (thread_p, &spec->s_id, mvcc_select_lock_needed,
-			     scan_op_type, fixed, spec->lock_hint, grouped,
-			     single_fetch, spec->s_dbval, val_list, vd,
+			     scan_op_type, fixed, grouped, single_fetch,
+			     spec->s_dbval, val_list, vd,
 			     &class_oid, &class_hfid,
 			     spec->s.cls_node.cls_regu_list_pred,
 			     spec->where_pred,
@@ -8652,8 +8649,8 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 	    }
 	}
       error =
-	scan_open_heap_page_scan (thread_p, &spec->s_id, spec->lock_hint,
-				  val_list, vd, &class_oid, &class_hfid,
+	scan_open_heap_page_scan (thread_p, &spec->s_id, val_list, vd,
+				  &class_oid, &class_hfid,
 				  spec->where_pred, scan_type,
 				  spec->s.cls_node.cache_reserved,
 				  spec->s.cls_node.cls_regu_list_reserved);
@@ -8682,7 +8679,7 @@ qexec_init_next_partition (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE * spec)
 
       error =
 	scan_open_index_scan (thread_p, &spec->s_id, mvcc_select_lock_needed,
-			      scan_op_type, fixed, spec->lock_hint, grouped,
+			      scan_op_type, fixed, grouped,
 			      single_fetch, spec->s_dbval, val_list, vd,
 			      idxptr, &class_oid, &class_hfid,
 			      spec->s.cls_node.cls_regu_list_key,
@@ -13277,7 +13274,7 @@ qexec_execute_obj_fetch (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	}
 
       (void) heap_scancache_start (thread_p, &scan_cache, NULL, NULL,
-				   true, false, LOCKHINT_NONE, mvcc_snapshot);
+				   true, false, mvcc_snapshot);
       scan_cache_end_needed = true;
 
       /* fetch the object and the class oid */
@@ -13909,7 +13906,7 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		{
 		  (void) heap_scancache_start (thread_p, &scan_cache,
 					       class_hfid, class_oid, false,
-					       false, LOCKHINT_NONE, NULL);
+					       false, NULL);
 		  scan_cache_inited = true;
 		  COPY_OID (&last_cached_class_oid, class_oid);
 		}

@@ -4746,17 +4746,13 @@ map_iso_levels (PARSER_CONTEXT * parser, PT_NODE * statement,
 	}
       break;
     case PT_REPEATABLE_READ:
-      if (instances == PT_READ_UNCOMMITTED)
+      if (instances == PT_READ_COMMITTED)
 	{
-	  *tran_isolation = TRAN_REP_CLASS_UNCOMMIT_INSTANCE;
-	}
-      else if (instances == PT_READ_COMMITTED)
-	{
-	  *tran_isolation = TRAN_REP_CLASS_COMMIT_INSTANCE;
+	  *tran_isolation = TRAN_READ_COMMITTED;
 	}
       else if (instances == PT_REPEATABLE_READ)
 	{
-	  *tran_isolation = TRAN_REP_CLASS_REP_INSTANCE;
+	  *tran_isolation = TRAN_REPEATABLE_READ;
 	}
       else
 	{
@@ -4768,14 +4764,9 @@ map_iso_levels (PARSER_CONTEXT * parser, PT_NODE * statement,
 	}
       break;
     case PT_READ_COMMITTED:
-      if (instances == PT_READ_UNCOMMITTED)
+      if (instances == PT_READ_COMMITTED)
 	{
-	  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == false);
-	  *tran_isolation = TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE;
-	}
-      else if (instances == PT_READ_COMMITTED)
-	{
-	  *tran_isolation = TRAN_COMMIT_CLASS_COMMIT_INSTANCE;
+	  *tran_isolation = TRAN_READ_COMMITTED;
 	}
       else
 	{
@@ -4786,11 +4777,6 @@ map_iso_levels (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  return ER_GENERIC_ERROR;
 	}
       break;
-    case PT_READ_UNCOMMITTED:
-      PT_ERRORmf2 (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
-		   MSGCAT_RUNTIME_XACT_INVALID_ISO_LVL_MSG,
-		   pt_show_misc_type (schema), pt_show_misc_type (instances));
-      return ER_GENERIC_ERROR;
     default:
       return ER_GENERIC_ERROR;
     }
@@ -4822,53 +4808,8 @@ set_iso_level (PARSER_CONTEXT * parser,
   /* translate to the enumerated type */
   switch (isolvl)
     {
-    case 1:
-      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-	{
-	  PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
-		     MSGCAT_MVCC_RUNTIME_XACT_ISO_LVL_MSG);
-	  error = ER_GENERIC_ERROR;
-	}
-      else
-	{
-	  *tran_isolation = TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE;
-	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					   MSGCAT_SET_PARSER_RUNTIME,
-					   MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
-	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					   MSGCAT_SET_PARSER_RUNTIME,
-					   MSGCAT_RUNTIME_READCOM_S_READUNC_I));
-	}
-      break;
-    case 2:
-      *tran_isolation = TRAN_COMMIT_CLASS_COMMIT_INSTANCE;
-      fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-				       MSGCAT_SET_PARSER_RUNTIME,
-				       MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
-      fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-				       MSGCAT_SET_PARSER_RUNTIME,
-				       MSGCAT_RUNTIME_READCOM_S_READCOM_I));
-      break;
-    case 3:
-      if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-	{
-	  PT_ERRORm (parser, statement, MSGCAT_SET_PARSER_RUNTIME,
-		     MSGCAT_MVCC_RUNTIME_XACT_ISO_LVL_MSG);
-	  error = ER_GENERIC_ERROR;
-	}
-      else
-	{
-	  *tran_isolation = TRAN_REP_CLASS_UNCOMMIT_INSTANCE;
-	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					   MSGCAT_SET_PARSER_RUNTIME,
-					   MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
-	  fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
-					   MSGCAT_SET_PARSER_RUNTIME,
-					   MSGCAT_RUNTIME_REPREAD_S_READUNC_I));
-	}
-      break;
-    case 4:
-      *tran_isolation = TRAN_REP_CLASS_COMMIT_INSTANCE;
+    case TRAN_READ_COMMITTED:
+      *tran_isolation = TRAN_READ_COMMITTED;
       fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
 				       MSGCAT_SET_PARSER_RUNTIME,
 				       MSGCAT_RUNTIME_ISO_LVL_SET_TO_MSG));
@@ -4876,8 +4817,8 @@ set_iso_level (PARSER_CONTEXT * parser,
 				       MSGCAT_SET_PARSER_RUNTIME,
 				       MSGCAT_RUNTIME_REPREAD_S_READCOM_I));
       break;
-    case 5:
-      *tran_isolation = TRAN_REP_CLASS_REP_INSTANCE;
+    case TRAN_REPEATABLE_READ:
+      *tran_isolation = TRAN_REPEATABLE_READ;
       fprintf (stdout,
 	       msgcat_message (MSGCAT_CATALOG_CUBRID,
 			       MSGCAT_SET_PARSER_RUNTIME,
@@ -4887,7 +4828,7 @@ set_iso_level (PARSER_CONTEXT * parser,
 			       MSGCAT_SET_PARSER_RUNTIME,
 			       MSGCAT_RUNTIME_REPREAD_S_REPREAD_I));
       break;
-    case 6:
+    case TRAN_SERIALIZABLE:
       *tran_isolation = TRAN_SERIALIZABLE;
       fprintf (stdout, msgcat_message (MSGCAT_CATALOG_CUBRID,
 				       MSGCAT_SET_PARSER_RUNTIME,
@@ -4906,6 +4847,9 @@ set_iso_level (PARSER_CONTEXT * parser,
 	  break;
 	}
       /* fall through */
+    case 1:			/* unsupported ones */
+    case 2:
+    case 3:
     default:
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	{

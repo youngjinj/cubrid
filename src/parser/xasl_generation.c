@@ -648,7 +648,6 @@ static ACCESS_SPEC_TYPE *pt_make_class_access_spec (PARSER_CONTEXT * parser,
 						    DB_OBJECT * class_,
 						    TARGET_TYPE scan_type,
 						    ACCESS_METHOD access,
-						    int lock_hint,
 						    INDX_INFO * indexptr,
 						    PRED_EXPR * where_key,
 						    PRED_EXPR * where_pred,
@@ -859,14 +858,15 @@ static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
 static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
 					      PT_NODE * tree, void *arg,
 					      int *continue_walk);
-static int pt_add_constant_object_regu_variable (PARSER_CONTEXT *parser,
-						 PT_NODE *node1,
-						 REGU_VARIABLE *regu_var1,
-						 PT_NODE *node2,
-						 REGU_VARIABLE *regu_var2,
-						 PT_NODE *node3,
-						 REGU_VARIABLE *regu_var3,
-						 REGU_VARIABLE_LIST *regu_list);
+static int pt_add_constant_object_regu_variable (PARSER_CONTEXT * parser,
+						 PT_NODE * node1,
+						 REGU_VARIABLE * regu_var1,
+						 PT_NODE * node2,
+						 REGU_VARIABLE * regu_var2,
+						 PT_NODE * node3,
+						 REGU_VARIABLE * regu_var3,
+						 REGU_VARIABLE_LIST *
+						 regu_list);
 
 
 static void
@@ -1738,7 +1738,7 @@ pt_make_pred_term_is (PARSER_CONTEXT * parser, PT_NODE * arg1, PT_NODE * arg2,
 static PRED_EXPR *
 pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 				int *argp,
-				REGU_VARIABLE_LIST *regu_list_last_version)
+				REGU_VARIABLE_LIST * regu_list_last_version)
 {
   PRED_EXPR *pred = NULL;
   DB_TYPE data_type;
@@ -2278,7 +2278,7 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 	      *argp |= PT_PRED_ARG_GRBYNUM_CONTINUE;
 	      *argp |= PT_PRED_ARG_ORDBYNUM_CONTINUE;
 	    }
-	  
+
 	  if (pt_add_constant_object_regu_variable (parser,
 						    node->info.expr.arg1,
 						    regu_var1,
@@ -2287,7 +2287,7 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
 						    node->info.expr.arg3,
 						    regu_var3,
 						    regu_list_last_version)
-						    != NO_ERROR)
+	      != NO_ERROR)
 	    {
 	      PT_INTERNAL_ERROR (parser, "failed building last version"
 				 " regu variable list");
@@ -2435,7 +2435,8 @@ pt_to_pred_expr_local_with_arg (PARSER_CONTEXT * parser, PT_NODE * node,
  */
 PRED_EXPR *
 pt_to_pred_expr_with_arg (PARSER_CONTEXT * parser, PT_NODE * node_list,
-			  int *argp, REGU_VARIABLE_LIST *regu_list_last_version)
+			  int *argp,
+			  REGU_VARIABLE_LIST * regu_list_last_version)
 {
   PRED_EXPR *cnf_pred, *dnf_pred, *temp;
   PT_NODE *node, *cnf_node, *dnf_node;
@@ -2532,9 +2533,10 @@ error:
  */
 PRED_EXPR *
 pt_to_pred_expr (PARSER_CONTEXT * parser, PT_NODE * node,
-		 REGU_VARIABLE_LIST *regu_list_last_version)
+		 REGU_VARIABLE_LIST * regu_list_last_version)
 {
-  return pt_to_pred_expr_with_arg (parser, node, NULL, regu_list_last_version);
+  return pt_to_pred_expr_with_arg (parser, node, NULL,
+				   regu_list_last_version);
 }
 
 #if defined (ENABLE_UNUSED_FUNCTION)
@@ -5070,7 +5072,6 @@ pt_make_access_spec (TARGET_TYPE spec_type,
     {
       spec->type = spec_type;
       spec->access = access;
-      spec->lock_hint = LOCKHINT_NONE;
       spec->indexptr = indexptr;
       spec->where_key = where_key;
       spec->where_pred = where_pred;
@@ -5159,7 +5160,6 @@ pt_fill_in_attrid_array (REGU_VARIABLE_LIST attr_list, ATTR_ID * attr_array,
  *   class(in):
  *   scan_type(in):
  *   access(in):
- *   lock_hint(in):
  *   indexptr(in):
  *   where_key(in):
  *   where_pred(in):
@@ -5180,7 +5180,6 @@ pt_make_class_access_spec (PARSER_CONTEXT * parser,
 			   DB_OBJECT * class_,
 			   TARGET_TYPE scan_type,
 			   ACCESS_METHOD access,
-			   int lock_hint,
 			   INDX_INFO * indexptr,
 			   PRED_EXPR * where_key,
 			   PRED_EXPR * where_pred,
@@ -6547,7 +6546,7 @@ pt_make_regu_constant (PARSER_CONTEXT * parser, DB_VALUE * db_value,
 
 		  /* need a new db_val that may be pointed later from other
 		   * regu variable */
-		  dbvalptr = regu_dbval_alloc ();		  
+		  dbvalptr = regu_dbval_alloc ();
 		  if (!dbvalptr)
 		    {
 		      return NULL;
@@ -6565,11 +6564,11 @@ pt_make_regu_constant (PARSER_CONTEXT * parser, DB_VALUE * db_value,
 		  oid = db_identifier (DB_GET_OBJECT (db_value));
 		  if (oid == NULL)
 		    {
-		      db_value_put_null (db_value);		      
+		      db_value_put_null (db_value);
 		    }
 		  else
 		    {
-		      db_make_object (db_value, ws_mop (oid, NULL));		      
+		      db_make_object (db_value, ws_mop (oid, NULL));
 		    }
 		  regu->value.dbvalptr = db_value;
 		}
@@ -12911,7 +12910,6 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	      access = pt_make_class_access_spec (parser, flat,
 						  class_->info.name.db_object,
 						  scan_type, access_method,
-						  spec->info.spec.lock_hint,
 						  NULL, NULL, where, NULL,
 						  NULL, regu_attributes_pred,
 						  regu_attributes_rest, NULL,
@@ -12987,7 +12985,6 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 		pt_make_class_access_spec (parser, flat,
 					   class_->info.name.db_object,
 					   TARGET_CLASS, access_method,
-					   spec->info.spec.lock_hint,
 					   index_info, NULL, where, NULL,
 					   NULL, NULL, NULL, NULL, NULL,
 					   output_val_list, NULL, NULL, NULL,
@@ -13132,7 +13129,6 @@ pt_to_class_spec_list (PARSER_CONTEXT * parser, PT_NODE * spec,
 	      access = pt_make_class_access_spec (parser, flat,
 						  class_->info.name.db_object,
 						  TARGET_CLASS, INDEX,
-						  spec->info.spec.lock_hint,
 						  index_info, where_key,
 						  where, where_range,
 						  regu_attributes_key,
@@ -15287,7 +15283,8 @@ pt_gen_simple_merge_plan (PARSER_CONTEXT * parser,
 
       flag = 0;
       xasl->instnum_pred = pt_to_pred_expr_with_arg (parser,
-						     instnum_part, &flag, NULL);
+						     instnum_part, &flag,
+						     NULL);
       if (flag & PT_PRED_ARG_INSTNUM_CONTINUE)
 	{
 	  xasl->instnum_flag = XASL_INSTNUM_FLAG_SCAN_CONTINUE;
@@ -15402,7 +15399,6 @@ pt_to_buildschema_proc (PARSER_CONTEXT * parser, PT_NODE * select_node)
   xasl->spec_list =
     pt_make_class_access_spec (parser, flat, flat->info.name.db_object,
 			       TARGET_CLASS, SCHEMA,
-			       from->info.spec.lock_hint,
 			       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 			       NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 			       acces_schema_type, NULL, NULL);
@@ -27128,24 +27124,27 @@ pt_set_limit_optimization_flags (PARSER_CONTEXT * parser, QO_PLAN * qo_plan,
  */
 static int
 pt_add_constant_object_regu_variable (PARSER_CONTEXT * parser,
-				      PT_NODE * node1, REGU_VARIABLE *regu_var1,
-				      PT_NODE * node2, REGU_VARIABLE *regu_var2,
-				      PT_NODE * node3, REGU_VARIABLE *regu_var3,
-				      REGU_VARIABLE_LIST
-				      *regu_list_last_version)
-{  
+				      PT_NODE * node1,
+				      REGU_VARIABLE * regu_var1,
+				      PT_NODE * node2,
+				      REGU_VARIABLE * regu_var2,
+				      PT_NODE * node3,
+				      REGU_VARIABLE * regu_var3,
+				      REGU_VARIABLE_LIST *
+				      regu_list_last_version)
+{
   DB_TYPE type;
-  DB_VALUE * val;
-  PT_NODE * nodes[3] = {node1, node2, node3}, *node;
-  REGU_VARIABLE *regu_vars[3] = {regu_var1, regu_var2, regu_var3}, *regu_var,
-		*cnst_regu_var;
+  DB_VALUE *val;
+  PT_NODE *nodes[3] = { node1, node2, node3 }, *node;
+  REGU_VARIABLE *regu_vars[3] =
+    { regu_var1, regu_var2, regu_var3 }, *regu_var, *cnst_regu_var;
   REGU_VARIABLE_LIST regu_var_node;
   int i;
 
   if (regu_list_last_version == NULL)
     {
       return NO_ERROR;
-    }  
+    }
 
   for (i = 0; i < 3; i++)
     {
@@ -27157,7 +27156,7 @@ pt_add_constant_object_regu_variable (PARSER_CONTEXT * parser,
 	  continue;
 	}
 
-      CAST_POINTER_TO_NODE (node);      
+      CAST_POINTER_TO_NODE (node);
 
       if (node->node_type == PT_NAME
 	  && node->info.name.meta_class == PT_PARAMETER
@@ -27170,22 +27169,22 @@ pt_add_constant_object_regu_variable (PARSER_CONTEXT * parser,
 	      continue;
 	    }
 
-	  type = DB_VALUE_DOMAIN_TYPE (val);	 	  	  
+	  type = DB_VALUE_DOMAIN_TYPE (val);
 
 	  /* create new regu variable to fetch the last OID version */
 	  cnst_regu_var = regu_var_alloc ();
 	  if (cnst_regu_var == NULL)
 	    {
 	      PT_ERROR (parser, node, msgcat_message (MSGCAT_CATALOG_CUBRID,
-			MSGCAT_SET_PARSER_SEMANTIC,
-			MSGCAT_SEMANTIC_OUT_OF_MEMORY));
+						      MSGCAT_SET_PARSER_SEMANTIC,
+						      MSGCAT_SEMANTIC_OUT_OF_MEMORY));
 	      return MSGCAT_SEMANTIC_OUT_OF_MEMORY;
 	    }
 	  cnst_regu_var->domain = pt_xasl_node_to_domain (parser, node);
 	  cnst_regu_var->type = TYPE_CONSTANT;
-	  cnst_regu_var->value.dbvalptr = val;	  
-	  
-	  /* add constant regu variable to result */	  
+	  cnst_regu_var->value.dbvalptr = val;
+
+	  /* add constant regu variable to result */
 	  regu_var_node = regu_varlist_alloc ();
 	  if (regu_var_node == NULL)
 	    {
@@ -27202,9 +27201,9 @@ pt_add_constant_object_regu_variable (PARSER_CONTEXT * parser,
 	    {
 	      regu_var_node->next = (*regu_list_last_version);
 	      (*regu_list_last_version) = regu_var_node;
-	    }	 
+	    }
 	}
     }
 
-  return NO_ERROR;  
+  return NO_ERROR;
 }

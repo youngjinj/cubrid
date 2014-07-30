@@ -3407,8 +3407,6 @@ pt_show_misc_type (PT_MISC_TYPE p)
       return "repeatable read";
     case PT_READ_COMMITTED:
       return "read committed";
-    case PT_READ_UNCOMMITTED:
-      return "read uncommitted";
     case PT_ISOLATION_LEVEL:
       return "isolation level";
     case PT_LOCK_TIMEOUT:
@@ -9505,7 +9503,6 @@ pt_init_spec (PT_NODE * p)
   p->info.spec.join_type = PT_JOIN_NONE;
   p->info.spec.on_cond = NULL;
   p->info.spec.using_cond = NULL;
-  p->info.spec.lock_hint = LOCKHINT_NONE;
   p->info.spec.auth_bypass_mask = DB_AUTH_NONE;
   p->info.spec.partition = NULL;
   return p;
@@ -9657,17 +9654,6 @@ pt_print_spec (PARSER_CONTEXT * parser, PT_NODE * p)
       q = pt_append_varchar (parser, q, r1);
       q = pt_append_nulstring (parser, q, ")");
       parser->custom_print = save_custom;
-    }
-
-  if (p->info.spec.lock_hint)
-    {
-      q = pt_append_nulstring (parser, q, " WITH (");
-      if (p->info.spec.lock_hint & LOCKHINT_READ_UNCOMMITTED)
-	{
-	  q = pt_append_nulstring (parser, q, "READ UNCOMMITTED");
-	}
-      /* other lock hint may be added here */
-      q = pt_append_nulstring (parser, q, ")");
     }
 
   if (p->info.spec.on_cond)

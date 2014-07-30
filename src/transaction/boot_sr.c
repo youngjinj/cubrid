@@ -2486,11 +2486,9 @@ boot_ctrl_c_in_init_server (int ignore_signo)
  *   client_lock_wait(in): Wait for at least this number of milliseconds to acquire a
  *          lock. Negative value is infinite
  *   client_isolation(in): Isolation level. One of the following:
- *                         TRAN_REP_CLASS_REP_INSTANCE
- *                         TRAN_REP_CLASS_COMMIT_INSTANCE
- *                         TRAN_REP_CLASS_UNCOMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_COMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
+ *                         TRAN_REPEATABLE_READ
+ *                         TRAN_READ_COMMITTED
+ *                         TRAN_SERIALIZABLE
  * db_desired_pagesize(in): Desired pagesize for the new database. The given size
  *          must be power of 2 and greater or equal than 512.
  *
@@ -3937,11 +3935,9 @@ xboot_get_server_session_key (void)
  *   client_lock_wait(in): Wait for at least this number of milliseconds to acquire
  *                         a lock. Negative value is infinite
  *   client_isolation(in): Isolation level. One of the following:
- *                         TRAN_REP_CLASS_REP_INSTANCE
- *                         TRAN_REP_CLASS_COMMIT_INSTANCE
- *                         TRAN_REP_CLASS_UNCOMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_COMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
+ *                         TRAN_REPEATABLE_READ
+ *                         TRAN_READ_COMMITTED
+ *                         TRAN_SERIALIZABLE
  *   tran_state(out): State of transaction
  *   server_credential(out): Server's credential (see boot.h)
  *

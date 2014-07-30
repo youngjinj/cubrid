@@ -4155,7 +4155,7 @@ db_invalidate_mvcc_snapshot_after_statement (void)
       return;
     }
 
-  if (TM_TRAN_ISOLATION () >= TRAN_REP_CLASS_REP_INSTANCE)
+  if (TM_TRAN_ISOLATION () >= TRAN_REPEATABLE_READ)
     {
       /* Do not invalidate snapshot after each statement */
       return;

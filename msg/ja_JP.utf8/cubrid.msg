@@ -1219,7 +1219,12 @@ $ LOADDB
 1150 コンテキストは、互換性のある照合順序を必要とします。
 1151 ボリューム%2$dのページ%1$dは、slotted pageではありません。
 1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
-1153 ラストエラー
+2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
+2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+2002 MVCC can't get snapshot
+2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+2004 Serializable conflict due to concurent update
+2005 ラストエラー
 
 $set 6 MSGCAT_SET_INTERNAL
 1 エラーサブシステムにエラー発生(ライン %1$d):
@@ -1669,11 +1674,11 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 2 トランザクションアイソレーションレベルは1、2、3、4、5、6の中で指定されます。
 3 タイムアウトバリューは-1、0、または0より大きいバリューの中で指定されます。
 4 アイソレーションレベル\n
-5          READ COMMITTED SCHEMA, READ UNCOMMITTED INSTANCES.\n
-6          READ COMMITTED SCHEMA, READ COMMITTED INSTANCES.\n
-7          REPEATABLE READ SCHEMA, READ UNCOMMITTED INSTANCES.\n
-8          REPEATABLE READ SCHEMA, READ COMMITTED INSTANCES.\n
-9          REPEATABLE READ SCHEMA, REPEATABLE READ INSTANCES.\n
+5          Unknown isolation.\n
+6          Unknown isolation.\n
+7          Unknown isolation.\n
+8          READ COMMITTED\n
+9          REPEATABLE READ\n
 10 db_query_execute_oidを使ってnon-updatableクエリーが実行できます。
 11 トランザクションがロックウエーティング中でタイムアウトされました。
 12 %1$d番目ホストバリアブルをアクセスしようとしたが、ただ%2$dこのホストバリアブルがあげられました。
@@ -1743,7 +1748,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 オーナーやDBAだけが対象シリアルの定義が変更(Alter)できます。
 78 「Auto increment」制約条件で作られたシリアルオブジェクトは自由に変更できません。
 79 正しくないアイソレーションレベル: 「%1$s」スキーマ、「%2$s」オブジェクト。
-80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
+80 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** 正しくないキャッシュ ***

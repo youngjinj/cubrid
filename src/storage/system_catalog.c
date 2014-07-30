@@ -3560,7 +3560,7 @@ xcatalog_is_acceptable_new_representation (THREAD_ENTRY * thread_p,
 	}
     }
   if (heap_scancache_start (thread_p, &scan_cache, hfid_p, class_id_p, true,
-			    false, LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+			    false, mvcc_snapshot) != NO_ERROR)
     {
       pgbuf_unfix_and_init (thread_p, page_p);
       return ER_FAILED;

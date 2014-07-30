@@ -4835,7 +4835,7 @@ catcls_get_server_lang_charset (THREAD_ENTRY * thread_p, int *charset_id_p,
     }
 
   error = heap_scancache_start (thread_p, &scan_cache, &hfid, NULL, true,
-				false, LOCKHINT_NONE, NULL);
+				false, NULL);
   if (error != NO_ERROR)
     {
       goto exit;
@@ -5419,7 +5419,7 @@ catcls_get_db_collation (THREAD_ENTRY * thread_p,
     }
 
   error = heap_scancache_start (thread_p, &scan_cache, &hfid, NULL, true,
-				false, LOCKHINT_NONE, NULL);
+				false, NULL);
   if (error != NO_ERROR)
     {
       goto exit;
@@ -5637,7 +5637,7 @@ catcls_get_apply_info_log_record_time (THREAD_ENTRY * thread_p,
     }
 
   error = heap_scancache_start (thread_p, &scan_cache, &hfid, NULL, true,
-				false, LOCKHINT_NONE, NULL);
+				false, NULL);
   if (error != NO_ERROR)
     {
       goto exit;

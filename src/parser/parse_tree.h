@@ -1021,7 +1021,6 @@ typedef enum
   PT_SERIALIZABLE,
   PT_REPEATABLE_READ,
   PT_READ_COMMITTED,
-  PT_READ_UNCOMMITTED,
   PT_ISOLATION_LEVEL,		/* get transaction option */
   PT_LOCK_TIMEOUT,
   PT_HOST_IN,			/* kind of host variable */
@@ -2118,7 +2117,6 @@ struct pt_spec_info
   PT_NODE *on_cond;
   PT_NODE *using_cond;		/* -- does not support named columns join */
   PT_JOIN_TYPE join_type;
-  int lock_hint;
   short location;		/* n-th position in FROM (start from 0); init val = -1 */
   bool natural;			/* -- does not support natural join */
   DB_AUTH auth_bypass_mask;	/* flag to bypass normal authorization :

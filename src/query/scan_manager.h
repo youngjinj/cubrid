@@ -77,13 +77,12 @@ struct heap_scan_id
   SCAN_PRED scan_pred;		/* scan predicates(filters) */
   SCAN_ATTRS pred_attrs;	/* attr info from predicates */
   REGU_VARIABLE_LIST rest_regu_list;	/* regulator variable list */
-  REGU_VARIABLE_LIST regu_list_last_version; /* regulator variable list */
-  bool cls_regu_inited;		/* is cls_regu_list_last_version inited */
+  REGU_VARIABLE_LIST regu_list_last_version;	/* regulator variable list */
   SCAN_ATTRS rest_attrs;	/* attr info from other than preds */
+  bool cls_regu_inited;		/* is cls_regu_list_last_version inited */
   bool caches_inited;		/* are the caches initialized?? */
   bool scancache_inited;
   bool scanrange_inited;
-  int lock_hint;		/* lock hint */
   DB_VALUE **cache_recordinfo;	/* cache for record information */
   REGU_VARIABLE_LIST recordinfo_regu_list;	/* regulator variable list for record info */
 };				/* Regular Heap File Scan Identifier */
@@ -216,7 +215,6 @@ struct indx_scan_id
   SCAN_ATTRS rest_attrs;	/* attr info from other than preds */
   KEY_VAL_RANGE *key_vals;	/* for eliminating duplicate ranges */
   int key_cnt;			/* number of valid ranges */
-  int lock_hint;		/* lock hint */
   bool iscan_oid_order;		/* index_scan_oid_order flag */
   bool need_count_only;		/* get count only, no OIDs are copied */
   bool caches_inited;		/* are the caches initialized?? */
@@ -383,7 +381,6 @@ extern int scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				bool mvcc_select_lock_needed,
 				SCAN_OPERATION_TYPE scan_op_type,
 				int fixed,
-				int lock_hint,
 				int grouped,
 				QPROC_SINGLE_FETCH single_fetch,
 				DB_VALUE * join_dbval,
@@ -406,7 +403,6 @@ extern int scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				REGU_VARIABLE_LIST regu_list_recordinfo);
 extern int scan_open_heap_page_scan (THREAD_ENTRY * thread_p,
 				     SCAN_ID * scan_id,
-				     int lock_hint,
 				     VAL_LIST * val_list,
 				     VAL_DESCR * vd,
 				     OID * cls_oid,
@@ -439,7 +435,6 @@ extern int scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 				 bool mvcc_select_lock_needed,
 				 SCAN_OPERATION_TYPE scan_op_type,
 				 int fixed,
-				 int lock_hint,
 				 int grouped,
 				 QPROC_SINGLE_FETCH single_fetch,
 				 DB_VALUE * join_dbval,

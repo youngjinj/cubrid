@@ -4894,8 +4894,6 @@ stx_build_access_spec_type (THREAD_ENTRY * thread_p, char *ptr,
   ptr = or_unpack_int (ptr, &tmp);
   access_spec->access = (ACCESS_METHOD) tmp;
 
-  ptr = or_unpack_int (ptr, &access_spec->lock_hint);
-
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
     {

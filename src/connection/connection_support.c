@@ -2789,7 +2789,7 @@ css_make_access_status_exist_user (THREAD_ENTRY * thread_p, OID * class_oid,
     }
 
   error = heap_scancache_start (thread_p, &scan_cache, &hfid,
-				NULL, true, false, LOCKHINT_NONE, NULL);
+				NULL, true, false, NULL);
   if (error != NO_ERROR)
     {
       goto end;

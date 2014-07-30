@@ -1084,7 +1084,6 @@ static int heap_scancache_start_internal (THREAD_ENTRY * thread_p,
 					  const OID * class_oid,
 					  int cache_last_fix_page,
 					  int is_queryscan, int is_indexscan,
-					  int lock_hint,
 					  MVCC_SNAPSHOT * mvcc_snapshot);
 static int heap_scancache_force_modify (THREAD_ENTRY * thread_p,
 					HEAP_SCANCACHE * scan_cache);
@@ -10543,7 +10542,6 @@ heap_ovf_get_capacity (THREAD_ENTRY * thread_p, const OID * ovf_oid,
  *                            between scan objects ?
  *   is_queryscan(in):
  *   is_indexscan(in):
- *   lock_hint(in):
  *
  */
 static int
@@ -10551,7 +10549,7 @@ heap_scancache_start_internal (THREAD_ENTRY * thread_p,
 			       HEAP_SCANCACHE * scan_cache, const HFID * hfid,
 			       const OID * class_oid, int cache_last_fix_page,
 			       int is_queryscan, int is_indexscan,
-			       int lock_hint, MVCC_SNAPSHOT * mvcc_snapshot)
+			       MVCC_SNAPSHOT * mvcc_snapshot)
 {
   LOCK class_lock = NULL_LOCK;
   int ret = NO_ERROR;
@@ -10575,7 +10573,7 @@ heap_scancache_start_internal (THREAD_ENTRY * thread_p,
 	   * during the scan of the heap. This can happen in transaction isolation
 	   * levels that release the locks of the class when the class is read.
 	   */
-	  if (lock_scan (thread_p, class_oid, is_indexscan, lock_hint,
+	  if (lock_scan (thread_p, class_oid, is_indexscan,
 			 &class_lock, &scan_cache->scanid_bit) != LK_GRANTED)
 	    {
 	      goto exit_on_error;
@@ -10760,19 +10758,17 @@ exit_on_error:
  *   cache_last_fix_page(in): Wheater or not to cache the last fetched page
  *                            between scan objects ?
  *   is_indexscan(in):
- *   lock_hint(in):
  *
  */
 int
 heap_scancache_start (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache,
 		      const HFID * hfid, const OID * class_oid,
 		      int cache_last_fix_page, int is_indexscan,
-		      int lock_hint, MVCC_SNAPSHOT * mvcc_snapshot)
+		      MVCC_SNAPSHOT * mvcc_snapshot)
 {
   return heap_scancache_start_internal (thread_p, scan_cache, hfid, class_oid,
 					cache_last_fix_page, true,
-					is_indexscan, lock_hint,
-					mvcc_snapshot);
+					is_indexscan, mvcc_snapshot);
 }
 
 /*
@@ -10813,8 +10809,7 @@ heap_scancache_start_modify (THREAD_ENTRY * thread_p,
   int ret = NO_ERROR;
 
   if (heap_scancache_start_internal (thread_p, scan_cache, hfid, NULL, false,
-				     false, false, LOCKHINT_NONE,
-				     mvcc_snapshot) != NO_ERROR)
+				     false, false, mvcc_snapshot) != NO_ERROR)
     {
       goto exit_on_error;
     }
@@ -13641,7 +13636,6 @@ heap_cmp (THREAD_ENTRY * thread_p, const OID * oid, RECDES * recdes)
  *   hfid(in): Heap file identifier
  *   class_oid(in): Class identifier
  *                  For any class, NULL or NULL_OID can be given
- *   lock_hint(in):
  *
  * Note: A scanrange structure is initialized. The scanrange structure
  * is used to define a scan range (set of objects) and to cache
@@ -13658,15 +13652,14 @@ heap_cmp (THREAD_ENTRY * thread_p, const OID * oid, RECDES * recdes)
  */
 int
 heap_scanrange_start (THREAD_ENTRY * thread_p, HEAP_SCANRANGE * scan_range,
-		      const HFID * hfid, const OID * class_oid, int lock_hint,
+		      const HFID * hfid, const OID * class_oid,
 		      MVCC_SNAPSHOT * mvcc_snapshot)
 {
   int ret = NO_ERROR;
 
   /* Start the scan cache */
   ret = heap_scancache_start (thread_p, &scan_range->scan_cache, hfid,
-			      class_oid, true, false, lock_hint,
-			      mvcc_snapshot);
+			      class_oid, true, false, mvcc_snapshot);
   if (ret != NO_ERROR)
     {
       goto exit_on_error;
@@ -19712,7 +19705,7 @@ heap_check_heap_file (THREAD_ENTRY * thread_p, HFID * hfid)
 	  && !OID_ISNULL (&hfdes.class_oid))
 	{
 
-	  if (lock_scan (thread_p, &hfdes.class_oid, true, LOCKHINT_NONE,
+	  if (lock_scan (thread_p, &hfdes.class_oid, true,
 			 &class_lock, &scanid_bit) != LK_GRANTED)
 	    {
 	      return DISK_ERROR;
@@ -19979,7 +19972,7 @@ heap_dump (THREAD_ENTRY * thread_p, FILE * fp, HFID * hfid, bool dump_records)
       if (dump_records == true)
 	{
 	  if (heap_scancache_start (thread_p, &scan_cache, hfid, NULL, true,
-				    false, LOCKHINT_NONE, NULL) != NO_ERROR)
+				    false, NULL) != NO_ERROR)
 	    {
 	      /* something went wrong, return */
 	      heap_attrinfo_end (thread_p, &attr_info);
@@ -22261,7 +22254,7 @@ xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
   OID_SET_NULL (&oid);
 
   if (heap_scancache_start (thread_p, &scan_cache, hfid, class_oid, true,
-			    false, LOCKHINT_NONE, mvcc_snapshot) != NO_ERROR)
+			    false, mvcc_snapshot) != NO_ERROR)
     {
       return ER_FAILED;
     }
@@ -25833,10 +25826,9 @@ heap_scancache_start_chain_update (THREAD_ENTRY * thread_p,
   /* update scan cache */
 
   /* start a local cache that is suitable for our needs */
-  if (heap_scancache_start
-      (thread_p, new_scan_cache, &old_scan_cache->hfid,
-       &old_scan_cache->class_oid, true, false, LOCKHINT_NONE,
-       NULL) != NO_ERROR)
+  if (heap_scancache_start (thread_p, new_scan_cache, &old_scan_cache->hfid,
+			    &old_scan_cache->class_oid, true, false,
+			    NULL) != NO_ERROR)
     {
       /* TODO - er_set */
       return ER_FAILED;
@@ -28132,7 +28124,7 @@ heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
       return scan_code;
 
     case DELETE_RECORD_DELETED:
-      if (logtb_find_current_isolation (thread_p) >= TRAN_REP_READ)
+      if (logtb_find_current_isolation (thread_p) >= TRAN_REPEATABLE_READ)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		  ER_MVCC_SERIALIZABLE_CONFLICT, 0);

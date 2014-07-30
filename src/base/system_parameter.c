@@ -944,18 +944,15 @@ bool PRM_LOG_BACKGROUND_ARCHIVING = true;
 static bool prm_log_background_archiving_default = true;
 static unsigned int prm_log_background_archiving_flag = 0;
 
-int PRM_LOG_ISOLATION_LEVEL = TRAN_REP_CLASS_UNCOMMIT_INSTANCE;
-static int prm_log_isolation_level_default = TRAN_REP_CLASS_UNCOMMIT_INSTANCE;
-static int prm_log_isolation_level_lower =
-  TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE;
+int PRM_LOG_ISOLATION_LEVEL = TRAN_READ_COMMITTED;
+static int prm_log_isolation_level_default = TRAN_READ_COMMITTED;
+static int prm_log_isolation_level_lower = TRAN_READ_COMMITTED;
 static int prm_log_isolation_level_upper = TRAN_SERIALIZABLE;
 static unsigned int prm_log_isolation_level_flag = 0;
 
-int PRM_MVCC_LOG_ISOLATION_LEVEL = TRAN_REP_CLASS_COMMIT_INSTANCE;
-static int prm_mvcc_log_isolation_level_default =
-  TRAN_REP_CLASS_COMMIT_INSTANCE;
-static int prm_mvcc_log_isolation_level_lower =
-  TRAN_COMMIT_CLASS_COMMIT_INSTANCE;
+int PRM_MVCC_LOG_ISOLATION_LEVEL = TRAN_READ_COMMITTED;
+static int prm_mvcc_log_isolation_level_default = TRAN_READ_COMMITTED;
+static int prm_mvcc_log_isolation_level_lower = TRAN_READ_COMMITTED;
 
 static unsigned int prm_log_media_failure_support_flag = 0;
 
@@ -4719,38 +4716,20 @@ static KEYVAL isolation_level_words[] = {
   {"tran_serializable", TRAN_SERIALIZABLE},
   {"tran_no_phantom_read", TRAN_SERIALIZABLE},
 
-  {"tran_rep_class_rep_instance", TRAN_REP_CLASS_REP_INSTANCE},
-  {"tran_rep_read", TRAN_REP_CLASS_REP_INSTANCE},
-  {"tran_rep_class_commit_instance", TRAN_REP_CLASS_COMMIT_INSTANCE},
-  {"tran_read_committed", TRAN_REP_CLASS_COMMIT_INSTANCE},
-  {"tran_cursor_stability", TRAN_REP_CLASS_COMMIT_INSTANCE},
-  {"tran_rep_class_uncommit_instance", TRAN_REP_CLASS_UNCOMMIT_INSTANCE},
-  /*
-   * This silly spelling has to hang around because it was in there
-   * once upon a time and users may have come to depend on it.
-   */
-  {"tran_read_uncommited", TRAN_REP_CLASS_UNCOMMIT_INSTANCE},
-  {"tran_read_uncommitted", TRAN_REP_CLASS_UNCOMMIT_INSTANCE},
-  {"tran_commit_class_commit_instance", TRAN_COMMIT_CLASS_COMMIT_INSTANCE},
-  {"tran_commit_class_uncommit_instance",
-   TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE},
+  {"tran_rep_class_rep_instance", TRAN_REPEATABLE_READ},
+  {"tran_rep_read", TRAN_REPEATABLE_READ},
+  {"tran_rep_class_commit_instance", TRAN_READ_COMMITTED},
+  {"tran_read_committed", TRAN_READ_COMMITTED},
+  {"tran_cursor_stability", TRAN_READ_COMMITTED},
 
-  /*
-   * Why be so fascict about the "tran_" prefix?  Are we afraid someone
-   * is going to use these gonzo words?
-   */
   {"serializable", TRAN_SERIALIZABLE},
   {"no_phantom_read", TRAN_SERIALIZABLE},
 
-  {"rep_class_rep_instance", TRAN_REP_CLASS_REP_INSTANCE},
-  {"rep_read", TRAN_REP_CLASS_REP_INSTANCE},
-  {"rep_class_commit_instance", TRAN_REP_CLASS_COMMIT_INSTANCE},
-  {"read_committed", TRAN_REP_CLASS_COMMIT_INSTANCE},
-  {"cursor_stability", TRAN_REP_CLASS_COMMIT_INSTANCE},
-  {"rep_class_uncommit_instance", TRAN_REP_CLASS_UNCOMMIT_INSTANCE},
-  {"read_uncommited", TRAN_REP_CLASS_UNCOMMIT_INSTANCE},
-  {"commit_class_commit_instance", TRAN_COMMIT_CLASS_COMMIT_INSTANCE},
-  {"commit_class_uncommit_instance", TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE}
+  {"rep_class_rep_instance", TRAN_REPEATABLE_READ},
+  {"rep_read", TRAN_REPEATABLE_READ},
+  {"rep_class_commit_instance", TRAN_READ_COMMITTED},
+  {"read_committed", TRAN_READ_COMMITTED},
+  {"cursor_stability", TRAN_READ_COMMITTED},
 };
 
 static KEYVAL pgbuf_debug_page_validation_level_words[] = {
@@ -5626,10 +5605,7 @@ prm_load_by_section (INI_TABLE * ini, const char *section,
 
       if (strcasecmp (PRM_NAME_MVCC_ENABLED, prm->name) == 0)
 	{
-	  if (PRM_LOG_ISOLATION_LEVEL == TRAN_REP_CLASS_UNCOMMIT_INSTANCE)
-	    {
-	      PRM_LOG_ISOLATION_LEVEL = PRM_MVCC_LOG_ISOLATION_LEVEL;
-	    }
+	  PRM_LOG_ISOLATION_LEVEL = PRM_MVCC_LOG_ISOLATION_LEVEL;
 
 	  prm_log_isolation_level_default =
 	    prm_mvcc_log_isolation_level_default;

@@ -1218,7 +1218,12 @@ $ LOADDB
 1149 Impossibile trovare la pagina %1$d del volume %2$d.
 1150 Contesto richiede collations compatibili.
 1151 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
-1152 Ultimo errore
+2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
+2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+2002 MVCC can't get snapshot
+2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+2004 Serializable conflict due to concurent update
+2005 Ultimo errore
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Errore nel sottosistema di errore (linea %1$d):
@@ -1668,11 +1673,11 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 2 Livello di isolamento di transazione deve essere 1, 2, 3, 4, 5 o 6.
 3 Il valore di timeout deve essere -1, 0 o >0.
 4 Livello di isolamento impostato a:\n
-5          READ COMMITTED SCHEMA, READ UNCOMMITTED INSTANCES.\n
-6          READ COMMITTED SCHEMA, READ COMMITTED INSTANCES.\n
-7          REPEATABLE READ SCHEMA, READ UNCOMMITTED INSTANCES.\n
-8          REPEATABLE READ SCHEMA, READ COMMITTED INSTANCES.\n
-9          REPEATABLE READ SCHEMA, REPEATABLE READ INSTANCES.\n
+5          Unknown isolation.\n
+6          Unknown isolation.\n
+7          Unknown isolation.\n
+8          READ COMMITTED\n
+9          REPEATABLE READ\n
 10 Un query non-aggiornabile non è permesso nel una chiamata db_query_execute_oid.
 11 Transazione scaduto in attesa per i blocchi.
 12 Tentativo di accesso variabile host con indice %1$d in cui solo\n%2$d variabili host di input sono stati dati.
@@ -1742,7 +1747,8 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 Il proprietario o DBA può modificare la definizione di target di serial.
 78 Non é permesso agli utenti di modificare l'oggetto serial creato da un vincolo di incremento automatico.
 79 Livello di isolamento non valido, schema %1$s, istanze %2$s.
-80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
+80 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** cache non valido ***

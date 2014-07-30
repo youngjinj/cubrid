@@ -72,14 +72,6 @@ static int rv;
 
 #define GET_NTH_OID(oid_setp, n) ((OID *)((OID *)(oid_setp) + (n)))
 
-/* Depending on the isolation level, there are times when we may not be
- *  able to fetch a scan item.
- */
-#define QPROC_OK_IF_DELETED(scan, iso) \
-  ((scan) == S_DOESNT_EXIST \
-   && ((iso) == TRAN_REP_CLASS_UNCOMMIT_INSTANCE \
-       || (iso) == TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE))
-
 /* ISS_RANGE_DETAILS stores information about the two ranges we use
  * interchangeably in Index Skip Scan mode: along with the real range, we
  * use a "fake" one to obtain the next value for the index's first column.
@@ -2431,7 +2423,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
       n = btree_range_search (thread_p,
 			      &indx_infop->indx_id.i.btid,
 			      s_id->scan_op_type,
-			      iscan_id->lock_hint,
 			      BTS,
 			      &key_vals[0],
 			      1,
@@ -2532,7 +2523,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
       n = btree_range_search (thread_p,
 			      &indx_infop->indx_id.i.btid,
 			      s_id->scan_op_type,
-			      iscan_id->lock_hint,
 			      BTS,
 			      &key_vals[0],
 			      1,
@@ -2605,7 +2595,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	  n = btree_range_search (thread_p,
 				  &indx_infop->indx_id.i.btid,
 				  s_id->scan_op_type,
-				  iscan_id->lock_hint,
 				  BTS,
 				  &key_vals[iscan_id->curr_keyno],
 				  1,
@@ -2751,7 +2740,6 @@ scan_get_index_oidset (THREAD_ENTRY * thread_p, SCAN_ID * s_id,
 	  n = btree_range_search (thread_p,
 				  &indx_infop->indx_id.i.btid,
 				  s_id->scan_op_type,
-				  iscan_id->lock_hint,
 				  BTS,
 				  &key_vals[iscan_id->curr_keyno],
 				  1,
@@ -2928,7 +2916,6 @@ scan_init_scan_id (SCAN_ID * scan_id, bool mvcc_select_lock_needed,
  *   mvcc_select_lock_needed(in):
  *   scan_op_type(in): scan operation type
  *   fixed(in):
- *   lock_hint(in):
  *   grouped(in):
  *   single_fetch(in):
  *   join_dbval(in):
@@ -2958,7 +2945,6 @@ scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 		     bool mvcc_select_lock_needed,
 		     SCAN_OPERATION_TYPE scan_op_type,
 		     int fixed,
-		     int lock_hint,
 		     int grouped,
 		     QPROC_SINGLE_FETCH single_fetch,
 		     DB_VALUE * join_dbval, VAL_LIST * val_list,
@@ -3024,8 +3010,6 @@ scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   hsidp->scancache_inited = false;
   hsidp->scanrange_inited = false;
 
-  hsidp->lock_hint = lock_hint;
-
   hsidp->cache_recordinfo = cache_recordinfo;
   hsidp->recordinfo_regu_list = regu_list_recordinfo;
 
@@ -3038,7 +3022,6 @@ scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
  * return		    : Error code.
  * thread_p (in)	    :
  * scan_id (in)		    :
- * lock_hint (in)	    :
  * val_list (in)	    :
  * vd (in)		    :
  * cls_oid (in)		    :
@@ -3051,7 +3034,7 @@ scan_open_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 int
 scan_open_heap_page_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 			  /* fields of SCAN_ID */
-			  int lock_hint, VAL_LIST * val_list, VAL_DESCR * vd,
+			  VAL_LIST * val_list, VAL_DESCR * vd,
 			  /* fields of HEAP_SCAN_ID */
 			  OID * cls_oid,
 			  HFID * hfid,
@@ -3174,7 +3157,6 @@ scan_open_class_attr_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
  *   scan_id(out): Scan identifier
  *   mvcc_select_lock_needed(in):
  *   fixed(in):
- *   lock_hint(in):
  *   grouped(in):
  *   single_fetch(in):
  *   join_dbval(in):
@@ -3212,7 +3194,6 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 		      bool mvcc_select_lock_needed,
 		      SCAN_OPERATION_TYPE scan_op_type,
 		      int fixed,
-		      int lock_hint,
 		      int grouped,
 		      QPROC_SINGLE_FETCH single_fetch,
 		      DB_VALUE * join_dbval,
@@ -3488,7 +3469,6 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     }
 
   isidp->iscan_oid_order = iscan_oid_order;
-  isidp->lock_hint = lock_hint;
 
   if (scan_init_indx_coverage (thread_p, coverage_enabled, output_val_list,
 			       regu_val_list, vd, query_id,
@@ -3741,7 +3721,6 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 					 &single_node_type) : NULL));
 
   isidp->iscan_oid_order = iscan_oid_order;
-  isidp->lock_hint = NULL_LOCK;
 
   if (scan_init_indx_coverage (thread_p, false, NULL, NULL, vd, query_id,
 			       root_header->node.max_key_len,
@@ -4238,8 +4217,7 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	{
 	  ret = heap_scanrange_start (thread_p, &hsidp->scan_range,
 				      &hsidp->hfid,
-				      &hsidp->cls_oid, hsidp->lock_hint,
-				      mvcc_snapshot);
+				      &hsidp->cls_oid, mvcc_snapshot);
 	  if (ret != NO_ERROR)
 	    {
 	      goto exit_on_error;
@@ -4252,7 +4230,7 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  ret = heap_scancache_start (thread_p, &hsidp->scan_cache,
 				      &hsidp->hfid,
 				      &hsidp->cls_oid, scan_id->fixed,
-				      false, hsidp->lock_hint, mvcc_snapshot);
+				      false, mvcc_snapshot);
 	  if (ret != NO_ERROR)
 	    {
 	      goto exit_on_error;
@@ -4340,7 +4318,7 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       ret = heap_scancache_start (thread_p, &isidp->scan_cache,
 				  &isidp->hfid,
 				  &isidp->cls_oid, scan_id->fixed,
-				  true, isidp->lock_hint, mvcc_snapshot);
+				  true, mvcc_snapshot);
       if (ret != NO_ERROR)
 	{
 	  goto exit_on_error;
@@ -5477,11 +5455,11 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	  if (eval_set_last_version (thread_p, &hsidp->cls_oid,
 				     &hsidp->scan_cache,
 				     hsidp->regu_list_last_version)
-				     != NO_ERROR)
+	      != NO_ERROR)
 	    {
 	      return S_ERROR;
 	    }
-	
+
 	  hsidp->cls_regu_inited = true;
 	}
 
@@ -6280,37 +6258,6 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
       indx_name_p = NULL;
       class_name_p = NULL;
 
-      /* check scan notification */
-      if (QPROC_OK_IF_DELETED (sp_scan, isolation))
-	{
-	  (void) heap_get_indexinfo_of_btid (thread_p, &isidp->cls_oid,
-					     btid, NULL, NULL,
-					     NULL, NULL, &indx_name_p, NULL);
-
-	  class_name_p = heap_get_class_name (thread_p, &isidp->cls_oid);
-
-	  er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE,
-		  ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE2, 11,
-		  (indx_name_p) ? indx_name_p : "*UNKNOWN-INDEX*",
-		  (class_name_p) ? class_name_p : "*UNKNOWN-CLASS*",
-		  isidp->cls_oid.volid, isidp->cls_oid.pageid,
-		  isidp->cls_oid.slotid, isidp->curr_oidp->volid,
-		  isidp->curr_oidp->pageid, isidp->curr_oidp->slotid,
-		  btid->vfid.volid, btid->vfid.fileid, btid->root_pageid);
-
-	  if (class_name_p)
-	    {
-	      free_and_init (class_name_p);
-	    }
-
-	  if (indx_name_p)
-	    {
-	      free_and_init (indx_name_p);
-	    }
-
-	  return S_DOESNT_EXIST;	/* continue to the next object */
-	}
-
       /* check scan error */
       if (er_errid () == NO_ERROR)
 	{
@@ -6344,15 +6291,16 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
     }
 
   if (isidp->regu_list_last_version && isidp->cls_regu_inited == false)
-  {
-    if (eval_set_last_version (thread_p, &isidp->cls_oid, &isidp->scan_cache,
-			       isidp->regu_list_last_version) != NO_ERROR)
-      {
-	return S_ERROR;
-      }
+    {
+      if (eval_set_last_version (thread_p, &isidp->cls_oid,
+				 &isidp->scan_cache,
+				 isidp->regu_list_last_version) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
 
-    isidp->cls_regu_inited = true;
-  }
+      isidp->cls_regu_inited = true;
+    }
 
   if (mvcc_Enabled == false || !scan_id->mvcc_select_lock_needed)
     {

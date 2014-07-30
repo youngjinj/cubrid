@@ -177,11 +177,9 @@ tran_reset_wait_times (int wait_in_msecs)
  * return:  NO_ERROR if all OK, ER_ status otherwise
  *
  *   isolation(in): New Isolation level. One of the following:
- *                         TRAN_REP_CLASS_REP_INSTANCE
- *                         TRAN_REP_CLASS_COMMIT_INSTANCE
- *                         TRAN_REP_CLASS_UNCOMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_COMMIT_INSTANCE
- *                         TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE
+ *                         TRAN_SERIALIZABLE
+ *                         TRAN_REPEATABLE_READ
+ *                         TRAN_READ_COMMITTED
  *   async_ws(in): New async_workspace
  *
  * NOTE: Reset the default isolation level for the current transaction

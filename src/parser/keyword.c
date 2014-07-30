@@ -469,7 +469,6 @@ static KEYWORD_RECORD keywords[] = {
   {TRUNCATE, "TRUNCATE", 0},
   {True, "TRUE", 0},
   {UCASE, "UCASE", 1},
-  {UNCOMMITTED, "UNCOMMITTED", 1},
   {UNDER, "UNDER", 0},
   {Union, "UNION", 0},
   {UNIQUE, "UNIQUE", 0},

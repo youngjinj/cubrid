@@ -415,14 +415,6 @@ typedef enum
   DB_INSTANCE_OF_NONUPDATABLE_OBJECT = 'e'
 } DB_OBJECT_TYPE;
 
-enum LOCKHINT
-{
-  LOCKHINT_NONE = 0,
-  LOCKHINT_READ_UNCOMMITTED = 1,
-  LOCKHINT_BUILD_INDEX = 2
-    /* other lock hint, having value of 4, 8 ..., may be added here */
-};
-
 /* session state id */
 typedef unsigned int SESSION_ID;
 /* uninitialized value for session id */

@@ -3196,8 +3196,7 @@ au_drop_user (MOP user)
   for (i = 0; class_name[i] != NULL; i++)
     {
       sprintf (query_buf,
-	       "select count(*) from [%s] WITH"
-	       " (READ UNCOMMITTED) where [owner] = ?;", class_name[i]);
+	       "select count(*) from [%s] where [owner] = ?;", class_name[i]);
       session = db_open_buffer (query_buf);
       if (session == NULL)
 	{
@@ -6518,16 +6517,7 @@ au_start (void)
   tran_get_tran_settings (&save_lock_wait_in_msecs,
 			  &save_tran_isolation, &async_ws);
 
-  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
-    {
-      (void) tran_reset_isolation (TRAN_COMMIT_CLASS_COMMIT_INSTANCE,
-				   async_ws);
-    }
-  else
-    {
-      (void) tran_reset_isolation (TRAN_COMMIT_CLASS_UNCOMMIT_INSTANCE,
-				   async_ws);
-    }
+  (void) tran_reset_isolation (TRAN_READ_COMMITTED, async_ws);
 
   mops = db_get_all_objects (Au_authorizations_class);
   (void) tran_reset_isolation (save_tran_isolation, async_ws);

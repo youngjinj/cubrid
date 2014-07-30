@@ -1219,7 +1219,12 @@ $ LOADDB
 1150 上下文需要兼容的排序规则.
 1151 卷 %2$d 的页 %1$d 不是一个 slotted 页.
 1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
-1153 Last Error
+2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
+2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+2002 MVCC can't get snapshot
+2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+2004 Serializable conflict due to concurent update
+2005 Last Error
 
 $set 6 MSGCAT_SET_INTERNAL
 1 在错误子系统中错误 (line %1$d):
@@ -1669,11 +1674,11 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 2 事务的隔离等级必须为 1, 2, 3, 4, 5 或 6.
 3 超时值必须为 -1, 0, 或 >0.
 4 隔离等级设为:\n
-5          READ COMMITTED SCHEMA, READ UNCOMMITTED INSTANCES.\n
-6          READ COMMITTED SCHEMA, READ COMMITTED INSTANCES.\n
-7          REPEATABLE READ SCHEMA, READ UNCOMMITTED INSTANCES.\n
-8          REPEATABLE READ SCHEMA, READ COMMITTED INSTANCES.\n
-9          REPEATABLE READ SCHEMA, REPEATABLE READ INSTANCES.\n
+5          Unknown isolation.\n
+6          Unknown isolation.\n
+7          Unknown isolation.\n
+8          READ COMMITTED\n
+9          REPEATABLE READ\n
 10 一个不可更新的查询不允许在 db_query_execute_oid 中被调用.
 11 事务等待锁超时.
 12 当只有 %2$d 个 host variable 输入被给定时，尝试以下标 %1$d 访问 host variable.
@@ -1743,7 +1748,7 @@ $set 9 MSGCAT_SET_PARSER_RUNTIME
 77 只有拥有者或DBA才能修改目标序列的定义.
 78 不允许用户修改由auto increment约束创建的序列对象.
 79 无效的隔离等级: %1$s 结构(schema), %2$s 实例.
-80 Transaction isolation level in MVCC must be 2, 4, 5 or 6.
+80 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
 
 $set 11 MSGCAT_SET_AUTHORIZATION
 1 *** 无效的缓存 ***

@@ -202,7 +202,7 @@ unloaddb (UTIL_FUNCTION_ARG * arg)
 
   ignore_err_flag = prm_get_bool_value (PRM_ID_UNLOADDB_IGNORE_ERROR);
 
-  if (db_set_isolation (TRAN_REP_CLASS_REP_INSTANCE) != NO_ERROR)
+  if (db_set_isolation (TRAN_REPEATABLE_READ) != NO_ERROR)
     {
       status = 1;
     }
