@@ -8823,3 +8823,18 @@ pgbuf_fix_when_other_is_fixed (THREAD_ENTRY * thread_p, VPID * vpid_to_fix,
   /* Fix successful */
   return NO_ERROR;
 }
+
+/*
+ * pgbuf_get_num_fixed_pages () - 
+ *
+ * return	       : The number of pages fixed by the thread.
+ * thread_p (in)       : Thread entry.
+ *
+ */
+int
+pgbuf_get_num_fixed_pages (THREAD_ENTRY * thread_p)
+{
+  int thrd_idx = THREAD_GET_CURRENT_ENTRY_INDEX (thread_p);
+
+  return pgbuf_Pool.thrd_holder_info[thrd_idx].num_hold_cnt;
+}

@@ -2669,6 +2669,9 @@ lock_suspend (THREAD_ENTRY * thread_p, LK_ENTRY * entry_ptr, int wait_msecs)
   int client_id;
   LOG_TDES *tdes;
 
+  /* The threads must not hold a page latch to be blocked on a lock request. */
+  assert (pgbuf_get_num_fixed_pages (thread_p) == 0);
+
   /* The caller is holding the thread entry mutex */
 
   if (lk_Gl.verbose_mode == true)
@@ -2709,10 +2712,8 @@ lock_suspend (THREAD_ENTRY * thread_p, LK_ENTRY * entry_ptr, int wait_msecs)
 
   tdes = LOG_FIND_CURRENT_TDES (thread_p);
 
-#if !defined (NDEBUG) && defined (SERVER_MODE)
-  /* assert - I'm not a deadlock-victim thread */
+  /* I must not be a deadlock-victim thread */
   assert (tdes->tran_abort_reason == TRAN_NORMAL);
-#endif
 
   if (tdes)
     {
@@ -8564,7 +8565,7 @@ lock_scan (THREAD_ENTRY * thread_p, const OID * class_oid, bool is_indexscan,
 	    }
 	}
     }
-  
+
   if (is_indexscan && !LK_UNCOMMITTED_READ_ISOLATION (isolation)
       && !(lock_hint & LOCKHINT_READ_UNCOMMITTED))
     {
