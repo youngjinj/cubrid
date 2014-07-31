@@ -1223,7 +1223,7 @@ $ LOADDB
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
 2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
-2004 Serializable conflict due to concurent update
+2004 Serializable conflict due to concurent updates
 2005 마지막 에러
 
 $set 6 MSGCAT_SET_INTERNAL

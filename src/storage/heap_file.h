@@ -691,13 +691,12 @@ extern int heap_mvcc_lock_chain_for_delete (THREAD_ENTRY * thread_p,
 					    const HFID * hfid,
 					    OID * oid, OID * class_oid,
 					    HEAP_SCANCACHE * scan_p);
-extern void heap_get_mvcc_rec_header_from_overflow (PAGE_PTR ovf_page,
-						    MVCC_REC_HEADER *
-						    mvcc_header,
-						    RECDES * peek_recdes);
-extern void heap_set_mvcc_rec_header_on_overflow (PAGE_PTR ovf_page,
-						  MVCC_REC_HEADER *
-						  mvcc_header);
+extern int heap_get_mvcc_rec_header_from_overflow (PAGE_PTR ovf_page,
+						   MVCC_REC_HEADER *mvcc_header,
+						   RECDES * peek_recdes);
+extern int heap_set_mvcc_rec_header_on_overflow (PAGE_PTR ovf_page,
+						 MVCC_REC_HEADER *
+						 mvcc_header);
 extern OID *heap_get_serial_class_oid (THREAD_ENTRY * thread_p);
 extern SCAN_CODE heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
 						   const HFID * hfid,

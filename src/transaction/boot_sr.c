@@ -5802,10 +5802,10 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
       vacuum_data_npages = prm_get_integer_value (PRM_ID_VACUUM_DATA_PAGES);
       /* Create files required for vacuum */
       if (file_create
-	  (thread_p, &vacuum_data_vfid, vacuum_data_npages, FILE_HEAP, NULL,
-	   &vacuum_data_vpid, -vacuum_data_npages) == NULL
-	  || file_create (thread_p, &dropped_files_vfid, 1, FILE_HEAP, NULL,
-			  &dropped_files_vpid, 1) == NULL)
+	  (thread_p, &vacuum_data_vfid, vacuum_data_npages, FILE_DROPPED_FILES,
+	   NULL, &vacuum_data_vpid, -vacuum_data_npages) == NULL
+	  || file_create (thread_p, &dropped_files_vfid, 1, FILE_VACUUM_DATA,
+			  NULL, &dropped_files_vpid, 1) == NULL)
 	{
 	  goto error;
 	}

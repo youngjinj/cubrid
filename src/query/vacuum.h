@@ -97,8 +97,8 @@ extern void vacuum_produce_log_block_data (THREAD_ENTRY * thread_p,
 					   LOG_LSA * start_lsa,
 					   MVCCID oldest_mvccid,
 					   MVCCID newest_mvccid);
-extern void vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
-					      bool ignore_duplicates);
+extern int vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
+					     bool ignore_duplicates);
 extern LOG_PAGEID vacuum_data_get_first_log_pageid (THREAD_ENTRY * thread_p);
 extern LOG_PAGEID vacuum_data_get_last_log_pageid (THREAD_ENTRY * thread_p);
 

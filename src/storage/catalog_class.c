@@ -4462,6 +4462,12 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
   HFID *hfid_p;
   HEAP_SCANCACHE scan;
   bool is_scan_inited = false;
+  PAGE_PTR pgptr = NULL, forward_pgptr = NULL;
+  bool need_mvcc_update;
+  bool ignore_record = false;
+#if defined (SERVER_MODE)
+  MVCC_REC_HEADER mvcc_rec_header;
+#endif
 
   if (catcls_find_oid_by_class_name (thread_p, name_p, &oid) != NO_ERROR)
     {
@@ -4507,12 +4513,6 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
   else
     {
       /* update catalog classes in MVCC */
-      PAGE_PTR pgptr = NULL, forward_pgptr = NULL;
-      bool need_mvcc_update;
-      bool ignore_record = false;
-#if defined (SERVER_MODE)
-      MVCC_REC_HEADER mvcc_rec_header;
-#endif
 
       /* The oid is visible for current transaction, so it can't be
        * removed by vacuum. More, can't be other transaction that
@@ -4572,6 +4572,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	    {
 	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
 	    }
+
 #endif /* SERVER_MODE */
 	}
       if (need_mvcc_update == false)
@@ -4604,6 +4605,16 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
   catalog_free_class_info (cls_info_p);
   catcls_free_or_value (value_p);
 
+  if (pgptr != NULL)
+    {
+      pgbuf_unfix (thread_p, pgptr);
+    }
+
+  if (forward_pgptr != NULL)
+    {
+      pgbuf_unfix (thread_p, forward_pgptr);
+    }
+
   return NO_ERROR;
 
 error:
@@ -4621,6 +4632,16 @@ error:
   if (value_p)
     {
       catcls_free_or_value (value_p);
+    }
+
+  if (pgptr != NULL)
+    {
+      pgbuf_unfix (thread_p, pgptr);
+    }
+
+  if (forward_pgptr != NULL)
+    {
+      pgbuf_unfix (thread_p, forward_pgptr);
     }
 
   return ER_FAILED;

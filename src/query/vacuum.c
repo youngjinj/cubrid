@@ -728,7 +728,40 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 				 forward_vpid.volid, forward_vpid.pageid);
 		  break;
 		}
+	      /* If conditional latch failed, someone else may have vacuumed
+	       * it until the page was fixed.
+	       */
+	      slot_p = spage_get_slot (forward_page, forward_oid.slotid);
+	      if (slot_p->record_type != REC_NEWHOME)
+		{
+		  vacuum_er_log (VACUUM_ER_LOG_WARNING | VACUUM_ER_LOG_HEAP,
+				 "VACUUM: Object (%d, %d, %d) was already "
+				 "vacuumed.", forward_oid.volid,
+				 forward_oid.pageid, forward_oid.slotid);
+		  assert_release ((slot_p->record_type == REC_MARKDELETED)
+				  || (slot_p->record_type
+				      == REC_DELETED_WILL_REUSE));
+		  pgbuf_unfix_and_init (thread_p, forward_page);
+#if !defined (NDEBUG)
+		  /* If REC_NEWHOME was vacuumed, then also REC_RELOCATION
+		   * must be vacuumed.
+		   */
+		  assert (page == NULL);
+		  page =
+		    pgbuf_fix (thread_p, &page_vpid, OLD_PAGE,
+			       PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
+		  assert (page != NULL);
+		  slot_p = spage_get_slot (page, slotid);
+		  assert (slot_p->record_type == REC_DELETED_WILL_REUSE
+			  || slot_p->record_type == REC_MARKDELETED
+			  || slot_p->record_type == REC_MVCC_NEXT_VERSION);
+		  page_header_p = (SPAGE_HEADER *) page;
+#endif
+		  /* Skip vacuuming this object */
+		  break;
+		}
 	    }
+	  /* Get forward record */
 	  if (spage_get_record (forward_page, forward_oid.slotid, &recdes,
 				PEEK) != S_SUCCESS)
 	    {
@@ -738,16 +771,7 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 			     forward_oid.pageid, forward_oid.slotid);
 	      break;
 	    }
-	  if (recdes.type != REC_NEWHOME)
-	    {
-	      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
-			     "VACUUM ERROR: Unexpected record type. Expected "
-			     "%d and found %d", REC_NEWHOME, recdes.type);
-	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
-		      ER_HEAP_BAD_OBJECT_TYPE, 3, page_vpid.volid,
-		      page_vpid.pageid, slotid);
-	      break;
-	    }
+	  assert (recdes.type == REC_NEWHOME);
 	  or_mvcc_get_header (&recdes, &mvcc_rec_header);
 	  result =
 	    mvcc_satisfies_vacuum (thread_p, &mvcc_rec_header,
@@ -769,11 +793,11 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 						   OLD_PAGE,
 						   PGBUF_LATCH_WRITE, &page,
 						   &forward_page);
-		}
-	      if (error_code == ER_FAILED)
-		{
-		  /* Failed fix */
-		  goto end;
+		  if (error_code == ER_FAILED)
+		    {
+		      /* Failed fix */
+		      goto end;
+		    }
 		}
 	      assert (page != NULL);
 	      /* Make sure we have an updated page header */
@@ -795,6 +819,7 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 		  break;
 		}
 
+	      /* Vacuum the relocation slot */
 	      spage_vacuum_slot (thread_p, page, slotid,
 				 &MVCC_GET_NEXT_VERSION (&mvcc_rec_header),
 				 reusable);
@@ -841,10 +866,9 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 			  /* Must have been vacuumed by another thread while
 			   * this worker lost the latch on page.
 			   */
-			  assert (slot_p->record_type == REC_MVCC_NEXT_VERSION
-				  || slot_p->record_type == REC_MARKDELETED
-				  || slot_p->record_type
-				  == REC_DELETED_WILL_REUSE);
+			  assert ((slot_p->record_type == REC_MARKDELETED)
+				  || (slot_p->record_type
+				      == REC_DELETED_WILL_REUSE));
 			  vacuum_er_log (VACUUM_ER_LOG_WARNING
 					 | VACUUM_ER_LOG_HEAP,
 					 "VACUUM: Object (%d, %d, %d) was "
@@ -971,8 +995,16 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 		  break;
 		}
 	      /* Get MVCC header from overflow page */
-	      heap_get_mvcc_rec_header_from_overflow (forward_page,
-						      &mvcc_rec_header, NULL);
+	      if (heap_get_mvcc_rec_header_from_overflow (forward_page,
+							  &mvcc_rec_header,
+							  NULL) != NO_ERROR)
+		{
+		  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				 "VACUUM ERROR: Could not obtain mvcc header "
+				 "(%d, %d, %d).", page_vpid.volid,
+				 page_vpid.pageid, slotid);
+		  break;
+		}
 	    }
 	  else
 	    {
@@ -985,7 +1017,14 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 				 page_vpid.pageid, slotid);
 		  break;
 		}
-	      or_mvcc_get_header (&recdes, &mvcc_rec_header);
+	      if (or_mvcc_get_header (&recdes, &mvcc_rec_header) != NO_ERROR)
+		{
+		  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				 "VACUUM ERROR: Could not obtain mvcc header "
+				 "(%d, %d, %d).", page_vpid.volid,
+				 page_vpid.pageid, slotid);
+		  break;
+		}
 	    }
 	  /* Check record for vacuum */
 
@@ -1032,8 +1071,29 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 		  /* Set new header into overflow page - header size is not
 		   * changed.
 		   */
-		  heap_set_mvcc_rec_header_on_overflow (forward_page,
-							&mvcc_rec_header);
+		  if (heap_set_mvcc_rec_header_on_overflow (forward_page,
+							    &mvcc_rec_header)
+		      != NO_ERROR)
+		    {
+		      vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_HEAP,
+				     "Vacuum error: set mvcc header "
+				     "(flag=%d, repid=%d, chn=%d, insid=%lld, "
+				     "delid=%lld, next_v=(%d %d %d) to object "
+				     "(%d %d %d) with record of type=%d and "
+				     "size=%d",
+				     (int) MVCC_GET_FLAG (&mvcc_rec_header),
+				     (int) MVCC_GET_REPID (&mvcc_rec_header),
+				     MVCC_GET_CHN (&mvcc_rec_header),
+				     MVCC_GET_INSID (&mvcc_rec_header),
+				     MVCC_GET_DELID (&mvcc_rec_header),
+				     mvcc_rec_header.next_version.volid,
+				     mvcc_rec_header.next_version.pageid,
+				     mvcc_rec_header.next_version.slotid,
+				     page_vpid.volid, page_vpid.pageid,
+				     slotid, (int) recdes.type,
+				     recdes.length);
+		      break;
+		    }
 		  vacuum_log_remove_ovf_insid (thread_p, forward_page, &hfid);
 		  pgbuf_set_dirty (thread_p, forward_page, DONT_FREE);
 		  pgbuf_unfix_and_init (thread_p, forward_page);
@@ -1078,6 +1138,7 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 				     page_vpid.volid, page_vpid.pageid,
 				     slotid, (int) recdes.type,
 				     recdes.length);
+		      break;
 		    }
 		  /* Update slot */
 		  if (spage_update (thread_p, page, slotid,
@@ -1112,6 +1173,7 @@ vacuum_heap_page (THREAD_ENTRY * thread_p, VPID page_vpid,
 	  /* Unhandled case */
 	  assert (0);
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+	  error_code = ER_GENERIC_ERROR;
 	  break;
 	}
       if (forward_page != NULL)
@@ -1462,10 +1524,20 @@ int
 vacuum_rv_redo_remove_ovf_insid (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
   MVCC_REC_HEADER rec_header;
+  int error = NO_ERROR;
 
-  heap_get_mvcc_rec_header_from_overflow (rcv->pgptr, &rec_header, NULL);
+  error = heap_get_mvcc_rec_header_from_overflow (rcv->pgptr, &rec_header,
+						  NULL);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
   MVCC_SET_INSID (&rec_header, MVCCID_ALL_VISIBLE);
-  heap_set_mvcc_rec_header_on_overflow (rcv->pgptr, &rec_header);
+  error = heap_set_mvcc_rec_header_on_overflow (rcv->pgptr, &rec_header);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
 
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
 
@@ -1617,7 +1689,7 @@ vacuum_process_vacuum_data (THREAD_ENTRY * thread_p)
   vacuum_data_remove_finished_entries (thread_p);
 
   /* Append newly logged blocks at the end of the vacuum data table */
-  vacuum_consume_buffer_log_blocks (thread_p, false);
+  (void) vacuum_consume_buffer_log_blocks (thread_p, false);
 
   /* Search for blocks ready to be vacuumed */
   for (i = 0; i < vacuum_Data->n_table_entries; i++)
@@ -2587,7 +2659,10 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
     }
 
   /* Make sure that vacuum data is up to date before flushing it */
-  vacuum_consume_buffer_log_blocks (thread_p, false);
+  if (vacuum_consume_buffer_log_blocks (thread_p, false) != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
 
   if (LSA_ISNULL (&vacuum_Data_oldest_not_flushed_lsa))
     {
@@ -3044,7 +3119,7 @@ end:
  * vacuum_consume_buffer_log_blocks () - Append new blocks from log block
  *					     data from buffer (if any).
  *
- * return	 : Void.
+ * return	 : error code.
  * thread_p (in) : Thread entry.
  *
  * NOTE: In order to avoid synchronizing access on vacuum data for log
@@ -3058,7 +3133,7 @@ end:
  *	    Some blocks may already exist in the recovered vacuum data.
  *	    Duplicates are simply ignored.
  */
-void
+int
 vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 				  bool ignore_duplicates)
 {
@@ -3067,7 +3142,7 @@ vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 
   if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
     {
-      return;
+      return NO_ERROR;
     }
 
   /* Consume blocks data from buffer and append them to vacuum data */
@@ -3080,7 +3155,8 @@ vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 	  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_MASTER
 			 | VACUUM_ER_LOG_VACUUM_DATA,
 			 "VACUUM: Fatal error: vacuum data is full!!!");
-	  break;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+	  return ER_FAILED;
 	}
 
       /* Position entry pointer at the end of the vacuum data table */
@@ -3103,7 +3179,7 @@ vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 	      /* Duplicates are not expected, something is wrong */
 	      assert (false);
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-	      return;
+	      return ER_FAILED;
 	    }
 	}
       vacuum_er_log (VACUUM_ER_LOG_MASTER | VACUUM_ER_LOG_VACUUM_DATA,
@@ -3139,6 +3215,8 @@ vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 				    vacuum_Data->n_table_entries -
 				    save_n_entries);
     }
+
+  return NO_ERROR;
 }
 
 /*
