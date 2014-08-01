@@ -418,10 +418,6 @@ static int vacuum_process_log_record (THREAD_ENTRY * thread_p,
 static void vacuum_get_mvcc_delete_undo_vpid (THREAD_ENTRY * thread_p,
 					      struct log_data *log_datap,
 					      char *undo_data, VPID * vpid);
-static int vacuum_load_data_from_disk (THREAD_ENTRY * thread_p,
-				       VFID * vacuum_data_vfid);
-static int vacuum_load_dropped_files_from_disk (THREAD_ENTRY *
-						thread_p, VFID * vfid);
 static int vacuum_compare_data_entries (const void *ptr1, const void *ptr2);
 static VACUUM_DATA_ENTRY *vacuum_get_vacuum_data_entry (VACUUM_LOG_BLOCKID
 							blockid);
@@ -2443,7 +2439,7 @@ vacuum_compare_data_entries (const void *ptr1, const void *ptr2)
  * NOTE: Loading vacuum data should be done when the database is started,
  *	 before starting other vacuum routines.
  */
-static int
+int
 vacuum_load_data_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid)
 {
   int error_code = NO_ERROR, i;
@@ -2503,7 +2499,7 @@ vacuum_load_data_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid)
  * thread_p (in) : Thread entry.
  * vfid (in)	 : File identifier.
  */
-static int
+int
 vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p, VFID * vfid)
 {
   VACUUM_DROPPED_FILES_PAGE *page = NULL;
@@ -2578,41 +2574,6 @@ vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p, VFID * vfid)
 #endif
 
   return NO_ERROR;
-}
-
-/*
- * vacuum_load_from_disk () - Load vacuum data and dropped files
- *			      from disk.
- *
- * return		     : Error code.
- * thread_p (in)	     : Thread entry.
- * vacuum_data_vfid (in)     : Vacuum data file identifier.
- * dropped_files_vfid (in) : Dropped classes file identifier.
- * dropped_indexes_vfid (in) : Dropped indexes file identifier.
- */
-int
-vacuum_load_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid,
-		       VFID * dropped_files_vfid)
-{
-  int error_code;
-
-  if (prm_get_bool_value (PRM_ID_DISABLE_VACUUM))
-    {
-      return NO_ERROR;
-    }
-
-  error_code = vacuum_load_data_from_disk (thread_p, vacuum_data_vfid);
-  if (error_code != NO_ERROR)
-    {
-      return error_code;
-    }
-  error_code =
-    vacuum_load_dropped_files_from_disk (thread_p, dropped_files_vfid);
-  if (error_code != NO_ERROR)
-    {
-      return error_code;
-    }
-  return error_code;
 }
 
 
@@ -3679,7 +3640,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
   int page_count, mem_size, npages = 0, compare;
   char *ptr = NULL;
   char *temp_buf = (char *) &vacuum_Dropped_files_tmp_buffer;
-  VACUUM_DROPPED_FILES_PAGE *page = NULL;
+  VACUUM_DROPPED_FILES_PAGE *page = NULL, *new_page = NULL;
   INT16 min, max, mid, position;
   LOG_DATA_ADDR addr;
   LOG_TDES *tdes = LOG_FIND_CURRENT_TDES (thread_p);
@@ -3969,30 +3930,27 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
       vacuum_unfix_dropped_entries_page (thread_p, page);
       return ER_FAILED;
     }
-  /* Save a link to the new page in last page */
-  VPID_COPY (&page->next_page, &vpid);
-  vacuum_log_dropped_files_set_next_page (thread_p, (PAGE_PTR) page, &vpid);
 
 #if !defined (NDEBUG)
   memcpy (&track_page->dropped_data_page, page, DB_PAGESIZE);
 #endif
-  vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
 
   /* Add new entry to new page */
-  page = vacuum_fix_dropped_entries_page (thread_p, &vpid, PGBUF_LATCH_WRITE);
-  if (page == NULL)
+  new_page =
+    vacuum_fix_dropped_entries_page (thread_p, &vpid, PGBUF_LATCH_WRITE);
+  if (new_page == NULL)
     {
       assert (false);
       return ER_FAILED;
     }
   /* Set page header: next page as NULL and count as 1 */
-  VPID_SET_NULL (&page->next_page);
+  VPID_SET_NULL (&new_page->next_page);
   page->n_dropped_files = 1;
 
   /* Set vfid */
-  VFID_COPY (&page->dropped_files[0].vfid, vfid);
+  VFID_COPY (&new_page->dropped_files[0].vfid, vfid);
   /* Set MVCCID */
-  page->dropped_files[0].mvccid = mvccid;
+  new_page->dropped_files[0].mvccid = mvccid;
 
   ATOMIC_INC_32 (&vacuum_Dropped_files_count, 1);
 
@@ -4014,7 +3972,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
     {
       new_track_page = track_page->next_tracked_page;
     }
-  memcpy (&new_track_page->dropped_data_page, page, DB_PAGESIZE);
+  memcpy (&new_track_page->dropped_data_page, new_page, DB_PAGESIZE);
   new_track_page->next_tracked_page = NULL;
   track_page->next_tracked_page = new_track_page;
 #endif
@@ -4022,7 +3980,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
   if (postpone_ref_lsa != NULL)
     {
       /* Append run postpone */
-      addr.pgptr = (PAGE_PTR) page;
+      addr.pgptr = (PAGE_PTR) new_page;
       addr.offset = 0;
       log_append_run_postpone (thread_p, RVVAC_DROPPED_FILE_ADD, &addr,
 			       pgbuf_get_vpid_ptr (addr.pgptr), rcv->length,
@@ -4031,7 +3989,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
   else
     {
       /* Append compensate for undo record */
-      addr.pgptr = (PAGE_PTR) page;
+      addr.pgptr = (PAGE_PTR) new_page;
 
       log_append_compensate (thread_p, RVVAC_DROPPED_FILE_ADD,
 			     pgbuf_get_vpid_ptr (addr.pgptr),
@@ -4043,13 +4001,24 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 		 "file(%d, %d) and mvccid=%lld to at position=%d. "
 		 "Page is (%d, %d) with lsa (%lld, %d).",
 		 thread_get_current_entry_index (),
-		 page->dropped_files[0].vfid.volid,
-		 page->dropped_files[0].vfid.fileid,
-		 page->dropped_files[0].mvccid, 0,
-		 pgbuf_get_volume_id ((PAGE_PTR) page),
-		 pgbuf_get_page_id ((PAGE_PTR) page),
-		 (long long int) pgbuf_get_lsa ((PAGE_PTR) page)->pageid,
-		 (int) pgbuf_get_lsa ((PAGE_PTR) page)->offset);
+		 new_page->dropped_files[0].vfid.volid,
+		 new_page->dropped_files[0].vfid.fileid,
+		 new_page->dropped_files[0].mvccid, 0,
+		 pgbuf_get_volume_id ((PAGE_PTR) new_page),
+		 pgbuf_get_page_id ((PAGE_PTR) new_page),
+		 (long long int) pgbuf_get_lsa ((PAGE_PTR) new_page)->pageid,
+		 (int) pgbuf_get_lsa ((PAGE_PTR) new_page)->offset);
+
+  /* Set dirty and unfix new page */
+  vacuum_set_dirty_dropped_entries_page (thread_p, new_page, FREE);
+
+  /* Save a link to the new page in last page */
+  VPID_COPY (&page->next_page, &vpid);
+  vacuum_log_dropped_files_set_next_page (thread_p, (PAGE_PTR) page, &vpid);
+#if !defined(NDEBUG)
+  VPID_COPY (&track_page->dropped_data_page.next_page, &vpid);
+#endif
+  /* Set dirty and unfix last page */
   vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
   return NO_ERROR;
 }
@@ -4231,36 +4200,6 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 		     (long long int) pgbuf_get_lsa (rcv->pgptr)->pageid,
 		     (int) pgbuf_get_lsa (rcv->pgptr)->offset);
     }
-
-#if !defined (NDEBUG)
-    {
-      /* Copy modified data to tracked pages (for debug) */
-      if (VPID_EQ (&vacuum_Dropped_files_vpid,
-		   pgbuf_get_vpid_ptr (rcv->pgptr)))
-	{
-	  /* Copy to first track page */
-	  assert (vacuum_Track_dropped_files != NULL);
-	  memcpy (&vacuum_Track_dropped_files->dropped_data_page,
-		  rcv->pgptr, DB_PAGESIZE);
-	}
-      else
-	{
-	  /* Search for the right track page */
-	  VACUUM_TRACK_DROPPED_FILES *track = vacuum_Track_dropped_files;
-	  while (!VPID_EQ (&track->dropped_data_page.next_page,
-			   pgbuf_get_vpid_ptr (rcv->pgptr)))
-	    {
-	      track = track->next_tracked_page;
-	    }
-	  /* Defense code */
-	  assert (track != NULL && track->next_tracked_page != NULL);
-	  assert (VPID_EQ (&track->dropped_data_page.next_page,
-			   pgbuf_get_vpid_ptr (rcv->pgptr)));
-	  track = track->next_tracked_page;
-	  memcpy (&track->dropped_data_page, rcv->pgptr, DB_PAGESIZE);
-	}
-    }
-#endif
 
   /* Page was modified, so set it dirty */
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);

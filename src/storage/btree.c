@@ -24913,23 +24913,6 @@ btree_rv_keyval_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 }
 
 /*
- * btree_rv_keyval_mvcc_dump () - Dump undo information <key-value> insertion
- *				  (MVCC operation).
- *
- * return      : Void.
- * fp (in)     : File pointer.
- * length (in) : Data length.
- * data (in)   : Recovery data.
- */
-void
-btree_rv_keyval_mvcc_dump (FILE * fp, int length, void *data)
-{
-  /* Dump undo information */
-  btree_rv_keyval_dump (fp, length - OR_LOG_LSA_ALIGNED_SIZE,
-			((char *) data) + OR_LOG_LSA_ALIGNED_SIZE);
-}
-
-/*
  * btree_rv_keyval_dump () - Dump undo information <key-value> insertion.
  *
  * return      : Void.
@@ -24942,6 +24925,50 @@ btree_rv_keyval_dump (FILE * fp, int length, void *data)
 {
   BTID btid;
   OID oid;
+  int purpose;
+  MVCCID ins_mvccid, del_mvccid;
+
+  if (mvcc_Enabled)
+    {
+      data = or_unpack_int (data, &purpose);
+      switch (purpose)
+	{
+	case MVCC_BTREE_VACUUM_OBJECT:
+	  fprintf (fp, " Logged by vacuuming object \n");
+	  break;
+	case MVCC_BTREE_VACUUM_INSID:
+	  fprintf (fp, " Logged by vacuuming insert MVCCID \n");
+	  break;
+	case MVCC_BTREE_DELETE_DELID:
+	  data = or_unpack_mvccid (data, &del_mvccid);
+	  fprintf (fp, " Logged by delete of DELID (del_mvccid=%lld) \n",
+		   del_mvccid);
+	  break;
+	case MVCC_BTREE_INSERT_DELID:
+	  data = or_unpack_mvccid (data, &del_mvccid);
+	  fprintf (fp, " Logged by insert of DELID  (del_mvccid=%lld) \n",
+		   del_mvccid);
+	  break;
+	case MVCC_BTREE_INSERT_OBJECT:
+	  data = or_unpack_mvccid (data, &ins_mvccid);
+	  fprintf (fp, " Logged by insert new object (ins_mvccid=%lld) \n",
+		   ins_mvccid);
+	  break;
+	case MVCC_BTREE_DELETE_OBJECT:
+	  data = or_unpack_mvccid (data, &ins_mvccid);
+	  fprintf (fp, " Logged by delete object (ins_mvccid=%lld) \n",
+		   ins_mvccid);
+	  break;
+	case MVCC_BTREE_RELOCATE_OBJ_AND_MVCC_INFO:
+	  data = or_unpack_mvccid (data, &ins_mvccid);
+	  data = or_unpack_mvccid (data, &del_mvccid);
+	  fprintf (fp, " Logged by insert new object (ins_mvccid=%lld, "
+		   "del_mvccid=%lld) \n", ins_mvccid, del_mvccid);
+	  break;
+	default:
+	  break;
+	}
+    }
 
   data = or_unpack_btid (data, &btid);
   fprintf (fp, " BTID = { { %d , %d }, %d} \n ",

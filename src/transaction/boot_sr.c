@@ -3544,10 +3544,12 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 
   if (mvcc_Enabled)
     {
-      /* Load vacuum info from disk and initialize vacuum routine */
+      /* We need to load vacuum data and initialize vacuum routine before
+       * recovery.
+       */
       error_code =
-	vacuum_load_from_disk (thread_p, &boot_Db_parm->vacuum_data_vfid,
-			       &boot_Db_parm->dropped_files_vfid);
+	vacuum_load_data_from_disk (thread_p,
+				    &boot_Db_parm->vacuum_data_vfid);
       if (error_code != NO_ERROR)
 	{
 	  fileio_dismount_all (thread_p);
@@ -3567,6 +3569,20 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 
   log_initialize (thread_p, boot_Db_full_name, log_path, log_prefix,
 		  from_backup, (r_args) ? &r_args->stopat : NULL);
+
+  if (mvcc_Enabled)
+    {
+      /* Load dropped files from disk after recovery */
+      error_code =
+	vacuum_load_dropped_files_from_disk (thread_p,
+					     &boot_Db_parm->
+					     dropped_files_vfid);
+      if (error_code != NO_ERROR)
+	{
+	  fileio_dismount_all (thread_p);
+	  goto error;
+	}
+    }
 
   /*
    * Allocate a temporary transaction index to finish further system related

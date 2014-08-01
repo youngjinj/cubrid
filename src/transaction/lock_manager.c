@@ -2650,7 +2650,7 @@ lock_suspend (THREAD_ENTRY * thread_p, LK_ENTRY * entry_ptr, int wait_msecs)
   LOG_TDES *tdes;
 
   /* The threads must not hold a page latch to be blocked on a lock request. */
-  assert (pgbuf_get_num_fixed_pages (thread_p) == 0);
+  assert (!pgbuf_has_perm_pages_fixed (thread_p));
 
   /* The caller is holding the thread entry mutex */
 

@@ -8829,16 +8829,31 @@ pgbuf_fix_when_other_is_fixed (THREAD_ENTRY * thread_p, VPID * vpid_to_fix,
 }
 
 /*
- * pgbuf_get_num_fixed_pages () - 
+ * pgbuf_has_perm_pages_fixed () - 
  *
  * return	       : The number of pages fixed by the thread.
  * thread_p (in)       : Thread entry.
  *
  */
-int
-pgbuf_get_num_fixed_pages (THREAD_ENTRY * thread_p)
+bool
+pgbuf_has_perm_pages_fixed (THREAD_ENTRY * thread_p)
 {
   int thrd_idx = THREAD_GET_CURRENT_ENTRY_INDEX (thread_p);
+  int count = 0;
+  PGBUF_HOLDER *holder = NULL;
 
-  return pgbuf_Pool.thrd_holder_info[thrd_idx].num_hold_cnt;
+  if (pgbuf_Pool.thrd_holder_info[thrd_idx].num_hold_cnt == 0)
+    {
+      return false;
+    }
+
+  for (holder = pgbuf_Pool.thrd_holder_info[thrd_idx].thrd_hold_list;
+       holder != NULL; holder = holder->thrd_link)
+    {
+      if (holder->bufptr->iopage_buffer->iopage.prv.ptype != PAGE_QRESULT)
+	{
+	  return true;
+	}
+    }
+  return false;
 }

@@ -288,5 +288,5 @@ extern int pgbuf_fix_when_other_is_fixed (THREAD_ENTRY * thread_p,
 					  PAGE_PTR * page_to_fix,
 					  PAGE_PTR * page_fixed);
 
-extern int pgbuf_get_num_fixed_pages (THREAD_ENTRY * thread_p);
+extern bool pgbuf_has_perm_pages_fixed (THREAD_ENTRY * thread_p);
 #endif /* _PAGE_BUFFER_H_ */

@@ -498,7 +498,6 @@ extern int btree_rv_keyval_undo_delete_mvccid (THREAD_ENTRY * thread_p,
 extern int btree_rv_keyval_undo_delete (THREAD_ENTRY * thread_p,
 					LOG_RCV * recv);
 extern void btree_rv_keyval_dump (FILE * fp, int length, void *data);
-extern void btree_rv_keyval_mvcc_dump (FILE * fp, int length, void *data);
 extern int btree_rv_undoredo_copy_page (THREAD_ENTRY * thread_p,
 					LOG_RCV * recv);
 extern int btree_rv_leafrec_redo_delete (THREAD_ENTRY * thread_p,
