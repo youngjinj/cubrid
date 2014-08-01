@@ -10122,7 +10122,8 @@ btree_delete_from_leaf (THREAD_ENTRY * thread_p, bool * key_deleted,
 
       assert (ovfl_copy_rec.length % 4 == 0);
 
-      if (btree_get_next_overflow_vpid (ovfl_page, &next_ovfl_vpid) != NO_ERROR)
+      if (btree_get_next_overflow_vpid (ovfl_page, &next_ovfl_vpid) !=
+	  NO_ERROR)
 	{
 	  pgbuf_unfix_and_init (thread_p, prev_page);
 	  pgbuf_unfix_and_init (thread_p, ovfl_page);
@@ -12398,7 +12399,7 @@ start_point:
 	  btree_read_record (thread_p, &btid_int, P, &peek_recdes1,
 			     NULL, &leaf_pnt, BTREE_LEAF_NODE,
 			     &clear_key, &offset, PEEK_KEY_VALUE, NULL);
-	  (void )btree_leaf_get_first_oid (&btid_int, &peek_recdes1,
+	  (void) btree_leaf_get_first_oid (&btid_int, &peek_recdes1,
 					   &curr_key_first_oid, &C_class_oid,
 					   NULL);
 	  if (!BTREE_IS_UNIQUE (btid_int.unique_pk))
@@ -12771,10 +12772,9 @@ curr_key_locking:
 			 &offset, PEEK_KEY_VALUE, NULL);
     }
 
-  (void) btree_leaf_get_first_oid (&btid_int, &peek_recdes1, &curr_key_first_oid,
-				   &C_class_oid, NULL);
-  btree_make_pseudo_oid (curr_key_first_oid.pageid,
-			 curr_key_first_oid.slotid,
+  (void) btree_leaf_get_first_oid (&btid_int, &peek_recdes1,
+				   &curr_key_first_oid, &C_class_oid, NULL);
+  btree_make_pseudo_oid (curr_key_first_oid.pageid, curr_key_first_oid.slotid,
 			 curr_key_first_oid.volid, btid_int.sys_btid, &C_oid);
 
   delete_first_key_oid = OID_EQ (&curr_key_first_oid, oid);
@@ -18252,7 +18252,8 @@ start_point:
       if (key_cnt > 0 && key_len_in_page > header->max_key_len)
 	{
 	  header->max_key_len = key_len_in_page;
-	  if (btree_node_header_redo_log (thread_p, &btid->vfid, Q) != NO_ERROR)
+	  if (btree_node_header_redo_log (thread_p, &btid->vfid, Q) !=
+	      NO_ERROR)
 	    {
 	      goto error;
 	    }
@@ -18555,7 +18556,7 @@ start_point:
 			 &leaf_pnt, BTREE_LEAF_NODE, &dummy, &offset,
 			 PEEK_KEY_VALUE, NULL);
       (void) btree_leaf_get_first_oid (&btid_int, &peek_rec, &N_oid,
-				      &N_class_oid, NULL);
+				       &N_class_oid, NULL);
       btree_make_pseudo_oid (N_oid.pageid, N_oid.slotid, N_oid.volid,
 			     btid_int.sys_btid, &N_oid);
 
@@ -24924,8 +24925,8 @@ void
 btree_rv_keyval_mvcc_dump (FILE * fp, int length, void *data)
 {
   /* Dump undo information */
-  btree_rv_keyval_dump (fp, length - OR_LOG_LSA_SIZE,
-			((char *) data) + OR_LOG_LSA_SIZE);
+  btree_rv_keyval_dump (fp, length - OR_LOG_LSA_ALIGNED_SIZE,
+			((char *) data) + OR_LOG_LSA_ALIGNED_SIZE);
 }
 
 /*
