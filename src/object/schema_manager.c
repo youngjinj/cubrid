@@ -5537,7 +5537,8 @@ sm_class_has_unique_constraint (MOP classop, bool check_subclasses)
   DB_OBJLIST *subclass = NULL;
   bool rc;
 
-  if (au_fetch_class (classop, &class_, AU_FETCH_READ, AU_SELECT) != NO_ERROR)
+  if (au_fetch_class_by_classmop (classop, &class_, AU_FETCH_READ, AU_SELECT)
+      != NO_ERROR)
     {
       return false;
     }

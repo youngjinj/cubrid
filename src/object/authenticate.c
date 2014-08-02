@@ -170,6 +170,14 @@ const char *AU_DBA_USER_NAME = "DBA";
          strcmp(name, CT_AUTHORIZATIONS_NAME) == 0 || \
 	 strcmp(name, CT_CHARSET_NAME) == 0)
 
+typedef enum fetch_by FETCH_BY;
+enum fetch_by
+{
+  DONT_KNOW,			/* Don't know the mop is a class os an instance */
+  BY_INSTANCE_MOP,		/* fetch a class by an instance mop */
+  BY_CLASS_MOP			/* fetch a class by the class mop */
+};
+
 /*
  * AU_GRANT
  *
@@ -540,7 +548,10 @@ static int is_protected_class (MOP classmop, SM_CLASS * sm_class,
 static int check_authorization (MOP classobj, SM_CLASS * sm_class,
 				DB_AUTH type);
 static int fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
-			AU_FETCHMODE fetchmode);
+			AU_FETCHMODE fetchmode, FETCH_BY fetch_by);
+static int au_fetch_class_internal (MOP op, SM_CLASS ** class_ptr,
+				    AU_FETCHMODE fetchmode, DB_AUTH type,
+				    FETCH_BY fetch_by);
 
 static int fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE fetchmode);
 static int au_perform_login (const char *name, const char *password,
@@ -5703,7 +5714,7 @@ check_authorization (MOP classobj, SM_CLASS * sm_class, DB_AUTH type)
  */
 static int
 fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
-	     AU_FETCHMODE fetchmode)
+	     AU_FETCHMODE fetchmode, FETCH_BY fetch_by)
 {
   int error = NO_ERROR;
   MOP classmop = NULL;
@@ -5722,8 +5733,9 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
   classmop = NULL;
   class_ = NULL;
 
-  if (locator_is_class (op, ((fetchmode == AU_FETCH_READ)
-			     ? DB_FETCH_READ : DB_FETCH_WRITE)))
+  if (fetch_by == BY_CLASS_MOP
+      || locator_is_class (op, ((fetchmode == AU_FETCH_READ)
+				? DB_FETCH_READ : DB_FETCH_WRITE)))
     {
       classmop = op;
     }
@@ -5831,17 +5843,18 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
 }
 
 /*
- * au_fetch_class - This is the primary function for accessing a class
+ * au_fetch_class - helper function for au_fetch_class families
  *   return: error code
  *   op(in): class or instance
  *   class_ptr(out): returned pointer to class structure
  *   fetchmode(in): type of fetch/lock to obtain
  *   type(in): authorization type to check
- *
+ *   fetch_by(in): DONT_KNOW, BY_INSTANCE_MOP or BY_CLASS_MOP
  */
 int
-au_fetch_class (MOP op, SM_CLASS ** class_ptr, AU_FETCHMODE fetchmode,
-		DB_AUTH type)
+au_fetch_class_internal (MOP op, SM_CLASS ** class_ptr,
+			 AU_FETCHMODE fetchmode, DB_AUTH type,
+			 FETCH_BY fetch_by)
 {
   int error = NO_ERROR;
   SM_CLASS *class_;
@@ -5873,7 +5886,7 @@ au_fetch_class (MOP op, SM_CLASS ** class_ptr, AU_FETCHMODE fetchmode,
       || op->lock < SCH_S_LOCK)	/* don't have the lowest level lock */
     {
       /* go through the usual fetch process */
-      error = fetch_class (op, &classmop, &class_, fetchmode);
+      error = fetch_class (op, &classmop, &class_, fetchmode, fetch_by);
       if (error != NO_ERROR)
 	{
 	  return error;
@@ -5898,6 +5911,58 @@ au_fetch_class (MOP op, SM_CLASS ** class_ptr, AU_FETCHMODE fetchmode,
 }
 
 /*
+ * au_fetch_class - This is the primary function for accessing a class
+ *   return: error code
+ *   op(in): class or instance
+ *   class_ptr(out): returned pointer to class structure
+ *   fetchmode(in): type of fetch/lock to obtain
+ *   type(in): authorization type to check
+ *
+ */
+int
+au_fetch_class (MOP op, SM_CLASS ** class_ptr, AU_FETCHMODE fetchmode,
+		DB_AUTH type)
+{
+  return au_fetch_class_internal (op, class_ptr, fetchmode, type, DONT_KNOW);
+}
+
+/*
+ * au_fetch_class_by_classmop - This is the primary function 
+ *                  for accessing a class by an instance mop.
+ *   return: error code
+ *   op(in): class or instance
+ *   class_ptr(out): returned pointer to class structure
+ *   fetchmode(in): type of fetch/lock to obtain
+ *   type(in): authorization type to check
+ *
+ */
+int
+au_fetch_class_by_instancemop (MOP op, SM_CLASS ** class_ptr,
+			       AU_FETCHMODE fetchmode, DB_AUTH type)
+{
+  return au_fetch_class_internal (op, class_ptr, fetchmode, type,
+				  BY_INSTANCE_MOP);
+}
+
+/*
+ * au_fetch_class_by_classmop - This is the primary function 
+ *                  for accessing a class by a class mop.
+ *   return: error code
+ *   op(in): class or instance
+ *   class_ptr(out): returned pointer to class structure
+ *   fetchmode(in): type of fetch/lock to obtain
+ *   type(in): authorization type to check
+ *
+ */
+int
+au_fetch_class_by_classmop (MOP op, SM_CLASS ** class_ptr,
+			    AU_FETCHMODE fetchmode, DB_AUTH type)
+{
+  return au_fetch_class_internal (op, class_ptr, fetchmode, type,
+				  BY_CLASS_MOP);
+}
+
+/*
  * au_fetch_class_force - This is like au_fetch_class except that it will
  *                        not check for authorization.
  *   return: error code
@@ -5913,7 +5978,7 @@ au_fetch_class_force (MOP op, SM_CLASS ** class_, AU_FETCHMODE fetchmode)
 {
   MOP classmop;
 
-  return (fetch_class (op, &classmop, class_, fetchmode));
+  return (fetch_class (op, &classmop, class_, fetchmode, DONT_KNOW));
 }
 
 /*
@@ -6098,7 +6163,8 @@ au_fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE mode, DB_AUTH type)
     }
 
   op = ws_mvcc_latest_version (op);
-  error = fetch_class (op, &classmop, &class_, AU_FETCH_READ);
+  error =
+    fetch_class (op, &classmop, &class_, AU_FETCH_READ, BY_INSTANCE_MOP);
   if (error != NO_ERROR)
     {
       /*
