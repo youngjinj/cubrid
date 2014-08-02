@@ -2893,6 +2893,8 @@ scan_init_scan_id (SCAN_ID * scan_id, bool mvcc_select_lock_needed,
      WILL DIE A HIDEOUS DEATH, AND YOUR CHILDREN WILL BE SHUNNED FOR THE
      REST OF THEIR LIVES.
      YOU HAVE BEEN WARNED!!! */
+  /* NOTE: ONE CAN LET A SCAN BE NON-FIXED AND HIS CHILDREN WILL BE JUST FINE!
+   */
 
   scan_id->grouped = grouped;	/* is it grouped or single scan? */
   scan_id->qualified_block = false;

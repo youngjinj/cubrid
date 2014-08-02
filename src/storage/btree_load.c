@@ -1089,6 +1089,14 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
       addr.offset = 0;
       log_append_undo_data (thread_p, RVBT_CREATE_INDEX, &addr, sizeof (VFID),
 			    &(btid->vfid));
+
+      /* Already append a vacuum undo logging when file was created, but
+       * since that was included in the system operation which just got
+       * committed, we need to do it again in case of rollback.
+       */
+      vacuum_log_add_dropped_file (thread_p, &btid->vfid,
+				   logtb_get_current_mvccid (thread_p),
+				   VACUUM_LOG_ADD_DROPPED_FILE_UNDO);
     }
   else
     {

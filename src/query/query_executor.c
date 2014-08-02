@@ -14922,7 +14922,9 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   int fixed_scan_flag;
   QFILE_LIST_MERGE_INFO *merge_infop;
   XASL_NODE *outer_xasl = NULL, *inner_xasl = NULL;
+  XASL_NODE *fixed_scan_xasl = NULL;
   bool iscan_oid_order, mvcc_select_lock_needed = false;
+  bool has_index_scan = false;
   int old_wait_msecs, wait_msecs;
   int error;
 
@@ -15303,41 +15305,65 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
        */
       if (xasl->spec_list)
 	{
-	  /* do locking on each instance instead of composite locking */
+	  /* Decide which scan will use fixed flags and which won't.
+	   * There are several cases here:
+	   * 1. Do not use fixed scans if locks on objects are required.
+	   * 2. Disable all fixed scans if any index scan is used (this is
+	   *	legacy and should be reconsidered).
+	   * 3. Disable fixed scan for outer scans. Fixed cannot be allowed
+	   *	while new scans start which also need to fix pages. This may
+	   *	lead to page deadlocks.
+	   *
+	   * NOTE: Only the innermost scans are allowed fixed scans.
+	   */
 	  if (COMPOSITE_LOCK (xasl->scan_op_type))
 	    {
-	      fixed_scan_flag = false;
+	      /* Do locking on each instance instead of composite locking */
+	      /* Fall through */
 	    }
 	  else
 	    {
-	      fixed_scan_flag = true;
 	      for (xptr = xasl; xptr; xptr = xptr->scan_ptr)
 		{
 		  specp = xptr->spec_list;
 		  for (; specp; specp = specp->next)
 		    {
-		      if (specp->type == TARGET_CLASS
-			  && IS_ANY_INDEX_ACCESS (specp->access))
+		      if (specp->type == TARGET_CLASS)
 			{
-			  fixed_scan_flag = false;
-			  break;
+			  /* Update fixed scan XASL */
+			  fixed_scan_xasl = xptr;
+			  if (IS_ANY_INDEX_ACCESS (specp->access))
+			    {
+			      has_index_scan = true;
+			      break;
+			    }
 			}
 		    }
-		  if (fixed_scan_flag == false)
+		  if (has_index_scan)
 		    {
+		      /* Stop search */
 		      break;
 		    }
 		  specp = xptr->merge_spec;
 		  if (specp)
 		    {
-		      if (specp->type == TARGET_CLASS
-			  && IS_ANY_INDEX_ACCESS (specp->access))
+		      if (specp->type == TARGET_CLASS)
 			{
-			  fixed_scan_flag = false;
-			  break;
+			  /* Update fixed scan XASL */
+			  fixed_scan_xasl = xptr;
+			  if (IS_ANY_INDEX_ACCESS (specp->access))
+			    {
+			      has_index_scan = true;
+			      break;
+			    }
 			}
 		    }
 		}
+	    }
+	  if (has_index_scan)
+	    {
+	      /* Index found, no fixed is allowed */
+	      fixed_scan_xasl = NULL;
 	    }
 
 	  /* open all the scans that are involved within the query,
@@ -15345,6 +15371,9 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	   */
 	  for (xptr = xasl, level = 0; xptr; xptr = xptr->scan_ptr, level++)
 	    {
+	      /* Check if fixed scan is allowed in this XASL node */
+	      fixed_scan_flag = (xptr == fixed_scan_xasl);
+
 	      /* consider all the access specification nodes */
 	      spec_ptr[0] = xptr->spec_list;
 	      spec_ptr[1] = xptr->merge_spec;
@@ -15353,10 +15382,6 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 		  for (specp = spec_ptr[spec_level]; specp;
 		       specp = specp->next)
 		    {
-		      /* we must make scans fixed because non-fixed scans
-		       * have never been tested.  There is also some
-		       * discussion as to the utility of non fixed scans.
-		       */
 		      specp->fixed_scan = fixed_scan_flag;
 
 		      /* set if the scan will be done in a grouped manner */

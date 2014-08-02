@@ -3941,6 +3941,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
   if (new_page == NULL)
     {
       assert (false);
+      vacuum_unfix_dropped_entries_page (thread_p, page);
       return ER_FAILED;
     }
   /* Set page header: next page as NULL and count as 1 */
@@ -3965,6 +3966,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
 		  1, VACUUM_TRACK_DROPPED_FILES_SIZE);
 	  vacuum_unfix_dropped_entries_page (thread_p, page);
+	  vacuum_unfix_dropped_entries_page (thread_p, new_page);
 	  return ER_FAILED;
 	}
     }

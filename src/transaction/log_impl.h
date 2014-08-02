@@ -2288,6 +2288,8 @@ logtb_assign_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 extern LOG_TDES *logtb_rv_find_allocate_tran_index (THREAD_ENTRY * thread_p,
 						    TRANID trid,
 						    const LOG_LSA * log_lsa);
+extern void logtb_rv_assign_mvccid_for_undo_recovery (THREAD_ENTRY * thread_p,
+						      MVCCID mvccid);
 extern void logtb_release_tran_index (THREAD_ENTRY * thread_p,
 				      int tran_index);
 extern void logtb_free_tran_index (THREAD_ENTRY * thread_p, int tran_index);

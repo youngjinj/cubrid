@@ -864,11 +864,9 @@ logtb_assign_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
     {
       if (mvcc_Enabled)
 	{
-	  int error_code;
-	  error_code = logtb_allocate_mvcc_info (thread_p);
-	  if (error_code != NO_ERROR)
+	  if (logtb_allocate_mvcc_info (thread_p) != NO_ERROR)
 	    {
-	      assert (true);
+	      assert (false);
 	      return NULL_TRAN_INDEX;
 	    }
 	}
@@ -1279,6 +1277,16 @@ logtb_rv_find_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 	{
 	  LSA_COPY (&tdes->head_lsa, log_lsa);
 	}
+
+      if (mvcc_Enabled)
+	{
+	  /* Need to allocate MVCC info too */
+	  if (logtb_allocate_mvcc_info (thread_p) != NO_ERROR)
+	    {
+	      assert (false);
+	      return NULL_TRAN_INDEX;
+	    }
+	}
     }
   else
     {
@@ -1286,6 +1294,32 @@ logtb_rv_find_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
     }
 
   return tdes;
+}
+
+/*
+ * logtb_rv_assign_mvccid_for_undo_recovery () - Assign an MVCCID for
+ *						 transactions that need to
+ *						 undo at recovery.
+ *
+ * return	 : Void.
+ * thread_p (in) : Thread entry.
+ * mvccid (in)	 : Assigned MVCCID.
+ */
+void
+logtb_rv_assign_mvccid_for_undo_recovery (THREAD_ENTRY * thread_p,
+					  MVCCID mvccid)
+{
+  LOG_TDES *tdes = LOG_FIND_CURRENT_TDES (thread_p);
+
+  assert (tdes != NULL && tdes->mvcc_info != NULL);
+  assert (MVCCID_IS_VALID (mvccid));
+  /* Transaction should have no MVCCID assigned, or it should be the same
+   * if it is already assigned.
+   */
+  assert (!MVCCID_IS_VALID (tdes->mvcc_info->mvcc_id)
+	  || tdes->mvcc_info->mvcc_id == mvccid);
+
+  tdes->mvcc_info->mvcc_id = mvccid;
 }
 
 /*

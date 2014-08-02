@@ -6586,6 +6586,11 @@ disk_rv_alloctable_bitmap_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
   INT32 num = 0;		/* Number of allocated bits */
   unsigned int bit, i;
 
+  /* TODO: Remove this code when double deallocations issue is
+   *       fixed.
+   */
+  int already_cleared = 0;		/* <-- */
+
   (void) pgbuf_check_page_ptype (thread_p, rcv->pgptr, PAGE_VOLBITMAP);
 
   mtb = (DISK_RECV_MTAB_BITS_WITH *) rcv->data;
@@ -6608,11 +6613,27 @@ disk_rv_alloctable_bitmap_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 	    }
 	  else
 	    {
-	      disk_bit_clear (at_chptr, i);
+	      /* TODO: Remove this code when double deallocations issue is
+	       *       fixed. This should only call:
+	       *       disk_bit_clear (at_chptr, i);
+	       */
+	      if (!disk_bit_is_set (at_chptr, i))	    /* <-- */
+		{			    /* <-- */
+		  already_cleared++;	    /* <-- */
+		}			    /* <-- */
+	      else			    /* <-- */
+		{			    /* <-- */
+		  disk_bit_clear (at_chptr, i);
+		}			    /* <-- */
 	    }
 	}
       bit = 0;
     }
+  /* TODO: Remove this code when double deallocations issue is
+   *       fixed. The number is passed to volume header recovery so update
+   *	   it to avoid header corruption.
+   */
+  mtb->num -= already_cleared;		    /* <-- */
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
 
 

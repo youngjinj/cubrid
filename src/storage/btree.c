@@ -709,7 +709,8 @@ static short btree_leaf_key_oid_is_mvcc_flaged (char *data,
 						short record_flag);
 static void btree_leaf_change_first_oid (RECDES * recp, BTID_INT * btid,
 					 OID * oidp, OID * class_oidp,
-					 MVCC_REC_HEADER * p_mvcc_rec_header);
+					 MVCC_REC_HEADER * p_mvcc_rec_header,
+					 int *key_offset);
 static void btree_leaf_rebuild_mvccids_in_record (RECDES * recp, int offset,
 						  int mvcc_old_oid_mvcc_flags,
 						  int oid_size,
@@ -895,7 +896,7 @@ static int btree_delete_oid_from_leaf (THREAD_ENTRY * thread_p,
 				       INT16 slot_id, DB_VALUE * key,
 				       OID * oid, OID * class_oid,
 				       RECDES * leaf_rec, int del_oid_offset,
-				       int oid_list_offset,
+				       int *oid_list_offset,
 				       MVCC_BTREE_OP_ARGUMENTS * mvcc_args);
 static int btree_modify_leaf_ovfl_vpid (THREAD_ENTRY * thread_p,
 					BTID_INT * btid, PAGE_PTR leaf_page,
@@ -2121,6 +2122,7 @@ btree_leaf_put_first_oid (RECDES * recp, OID * oidp, short record_flag)
  *   offset(in): oid offset
  *   p_mvcc_rec_header(in/out): MVCC record header containing MVCC info
  *			      to be inserted into record
+ *   key_offset(out): offset of the key after moving data
  *
  * Note: This function replace OID, CLASS OID and MVCCID from recp->data + offset
  *  with values specified by oidp, class_oidp, p_mvcc_rec_header.
@@ -2129,7 +2131,8 @@ btree_leaf_put_first_oid (RECDES * recp, OID * oidp, short record_flag)
 static void
 btree_leaf_change_first_oid (RECDES * recp, BTID_INT * btid, OID * oidp,
 			     OID * class_oidp,
-			     MVCC_REC_HEADER * p_mvcc_rec_header)
+			     MVCC_REC_HEADER * p_mvcc_rec_header,
+			     int *key_offset)
 {
   short old_rec_flag = 0, new_rec_flag = 0, mvcc_flags = 0;
   char *src = NULL, *desc = NULL;
@@ -2229,6 +2232,10 @@ btree_leaf_change_first_oid (RECDES * recp, BTID_INT * btid, OID * oidp,
 
   /* Key and any other OID's may need to be moved */
   BTREE_LEAF_MOVE_INSIDE_RECORD (recp, new_object_size, old_object_size);
+  if (key_offset)
+    {
+      *key_offset = (new_object_size - old_object_size);
+    }
 
   /* Add new data */
   or_init (&buffer, recp->data, new_object_size);
@@ -9244,7 +9251,7 @@ btree_swap_first_oid_with_ovfl_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
   assert (mvcc_Enabled || OID_ISNULL (&last_class_oid));
 
   btree_leaf_change_first_oid (leaf_rec, btid, &last_oid, &last_class_oid,
-			       p_last_oid_mvcc_header);
+			       p_last_oid_mvcc_header, NULL);
   assert (leaf_rec->length % 4 == 0);
 
   assert (slot_id > 0);
@@ -9292,13 +9299,15 @@ exit_on_error:
  *   class_oid(in):
  *   leaf_rec(in):
  *   del_oid_offset(in):
+ *   oid_list_offset(in/out): oid list offset, may be changed when delete first
+ *			    OID
  */
 static int
 btree_delete_oid_from_leaf (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			    PAGE_PTR leaf_page, INT16 slot_id,
 			    DB_VALUE * key, OID * oid, OID * class_oid,
 			    RECDES * leaf_rec, int del_oid_offset,
-			    int oid_list_offset,
+			    int *oid_list_offset,
 			    MVCC_BTREE_OP_ARGUMENTS * mvcc_args)
 {
   int ret = NO_ERROR;
@@ -9308,6 +9317,7 @@ btree_delete_oid_from_leaf (THREAD_ENTRY * thread_p, BTID_INT * btid,
   char rv_data_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
   MVCC_REC_HEADER last_oid_mvcc_header, *p_last_oid_mvcc_header = NULL;
   int last_oid_mvcc_offset, *p_last_oid_mvcc_offset = NULL;
+  int key_offset;
 
   rv_data = PTR_ALIGN (rv_data_buf, BTREE_MAX_ALIGN);
 
@@ -9387,7 +9397,7 @@ btree_delete_oid_from_leaf (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	}
       /* Get last object from record */
       btree_leaf_get_last_oid (btid, leaf_rec, BTREE_LEAF_NODE,
-			       oid_list_offset, &last_oid, &last_class_oid,
+			       *oid_list_offset, &last_oid, &last_class_oid,
 			       p_last_oid_mvcc_header, &last_oid_mvcc_offset);
 
       /* Remove last object */
@@ -9404,7 +9414,9 @@ btree_delete_oid_from_leaf (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	      /* Delete first oid */
 	      btree_leaf_change_first_oid (leaf_rec, btid, &last_oid,
 					   &last_class_oid,
-					   p_last_oid_mvcc_header);
+					   p_last_oid_mvcc_header,
+					   &key_offset);
+	      (*oid_list_offset) += key_offset;
 	    }
 	  else
 	    {
@@ -9853,7 +9865,8 @@ btree_delete_from_leaf (THREAD_ENTRY * thread_p, bool * key_deleted,
   int oid_size, oid_offset, oid_list_offset, oid_cnt;
   bool dummy;
   bool mvcc_key_deleted =
-    mvcc_Enabled && (key_deleted != NULL) && (mvcc_args == NULL);
+    mvcc_Enabled && (key_deleted != NULL)
+    && (mvcc_args == NULL || mvcc_args->purpose == MVCC_BTREE_DELETE_OBJECT);
   int num_visible_oids = 0;
   MVCC_SNAPSHOT mvcc_snapshot_dirty;
 
@@ -10024,7 +10037,7 @@ btree_delete_from_leaf (THREAD_ENTRY * thread_p, bool * key_deleted,
 	      ret = btree_delete_oid_from_leaf (thread_p, btid, leaf_page,
 						leaf_slot_id, key, oid,
 						class_oid, &leaf_copy_rec,
-						oid_offset, oid_list_offset,
+						oid_offset, &oid_list_offset,
 						mvcc_args);
 #if !defined (NDEBUG)
 	      btree_check_valid_record (thread_p, btid, &leaf_copy_rec,
@@ -13429,7 +13442,7 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
       /* replace first OID with the new OID */
       btree_leaf_change_first_oid (rec, btid, oid, cls_oid,
-				   p_mvcc_rec_header);
+				   p_mvcc_rec_header, NULL);
 
       /* prepare for insertion of saved first OID at the end of the buffer */
       if (insoid_mode == KEY_INSOID_INSERT_AT_BEGINNING)
@@ -14328,7 +14341,7 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added_deleted,
 	  ret =
 	    btree_delete_oid_from_leaf (thread_p, btid, page_ptr, slot_id,
 					key, &last_oid, &last_class_oid, &rec,
-					last_oid_offset, offset,
+					last_oid_offset, &offset,
 					&mvcc_args_for_delete);
 	  if (ret != NO_ERROR)
 	    {
@@ -25265,7 +25278,7 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 
 	      btree_leaf_change_first_oid (&rec, &btid_int, &recins->oid,
 					   &recins->class_oid,
-					   p_mvcc_rec_header);
+					   p_mvcc_rec_header, NULL);
 
 	      /* prepare for insertion of saved first OID at the end of the buffer */
 	      if (recins->insoid_mode == KEY_INSOID_INSERT_AT_BEGINNING)

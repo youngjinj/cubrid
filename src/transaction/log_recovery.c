@@ -266,6 +266,13 @@ log_rv_undo_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa,
   int error_code = NO_ERROR;
   LOG_SET_CURRENT_TRAN_INDEX (thread_p, tdes->tran_index);
 
+  if (MVCCID_IS_VALID (rcv->mvcc_id))
+    {
+      /* Assign the MVCCID to transaction. */
+      assert (LOG_IS_MVCC_OPERATION (rcvindex));
+      logtb_rv_assign_mvccid_for_undo_recovery (thread_p, rcv->mvcc_id);
+    }
+
   /*
    * Fetch the page for physical log records. The page is not locked since the
    * recovery process is the only one running. If the page does not exist
