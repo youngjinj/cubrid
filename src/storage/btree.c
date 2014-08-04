@@ -18868,18 +18868,18 @@ curr_key_locking:
 	      assert (curr_lock_flag == true);
 	      goto start_point;
 	    }
+
+	  if (result == BTREE_ACTIVE_KEY_FOUND)
+	    {
+	      /* check whether the other transaction key insertion has been
+	       * committed/aborted
+	       */
+	      goto curr_key_locking;
+	    }
 	}
       else
 	{
 	  goto error;
-	}
-
-      if (result == BTREE_ACTIVE_KEY_FOUND)
-	{
-	  /* check whether the other transaction key insertion has been
-	   * committed/aborted
-	   */
-	  goto curr_key_locking;
 	}
 
       /* Object is locked, may insert into key */

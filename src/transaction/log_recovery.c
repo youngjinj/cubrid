@@ -4955,6 +4955,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 			}
 		      else
 			{
+			  if (tdes->mvcc_info != NULL)
+			    {
+			      /* Clear MVCCID */
+			      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+			    }
 			  (void) log_complete (thread_p, tdes, LOG_ABORT,
 					       LOG_DONT_NEED_NEWTRID);
 			  logtb_free_tran_index (thread_p, tran_index);
@@ -5054,6 +5059,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 			}
 		      else
 			{
+			  if (tdes->mvcc_info != NULL)
+			    {
+			      /* Clear MVCCID */
+			      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+			    }
 			  (void) log_complete (thread_p, tdes, LOG_ABORT,
 					       LOG_DONT_NEED_NEWTRID);
 			  logtb_free_tran_index (thread_p, tran_index);
@@ -5093,6 +5103,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 			}
 		      else
 			{
+			  if (tdes->mvcc_info != NULL)
+			    {
+			      /* Clear MVCCID */
+			      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+			    }
 			  (void) log_complete (thread_p, tdes, LOG_ABORT,
 					       LOG_DONT_NEED_NEWTRID);
 			  logtb_free_tran_index (thread_p, tran_index);
@@ -5131,6 +5146,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 			}
 		      else
 			{
+			  if (tdes->mvcc_info != NULL)
+			    {
+			      /* Clear MVCCID */
+			      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+			    }
 			  (void) log_complete (thread_p, tdes, LOG_ABORT,
 					       LOG_DONT_NEED_NEWTRID);
 			  logtb_free_tran_index (thread_p, tran_index);
@@ -5175,6 +5195,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 			}
 		      else
 			{
+			  if (tdes->mvcc_info != NULL)
+			    {
+			      /* Clear MVCCID */
+			      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+			    }
 			  (void) log_complete (thread_p, tdes, LOG_ABORT,
 					       LOG_DONT_NEED_NEWTRID);
 			  logtb_free_tran_index (thread_p, tran_index);
@@ -5218,6 +5243,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 			}
 		      else
 			{
+			  if (tdes->mvcc_info != NULL)
+			    {
+			      /* Clear MVCCID */
+			      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+			    }
 			  (void) log_complete (thread_p, tdes, LOG_ABORT,
 					       LOG_DONT_NEED_NEWTRID);
 			  logtb_free_tran_index (thread_p, tran_index);
@@ -5265,6 +5295,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 				log_to_string (log_rec->type));
 #endif /* CUBRID_DEBUG */
 		  /* Remove the transaction from the recovery process */
+		  if (tdes->mvcc_info != NULL)
+		    {
+		      /* Clear MVCCID */
+		      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+		    }
 		  (void) log_complete (thread_p, tdes, LOG_ABORT,
 				       LOG_DONT_NEED_NEWTRID);
 		  logtb_free_tran_index (thread_p, tran_index);
@@ -5286,6 +5321,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 		  /*
 		   * Remove the transaction from the recovery process
 		   */
+		  if (tdes->mvcc_info != NULL)
+		    {
+		      /* Clear MVCCID */
+		      tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+		    }
 		  (void) log_complete (thread_p, tdes, LOG_ABORT,
 				       LOG_DONT_NEED_NEWTRID);
 		  logtb_free_tran_index (thread_p, tran_index);

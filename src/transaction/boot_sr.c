@@ -3548,14 +3548,14 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
        * recovery.
        */
       error_code =
-	vacuum_load_data_from_disk (thread_p,
-				    &boot_Db_parm->vacuum_data_vfid);
+	vacuum_initialize (thread_p, &boot_Db_parm->vacuum_data_vfid,
+			   &boot_Db_parm->dropped_files_vfid);
       if (error_code != NO_ERROR)
 	{
 	  fileio_dismount_all (thread_p);
 	  goto error;
 	}
-      error_code = vacuum_initialize (thread_p);
+      error_code = vacuum_load_data_from_disk (thread_p);
       if (error_code != NO_ERROR)
 	{
 	  fileio_dismount_all (thread_p);
@@ -3572,11 +3572,8 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
 
   if (mvcc_Enabled)
     {
-      /* Load dropped files from disk after recovery */
-      error_code =
-	vacuum_load_dropped_files_from_disk (thread_p,
-					     &boot_Db_parm->
-					     dropped_files_vfid);
+      /* Make sure dropped files are loaded from disk after recovery */
+      error_code = vacuum_load_dropped_files_from_disk (thread_p);
       if (error_code != NO_ERROR)
 	{
 	  fileio_dismount_all (thread_p);
@@ -5818,8 +5815,9 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
       vacuum_data_npages = prm_get_integer_value (PRM_ID_VACUUM_DATA_PAGES);
       /* Create files required for vacuum */
       if (file_create
-	  (thread_p, &vacuum_data_vfid, vacuum_data_npages, FILE_DROPPED_FILES,
-	   NULL, &vacuum_data_vpid, -vacuum_data_npages) == NULL
+	  (thread_p, &vacuum_data_vfid, vacuum_data_npages,
+	   FILE_DROPPED_FILES, NULL, &vacuum_data_vpid,
+	   -vacuum_data_npages) == NULL
 	  || file_create (thread_p, &dropped_files_vfid, 1, FILE_VACUUM_DATA,
 			  NULL, &dropped_files_vpid, 1) == NULL)
 	{

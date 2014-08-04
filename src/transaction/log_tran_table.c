@@ -1251,7 +1251,7 @@ logtb_rv_find_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
   /*
    * If this is the first time, the transaction is seen. Assign a new
    * index to describe it and assume that the transaction was active
-   * at the time of the crash, and thus it will be unilateraly aborted
+   * at the time of the crash, and thus it will be unilaterally aborted
    */
   tran_index = logtb_find_tran_index (thread_p, trid);
   if (tran_index == NULL_TRAN_INDEX)
@@ -1284,7 +1284,7 @@ logtb_rv_find_allocate_tran_index (THREAD_ENTRY * thread_p, TRANID trid,
 	  if (logtb_allocate_mvcc_info (thread_p) != NO_ERROR)
 	    {
 	      assert (false);
-	      return NULL_TRAN_INDEX;
+	      return NULL;
 	    }
 	}
     }

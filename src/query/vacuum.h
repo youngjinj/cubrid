@@ -84,11 +84,11 @@ typedef INT64 VACUUM_LOG_BLOCKID;
 extern int vacuum_init_vacuum_files (THREAD_ENTRY * thread_p,
 				     VFID * vacuum_data_vfid,
 				     VFID * dropped_files_vfid);
-extern int vacuum_load_data_from_disk (THREAD_ENTRY * thread_p,
-				       VFID * vacuum_data_vfid);
-extern int vacuum_load_dropped_files_from_disk (THREAD_ENTRY *
-						thread_p, VFID * vfid);
-extern int vacuum_initialize (THREAD_ENTRY * thread_p);
+extern int vacuum_load_data_from_disk (THREAD_ENTRY * thread_p);
+extern int vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p);
+extern int vacuum_initialize (THREAD_ENTRY * thread_p,
+			      VFID * vacuum_data_vfid,
+			      VFID * dropped_files_vfid);
 extern void vacuum_finalize (THREAD_ENTRY * thread_p);
 extern int vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
 			      LOG_LSA * prev_chkpt_lsa,

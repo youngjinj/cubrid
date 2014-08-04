@@ -144,6 +144,9 @@ struct vacuum_data
 /* Pointer to vacuum data */
 VACUUM_DATA *vacuum_Data = NULL;
 
+/* VFID of the vacuum data file */
+VFID vacuum_Data_vfid;
+
 /* VPID of the first vacuum data page */
 VPID vacuum_Data_vpid;
 
@@ -275,6 +278,8 @@ LOCK_FREE_CIRCULAR_QUEUE *vacuum_Block_data_buffer = NULL;
 
 #define VACUUM_DROPPED_FILES_EXTEND_FILE_NPAGES 5
 
+static bool vacuum_Dropped_files_loaded = false;
+
 /* Identifier for the file where dropped file list is kept */
 static VFID vacuum_Dropped_files_vfid;
 
@@ -282,7 +287,7 @@ static VFID vacuum_Dropped_files_vfid;
 static VPID vacuum_Dropped_files_vpid;
 
 /* Total count of dropped files */
-static INT32 vacuum_Dropped_files_count;
+static INT32 vacuum_Dropped_files_count = 0;
 
 /* Temporary buffer used to move memory data from the first page of dropped
  * files. An exclusive latch on this first page is required to synchronize
@@ -481,7 +486,8 @@ xvacuum (THREAD_ENTRY * thread_p, int num_classes, OID * class_oids)
  * thread_p (in) : Thread entry.
  */
 int
-vacuum_initialize (THREAD_ENTRY * thread_p)
+vacuum_initialize (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid,
+		   VFID * dropped_files_vfid)
 {
   int error_code = NO_ERROR;
 
@@ -490,9 +496,22 @@ vacuum_initialize (THREAD_ENTRY * thread_p)
       return NO_ERROR;
     }
 
-  /* Initialize mutex for vacuum data */
+  /* Initialize vacuum data */
+  vacuum_Data = NULL;
   (void) pthread_mutex_init (&vacuum_Data_mutex, NULL);
+  VFID_COPY (&vacuum_Data_vfid, vacuum_data_vfid);
+  VPID_SET_NULL (&vacuum_Data_vpid);
 
+  /* Initialize vacuum dropped files */
+  vacuum_Dropped_files_loaded = false;
+  VFID_COPY (&vacuum_Dropped_files_vfid, dropped_files_vfid);
+  VPID_SET_NULL (&vacuum_Dropped_files_vpid);
+  vacuum_Dropped_files_version = 0;
+#if !defined (NDEBUG)
+  vacuum_Track_dropped_files = NULL;
+#endif
+
+  /* Initialize the log block data buffer */
   vacuum_Block_data_buffer =
     lock_free_circular_queue_create (VACUUM_BLOCK_DATA_BUFFER_CAPACITY,
 				     sizeof (VACUUM_DATA_ENTRY));
@@ -2440,14 +2459,15 @@ vacuum_compare_data_entries (const void *ptr1, const void *ptr2)
  *	 before starting other vacuum routines.
  */
 int
-vacuum_load_data_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid)
+vacuum_load_data_from_disk (THREAD_ENTRY * thread_p)
 {
   int error_code = NO_ERROR, i;
   int vacuum_data_npages = prm_get_integer_value (PRM_ID_VACUUM_DATA_PAGES);
   int vol_fd;
   VACUUM_DATA_ENTRY *entry = NULL;
 
-  assert (vacuum_Data == NULL);
+  assert_release (vacuum_Data == NULL);
+  assert_release (!VFID_ISNULL (&vacuum_Data_vfid));
 
   /* Data is being loaded from disk so all data that is flushed */
   LSA_SET_NULL (&vacuum_Data_oldest_not_flushed_lsa);
@@ -2461,8 +2481,8 @@ vacuum_load_data_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid)
     }
 
   /* Get the first vacuum data page vpid */
-  if (file_find_nthpages (thread_p, vacuum_data_vfid, &vacuum_Data_vpid, 0, 1)
-      < 1)
+  if (file_find_nthpages
+      (thread_p, &vacuum_Data_vfid, &vacuum_Data_vpid, 0, 1) < 1)
     {
       assert (false);
       return ER_FAILED;
@@ -2500,24 +2520,32 @@ vacuum_load_data_from_disk (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid)
  * vfid (in)	 : File identifier.
  */
 int
-vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p, VFID * vfid)
+vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p)
 {
   VACUUM_DROPPED_FILES_PAGE *page = NULL;
   VPID vpid;
   INT16 page_count;
 #if !defined (NDEBUG)
   VACUUM_TRACK_DROPPED_FILES *track_head = NULL, *track_tail = NULL;
-  VACUUM_TRACK_DROPPED_FILES *track_new = NULL;
+  VACUUM_TRACK_DROPPED_FILES *track_new = NULL, *save_next = NULL;
 #endif
 
-  assert (vfid != NULL);
+  assert_release (!VFID_ISNULL (&vacuum_Dropped_files_vfid));
 
-  /* Save vfid */
-  VFID_COPY (&vacuum_Dropped_files_vfid, vfid);
+  if (vacuum_Dropped_files_loaded)
+    {
+      /* Already loaded */
+      assert_release (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
+#if !defined (NDEBUG)
+      assert_release (vacuum_Track_dropped_files != NULL);
+#endif
+      return NO_ERROR;
+    }
 
   /* Save first page vpid. */
-  if (file_find_nthpages (thread_p, vfid, &vacuum_Dropped_files_vpid, 0, 1) <
-      1)
+  if (file_find_nthpages
+      (thread_p, &vacuum_Dropped_files_vfid, &vacuum_Dropped_files_vpid, 0,
+       1) < 1)
     {
       assert (false);
       return ER_FAILED;
@@ -2525,7 +2553,7 @@ vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p, VFID * vfid)
   assert (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
 
   /* Save total count. */
-  vacuum_Dropped_files_count = 0;
+  assert_release (vacuum_Dropped_files_count == 0);
   VPID_COPY (&vpid, &vacuum_Dropped_files_vpid);
   for (; !VPID_ISNULL (&vpid);)
     {
@@ -2549,7 +2577,12 @@ vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p, VFID * vfid)
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
 		  1, VACUUM_TRACK_DROPPED_FILES_SIZE);
-	  /* TODO: Free already allocated tracked pages */
+	  for (track_new = track_head; track_new != NULL;
+	       track_new = save_next)
+	    {
+	      save_next = track_new->next_tracked_page;
+	      free_and_init (track_new);
+	    }
 	  vacuum_unfix_dropped_entries_page (thread_p, page);
 	  return ER_OUT_OF_VIRTUAL_MEMORY;
 	}
@@ -2573,6 +2606,7 @@ vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p, VFID * vfid)
   vacuum_Track_dropped_files = track_head;
 #endif
 
+  vacuum_Dropped_files_loaded = true;
   return NO_ERROR;
 }
 
@@ -2647,8 +2681,8 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
 		     "data unflushed lsa (%lld, %d).",
 		     (long long int) flush_to_lsa->pageid,
 		     (int) flush_to_lsa->pageid,
-		     (long long int) vacuum_Data_oldest_not_flushed_lsa.pageid,
-		     (int) vacuum_Data_oldest_not_flushed_lsa.offset);
+		     (long long int) vacuum_Data_oldest_not_flushed_lsa.
+		     pageid, (int) vacuum_Data_oldest_not_flushed_lsa.offset);
       if (!is_vacuum_data_locked)
 	{
 	  VACUUM_UNLOCK_DATA ();
@@ -2668,7 +2702,7 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
 	{
 	  VACUUM_UNLOCK_DATA ();
 	}
-      
+
       assert (false);
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
       return ER_FAILED;
@@ -2827,18 +2861,18 @@ vacuum_set_vacuum_data_lsa (THREAD_ENTRY * thread_p,
       vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
 		     "VACUUM: Updated vacuum data's oldest unflushed lsa to "
 		     "(%lld, %d).",
-		     (long long int) vacuum_Data_oldest_not_flushed_lsa.pageid,
-		     (int) vacuum_Data_oldest_not_flushed_lsa.offset);
+		     (long long int) vacuum_Data_oldest_not_flushed_lsa.
+		     pageid, (int) vacuum_Data_oldest_not_flushed_lsa.offset);
     }
   else
     {
       vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
 		     "VACUUM: No need to update vacuum data oldest unflushed "
 		     "lsa. It already is (%lld, %d).",
-		     (long long int) vacuum_Data_oldest_not_flushed_lsa.pageid,
-		     (int) vacuum_Data_oldest_not_flushed_lsa.offset);
-      assert (LSA_LT (&vacuum_Data_oldest_not_flushed_lsa,
-		      &vacuum_Data->crt_lsa));
+		     (long long int) vacuum_Data_oldest_not_flushed_lsa.
+		     pageid, (int) vacuum_Data_oldest_not_flushed_lsa.offset);
+      assert (LSA_LT
+	      (&vacuum_Data_oldest_not_flushed_lsa, &vacuum_Data->crt_lsa));
     }
 }
 
@@ -3653,6 +3687,33 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 
   assert (tdes != NULL);
 
+  if (!vacuum_Dropped_files_loaded)
+    {
+      /* Normally, dropped files are loaded after recovery, in order to
+       * provide a consistent state of its pages. Actually, the consistent
+       * state should be reached after all run postpone and compensate undo
+       * records are applied.
+       * However, this may be called from log_recovery_finish_all_postpone
+       * or from log_recovery_undo. Because there is no certain code that is
+       * executed after applying redo and before calling these function, the
+       * dropped files are loaded when needed.
+       */
+      /* This must be recover, otherwise the files should have been loaded. */
+      assert (!LOG_ISRESTARTED ());
+      if (vacuum_load_dropped_files_from_disk (thread_p) != NO_ERROR)
+	{
+	  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_DROPPED_FILES
+			 | VACUUM_ER_LOG_RECOVERY,
+			 "VACUUM: Failed to load dropped files during "
+			 "recovery!");
+	  assert_release (false);
+	  return ER_FAILED;
+	}
+    }
+
+  assert_release (!VFID_ISNULL (&vacuum_Dropped_files_vfid));
+  assert_release (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
+
   addr.vfid = NULL;
   addr.offset = -1;
 
@@ -4314,9 +4375,22 @@ vacuum_cleanup_dropped_files (THREAD_ENTRY * thread_p)
     (VACUUM_TRACK_DROPPED_FILES *) vacuum_Track_dropped_files;
 #endif
 
+  if (!LOG_ISRESTARTED ())
+    {
+      /* Skip cleanup during recovery */
+      vacuum_er_log (VACUUM_ER_LOG_RECOVERY | VACUUM_ER_LOG_DROPPED_FILES,
+		     "VACUUM: Skip cleanup during recovery.");
+      return NO_ERROR;
+    }
+
+  assert_release (!VFID_ISNULL (&vacuum_Dropped_files_vfid));
+  assert_release (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
+
   if (vacuum_Dropped_files_count == 0)
     {
       /* Nothing to clean */
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		     "VACUUM: Cleanup skipped, no current entries.");
       return NO_ERROR;
     }
 
@@ -4476,6 +4550,8 @@ vacuum_find_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid)
       /* No dropped files */
       return false;
     }
+
+  assert_release (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
 
   /* Search for dropped file in all pages. */
   VPID_COPY (&vpid, &vacuum_Dropped_files_vpid);

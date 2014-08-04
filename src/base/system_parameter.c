@@ -4624,7 +4624,7 @@ static SYSPRM_PARAM prm_Def[] = {
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},
   {PRM_NAME_DISABLE_VACUUM,
-   (PRM_FOR_SERVER | PRM_FOR_CLIENT | PRM_FORCE_SERVER),
+   (PRM_FOR_SERVER | PRM_HIDDEN),
    PRM_BOOLEAN,
    (void *) &prm_disable_vacuum_flag,
    (void *) &prm_disable_vacuum_default,
