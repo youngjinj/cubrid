@@ -4168,9 +4168,6 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
   /* LK_FORCE_ZERO_WAIT doesn't set error when deadlock occurrs */
   old_wait_msecs = xlogtb_reset_wait_msecs (thread_p, LK_FORCE_ZERO_WAIT);
 
-  /* backup previous error */
-  er_stack_push ();
-
   found = HEAP_FINDSPACE_NOTFOUND;
   notfound_cnt = 0;
   best_array_index = 0;
@@ -4256,21 +4253,11 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
 	  switch (er_errid ())
 	    {
 	    case NO_ERROR:
-	      /*
-	       * may return with LOCK_RESUMED_TIMEOUT, but it's not an error
+	      /* In case of latch-timeout in pgbuf_fix,
+	       * the timeout error(ER_LK_PAGE_TIMEOUT) is not set,
+	       * because lock wait time is LK_FORCE_ZERO_WAIT.
+	       * So we will just continue to find another page.
 	       */
-	      break;
-
-	    case ER_LK_PAGE_TIMEOUT:
-	      /*
-	       * The page is busy, continue instead of waiting.
-	       */
-	      er_log_debug (ARG_FILE_LINE,
-			    "heap_stats_find_page_in_bestspace: "
-			    "heap_scan_pb_lock_and_fetch() "
-			    "vpid {pagid %d volid %d} "
-			    "returned ER_LK_PAGE_TIMEOUT",
-			    best.vpid.pageid, best.vpid.volid);
 	      break;
 
 	    case ER_INTERRUPTED:
@@ -4375,9 +4362,6 @@ heap_stats_find_page_in_bestspace (THREAD_ENTRY * thread_p,
    * Reset back the timeout value of the transaction
    */
   (void) xlogtb_reset_wait_msecs (thread_p, old_wait_msecs);
-
-  /* restore previous error */
-  er_stack_pop ();
 
   return found;
 }
@@ -4693,6 +4677,8 @@ heap_stats_sync_bestspace (THREAD_ENTRY * thread_p, const HFID * hfid,
 
   tsc_getticks (&start_tick);
 #endif /* CUBRID_DEBUG */
+
+  mnt_heap_stats_sync_bestspace (thread_p);
 
   min_freespace = heap_stats_get_min_freespace (heap_hdr);
 

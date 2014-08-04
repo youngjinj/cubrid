@@ -19461,7 +19461,7 @@ btree_update (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * old_key,
       }
   }
 
-#if !defined(NDEBUG)
+#if 0
   {
     BTREE_CHECKSCAN bt_checkscan;
     DISK_ISVALID isvalid = DISK_VALID;
