@@ -4857,8 +4857,8 @@ disk_id_dealloc (THREAD_ENTRY * thread_p, INT16 volid, INT32 at_pg1,
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_PAGE_LATCH_ABORTED, 2, vpid.volid, vpid.pageid);
 
-	  /* FIXME: remove it. temporarily added for debugging */
-	  assert (0);
+	      /* FIXME: remove it. temporarily added for debugging */
+	      assert (0);
 
 	      break;
 	    }
@@ -6589,7 +6589,7 @@ disk_rv_alloctable_bitmap_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
   /* TODO: Remove this code when double deallocations issue is
    *       fixed.
    */
-  int already_cleared = 0;		/* <-- */
+  int already_cleared = 0;	/* <-- */
 
   (void) pgbuf_check_page_ptype (thread_p, rcv->pgptr, PAGE_VOLBITMAP);
 
@@ -6617,23 +6617,24 @@ disk_rv_alloctable_bitmap_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 	       *       fixed. This should only call:
 	       *       disk_bit_clear (at_chptr, i);
 	       */
-	      if (!disk_bit_is_set (at_chptr, i))	    /* <-- */
-		{			    /* <-- */
-		  already_cleared++;	    /* <-- */
-		}			    /* <-- */
-	      else			    /* <-- */
-		{			    /* <-- */
+	      if (!disk_bit_is_set (at_chptr, i))	/* <-- */
+		{		/* <-- */
+		  already_cleared++;	/* <-- */
+		}		/* <-- */
+	      else		/* <-- */
+		{		/* <-- */
 		  disk_bit_clear (at_chptr, i);
-		}			    /* <-- */
+		}		/* <-- */
 	    }
 	}
       bit = 0;
     }
   /* TODO: Remove this code when double deallocations issue is
    *       fixed. The number is passed to volume header recovery so update
-   *	   it to avoid header corruption.
+   *       it to avoid header corruption.
+   * PLEASE ALSO FIX disk_rv_alloctable_vhdr_only ().
    */
-  mtb->num -= already_cleared;		    /* <-- */
+  mtb->num -= already_cleared;	/* <-- */
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
 
 
@@ -6659,6 +6660,16 @@ disk_rv_alloctable_vhdr_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
   mtb = (DISK_RECV_MTAB_BITS_WITH *) rcv->data;
 
   assert (mtb != NULL);
+
+  /* TODO: Remove this code when double deallocations issue is fixed. 
+   *       The number is passed to volume header recovery so update
+   *       it to avoid header corruption.
+   */
+  if (mtb->num == 0)
+    {
+      return NO_ERROR;
+    }
+
   assert (mtb->num > 0);
 
   if (mode == DISK_ALLOCTABLE_SET)
