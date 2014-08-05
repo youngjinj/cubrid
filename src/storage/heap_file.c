@@ -28242,6 +28242,15 @@ heap_mvcc_get_version_for_delete (THREAD_ENTRY * thread_p,
     }
 
   COPY_OID (&latest_version, oid);
+  if (!HFID_EQ (&scan_cache->hfid, hfid)
+      || OID_ISNULL (&scan_cache->class_oid))
+    {
+      if (heap_scancache_reset_modify (thread_p, scan_cache, hfid,
+				       class_oid) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
   scan_code =
     heap_mvcc_get_latest_version_for_delete (thread_p, hfid, &latest_version,
 					     scan_cache, recdes, ispeeking,

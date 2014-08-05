@@ -673,7 +673,8 @@ static int btree_check_duplicate_oid (THREAD_ENTRY * thread_p,
 				      VPID * ovfl_vpid);
 static int btree_find_oid_from_leaf (BTID_INT * btid, RECDES * rec_p,
 				     int oid_list_offset, OID * oid,
-				     MVCC_BTREE_OP_ARGUMENTS * mvcc_args);
+				     MVCC_BTREE_OP_ARGUMENTS * mvcc_args,
+				     MVCC_REC_HEADER * mvcc_local_rec_header);
 static int btree_find_oid_from_ovfl (RECDES * rec_p, OID * oid, int oid_size,
 				     MVCC_BTREE_OP_ARGUMENTS * mvcc_args);
 static int btree_leaf_get_vpid_for_overflow_oids (RECDES * rec, VPID * vpid);
@@ -9936,7 +9937,7 @@ btree_delete_from_leaf (THREAD_ENTRY * thread_p, bool * key_deleted,
 
   oid_offset =
     btree_find_oid_from_leaf (btid, &leaf_copy_rec, oid_list_offset, oid,
-			      mvcc_args);
+			      mvcc_args, NULL);
 
   if (oid_offset != NOT_FOUND)
     {
@@ -14255,7 +14256,8 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added_deleted,
       int last_oid_offset = 0;
 
       assert (mvcc_Enabled == true);
-      oid_offset = btree_find_oid_from_leaf (btid, &rec, offset, oid, NULL);
+      oid_offset = btree_find_oid_from_leaf (btid, &rec, offset, oid, NULL,
+					     NULL);
 
       if (BTREE_IS_UNIQUE (btid->unique_pk))
 	{
@@ -14828,7 +14830,7 @@ btree_check_duplicate_oid (THREAD_ENTRY * thread_p, BTID_INT * btid,
     }
 
   if (btree_find_oid_from_leaf (btid, leaf_rec_p, oid_list_offset,
-				oid, NULL) != NOT_FOUND)
+				oid, NULL, NULL) != NOT_FOUND)
     {
       redo_page = leaf_page;
       redo_slot_id = slot_id;
@@ -14896,7 +14898,8 @@ redo_log:
 static int
 btree_find_oid_from_leaf (BTID_INT * btid, RECDES * rec_p,
 			  int oid_list_offset, OID * oid,
-			  MVCC_BTREE_OP_ARGUMENTS * mvcc_args)
+			  MVCC_BTREE_OP_ARGUMENTS * mvcc_args,
+			  MVCC_REC_HEADER * p_mvcc_rec_header)
 {
   OR_BUF buf;
   char *save_buf_ptr = NULL;
@@ -14980,6 +14983,12 @@ btree_find_oid_from_leaf (BTID_INT * btid, RECDES * rec_p,
 	    {
 	      /* Save insert MVCCID */
 	      mvcc_args->insert_mvccid = MVCC_GET_INSID (&mvcc_header);
+	    }
+
+	  if (p_mvcc_rec_header)
+	    {
+	      memcpy (p_mvcc_rec_header, &mvcc_header,
+		      sizeof (MVCC_REC_HEADER));
 	    }
 	  return CAST_BUFLEN (save_buf_ptr - rec_p->data);
 	}
@@ -17699,6 +17708,8 @@ btree_insert (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * key,
   bool old_check_interrupt;
   int retry_btree_no_space = 0;
   BTREE_SEARCH result;
+  MVCC_SNAPSHOT *mvcc_snapshot = NULL;	/* used in RR or SERIALIZABLE */
+  MVCC_REC_HEADER mvcc_local_rec_header;
 
   assert (key != NULL);
 
@@ -18818,6 +18829,38 @@ curr_key_locking:
 
 	  lock_unlock_object (thread_p, &saved_C_oid, &saved_C_class_oid,
 			      current_lock, true);
+
+	  if (result == BTREE_KEY_NOTFOUND)
+	    {
+	      /* other previous insert has rollback or has delete and commit */
+	      if ((logtb_find_current_isolation (thread_p)
+		   >= TRAN_REPEATABLE_READ)
+		  && (btree_find_oid_from_leaf (&btid_int, &peek_rec, offset,
+						&saved_C_oid, NULL,
+						&mvcc_local_rec_header)
+		      != NOT_FOUND))
+		{
+		  if (mvcc_snapshot == NULL)
+		    {
+		      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+		    }
+
+		  if ((mvcc_snapshot)->snapshot_fnc (thread_p,
+						     &mvcc_local_rec_header,
+						     mvcc_snapshot))
+		    {
+		      /* can't have 2 OID visible objects in unique, as follow:
+		       *  1. the previous locked object - modified by other
+		       *  transaction
+		       *  2. the current inserted OID
+		       */
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_MVCC_SERIALIZABLE_CONFLICT, 0);
+
+		      goto error;
+		    }
+		}
+	    }
 	  curr_lock_flag = false;
 	  OID_SET_NULL (&saved_C_oid);
 	  OID_SET_NULL (&saved_C_class_oid);
@@ -25736,7 +25779,7 @@ btree_find_key_from_leaf (THREAD_ENTRY * thread_p,
 			 NULL);
       ovfl_vpid = leaf_pnt.ovfl;
 
-      if (btree_find_oid_from_leaf (btid, &rec, offset, oid, NULL)
+      if (btree_find_oid_from_leaf (btid, &rec, offset, oid, NULL, NULL)
 	  != NOT_FOUND)
 	{
 	  /* key will be cleared by caller */
