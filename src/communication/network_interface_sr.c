@@ -8416,7 +8416,8 @@ sbtree_get_key_type (THREAD_ENTRY * thread_p, unsigned int rid,
       if (reply_data == NULL)
 	{
 	  error = ER_OUT_OF_VIRTUAL_MEMORY;
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, reply_data_size);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1,
+		  reply_data_size);
 	  reply_data_size = 0;
 	}
       else
@@ -10510,7 +10511,24 @@ void
 slogtb_invalidate_mvcc_snapshot (THREAD_ENTRY * thread_p, unsigned int rid,
 				 char *request, int reqlen)
 {
-  xlogtb_invalidate_snapshot_data (thread_p);
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = NULL;
+  int err;
+
+  err = xlogtb_invalidate_snapshot_data (thread_p);
+
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  (void) or_pack_int (reply, err);
+
+  if (err != NO_ERROR)
+    {
+      return_error_to_client (thread_p, rid);
+    }
+
+  css_send_data_to_client (thread_p->conn_entry, rid,
+			   OR_ALIGNED_BUF_START (a_reply),
+			   OR_ALIGNED_BUF_SIZE (a_reply));
 }
 
 /*

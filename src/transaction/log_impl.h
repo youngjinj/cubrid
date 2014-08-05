@@ -2322,7 +2322,7 @@ extern int logtb_find_client_type (int tran_index);
 extern char *logtb_find_client_name (int tran_index);
 extern void logtb_set_user_name (int tran_index, const char *client_name);
 extern void logtb_set_current_user_name (THREAD_ENTRY * thread_p,
-					 const char * client_name);
+					 const char *client_name);
 extern char *logtb_find_client_hostname (int tran_index);
 extern int logtb_find_client_name_host_pid (int tran_index,
 					    char **client_prog_name,
@@ -2391,7 +2391,7 @@ extern int logtb_release_mvcc_info (THREAD_ENTRY * thread_p);
 
 extern MVCCID logtb_find_current_mvccid (THREAD_ENTRY * thread_p);
 extern MVCCID logtb_get_current_mvccid (THREAD_ENTRY * thread_p);
-extern void xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p);
+extern int xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p);
 
 extern bool logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);
 extern bool logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid);

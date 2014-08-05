@@ -4238,7 +4238,7 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
  * return	 : Void.
  * thread_p (in) : Thread entry.
  */
-void
+int
 xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
 {
   /* Get transaction descriptor */
@@ -4248,7 +4248,7 @@ xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
       || tdes->isolation >= TRAN_REPEATABLE_READ)
     {
       /* Nothing to do */
-      return;
+      return NO_ERROR;
     }
   if (tdes->mvcc_info->mvcc_snapshot.valid)
     {
@@ -4257,7 +4257,7 @@ xlogtb_invalidate_snapshot_data (THREAD_ENTRY * thread_p)
       logtb_mvcc_reset_count_optim_state (thread_p);
     }
 
-  return;
+  return NO_ERROR;
 }
 
 /*
