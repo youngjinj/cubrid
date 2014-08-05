@@ -63,7 +63,7 @@
 #error "Error __WORDSIZE"
 #endif
 #else
-#define	DEFAULT_SERVER_MAX_SIZE	"512M"
+#define	DEFAULT_SERVER_MAX_SIZE	"0"
 #endif
 
 #define	DEFAULT_SERVER_HARD_LIMIT	"1G"
