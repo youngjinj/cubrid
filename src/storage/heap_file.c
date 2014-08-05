@@ -343,7 +343,6 @@ static int rv;
 		  ER_PAGE_LATCH_ABORTED, 2, home_vpid.volid,  \
 		  home_vpid.pageid);  \
 		  error_code = ER_PAGE_LATCH_ABORTED; \
-		  assert (0); \
 		  } \
 	      } \
 	  } \
@@ -399,7 +398,6 @@ static int rv;
 			  ER_PAGE_LATCH_ABORTED, 2, (home_vpid).volid,  \
 			  (home_vpid).pageid);  \
 			error_code = ER_PAGE_LATCH_ABORTED; \
-			assert (0); \
 		      } \
 		  }	\
 	      } \
@@ -458,7 +456,6 @@ static int rv;
 				  ER_PAGE_LATCH_ABORTED, 2, \
 				  (home_vpid).volid, (home_vpid).pageid);	\
 			  error_code = ER_PAGE_LATCH_ABORTED; \
-			  assert (0); \
 			} \
 		    } \
 		}	\
@@ -486,7 +483,6 @@ static int rv;
 			      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, \
 				      ER_PAGE_LATCH_ABORTED, 2, (fwd_vpid).volid, \
 				      (fwd_vpid).pageid); \
-			      assert (0); \
 			    } \
 			} \
 		    } \
@@ -8307,8 +8303,9 @@ try_again:
 	RECDES *new_recdes = NULL;
 	bool is_home_insert;
 
-	error_code = heap_get_mvcc_rec_header_from_overflow (forward_addr.pgptr,
-							     &rec_header, NULL);
+	error_code =
+	  heap_get_mvcc_rec_header_from_overflow (forward_addr.pgptr,
+						  &rec_header, NULL);
 	if (error_code != NO_ERROR)
 	  {
 	    goto error;
@@ -8760,7 +8757,7 @@ try_again:
 	  {
 	    /* Physically delete the previously inserted record */
 	    (void) heap_delete_internal (thread_p, hfid, class_oid,
-				         &mvcc_next_oid, scan_cache,
+					 &mvcc_next_oid, scan_cache,
 					 is_home_insert, true);
 
 	    if (is_big_length)
@@ -9585,12 +9582,12 @@ try_again:
 	  (void) pgbuf_check_page_ptype (thread_p, addr.pgptr, PAGE_HEAP);
 
 	  /* Find the contents of the record for MVCC delete purposes */
-	 if (heap_get_mvcc_rec_header_from_overflow (forward_addr.pgptr,
-						     &recdes_header, NULL)
-	     != NO_ERROR)
-	   {
-	     goto error;
-	   }
+	  if (heap_get_mvcc_rec_header_from_overflow (forward_addr.pgptr,
+						      &recdes_header, NULL)
+	      != NO_ERROR)
+	    {
+	      goto error;
+	    }
 
 	  assert (or_mvcc_header_size_from_flags (recdes_header.mvcc_flag)
 		  == OR_MVCC_MAX_HEADER_SIZE);
@@ -12150,7 +12147,6 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, forward_vpid.volid,
 			      forward_vpid.pageid);
-		      assert (0);
 		    }
 		  scan = S_ERROR;
 		  goto end;
@@ -21839,7 +21835,8 @@ heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
     }
   else
     {
-      if (heap_get_mvcc_rec_header_from_overflow (rcv->pgptr, &mvcc_rec_header,
+      if (heap_get_mvcc_rec_header_from_overflow (rcv->pgptr,
+						  &mvcc_rec_header,
 						  &peek_recdes) != NO_ERROR)
 	{
 	  return ER_FAILED;
@@ -21867,7 +21864,8 @@ heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
       if (heap_set_mvcc_rec_header_on_overflow (rcv->pgptr, &mvcc_rec_header)
 	  != NO_ERROR)
 	{
-	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR,
+		  0);
 	  return ER_FAILED;
 	}
     }
@@ -21889,7 +21887,8 @@ heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 			      OR_GET_OFFSET_SIZE (peek_recdes.data))
 	  != NO_ERROR)
 	{
-	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR,
+		  0);
 	  return ER_FAILED;
 	}
       memcpy (recdes.data + recdes.length,
@@ -21962,7 +21961,8 @@ heap_rv_mvcc_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
     }
   else
     {
-      if (heap_get_mvcc_rec_header_from_overflow (rcv->pgptr, &mvcc_rec_header,
+      if (heap_get_mvcc_rec_header_from_overflow (rcv->pgptr,
+						  &mvcc_rec_header,
 						  &peek_recdes) != NO_ERROR)
 	{
 	  return ER_FAILED;
@@ -25475,7 +25475,6 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
 			      vpid.pageid);
-		      assert (0);
 		    }
 
 		  goto error;
@@ -25734,7 +25733,6 @@ try_again:
 			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 				  ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
 				  vpid.pageid);
-			  assert (0);
 			}
 
 		      goto error;
@@ -25843,7 +25841,6 @@ try_again:
 			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 				  ER_PAGE_LATCH_ABORTED, 2, vpid.volid,
 				  vpid.pageid);
-			  assert (0);
 			}
 
 		      goto error;
@@ -26931,7 +26928,6 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, forward_vpid.volid,
 			      forward_vpid.pageid);
-		      assert (0);
 		    }
 		  return S_ERROR;
 		}
@@ -27288,7 +27284,6 @@ try_again:
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_PAGE_LATCH_ABORTED, 2, forward_vpid.volid,
 			      forward_vpid.pageid);
-		      assert (0);
 		    }
 		  return S_ERROR;
 		}

@@ -100,8 +100,8 @@ extern int xlocator_assign_oid (THREAD_ENTRY * thread_p, const HFID * hfid,
 				OID * perm_oid, int expected_length,
 				OID * class_oid, const char *classname);
 extern int xlocator_fetch (THREAD_ENTRY * thrd, OID * oid, int chn, LOCK lock,
-			   OID * class_oid, int class_chn, int prefetching,
-			   LC_COPYAREA ** fetch_area);
+			   bool retain_lock, OID * class_oid, int class_chn,
+			   int prefetching, LC_COPYAREA ** fetch_area);
 extern int xlocator_get_class (THREAD_ENTRY * thread_p, OID * class_oid,
 			       int class_chn, const OID * oid, LOCK lock,
 			       int prefetching, LC_COPYAREA ** fetch_area);

@@ -1083,7 +1083,6 @@ pgbuf_fix_with_retry (THREAD_ENTRY * thread_p, const VPID * vpid, int newpg,
 	{
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		  ER_PAGE_LATCH_ABORTED, 2, vpid->volid, vpid->pageid);
-	  assert (0);
 	  break;
 	}
     }

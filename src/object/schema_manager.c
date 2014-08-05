@@ -13671,7 +13671,8 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
       return error;
     }
 
-  error = au_fetch_class (classop, &class_, AU_FETCH_READ, AU_INDEX);
+  error = au_fetch_class_by_classmop (classop, &class_, AU_FETCH_SCAN,
+				      AU_INDEX);
   if (error != NO_ERROR)
     {
       return error;

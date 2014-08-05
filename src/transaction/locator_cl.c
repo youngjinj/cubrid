@@ -134,7 +134,8 @@ static void locator_cache_lock (MOP mop, MOBJ ignore_notgiven_object,
 static void locator_cache_lock_set (MOP mop, MOBJ ignore_notgiven_object,
 				    void *xlockset);
 static LOCK locator_to_prefetched_lock (LOCK class_lock);
-static int locator_lock (MOP mop, LOCK lock, LC_OBJTYPE isclass);
+static int locator_lock (MOP mop, LC_OBJTYPE isclass,
+			 LOCK lock, bool retain_lock);
 static int locator_lock_class_of_instance (MOP inst_mop, MOP * class_mop,
 					   LOCK lock);
 static int locator_lock_and_doesexist (MOP mop, LOCK lock,
@@ -615,8 +616,9 @@ locator_cache_lock_set (MOP mop, MOBJ ignore_notgiven_object, void *xlockset)
  * return: NO_ERROR if all OK, ER status otherwise
  *
  *   mop(in): Mop of the object to lock
- *   lock(in): Lock to acquire
  *   isclass(in): LC_OBJTYPE of mop to be locked
+ *   lock(in): Lock to acquire
+ *   retain_lock(in): flag to retain lock after fetching the class
  *
  * Note: The object associated with the given MOP is locked with the
  *              desired lock. The object locator on the server is not invoked
@@ -627,7 +629,7 @@ locator_cache_lock_set (MOP mop, MOBJ ignore_notgiven_object, void *xlockset)
  *              may be prefetched.
  */
 static int
-locator_lock (MOP mop, LOCK lock, LC_OBJTYPE isclass)
+locator_lock (MOP mop, LC_OBJTYPE isclass, LOCK lock, bool retain_lock)
 {
   LOCATOR_CACHE_LOCK cache_lock;	/* Cache the lock */
   OID *oid;			/* OID of object to lock                  */
@@ -809,7 +811,7 @@ locator_lock (MOP mop, LOCK lock, LC_OBJTYPE isclass)
     {
       is_prefetch = false;
     }
-  if (locator_fetch (oid, chn, lock, class_oid, class_chn,
+  if (locator_fetch (oid, chn, lock, retain_lock, class_oid, class_chn,
 		     is_prefetch, &fetch_area) != NO_ERROR)
     {
       error_code = ER_FAILED;
@@ -919,7 +921,8 @@ locator_lock_set (int num_mops, MOP * vector_mop, LOCK reqobj_inst_lock,
   if (lockset == NULL)
     {
       /* Out of space... Try single object */
-      return locator_lock (vector_mop[0], reqobj_inst_lock, LC_INSTANCE);
+      return locator_lock (vector_mop[0], LC_INSTANCE,
+			   reqobj_inst_lock, false);
     }
 
   reqobjs = lockset->objects;
@@ -2277,6 +2280,11 @@ locator_fetch_mode_to_lock (DB_FETCH_MODE purpose, LC_OBJTYPE type)
       lock = NULL_LOCK;
       break;
 
+    case DB_FETCH_SCAN:
+      assert (type == LC_CLASS);
+      lock = S_LOCK;
+      break;
+
     default:
 #if defined(CUBRID_DEBUG)
       er_log_debug (ARG_FILE_LINE,
@@ -2330,7 +2338,7 @@ locator_get_cache_coherency_number (MOP mop)
     }
 
   lock = locator_fetch_mode_to_lock (DB_FETCH_READ, isclass);
-  if (locator_lock (mop, lock, isclass) != NO_ERROR)
+  if (locator_lock (mop, isclass, lock, false) != NO_ERROR)
     {
       return NULL_CHN;
     }
@@ -2390,7 +2398,7 @@ locator_fetch_object (MOP mop, DB_FETCH_MODE purpose)
     }
 
   lock = locator_fetch_mode_to_lock (purpose, isclass);
-  if (locator_lock (mop, lock, isclass) != NO_ERROR)
+  if (locator_lock (mop, isclass, lock, false) != NO_ERROR)
     {
       return NULL;
     }
@@ -2429,6 +2437,7 @@ MOBJ
 locator_fetch_class (MOP class_mop, DB_FETCH_MODE purpose)
 {
   LOCK lock;			/* Lock to acquire for the above purpose */
+  bool retain_lock;
   MOBJ class_obj;		/* The desired class                     */
 
   if (class_mop == NULL)
@@ -2456,7 +2465,8 @@ locator_fetch_class (MOP class_mop, DB_FETCH_MODE purpose)
 #endif /* CUBRID_DEBUG */
 
   lock = locator_fetch_mode_to_lock (purpose, LC_CLASS);
-  if (locator_lock (class_mop, lock, LC_CLASS) != NO_ERROR)
+  retain_lock = (purpose == DB_FETCH_SCAN);
+  if (locator_lock (class_mop, LC_CLASS, lock, retain_lock) != NO_ERROR)
     {
       return NULL;
     }
@@ -2553,7 +2563,7 @@ locator_fetch_instance (MOP mop, DB_FETCH_MODE purpose)
 
   inst = NULL;
   lock = locator_fetch_mode_to_lock (purpose, LC_INSTANCE);
-  if (locator_lock (mop, lock, LC_INSTANCE) != NO_ERROR)
+  if (locator_lock (mop, LC_INSTANCE, lock, false) != NO_ERROR)
     {
       return NULL;
     }
@@ -3143,7 +3153,7 @@ locator_find_class_by_oid (MOP * class_mop, const char *classname,
 	  return found;
 	}
 
-      error_code = locator_lock (*class_mop, lock, LC_CLASS);
+      error_code = locator_lock (*class_mop, LC_CLASS, lock, false);
       if (error_code != NO_ERROR)
 	{
 	  /*
@@ -3240,7 +3250,7 @@ locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
     }
   else
     {
-      if (locator_lock (*class_mop, lock, LC_CLASS) != NO_ERROR)
+      if (locator_lock (*class_mop, LC_CLASS, lock, false) != NO_ERROR)
 	{
 	  *class_mop = NULL;
 	  found = LC_CLASSNAME_ERROR;
@@ -5849,7 +5859,8 @@ locator_add_class (MOBJ class_obj, const char *classname)
   else
     {
       /* Fetch the rootclass object */
-      if (locator_lock (sm_Root_class_mop, IX_LOCK, LC_CLASS) != NO_ERROR)
+      if (locator_lock (sm_Root_class_mop, LC_CLASS, IX_LOCK, false) !=
+	  NO_ERROR)
 	{
 	  /* Unable to lock the Rootclass. Undo the reserve of classname */
 	  (void) locator_delete_class_name (classname);
@@ -5857,8 +5868,8 @@ locator_add_class (MOBJ class_obj, const char *classname)
 	}
     }
 
-  class_mop =
-    ws_cache_with_oid (class_obj, &class_temp_oid, sm_Root_class_mop);
+  class_mop = ws_cache_with_oid (class_obj, &class_temp_oid,
+				 sm_Root_class_mop);
   if (class_mop != NULL)
     {
       ws_dirty (class_mop);

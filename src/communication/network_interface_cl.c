@@ -201,20 +201,22 @@ length_string_with_null_padding (int len)
  *   oidp(in):
  *   chn(in):
  *   lock(in):
+ *   retain_lock(in):
  *   class_oid(in):
  *   class_chn(in):
  *   prefetch(in):
  *   fetch_copyarea(in):
  */
 int
-locator_fetch (OID * oidp, int chn, LOCK lock, OID * class_oid,
-	       int class_chn, int prefetch, LC_COPYAREA ** fetch_copyarea)
+locator_fetch (OID * oidp, int chn, LOCK lock, bool retain_lock,
+	       OID * class_oid, int class_chn, int prefetch,
+	       LC_COPYAREA ** fetch_copyarea)
 {
 #if defined(CS_MODE)
   int success = ER_FAILED;
   int req_error;
   char *ptr;
-  OR_ALIGNED_BUF ((OR_OID_SIZE * 2) + (OR_INT_SIZE * 4)) a_request;
+  OR_ALIGNED_BUF ((OR_OID_SIZE * 2) + (OR_INT_SIZE * 5)) a_request;
   char *request;
   OR_ALIGNED_BUF (NET_COPY_AREA_SENDRECV_SIZE + OR_INT_SIZE) a_reply;
   char *reply;
@@ -225,6 +227,7 @@ locator_fetch (OID * oidp, int chn, LOCK lock, OID * class_oid,
   ptr = or_pack_oid (request, oidp);
   ptr = or_pack_int (ptr, chn);
   ptr = or_pack_lock (ptr, lock);
+  ptr = or_pack_int (ptr, retain_lock);
   ptr = or_pack_oid (ptr, class_oid);
   ptr = or_pack_int (ptr, class_chn);
   ptr = or_pack_int (ptr, prefetch);
@@ -252,8 +255,8 @@ locator_fetch (OID * oidp, int chn, LOCK lock, OID * class_oid,
 
   ENTER_SERVER ();
 
-  success = xlocator_fetch (NULL, oidp, chn, lock, class_oid, class_chn,
-			    prefetch, fetch_copyarea);
+  success = xlocator_fetch (NULL, oidp, chn, lock, retain_lock, class_oid,
+			    class_chn, prefetch, fetch_copyarea);
 
   EXIT_SERVER ();
 
@@ -11135,8 +11138,16 @@ cvacuum (int num_classes, OID * class_oids)
 
   return err;
 #else /* !CS_MODE */
+  int err;
+
+  ENTER_SERVER ();
+
   /* Call server function for vacuuming classes */
-  return xvacuum (NULL, num_classes, class_oids);
+  err = xvacuum (NULL, num_classes, class_oids);
+
+  EXIT_SERVER ();
+
+  return err;
 #endif /* CS_MODE */
 }
 

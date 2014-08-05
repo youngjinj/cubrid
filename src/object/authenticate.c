@@ -5760,6 +5760,9 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
 	case AU_FETCH_READ:
 	  class_ = (SM_CLASS *) locator_fetch_class (classmop, DB_FETCH_READ);
 	  break;
+	case AU_FETCH_SCAN:
+	  class_ = (SM_CLASS *) locator_fetch_class (classmop, DB_FETCH_SCAN);
+	  break;
 	case AU_FETCH_WRITE:
 	  class_ =
 	    (SM_CLASS *) locator_fetch_class (classmop, DB_FETCH_WRITE);
@@ -5777,6 +5780,10 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
 	  class_ =
 	    (SM_CLASS *) locator_fetch_class_of_instance (op, &classmop,
 							  DB_FETCH_READ);
+	  break;
+	case AU_FETCH_SCAN:
+	  /* AU_FETCH_SCAN is allowed only for class mops. */
+	  assert (0);
 	  break;
 	case AU_FETCH_WRITE:
 	  class_ =
@@ -6075,6 +6082,11 @@ fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE fetchmode)
 	case AU_FETCH_UPDATE:
 	  obj = vid_upd_instance (op);
 	  break;
+	case AU_FETCH_SCAN:
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OBJ_INVALID_ARGUMENTS,
+		  0);
+	  assert (0);
+	  break;
 	}
     }
   else
@@ -6089,6 +6101,11 @@ fetch_instance (MOP op, MOBJ * obj_ptr, AU_FETCHMODE fetchmode)
 	  break;
 	case AU_FETCH_UPDATE:
 	  obj = locator_update_instance (op);
+	  break;
+	case AU_FETCH_SCAN:
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OBJ_INVALID_ARGUMENTS,
+		  0);
+	  assert (0);
 	  break;
 	}
     }

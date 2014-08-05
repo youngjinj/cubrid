@@ -2330,6 +2330,7 @@ locator_return_object (THREAD_ENTRY * thread_p,
  *   oid(in): Object identifier of requested object
  *   chn(in): Cache coherence number of object
  *   lock(in): Lock to acquire before the object is fetched
+ *   retain_lock(in): flag to retain/release lock after fetching the class
  *   class_oid(in): Class identifier of the object
  *   class_chn(in): Cache coherence number of the class of the object
  *   prefetching(in): true when pretching of neighbors is desired
@@ -2352,8 +2353,8 @@ locator_return_object (THREAD_ENTRY * thread_p,
  */
 int
 xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
-		OID * class_oid, int class_chn, int prefetching,
-		LC_COPYAREA ** fetch_area)
+		bool retain_lock, OID * class_oid, int class_chn,
+		int prefetching, LC_COPYAREA ** fetch_area)
 {
   OID tmp_oid;			/* Uses to hold the class_oid when
 				 * it is not know by the caller */
@@ -2590,7 +2591,7 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
     }
 
 error:
-  if (lock != NULL_LOCK)
+  if (lock != NULL_LOCK && !retain_lock)
     {
       lock_unlock_object (thread_p, oid, class_oid, lock, false);
     }
@@ -2672,7 +2673,7 @@ xlocator_get_class (THREAD_ENTRY * thread_p, OID * class_oid, int class_chn,
    */
 
   error_code = xlocator_fetch (NULL, class_oid, class_chn, NULL_LOCK,
-			       oid_Root_class_oid, -1, prefetching,
+			       false, oid_Root_class_oid, -1, prefetching,
 			       fetch_area);
 
   if (lock != NULL_LOCK)
@@ -3965,7 +3966,7 @@ xlocator_does_exist (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
 	{
 	  /* The object exist. Prefetch the object if that operation is
 	   * desirable */
-	  (void) xlocator_fetch (NULL, oid, chn, NULL_LOCK, class_oid,
+	  (void) xlocator_fetch (NULL, oid, chn, NULL_LOCK, false, class_oid,
 				 class_chn, prefetching, fetch_area);
 	}
       if (lock != NULL_LOCK)

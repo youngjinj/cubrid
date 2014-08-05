@@ -716,7 +716,7 @@ do_update_auto_increment_serial_on_rename (MOP serial_obj,
   assert (WS_ISDIRTY (serial_object) == false);
 
   ws_decache (serial_object);
-  error = au_fetch_instance_force (serial_object, NULL, DB_FETCH_WRITE);
+  error = au_fetch_instance_force (serial_object, NULL, AU_FETCH_WRITE);
   if (error != NO_ERROR)
     {
       goto update_auto_increment_error;
@@ -1969,7 +1969,7 @@ do_update_maxvalue_of_auto_increment_serial (PARSER_CONTEXT * parser,
 
   ws_decache (serial_mop);
 
-  error = au_fetch_instance_force (serial_mop, NULL, DB_FETCH_WRITE);
+  error = au_fetch_instance_force (serial_mop, NULL, AU_FETCH_WRITE);
   if (error != NO_ERROR)
     {
       goto end;
@@ -2190,7 +2190,7 @@ do_alter_serial (PARSER_CONTEXT * parser, PT_NODE * statement)
 
   ws_decache (serial_object);
 
-  error = au_fetch_instance_force (serial_object, NULL, DB_FETCH_WRITE);
+  error = au_fetch_instance_force (serial_object, NULL, AU_FETCH_WRITE);
   if (error != NO_ERROR)
     {
       goto end;
