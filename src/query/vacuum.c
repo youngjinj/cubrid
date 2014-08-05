@@ -4249,10 +4249,6 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
       /* Increment number of files */
       page->n_dropped_files++;
 
-      /* Increment global count of dropped files */
-      /* No need for atomic increment during recovery */
-      vacuum_Dropped_files_count++;
-
       vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES | VACUUM_ER_LOG_RECOVERY,
 		     "VACUUM: Dropped files redo recovery, insert new entry "
 		     "vfid=(%d, %d), mvccid=%lld at position %d. "

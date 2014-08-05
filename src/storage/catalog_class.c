@@ -731,7 +731,7 @@ catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p,
 {
   char *name_p = NULL;
   OID oid_buf;
-  OID *class_oid_p = NULL, *oid_p = NULL;
+  OID *class_oid_p = NULL, *oid_p = NULL, *old_oid_p = NULL;
   CATCLS_ENTRY *entry_p = NULL;
 
   if (DB_IS_NULL (oid_val_p))
@@ -740,50 +740,64 @@ catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p,
     }
 
   class_oid_p = DB_PULL_OID (oid_val_p);
-  /* temporary disable search in catcls_Class_oid_to_oid_hash_table in MVCC */
-  if (mvcc_Enabled == false)
+
+  oid_p = &oid_buf;
+  name_p = heap_get_class_name (thread_p, class_oid_p);
+  if (name_p == NULL)
     {
-      if (csect_enter_as_reader (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) !=
-	  NO_ERROR)
+      return NO_ERROR;
+    }
+
+  if (catcls_find_oid_by_class_name (thread_p, name_p, oid_p) != NO_ERROR)
+    {
+      free_and_init (name_p);
+
+      assert (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+
+  /* temporary disable search in catcls_Class_oid_to_oid_hash_table in MVCC */
+
+  if (csect_enter_as_reader (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) !=
+      NO_ERROR)
+    {
+      free_and_init (name_p);
+      return ER_FAILED;
+    }
+
+  entry_p =
+    (CATCLS_ENTRY *) mht_get (catcls_Class_oid_to_oid_hash_table,
+			      class_oid_p);
+  if (entry_p != NULL)
+    {
+      old_oid_p = &entry_p->oid;
+    }
+
+  if (old_oid_p != NULL)
+    {
+      /* if is the same oid, nothing to do */
+      if (!OID_EQ (old_oid_p, oid_p))
 	{
+	  /* update hash entry with the last version */
+	  COPY_OID (&entry_p->oid, oid_p);
+	}
+    }
+  else if (!OID_ISNULL (oid_p))
+    {
+      entry_p = catcls_allocate_entry ();
+      if (entry_p == NULL)
+	{
+	  csect_exit (thread_p, CSECT_CT_OID_TABLE);
+	  free_and_init (name_p);
 	  return ER_FAILED;
 	}
 
-      oid_p = catcls_find_oid (class_oid_p);
-
-      csect_exit (thread_p, CSECT_CT_OID_TABLE);
+      COPY_OID (&entry_p->class_oid, class_oid_p);
+      COPY_OID (&entry_p->oid, oid_p);
+      catcls_put_entry (entry_p);
     }
 
-  if (oid_p == NULL)
-    {
-      oid_p = &oid_buf;
-      name_p = heap_get_class_name (thread_p, class_oid_p);
-      if (name_p == NULL)
-	{
-	  return NO_ERROR;
-	}
-
-      if (catcls_find_oid_by_class_name (thread_p, name_p, oid_p) != NO_ERROR)
-	{
-	  free_and_init (name_p);
-
-	  assert (er_errid () != NO_ERROR);
-	  return er_errid ();
-	}
-
-      if (!OID_ISNULL (oid_p) && (entry_p = catcls_allocate_entry ()) != NULL)
-	{
-	  COPY_OID (&entry_p->class_oid, class_oid_p);
-	  COPY_OID (&entry_p->oid, oid_p);
-	  if (csect_enter (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) !=
-	      NO_ERROR)
-	    {
-	      return ER_FAILED;
-	    }
-	  catcls_put_entry (entry_p);
-	  csect_exit (thread_p, CSECT_CT_OID_TABLE);
-	}
-    }
+  csect_exit (thread_p, CSECT_CT_OID_TABLE);
 
   db_push_oid (oid_val_p, oid_p);
 
