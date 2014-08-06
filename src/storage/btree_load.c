@@ -1926,8 +1926,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
    */
   btree_log_page (thread_p, &load_args->btid->sys_btid->vfid,
 		  load_args->nleaf.pgptr);
-  /* unfix root page */
-  pgbuf_unfix_and_init (thread_p, load_args->nleaf.pgptr);
+  /* Root was unfixed */
   load_args->nleaf.pgptr = NULL;
 
 end:
