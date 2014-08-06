@@ -808,6 +808,8 @@ pt_find_lck_classes (PARSER_CONTEXT * parser, PT_NODE * node,
 {
   PT_CLASS_LOCKS *lcks = (PT_CLASS_LOCKS *) arg;
 
+  lcks->lock_type = DB_FETCH_READ;
+
   if (node->node_type == PT_SELECT)
     {
       /* count optimization */
@@ -850,8 +852,6 @@ pt_find_lck_classes (PARSER_CONTEXT * parser, PT_NODE * node,
     {
       return node;
     }
-
-  lcks->lock_type = DB_FETCH_READ;
 
   if (node->info.spec.partition != NULL)
     {
