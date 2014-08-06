@@ -794,8 +794,8 @@ xserial_get_next_value_internal (THREAD_ENTRY * thread_p,
       entry = serial_alloc_cache_entry ();
       if (entry != NULL)
 	{
-	  assert (mht_get (serial_Cache_pool.ht, &entry->oid) == NULL);
 	  COPY_OID (&entry->oid, serial_oidp);
+	  assert (mht_get (serial_Cache_pool.ht, &entry->oid) == NULL);
 	  if (mht_put (serial_Cache_pool.ht, &entry->oid, entry) == NULL)
 	    {
 	      OID_SET_NULL (&entry->oid);
