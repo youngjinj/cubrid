@@ -1920,15 +1920,14 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
       goto exit_on_error;
     }
 
-  /* unfix root page */
-  pgbuf_unfix_and_init (thread_p, load_args->nleaf.pgptr);
-
   /*
    * The root page must be logged, otherwise, in the event of a crash. The
    * index may be gone.
    */
   btree_log_page (thread_p, &load_args->btid->sys_btid->vfid,
 		  load_args->nleaf.pgptr);
+  /* unfix root page */
+  pgbuf_unfix_and_init (thread_p, load_args->nleaf.pgptr);
   load_args->nleaf.pgptr = NULL;
 
 end:
