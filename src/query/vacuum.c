@@ -1951,7 +1951,38 @@ vacuum_process_log_block (THREAD_ENTRY * thread_p, VACUUM_DATA_ENTRY * data)
 	  /* Set btree_delete purpose: vacuum object if it was deleted or
 	   * vacuum insert MVCCID if it was inserted.
 	   */
-	  if (log_record_data.rcvindex == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID)
+	  if (log_record_data.rcvindex == RVBT_MVCC_NOTIFY_VACUUM)
+	    {
+	      if (MVCCID_IS_VALID (MVCC_GET_DELID (&mvcc_header)))
+		{
+		  mvcc_args.purpose = MVCC_BTREE_VACUUM_OBJECT;
+		  mvcc_args.delete_mvccid = MVCC_GET_DELID (&mvcc_header);
+		}
+	      else if (MVCCID_IS_VALID (MVCC_GET_INSID (&mvcc_header))
+		       && MVCC_GET_INSID (&mvcc_header) != MVCCID_ALL_VISIBLE)
+		{
+		  mvcc_args.purpose = MVCC_BTREE_VACUUM_INSID;
+		  mvcc_args.insert_mvccid = MVCC_GET_INSID (&mvcc_header);
+		}
+	      else
+		{
+		  /* impossible case */
+		  vacuum_er_log (VACUUM_ER_LOG_BTREE | VACUUM_ER_LOG_WORKER |
+				 VACUUM_ER_LOG_ERROR,
+				 "VACUUM ERROR: invalid vacuum case for "
+				 "RVBT_MVCC_NOTIFY_VACUUM btid(%d, (%d %d)) "
+				 "oid(%d, %d, %d) class_oid(%d, %d, %d)",
+				 btid_int.sys_btid->root_pageid,
+				 btid_int.sys_btid->vfid.fileid,
+				 btid_int.sys_btid->vfid.volid, oid.volid,
+				 oid.pageid, oid.slotid, class_oid.volid,
+				 class_oid.pageid, class_oid.slotid);
+		  assert_release (false);
+		  continue;
+		}
+	    }
+	  else if (log_record_data.rcvindex ==
+		   RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID)
 	    {
 	      mvcc_args.purpose = MVCC_BTREE_VACUUM_OBJECT;
 	      mvcc_args.delete_mvccid = MVCC_GET_DELID (&mvcc_header);
@@ -3997,8 +4028,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 		     pgbuf_get_page_id ((PAGE_PTR) page),
 		     (long long int) pgbuf_get_lsa ((PAGE_PTR) page)->pageid,
 		     (int) pgbuf_get_lsa ((PAGE_PTR) page)->offset,
-		     page->n_dropped_files,
-		     vacuum_Dropped_files_count);
+		     page->n_dropped_files, vacuum_Dropped_files_count);
       vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
       return NO_ERROR;
     }
@@ -4106,8 +4136,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 		 pgbuf_get_page_id ((PAGE_PTR) new_page),
 		 (long long int) pgbuf_get_lsa ((PAGE_PTR) new_page)->pageid,
 		 (int) pgbuf_get_lsa ((PAGE_PTR) new_page)->offset,
-		 new_page->n_dropped_files,
-		 vacuum_Dropped_files_count);
+		 new_page->n_dropped_files, vacuum_Dropped_files_count);
 
   /* Set dirty and unfix new page */
   vacuum_set_dirty_dropped_entries_page (thread_p, new_page, FREE);
@@ -4671,8 +4700,7 @@ vacuum_find_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid)
 			     pgbuf_get_page_id ((PAGE_PTR) page),
 			     dropped_file - page->dropped_files,
 			     dropped_file->vfid.volid,
-			     dropped_file->vfid.fileid,
-			     dropped_file->mvccid);
+			     dropped_file->vfid.fileid, dropped_file->mvccid);
 	      vacuum_unfix_dropped_entries_page (thread_p, page);
 	      return true;
 	    }
@@ -4691,13 +4719,12 @@ vacuum_find_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid)
 			     pgbuf_get_page_id ((PAGE_PTR) page),
 			     dropped_file - page->dropped_files,
 			     dropped_file->vfid.volid,
-			     dropped_file->vfid.fileid,
-			     dropped_file->mvccid);
+			     dropped_file->vfid.fileid, dropped_file->mvccid);
 	      vacuum_unfix_dropped_entries_page (thread_p, page);
 	      return false;
 	    }
 	}
-      /* Do not log this unless you think it is useful. It spamms the log
+      /* Do not log this unless you think it is useful. It spams the log
        * file.
        */
       vacuum_er_log (VACUUM_ER_LOG_NONE,

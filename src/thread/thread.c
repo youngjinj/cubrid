@@ -2772,7 +2772,7 @@ thread_vacuum_master_thread (void *arg_p)
   thread_Vacuum_master_thread.is_available = false;
   pthread_mutex_unlock (&thread_Vacuum_master_thread.lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   return (THREAD_RET_T) 0;
@@ -2855,7 +2855,7 @@ thread_vacuum_worker_thread (void *arg_p)
   thread_monitor->is_available = false;
   pthread_mutex_unlock (&thread_monitor->lock);
 
-  er_clear ();
+  er_final (false);
   tsd_ptr->status = TS_DEAD;
 
   return (THREAD_RET_T) 0;

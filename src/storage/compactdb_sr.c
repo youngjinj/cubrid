@@ -209,8 +209,8 @@ process_object (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scancache,
       copy_recdes.data = NULL;
 
       scan_code =
-	heap_mvcc_get_version_for_delete (thread_p, &upd_scancache->hfid,
-					  oid, &upd_scancache->class_oid,
+	heap_mvcc_get_version_for_delete (thread_p, oid,
+					  &upd_scancache->class_oid,
 					  &copy_recdes, upd_scancache,
 					  COPY, NULL);
       if (scan_code != S_SUCCESS)

@@ -75,6 +75,14 @@
 #define MVCC_IS_FLAG_SET(rec_header_p, flags) \
   ((rec_header_p)->mvcc_flag & (flags))
 
+#define MVCC_IS_HEADER_DELID_VALID(rec_header_p) \
+  (MVCC_IS_FLAG_SET (rec_header_p, OR_MVCC_FLAG_VALID_DELID) \
+   && MVCCID_IS_VALID (MVCC_GET_DELID (rec_header_p)))
+
+#define MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE(rec_header_p) \
+  (MVCC_IS_FLAG_SET (rec_header_p, OR_MVCC_FLAG_VALID_INSID) \
+   && MVCC_GET_INSID (rec_header_p) != MVCCID_ALL_VISIBLE)
+
 #define MVCC_SET_FLAG_BITS(rec_header_p, flag) \
   ((rec_header_p)->mvcc_flag |= (flag))
 

@@ -885,6 +885,12 @@ struct rvfun RV_fun[] = {
    btree_rv_mvcc_undo_redo_increments_update,
    btree_rv_mvcc_undo_redo_increments_update,
    NULL, NULL},
+
+  {RVBT_MVCC_NOTIFY_VACUUM,
+   "RVBT_MVCC_NOTIFY_VACUUM",
+   btree_rv_nop,
+   btree_rv_nop,
+   NULL, NULL}
 };
 
 /*

@@ -5305,8 +5305,8 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	      mvcc_sel_reev_data.qualification = &scan_id->qualification;
 	      COPY_OID (&current_oid, &hsidp->curr_oid);
 	      sp_scan =
-		heap_mvcc_get_version_for_delete (thread_p, &hsidp->hfid,
-						  &current_oid, NULL, &recdes,
+		heap_mvcc_get_version_for_delete (thread_p, &current_oid,
+						  NULL, &recdes,
 						  &hsidp->scan_range.
 						  scan_cache, scan_id->fixed,
 						  &mvcc_reev_data);
@@ -5324,11 +5324,7 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	}
       else
 	{
-	  /* regular, fixed scan */
-	  if (scan_id->fixed == false)
-	    {
-	      recdes.data = NULL;
-	    }
+	  recdes.data = NULL;
 	  if (scan_id->direction == S_FORWARD)
 	    {
 	      /* move forward */
@@ -5357,7 +5353,6 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		      COPY_OID (&current_oid, &hsidp->curr_oid);
 		      sp_scan =
 			heap_mvcc_get_version_for_delete (thread_p,
-							  &hsidp->hfid,
 							  &current_oid, NULL,
 							  &recdes,
 							  &hsidp->scan_cache,
@@ -5415,7 +5410,6 @@ scan_next_heap_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 		      COPY_OID (&current_oid, &hsidp->curr_oid);
 		      sp_scan =
 			heap_mvcc_get_version_for_delete (thread_p,
-							  &hsidp->hfid,
 							  &current_oid, NULL,
 							  &recdes,
 							  &hsidp->scan_cache,
@@ -6203,7 +6197,6 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 	}
       mvcc_sel_reev_data.qualification = &scan_id->qualification;
       sp_scan = heap_mvcc_get_version_for_delete (thread_p,
-						  &isidp->hfid,
 						  isidp->curr_oidp,
 						  NULL,
 						  &recdes,

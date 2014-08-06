@@ -204,6 +204,8 @@ typedef enum
 
   RVBT_MVCC_INCREMENTS_UPD = 135,
 
+  RVBT_MVCC_NOTIFY_VACUUM = 136,
+
   RV_NOT_DEFINED = 999
 } LOG_RCVINDEX;
 
@@ -263,6 +265,7 @@ extern void rv_check_rvfuns (void);
 	     || ((idx) == RVBT_KEYVAL_MVCC_INS_LFRECORD_KEYINS)	\
 	     || ((idx) == RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS)	\
 	     || ((idx) == RVBT_MVCC_INCREMENTS_UPD)   \
+	     || ((idx) == RVBT_MVCC_NOTIFY_VACUUM)   \
 ) ? true : false )
 
 #endif /* _RECOVERY_H_ */

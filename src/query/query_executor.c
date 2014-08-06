@@ -11673,9 +11673,8 @@ qexec_remove_duplicates_for_replace (THREAD_ENTRY * thread_p,
 
 	      /* TO DO - need to handle reevaluation */
 	      scan_code =
-		heap_mvcc_get_version_for_delete (thread_p, &pruned_hfid,
-						  &unique_oid, &class_oid,
-						  &copy_recdes,
+		heap_mvcc_get_version_for_delete (thread_p, &unique_oid,
+						  &class_oid, &copy_recdes,
 						  local_scan_cache, COPY,
 						  NULL);
 
@@ -13913,8 +13912,8 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	      /* need to handle reevaluation */
 	      copy_recdes.data = NULL;
 	      scan_code =
-		heap_mvcc_get_version_for_delete (thread_p, class_hfid, oid,
-						  class_oid, &copy_recdes,
+		heap_mvcc_get_version_for_delete (thread_p, oid, class_oid,
+						  &copy_recdes,
 						  &scan_cache, COPY, NULL);
 	      if (scan_code != S_SUCCESS)
 		{
@@ -15309,10 +15308,10 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 	   * There are several cases here:
 	   * 1. Do not use fixed scans if locks on objects are required.
 	   * 2. Disable all fixed scans if any index scan is used (this is
-	   *	legacy and should be reconsidered).
+	   *    legacy and should be reconsidered).
 	   * 3. Disable fixed scan for outer scans. Fixed cannot be allowed
-	   *	while new scans start which also need to fix pages. This may
-	   *	lead to page deadlocks.
+	   *    while new scans start which also need to fix pages. This may
+	   *    lead to page deadlocks.
 	   *
 	   * NOTE: Only the innermost scans are allowed fixed scans.
 	   */

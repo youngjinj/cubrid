@@ -1407,7 +1407,8 @@ enum log_repl_flush
   ((rcvindex) == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID \
    || (rcvindex) == RVBT_KEYVAL_MVCC_INS \
    || (rcvindex) == RVBT_KEYVAL_MVCC_INS_LFRECORD_KEYINS \
-   || (rcvindex) == RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS)
+   || (rcvindex) == RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS \
+   || (rcvindex) == RVBT_MVCC_NOTIFY_VACUUM)
 
 /* Is log record for a MVCC operation */
 #define LOG_IS_MVCC_OPERATION(rcvindex) \

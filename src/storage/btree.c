@@ -119,16 +119,6 @@
 #define BTREE_GET_CLASS_OID(buf, class_oid_ptr) \
   OR_GET_OID (buf, class_oid_ptr)
 
-
-#define BTREE_INIT_MVCC_HEADER(p_mvcc_rec_header) \
-  do {	\
-    MVCC_SET_FLAG (p_mvcc_rec_header, 0); \
-    MVCC_SET_INSID (p_mvcc_rec_header, MVCCID_NULL); \
-    MVCC_SET_DELID (p_mvcc_rec_header, MVCCID_NULL); \
-    MVCC_SET_REPID (p_mvcc_rec_header, 0);  \
-    MVCC_SET_NEXT_VERSION (p_mvcc_rec_header, &oid_Null_oid);  \
-  }while (0)
-
 /* check whether insert is in fact a logical delete */
 #define BTREE_INSERT_IS_LOGICAL_DELETE(p_mvcc_rec_header)  \
   ((p_mvcc_rec_header != NULL)	\
@@ -601,10 +591,6 @@ static int btree_lock_next_key (THREAD_ENTRY * thread_p,
 				OID * saved_nk_class_oid, int *which_action);
 static void btree_make_pseudo_oid (int p, short s, short v, BTID * btid,
 				   OID * oid);
-static int btree_rv_save_keyval (BTID_INT * btid, DB_VALUE * key,
-				 OID * cls_oid, OID * oid,
-				 MVCC_BTREE_OP_ARGUMENTS * mvcc_args,
-				 char **data, int *length);
 static DISK_ISVALID btree_find_key_from_leaf (THREAD_ENTRY * thread_p,
 					      BTID_INT * btid,
 					      PAGE_PTR pg_ptr, int key_cnt,
@@ -678,9 +664,6 @@ static int btree_find_oid_from_leaf (BTID_INT * btid, RECDES * rec_p,
 static int btree_find_oid_from_ovfl (RECDES * rec_p, OID * oid, int oid_size,
 				     MVCC_BTREE_OP_ARGUMENTS * mvcc_args);
 static int btree_leaf_get_vpid_for_overflow_oids (RECDES * rec, VPID * vpid);
-static int btree_leaf_get_first_oid (BTID_INT * btid, RECDES * recp,
-				     OID * oidp, OID * class_oid,
-				     MVCC_REC_HEADER * p_mvcc_header);
 #if defined(ENABLE_UNUSED_FUNCTION)
 static int btree_leaf_put_first_oid (RECDES * recp, OID * oidp,
 				     short record_flag);
@@ -708,10 +691,6 @@ static void btree_leaf_key_oid_clear_mvcc_flag (char *rec_data,
 static short btree_leaf_key_oid_get_mvcc_flag (char *data);
 static short btree_leaf_key_oid_is_mvcc_flaged (char *data,
 						short record_flag);
-static void btree_leaf_change_first_oid (RECDES * recp, BTID_INT * btid,
-					 OID * oidp, OID * class_oidp,
-					 MVCC_REC_HEADER * p_mvcc_rec_header,
-					 int *key_offset);
 static void btree_leaf_rebuild_mvccids_in_record (RECDES * recp, int offset,
 						  int mvcc_old_oid_mvcc_flags,
 						  int oid_size,
@@ -1089,9 +1068,6 @@ static int btree_or_get_mvccinfo (OR_BUF * buf,
 				  MVCC_REC_HEADER * p_mvcc_header,
 				  short btree_mvcc_flags);
 
-static int btree_check_valid_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
-				     RECDES * recp, BTREE_NODE_TYPE node_type,
-				     DB_VALUE * key);
 
 #if !defined(NDEBUG)
 /*
@@ -1595,7 +1571,7 @@ btree_leaf_new_overflow_oids_vpid (RECDES * rec, VPID * ovfl_vpid,
  *   oidp(out):
  *   class_oid(out):
  */
-static int
+int
 btree_leaf_get_first_oid (BTID_INT * btid, RECDES * recp, OID * oidp,
 			  OID * class_oid, MVCC_REC_HEADER * p_mvcc_header)
 {
@@ -2129,7 +2105,7 @@ btree_leaf_put_first_oid (RECDES * recp, OID * oidp, short record_flag)
  *  with values specified by oidp, class_oidp, p_mvcc_rec_header.
  *	 This function is called only for leaf page if offset == 0 or non unique
  */
-static void
+void
 btree_leaf_change_first_oid (RECDES * recp, BTID_INT * btid, OID * oidp,
 			     OID * class_oidp,
 			     MVCC_REC_HEADER * p_mvcc_rec_header,
@@ -7176,11 +7152,13 @@ btree_check_pages (THREAD_ENTRY * thread_p, BTID_INT * btid,
       goto error;
     }
 
+#ifdef SPAGE_DEBUG
   if (spage_check (thread_p, pg_ptr) != NO_ERROR)
     {
       vld = DISK_ERROR;
       goto error;
     }
+#endif /* SPAGE_DEBUG */
 
   /* Verify subtree child pages */
 
@@ -18863,6 +18841,51 @@ curr_key_locking:
 	  OID_SET_NULL (&saved_C_oid);
 	  OID_SET_NULL (&saved_C_class_oid);
 	}
+      else
+	{
+	  if ((key_found == true) && (result == BTREE_KEY_NOTFOUND)
+	      && (logtb_find_current_isolation (thread_p)
+		  >= TRAN_REPEATABLE_READ))
+	    {
+	      /* check MVCC snapshot to be sure that can't have 2 OID visible
+	       * objects in unique
+	       */
+	      int max_visible_oids = 1;
+	      if (mvcc_snapshot == NULL)
+		{
+		  mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+		}
+
+	      if (btree_leaf_mvcc_get_num_visible_oids
+		  (thread_p, &btid_int, &peek_rec, offset, BTREE_LEAF_NODE,
+		   &max_visible_oids, mvcc_snapshot) > 0)
+		{
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			  ER_MVCC_SERIALIZABLE_CONFLICT, 0);
+
+		  goto error;
+		}
+	      else if (!VPID_ISNULL (&leaf_pnt.ovfl))
+		{
+		  int num_visible_oids;
+
+		  if (btree_mvcc_get_num_visible_oids_from_all_ovf
+		      (thread_p, &btid_int, &leaf_pnt.ovfl,
+		       &num_visible_oids,
+		       &max_visible_oids, mvcc_snapshot) != NO_ERROR)
+		    {
+		      goto error;
+		    }
+
+		  if (num_visible_oids > 0)
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_MVCC_SERIALIZABLE_CONFLICT, 0);
+		      goto error;
+		    }
+		}
+	    }
+	}
 
       current_lock = X_LOCK;
       ret_val =
@@ -23738,7 +23761,7 @@ btree_rv_util_save_page_records (PAGE_PTR page_ptr,
  *	    Currently all calls to this routine are from leaf pages. Be
  *	    careful if you add a call to this routine.
  */
-static int
+int
 btree_rv_save_keyval (BTID_INT * btid, DB_VALUE * key, OID * cls_oid,
 		      OID * oid, MVCC_BTREE_OP_ARGUMENTS * mvcc_args,
 		      char **data, int *length)
@@ -32018,7 +32041,7 @@ btree_compare_btids (const void *mem_btid1, const void *mem_btid2)
  *			  and if node type is leaf and if key doesn't have
  *			  overflow pages).
  */
-static int
+int
 btree_check_valid_record (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			  RECDES * recp, BTREE_NODE_TYPE node_type,
 			  DB_VALUE * key)

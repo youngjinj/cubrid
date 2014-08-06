@@ -99,14 +99,6 @@
 /* in MVCC BTREE_MAX_OIDLEN_INPAGE include MVCC fields too */
 #define BTREE_MAX_OIDLEN_INPAGE ((int)(DB_PAGESIZE / 8))
 
-/* B+tree node types */
-typedef enum
-{
-  BTREE_LEAF_NODE = 0,
-  BTREE_NON_LEAF_NODE,
-  BTREE_OVERFLOW_NODE
-} BTREE_NODE_TYPE;
-
 extern int btree_node_number_of_keys (PAGE_PTR page_ptr);
 extern int btree_get_next_overflow_vpid (PAGE_PTR page_ptr, VPID * vpid);
 

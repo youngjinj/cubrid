@@ -12718,6 +12718,7 @@ pt_get_mvcc_reev_range_data (PARSER_CONTEXT * parser, TABLE_INFO * table_info,
   parser_free_tree (parser, where_range_part);
   parser_free_tree (parser, range_attrs);
   free_and_init (range_offsets);
+  free_and_init (range_rest_offsets);
 
   return NO_ERROR;
 }

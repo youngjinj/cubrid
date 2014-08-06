@@ -4604,8 +4604,7 @@ locator_check_primary_key_delete (THREAD_ENTRY * thread_p,
 		      /* TO DO - handle reevaluation */
 
 		      scan_code =
-			heap_mvcc_get_version_for_delete (thread_p, &hfid,
-							  oid_ptr,
+			heap_mvcc_get_version_for_delete (thread_p, oid_ptr,
 							  &fkref->self_oid,
 							  &recdes,
 							  &scan_cache, false,
@@ -4965,8 +4964,7 @@ locator_repair_object_cache (THREAD_ENTRY * thread_p, OR_INDEX * index,
 		  /* TO DO - handle reevaluation */
 
 		  scan_code =
-		    heap_mvcc_get_version_for_delete (thread_p, &hfid,
-						      &oid_buf[i],
+		    heap_mvcc_get_version_for_delete (thread_p, &oid_buf[i],
 						      &fkref->self_oid,
 						      &recdes, &upd_scancache,
 						      false, NULL);
@@ -5273,8 +5271,7 @@ locator_check_primary_key_update (THREAD_ENTRY * thread_p,
 		      /* TO DO - handle reevaluation */
 
 		      scan_code =
-			heap_mvcc_get_version_for_delete (thread_p, &hfid,
-							  oid_ptr,
+			heap_mvcc_get_version_for_delete (thread_p, oid_ptr,
 							  &fkref->self_oid,
 							  &recdes,
 							  &scan_cache, false,
@@ -6155,8 +6152,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	      if (pruning_type == DB_NOT_PARTITIONED_CLASS)
 		{
 		  scan =
-		    heap_mvcc_get_version_for_delete (thread_p, hfid,
-						      &last_oid, class_oid,
+		    heap_mvcc_get_version_for_delete (thread_p, &last_oid,
+						      class_oid,
 						      &copy_recdes,
 						      local_scan_cache, false,
 						      mvcc_reev_data);
@@ -6165,8 +6162,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		{
 		  /* do not affect class_oid since is used at partition pruning */
 		  scan =
-		    heap_mvcc_get_version_for_delete (thread_p, hfid,
-						      &last_oid, NULL,
+		    heap_mvcc_get_version_for_delete (thread_p, &last_oid,
+						      NULL,
 						      &copy_recdes,
 						      local_scan_cache, false,
 						      mvcc_reev_data);
@@ -6741,7 +6738,7 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
       COPY_OID (&last_oid, oid);
       copy_recdes.data = NULL;
       scan_code =
-	heap_mvcc_get_version_for_delete (thread_p, hfid, &last_oid,
+	heap_mvcc_get_version_for_delete (thread_p, &last_oid,
 					  &class_oid, &copy_recdes,
 					  scan_cache, false, mvcc_reev_data);
       if (scan_code == S_SUCCESS && mvcc_reev_data != NULL
@@ -7700,7 +7697,7 @@ xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
       /* TO DO - handle reevaluation */
 
       scan =
-	heap_mvcc_get_version_for_delete (thread_p, &hfid, &unique_oid,
+	heap_mvcc_get_version_for_delete (thread_p, &unique_oid,
 					  class_oid, &old_recdes,
 					  &scan_cache, false, NULL);
       if (scan != S_SUCCESS)
@@ -7990,7 +7987,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 	    }
 
 	  scan =
-	    heap_mvcc_get_version_for_delete (thread_p, hfid, oid, &class_oid,
+	    heap_mvcc_get_version_for_delete (thread_p, oid, &class_oid,
 					      &copy_recdes, scan_cache, COPY,
 					      NULL);
 
