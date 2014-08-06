@@ -3676,8 +3676,7 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
   LOG_TDES *tdes = LOG_FIND_CURRENT_TDES (thread_p);
 
 #if !defined (NDEBUG)
-  VACUUM_TRACK_DROPPED_FILES *track_page =
-    (VACUUM_TRACK_DROPPED_FILES *) vacuum_Track_dropped_files;
+  VACUUM_TRACK_DROPPED_FILES *track_page = NULL;
   VACUUM_TRACK_DROPPED_FILES *new_track_page = NULL;
 #endif
 
@@ -3709,6 +3708,9 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 
   assert_release (!VFID_ISNULL (&vacuum_Dropped_files_vfid));
   assert_release (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
+  assert_release (vacuum_Track_dropped_files != NULL);
+
+  track_page = vacuum_Track_dropped_files;
 
   addr.vfid = NULL;
   addr.offset = -1;
@@ -3994,10 +3996,6 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
       vacuum_unfix_dropped_entries_page (thread_p, page);
       return ER_FAILED;
     }
-
-#if !defined (NDEBUG)
-  memcpy (&track_page->dropped_data_page, page, DB_PAGESIZE);
-#endif
 
   /* Add new entry to new page */
   new_page =
@@ -4758,9 +4756,6 @@ vacuum_rv_redo_cleanup_dropped_files (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
       /* Update dropped files page counter */
       page->n_dropped_files--;
     }
-
-  /* Update dropped files global counter */
-  vacuum_Dropped_files_count -= n_indexes;
 
   pgbuf_set_dirty (thread_p, rcv->pgptr, DONT_FREE);
 
