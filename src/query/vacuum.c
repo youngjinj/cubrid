@@ -3708,9 +3708,11 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 
   assert_release (!VFID_ISNULL (&vacuum_Dropped_files_vfid));
   assert_release (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
+#if !defined (NDEBUG)
   assert_release (vacuum_Track_dropped_files != NULL);
 
   track_page = vacuum_Track_dropped_files;
+#endif /* !NDEBUG */
 
   addr.vfid = NULL;
   addr.offset = -1;
