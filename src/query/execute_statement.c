@@ -6207,6 +6207,11 @@ do_drop_trigger (PARSER_CONTEXT * parser, PT_NODE * statement)
 	  for (t = triggers; t != NULL && error == NO_ERROR; t = t->next)
 	    {
 	      error = tr_drop_trigger (t->op, false);
+	      if (error == ER_TR_TRIGGER_NOT_FOUND)
+		{
+		  /* another transaction has drop the trigger before me */
+		  break;
+		}
 	    }
 	}
 

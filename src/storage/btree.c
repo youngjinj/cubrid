@@ -4906,7 +4906,6 @@ xbtree_add_index (THREAD_ENTRY * thread_p, BTID * btid, TP_DOMAIN * key_type,
   is_file_created = true;
 
   vacuum_log_add_dropped_file (thread_p, &btid->vfid,
-			       logtb_get_current_mvccid (thread_p),
 			       VACUUM_LOG_ADD_DROPPED_FILE_UNDO);
 
   alignment = BTREE_MAX_ALIGN;
@@ -5050,7 +5049,6 @@ xbtree_delete_index (THREAD_ENTRY * thread_p, BTID * btid)
   btid->root_pageid = NULL_PAGEID;
 
   vacuum_log_add_dropped_file (thread_p, &btid->vfid,
-			       logtb_get_current_mvccid (thread_p),
 			       VACUUM_LOG_ADD_DROPPED_FILE_POSTPONE);
 
   ret = file_destroy (thread_p, &btid->vfid);

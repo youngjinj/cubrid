@@ -888,7 +888,6 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   file_created = 1;
 
   vacuum_log_add_dropped_file (thread_p, &btid->vfid,
-			       logtb_get_current_mvccid (thread_p),
 			       VACUUM_LOG_ADD_DROPPED_FILE_UNDO);
 
   /*
@@ -1095,7 +1094,6 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
        * committed, we need to do it again in case of rollback.
        */
       vacuum_log_add_dropped_file (thread_p, &btid->vfid,
-				   logtb_get_current_mvccid (thread_p),
 				   VACUUM_LOG_ADD_DROPPED_FILE_UNDO);
     }
   else

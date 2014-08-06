@@ -40,6 +40,7 @@
 #include "db.h"
 #include "parser.h"
 #include "system_parameter.h"
+#include "locator_cl.h"
 
 #include "dbval.h"		/* this must be the last header file included!!! */
 
@@ -4312,6 +4313,40 @@ tr_drop_trigger_internal (TR_TRIGGER * trigger, int rollback)
 	       * transaction cleanup
 	       */
 	      db_drop (trigger->object);
+
+	      /* check whether successfully dropped as follow:
+	       *  - flush, decache, fetch again 
+	       */
+	      error = locator_flush_instance (trigger->object);
+	      if (error == NO_ERROR)
+		{
+		  ws_decache (trigger->object);
+		  ws_clear_hints (trigger->object, false);
+		  error = au_fetch_instance_force (trigger->object, NULL,
+						   AU_FETCH_WRITE);
+		  if (error == NO_ERROR)
+		    {
+		      /* 
+		       * The object was not deleted in fact. This is possible
+		       * when we start delete from intermediary version
+		       * (not the last one). This may happen when another
+		       * concurrent transaction has updated the trigger before me.
+		       * The current solution may be expensive, but drop trigger 
+		       * is rarely used.
+		       * A better solution would be to get & lock the last
+		       * version from beginning, not the visible one.
+		       */		      
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+			      ER_TR_TRIGGER_NOT_FOUND, 1, trigger->name);
+		      error = ER_TR_TRIGGER_NOT_FOUND;		      
+		    }
+		  else if (error == ER_HEAP_UNKNOWN_OBJECT)
+		    {
+		      /* clear the error - the object was successfully dropped */
+		      er_clear ();
+		      error = NO_ERROR;
+		    }
+		}
 	    }
 
 	  /* free the cache structure */

@@ -374,6 +374,13 @@ VACUUM_TRACK_DROPPED_FILES *vacuum_Track_dropped_files;
 
 INT32 vacuum_Dropped_files_version = 0;
 
+typedef struct vacuum_dropped_files_rcv_data VACUUM_DROPPED_FILES_RCV_DATA;
+struct vacuum_dropped_files_rcv_data
+{
+  VFID vfid;
+  MVCCID mvccid;
+};
+
 #define VACUUM_MAX_PAGE_BUFFER_SIZE  4000
 
 static void vacuum_log_vacuum_heap_page (THREAD_ENTRY * thread_p,
@@ -503,6 +510,7 @@ vacuum_initialize (THREAD_ENTRY * thread_p, VFID * vacuum_data_vfid,
   VFID_COPY (&vacuum_Dropped_files_vfid, dropped_files_vfid);
   VPID_SET_NULL (&vacuum_Dropped_files_vpid);
   vacuum_Dropped_files_version = 0;
+  vacuum_Dropped_files_count = 0;
 #if !defined (NDEBUG)
   vacuum_Track_dropped_files = NULL;
 #endif
@@ -2549,7 +2557,11 @@ vacuum_load_dropped_files_from_disk (THREAD_ENTRY * thread_p)
   assert (!VPID_ISNULL (&vacuum_Dropped_files_vpid));
 
   /* Save total count. */
-  assert_release (vacuum_Dropped_files_count == 0);
+  if (vacuum_Dropped_files_count != 0)
+    {
+      assert (false);
+      vacuum_Dropped_files_count = 0;
+    }
   VPID_COPY (&vpid, &vacuum_Dropped_files_vpid);
   for (; !VPID_ISNULL (&vpid);)
     {
@@ -3163,6 +3175,9 @@ vacuum_consume_buffer_log_blocks (THREAD_ENTRY * thread_p,
 	  if (ignore_duplicates)
 	    {
 	      /* Ignore duplicates */
+	      vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+			     "VACUUM: Recovery consume found a duplicate, "
+			     "skip consume.");
 	      continue;
 	    }
 	  else
@@ -3606,6 +3621,9 @@ vacuum_update_oldest_mvccid (THREAD_ENTRY * thread_p)
       return;
     }
 
+  vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		 "VACUUM: Try to update oldest_mvccid.");
+
   oldest_mvccid = VACUUM_DATA_ENTRY_OLDEST_MVCCID (VACUUM_DATA_GET_ENTRY (0));
   for (i = 1; i < vacuum_Data->n_table_entries; i++)
     {
@@ -3621,8 +3639,17 @@ vacuum_update_oldest_mvccid (THREAD_ENTRY * thread_p)
       /* Oldest MVCCID has changed. Update it and run cleanup on dropped
        * files.
        */
+      vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: Update oldest mvccid from %lld to %lld.",
+		     vacuum_Data->oldest_mvccid, oldest_mvccid);
       vacuum_Data->oldest_mvccid = oldest_mvccid;
       vacuum_cleanup_dropped_files (thread_p);
+    }
+  else
+    {
+      vacuum_er_log (VACUUM_ER_LOG_VACUUM_DATA,
+		     "VACUUM: Oldest MVCCID remains %lld.",
+		     vacuum_Data->oldest_mvccid);
     }
 }
 
@@ -3848,6 +3875,8 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 	      /* Replace MVCCID */
 	      save_mvccid = page->dropped_files[mid].mvccid;
 	      page->dropped_files[mid].mvccid = mvccid;
+
+	      assert_release (mvcc_id_follow_or_equal (mvccid, save_mvccid));
 
 	      if (postpone_ref_lsa != NULL)
 		{
@@ -4103,27 +4132,22 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
  * return	 : Void.
  * thread_p (in) : Thread entry.
  * vfid (in)	 : Dropped file identifier.
- * mvccid (in)	 : MVCC identifier for transaction.
  */
 void
 vacuum_log_add_dropped_file (THREAD_ENTRY * thread_p, const VFID * vfid,
-			     MVCCID mvccid, bool pospone_or_undo)
+			     bool pospone_or_undo)
 {
-  int offset = 0;
-  char log_data_buffer[sizeof (VFID) + sizeof (MVCCID)];
   LOG_DATA_ADDR addr;
+  VACUUM_DROPPED_FILES_RCV_DATA rcv_data;
 
   vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
-		 "VACUUM: Append %s log from dropped file (%d, %d) "
-		 "by transaction with MVCCID=%lld",
+		 "VACUUM: Append %s log from dropped file (%d, %d).",
 		 pospone_or_undo ? "postpone" : "undo",
-		 vfid->volid, vfid->fileid, mvccid);
+		 vfid->volid, vfid->fileid);
 
-  memcpy (log_data_buffer + offset, vfid, sizeof (VFID));
-  offset += sizeof (VFID);
-
-  memcpy (log_data_buffer + offset, &mvccid, sizeof (MVCCID));
-  offset += sizeof (MVCCID);
+  /* Initialize recovery data */
+  VFID_COPY (&rcv_data.vfid, vfid);
+  rcv_data.mvccid = MVCCID_NULL;      /* Not really used here */
 
   addr.offset = -1;
   addr.pgptr = NULL;
@@ -4132,12 +4156,12 @@ vacuum_log_add_dropped_file (THREAD_ENTRY * thread_p, const VFID * vfid,
   if (pospone_or_undo == VACUUM_LOG_ADD_DROPPED_FILE_POSTPONE)
     {
       log_append_postpone (thread_p, RVVAC_DROPPED_FILE_ADD, &addr,
-			   offset, log_data_buffer);
+			   sizeof (rcv_data), &rcv_data);
     }
   else
     {
       log_append_undo_data (thread_p, RVVAC_DROPPED_FILE_ADD, &addr,
-			    offset, log_data_buffer);
+			    sizeof (rcv_data), &rcv_data);
     }
 }
 
@@ -4302,26 +4326,41 @@ int
 vacuum_notify_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 			    LOG_LSA * pospone_ref_lsa)
 {
-  MVCCID mvccid;
-  VFID *vfid = NULL;
-  int error = NO_ERROR, offset = 0;
+  int error = NO_ERROR;
+  LOG_RCV new_rcv;
+  VACUUM_DROPPED_FILES_RCV_DATA new_rcv_data;
 #if defined (SERVER_MODE)
   INT32 my_version, prev_version, workers_min_version;
 #endif
 
-  vfid = (VFID *) (rcv->data + offset);
-  offset += sizeof (*vfid);
+  new_rcv.mvcc_id = rcv->mvcc_id;
+  new_rcv.offset = rcv->offset;
+  new_rcv.pgptr = rcv->pgptr;
+  new_rcv.data = (char *) &new_rcv_data;
+  new_rcv.length = sizeof (new_rcv_data);
 
-  mvccid = *((MVCCID *) (rcv->data + offset));
-  offset += sizeof (mvccid);
+  /* Copy VFID from current log recovery data but set MVCCID at this point.
+   * We will use the log_Gl.hdr.mvcc_next_id as borderline to distinguish
+   * this file from newer files.
+   * 1. All changes on this file must be done by transaction that have already
+   *	committed which means their MVCCID will be less than current
+   *	log_Gl.hdr.mvcc_next_id.
+   * 2. All changes on a new file that reused VFID must be done by transaction
+   *	that start after this call, which means their MVCCID's will be at
+   *	least equal to current log_Gl.hdr.mvcc_next_id.
+   */
 
-  assert (!VFID_ISNULL (vfid));
-  assert (MVCCID_IS_VALID (mvccid));
-  assert (offset == rcv->length);
+  VFID_COPY (&new_rcv_data.vfid,
+	     &((VACUUM_DROPPED_FILES_RCV_DATA *) rcv->data)->vfid);
+  new_rcv_data.mvccid = log_Gl.hdr.mvcc_next_id;
+
+  assert (!VFID_ISNULL (&new_rcv_data.vfid));
+  assert (MVCCID_IS_VALID (new_rcv_data.mvccid));
 
   /* Add dropped file to current list */
   error =
-    vacuum_add_dropped_file (thread_p, vfid, mvccid, rcv, pospone_ref_lsa);
+    vacuum_add_dropped_file (thread_p, &new_rcv_data.vfid,
+			     new_rcv_data.mvccid, rcv, pospone_ref_lsa);
   if (error != NO_ERROR)
     {
       return error;
@@ -4343,7 +4382,8 @@ vacuum_notify_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
   vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
 		 "VACUUM: Added dropped file - vfid=(%d, %d), mvccid=%lld - "
 		 "Wait for all workers to see my_version=%d",
-		 vfid->volid, vfid->fileid, mvccid, my_version);
+		 new_rcv_data.vfid.volid, new_rcv_data.vfid.fileid,
+		 new_rcv_data.mvccid, my_version);
 
   /* Wait until all workers have been notified of this change */
   for (workers_min_version = thread_get_min_dropped_files_version ();
@@ -4390,6 +4430,9 @@ vacuum_cleanup_dropped_files (THREAD_ENTRY * thread_p)
   VACUUM_TRACK_DROPPED_FILES *track_page =
     (VACUUM_TRACK_DROPPED_FILES *) vacuum_Track_dropped_files;
 #endif
+
+  vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		 "VACUUM: Start cleanup dropped files.");
 
   if (!LOG_ISRESTARTED ())
     {
@@ -4518,6 +4561,11 @@ vacuum_cleanup_dropped_files (THREAD_ENTRY * thread_p)
       /* Update next page link in the last non-empty page to NULL, to avoid
        * fixing empty pages in the future.
        */
+      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		     "VACUUM: Cleanup dropped files must remove pages to the "
+		     "of page (%d, %d)... Cut off link.",
+		     last_non_empty_page_vpid.volid,
+		     last_non_empty_page_vpid.pageid);
       page =
 	vacuum_fix_dropped_entries_page (thread_p, &last_non_empty_page_vpid,
 					 PGBUF_LATCH_WRITE);
@@ -4531,6 +4579,9 @@ vacuum_cleanup_dropped_files (THREAD_ENTRY * thread_p)
 					      &page->next_page);
       vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
     }
+
+  vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
+		 "VACUUM: Finished cleanup dropped files.");
   return NO_ERROR;
 }
 
@@ -4607,7 +4658,7 @@ vacuum_find_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid)
 	  /* Found matching entry.
 	   * Compare the given MVCCID with the MVCCID of dropped file.
 	   */
-	  if (!mvcc_id_precedes (dropped_file->mvccid, mvccid))
+	  if (mvcc_id_precedes (mvccid, dropped_file->mvccid))
 	    {
 	      /* The record must belong to the dropped file */
 	      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
@@ -4646,12 +4697,15 @@ vacuum_find_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid)
 	      return false;
 	    }
 	}
-      vacuum_er_log (VACUUM_ER_LOG_DROPPED_FILES,
-			     "VACUUM: didn't find dropped file: vfid=(%d, %d)"
-			     " mvccid=%d in page (%d, %d).",
-			     vfid->volid, vfid->fileid, mvccid,
-			     pgbuf_get_volume_id ((PAGE_PTR) page),
-			     pgbuf_get_page_id ((PAGE_PTR) page));
+      /* Do not log this unless you think it is useful. It spamms the log
+       * file.
+       */
+      vacuum_er_log (VACUUM_ER_LOG_NONE,
+		     "VACUUM: didn't find dropped file: vfid=(%d, %d)"
+		     " mvccid=%d in page (%d, %d).",
+		     vfid->volid, vfid->fileid, mvccid,
+		     pgbuf_get_volume_id ((PAGE_PTR) page),
+		     pgbuf_get_page_id ((PAGE_PTR) page));
       vacuum_unfix_dropped_entries_page (thread_p, page);
     }
 

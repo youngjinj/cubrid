@@ -6324,8 +6324,6 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, int exp_npgs,
 	    {
 	      /* A heap has been reused */
 	      vacuum_log_add_dropped_file (thread_p, &hfid->vfid,
-					   logtb_get_current_mvccid
-					   (thread_p),
 					   VACUUM_LOG_ADD_DROPPED_FILE_UNDO);
 	      return hfid;
 	    }
@@ -6356,7 +6354,6 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, int exp_npgs,
     }
 
   vacuum_log_add_dropped_file (thread_p, &hfid->vfid,
-			       logtb_get_current_mvccid (thread_p),
 			       VACUUM_LOG_ADD_DROPPED_FILE_UNDO);
 
   addr_hdr.pgptr = pgbuf_fix (thread_p, &vpid, NEW_PAGE, PGBUF_LATCH_WRITE,
@@ -6898,7 +6895,6 @@ xheap_destroy (THREAD_ENTRY * thread_p, const HFID * hfid)
     }
 
   vacuum_log_add_dropped_file (thread_p, &hfid->vfid,
-			       logtb_get_current_mvccid (thread_p),
 			       VACUUM_LOG_ADD_DROPPED_FILE_POSTPONE);
 
   ret = file_destroy (thread_p, &hfid->vfid);
@@ -6955,7 +6951,6 @@ xheap_destroy_newly_created (THREAD_ENTRY * thread_p, const HFID * hfid)
     }
 
   vacuum_log_add_dropped_file (thread_p, &hfid->vfid,
-			       logtb_get_current_mvccid (thread_p),
 			       VACUUM_LOG_ADD_DROPPED_FILE_POSTPONE);
 
   ret = file_mark_as_deleted (thread_p, &hfid->vfid);
