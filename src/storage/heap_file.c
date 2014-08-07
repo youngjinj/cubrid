@@ -15968,6 +15968,7 @@ heap_attrinfo_read_dbvalues (THREAD_ENTRY * thread_p, const OID * inst_oid,
   int ret = NO_ERROR;
   OID mvcc_updated_oid;
   RECDES mvcc_last_record;
+  bool need_last_version;
 
   /* check to make sure the attr_info has been used */
   if (attr_info->num_values == -1)
@@ -15999,6 +16000,7 @@ heap_attrinfo_read_dbvalues (THREAD_ENTRY * thread_p, const OID * inst_oid,
    * Go over each attribute and read it
    */
 
+  need_last_version = false;
   for (i = 0; i < attr_info->num_values; i++)
     {
       value = &attr_info->values[i];
@@ -16008,32 +16010,12 @@ heap_attrinfo_read_dbvalues (THREAD_ENTRY * thread_p, const OID * inst_oid,
 	  goto exit_on_error;
 	}
 
-      if (mvcc_Enabled && scan_cache != NULL
+      if (need_last_version == false && scan_cache != NULL
 	  && DB_VALUE_DOMAIN_TYPE (&(value->dbvalue)) == DB_TYPE_OID
 	  && !DB_IS_NULL (&(value->dbvalue))
 	  && !oid_is_partition (&(*attr_info).class_oid))
 	{
-	  mvcc_last_record.data = NULL;
-	  if (heap_get_last_internal (thread_p, &((*attr_info).class_oid),
-				      DB_GET_OID (&(value->dbvalue)),
-				      &mvcc_last_record,
-				      scan_cache, true, NULL_CHN,
-				      &mvcc_updated_oid) != S_SUCCESS)
-	    {
-	      if (er_errid () == ER_HEAP_NODATA_NEWADDRESS
-		  || er_errid () == ER_HEAP_UNKNOWN_OBJECT)
-		{
-		  er_clear ();	/* clear ER_HEAP_NODATA_NEWADDRESS */
-		  continue;
-		}
-	      goto exit_on_error;
-	    }
-
-	  if (!OID_ISNULL (&mvcc_updated_oid)
-	      && !OID_EQ (&mvcc_updated_oid, DB_GET_OID (&(value->dbvalue))))
-	    {
-	      DB_MAKE_OID (&(value->dbvalue), &mvcc_updated_oid);
-	    }
+	  need_last_version = true;
 	}
     }
 
@@ -16044,6 +16026,47 @@ heap_attrinfo_read_dbvalues (THREAD_ENTRY * thread_p, const OID * inst_oid,
     {
       attr_info->inst_chn = or_chn (recdes);
       attr_info->inst_oid = *inst_oid;
+    }
+
+  if (need_last_version == true)
+    {
+      for (i = 0; i < attr_info->num_values; i++)
+	{
+	  value = &attr_info->values[i];
+	  if (DB_VALUE_DOMAIN_TYPE (&(value->dbvalue)) == DB_TYPE_OID
+	      && !DB_IS_NULL (&(value->dbvalue))
+	      && !oid_is_partition (&(*attr_info).class_oid))
+	    {
+	      mvcc_last_record.data = NULL;
+	      /* Since we care only about to cache the last fetched page
+	       * in heap_get_last_internal, we can reuse the same scan_cache
+	       * even if was initialized on other class.
+	       * In case that heap_get_last_internal need scan_cache->hfid 
+	       * for instance, then, another scan_cache must be used.
+	       */
+	      if (heap_get_last_internal (thread_p, &((*attr_info).class_oid),
+					  DB_GET_OID (&(value->dbvalue)),
+					  &mvcc_last_record,
+					  scan_cache, true, NULL_CHN,
+					  &mvcc_updated_oid) != S_SUCCESS)
+		{
+		  if (er_errid () == ER_HEAP_NODATA_NEWADDRESS
+		      || er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+		    {
+		      er_clear ();	/* clear ER_HEAP_NODATA_NEWADDRESS */
+		      continue;
+		    }
+		  goto exit_on_error;
+		}
+
+	      if (!OID_ISNULL (&mvcc_updated_oid)
+		  && !OID_EQ (&mvcc_updated_oid,
+			      DB_GET_OID (&(value->dbvalue))))
+		{
+		  DB_MAKE_OID (&(value->dbvalue), &mvcc_updated_oid);
+		}
+	    }
+	}
     }
 
   return ret;
@@ -27029,6 +27052,24 @@ try_again:
 	    }
 	}
 
+      /* Although we not have lock on object, it is still possible that we
+       * had to wait for someone else to finish his change. This change could
+       * also mean change of record type. If that is the case, go back from
+       * top and repeat steps (note that object is already locked so it
+       * shouldn't be changed a second time).
+       * TODO: Find a better solution which doesn't require refixing pages.
+       */
+      assert_release (pgptr != NULL);
+      if (spage_get_record_type (pgptr, oid->slotid) != REC_RELOCATION)
+	{
+	  if (forward_pgptr != NULL)
+	    {
+	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+	    }
+	  pgbuf_unfix_and_init (thread_p, pgptr);
+	  goto try_again;
+	}
+
       if (scan == S_SUCCESS)
 	{
 	  /* allocate space if is the case */
@@ -27178,6 +27219,24 @@ try_again:
 	    {
 	      goto error;
 	    }
+	}
+
+      /* Although we not have lock on object, it is still possible that we
+       * had to wait for someone else to finish his change. This change could
+       * also mean change of record type. If that is the case, go back from
+       * top and repeat steps (note that object is already locked so it
+       * shouldn't be changed a second time).
+       * TODO: Find a better solution which doesn't require refixing pages.
+       */
+      assert_release (pgptr != NULL);
+      if (spage_get_record_type (pgptr, oid->slotid) != REC_HOME)
+	{
+	  if (forward_pgptr != NULL)
+	    {
+	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+	    }
+	  pgbuf_unfix_and_init (thread_p, pgptr);
+	  goto try_again;
 	}
 
       if (scan == S_SUCCESS)
@@ -27363,10 +27422,6 @@ try_again:
 	      goto error;
 	    }
 
-	  /* release pages since lock acquired */
-	  pgbuf_unfix_and_init (thread_p, pgptr);
-	  pgbuf_unfix_and_init (thread_p, forward_pgptr);
-
 	  if (mvcc_delete_info->satisfies_delete_result !=
 	      DELETE_RECORD_CAN_DELETE)
 	    {
@@ -27375,6 +27430,24 @@ try_again:
 	       */
 	      goto end;
 	    }
+	}
+
+      /* Although we not have lock on object, it is still possible that we
+       * had to wait for someone else to finish his change. This change could
+       * also mean change of record type. If that is the case, go back from
+       * top and repeat steps (note that object is already locked so it
+       * shouldn't be changed a second time).
+       * TODO: Find a better solution which doesn't require refixing pages.
+       */
+      assert_release (pgptr != NULL);
+      if (spage_get_record_type (pgptr, oid->slotid) != REC_BIGONE)
+	{
+	  if (forward_pgptr != NULL)
+	    {
+	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+	    }
+	  pgbuf_unfix_and_init (thread_p, pgptr);
+	  goto try_again;
 	}
 
       /*

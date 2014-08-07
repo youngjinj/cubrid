@@ -2236,10 +2236,6 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
 	{
 	  er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
 		  ER_LOG_READ, 3, pageid, phy_pageid, log_Name_active);
-	  if (thread_is_process_log_for_vacuum (thread_p))
-	    {
-	      LOG_CS_EXIT (thread_p);
-	    }
 	  goto error;
 	}
       else
@@ -2249,10 +2245,6 @@ logpb_read_page_from_file (THREAD_ENTRY * thread_p, LOG_PAGEID pageid,
 	      /* Clean the buffer... since it may be corrupted */
 	      er_set (ER_FATAL_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_LOG_PAGE_CORRUPTED, 1, pageid);
-	      if (thread_is_process_log_for_vacuum (thread_p))
-		{
-		  LOG_CS_EXIT (thread_p);
-		}
 	      goto error;
 	    }
 	}
@@ -6524,15 +6516,6 @@ logpb_set_unavailable_archive (int arv_num)
 {
   int *ptr;
   int size;
-  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (NULL);
-
-  if (!archive_cs_own_write)
-    {
-      /* TODO: Analyze and change the system of locks on archives. Vacuum
-       *       workers may be gravely affected by current CS.
-       */
-      LOG_ARCHIVE_CS_ENTER (NULL);
-    }
 
   if (log_Gl.archive.unav_archives == NULL)
     {
@@ -6540,7 +6523,7 @@ logpb_set_unavailable_archive (int arv_num)
       ptr = (int *) malloc (size);
       if (ptr == NULL)
 	{
-	  goto end;
+	  return;
 	}
       log_Gl.archive.max_unav = 10;
       log_Gl.archive.next_unav = 0;
@@ -6555,7 +6538,7 @@ logpb_set_unavailable_archive (int arv_num)
 	  ptr = (int *) realloc (log_Gl.archive.unav_archives, size);
 	  if (ptr == NULL)
 	    {
-	      goto end;
+	      return;
 	    }
 	  log_Gl.archive.max_unav += 10;
 	  log_Gl.archive.unav_archives = ptr;
@@ -6563,12 +6546,6 @@ logpb_set_unavailable_archive (int arv_num)
     }
 
   log_Gl.archive.unav_archives[log_Gl.archive.next_unav++] = arv_num;
-
-end:
-  if (!archive_cs_own_write)
-    {
-      LOG_ARCHIVE_CS_EXIT (NULL);
-    }
 }
 
 /*
@@ -6581,16 +6558,6 @@ end:
 void
 logpb_decache_archive_info (THREAD_ENTRY * thread_p)
 {
-  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
-
-  if (!archive_cs_own_write)
-    {
-      /* TODO: Analyze and change the system of locks on archives. Vacuum
-       *       workers may be gravely affected by current CS.
-       */
-      LOG_ARCHIVE_CS_ENTER (thread_p);
-    }
-
   if (log_Gl.archive.vdes != NULL_VOLDES)
     {
       fileio_dismount (thread_p, log_Gl.archive.vdes);
@@ -6601,11 +6568,6 @@ logpb_decache_archive_info (THREAD_ENTRY * thread_p)
       free_and_init (log_Gl.archive.unav_archives);
       log_Gl.archive.max_unav = 0;
       log_Gl.archive.next_unav = 0;
-    }
-
-  if (!archive_cs_own_write)
-    {
-      LOG_ARCHIVE_CS_EXIT (thread_p);
     }
 }
 
@@ -7157,7 +7119,6 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
   const char *catmsg;
   int error_code = NO_ERROR;
   int num_pages = 0;
-  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
 
   aligned_log_pgbuf = PTR_ALIGN (log_pgbuf, MAX_ALIGNMENT);
 
@@ -7177,17 +7138,14 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
       return;
     }
 
-  if (!archive_cs_own_write)
-    {
-      /* TODO: Analyze and change the system of locks on archives. Vacuum
-       *       workers may be gravely affected by current CS.
-       */
-      LOG_ARCHIVE_CS_ENTER (thread_p);
-    }
-
   bg_arv_info = &log_Gl.bg_archive_info;
   if (log_Gl.archive.vdes != NULL_VOLDES)
     {
+      /* A recheck is required after logpb_flush_all_append_pages when
+       * LOG_CS is demoted and promoted. log_Gl.archive.vdes may be modified
+       * by someone else.
+       * Should we remove this dismount?
+       */
       fileio_dismount (thread_p, log_Gl.archive.vdes);
       log_Gl.archive.vdes = NULL_VOLDES;
     }
@@ -7395,6 +7353,10 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
   /* Cast the archive information. May be used again */
 
   log_Gl.archive.hdr = *arvhdr;	/* Copy of structure */
+  if (log_Gl.archive.vdes != NULL_VOLDES)
+    {
+      fileio_dismount (thread_p, log_Gl.archive.vdes);
+    }
   log_Gl.archive.vdes = vdes;
 
   catmsg = msgcat_message (MSGCAT_CATALOG_CUBRID,
@@ -7499,11 +7461,6 @@ logpb_archive_active_log (THREAD_ENTRY * thread_p)
 
   free_and_init (malloc_arv_hdr_pgptr);
 
-  if (!archive_cs_own_write)
-    {
-      LOG_ARCHIVE_CS_EXIT (thread_p);
-    }
-
   return;
 
   /* ********* */
@@ -7531,11 +7488,6 @@ error:
     }
 
   logpb_fatal_error (thread_p, true, ARG_FILE_LINE, "log_archive_active_log");
-
-  if (!archive_cs_own_write)
-    {
-      LOG_ARCHIVE_CS_EXIT (thread_p);
-    }
 }
 
 int
@@ -7694,17 +7646,8 @@ logpb_remove_archive_logs (THREAD_ENTRY * thread_p, const char *info_reason)
   LOG_LSA newflush_upto_lsa;	/* Next to be flush           */
   int first_deleted_arv_num;
   int last_deleted_arv_num;
-  bool archive_cs_own_write = LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
 
   assert (LOG_CS_OWN_WRITE_MODE (thread_p));
-
-  if (!archive_cs_own_write)
-    {
-      /* TODO: Analyze and change the system of locks on archives. Vacuum
-       *       workers may be gravely affected by current CS.
-       */
-      LOG_ARCHIVE_CS_ENTER (thread_p);
-    }
 
   /* Close any log archives that are opened */
   if (log_Gl.archive.vdes != NULL_VOLDES)
@@ -7756,10 +7699,6 @@ logpb_remove_archive_logs (THREAD_ENTRY * thread_p, const char *info_reason)
   if (log_Gl.hdr.last_deleted_arv_num + 1 > last_deleted_arv_num)
     {
       /* Nothing to remove */
-      if (!archive_cs_own_write)
-	{
-	  LOG_ARCHIVE_CS_EXIT (thread_p);
-	}
       return;
     }
 
@@ -7771,11 +7710,6 @@ logpb_remove_archive_logs (THREAD_ENTRY * thread_p, const char *info_reason)
 
       log_Gl.hdr.last_deleted_arv_num = last_deleted_arv_num;
       logpb_flush_header (thread_p);	/* to get rid of archives */
-    }
-
-  if (!archive_cs_own_write)
-    {
-      LOG_ARCHIVE_CS_EXIT (thread_p);
     }
 }
 
@@ -8886,15 +8820,6 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
 
       if (first_arv_num_not_needed != -1)
 	{
-	  bool archive_cs_own_write =
-	    LOG_ARCHIVE_CS_OWN_WRITE_MODE (thread_p);
-	  if (!archive_cs_own_write)
-	    {
-	      /* TODO: Analyze and change the system of locks on archives. Vacuum
-	       *       workers may be gravely affected by current CS.
-	       */
-	      LOG_ARCHIVE_CS_ENTER (thread_p);
-	    }
 	  log_Gl.hdr.last_arv_num_for_syscrashes =
 	    last_arv_num_not_needed + 1;
 
@@ -8950,11 +8875,6 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
 	    }
 
 	  logpb_flush_header (thread_p);	/* Yes, one more time, to get rid of archives */
-
-	  if (!archive_cs_own_write)
-	    {
-	      LOG_ARCHIVE_CS_EXIT (thread_p);
-	    }
 	}
     }
 

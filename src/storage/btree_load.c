@@ -1861,10 +1861,9 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
       PHASE III: Update the root page
    *****************************************/
 
-  /* Retrieve the pre-allocated root page */
-  root_vpid.volid = load_args->btid->sys_btid->vfid.volid;
-  root_vpid.pageid = load_args->btid->sys_btid->root_pageid;
-  load_args->nleaf.pgptr = pgbuf_fix (thread_p, &root_vpid,
+  /* Retrieve the last non-leaf page (the current one); guaranteed to exist */
+  /* Fetch the current page */
+  load_args->nleaf.pgptr = pgbuf_fix (thread_p, &load_args->nleaf.vpid,
 				      OLD_PAGE, PGBUF_LATCH_WRITE,
 				      PGBUF_UNCONDITIONAL_LATCH);
   if (load_args->nleaf.pgptr == NULL)
@@ -1919,6 +1918,43 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
     {
       goto exit_on_error;
     }
+
+  /* move current ROOT page content to the first page allocated */
+  if (file_find_nthpages (thread_p, &load_args->btid->sys_btid->vfid,
+			  &cur_nleafpgid, 0, 1) != 1)
+    {
+      goto exit_on_error;
+    }
+  next_pageptr = pgbuf_fix (thread_p, &cur_nleafpgid, NEW_PAGE,
+			    PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
+  if (next_pageptr == NULL)
+    {
+      goto exit_on_error;
+    }
+
+  (void) pgbuf_set_page_ptype (thread_p, next_pageptr, PAGE_BTREE);
+
+  memcpy (next_pageptr, load_args->nleaf.pgptr, DB_PAGESIZE);
+  pgbuf_unfix_and_init (thread_p, load_args->nleaf.pgptr);
+
+  if (load_args->used_pgcnt > load_args->allocated_pgcnt)
+    {
+      /* deallocate this last page of index file
+       * Note: If used_pgcnt is less than init_pgcnt, this last page
+       * will be deleted on page resource release at the end.
+       */
+      ret = file_dealloc_page (thread_p, &load_args->btid->sys_btid->vfid,
+			       &load_args->nleaf.vpid);
+      if (ret != NO_ERROR)
+	{
+	  goto exit_on_error;
+	}
+    }
+  load_args->used_pgcnt--;
+
+  load_args->nleaf.pgptr = next_pageptr;
+  next_pageptr = NULL;
+  load_args->nleaf.vpid = cur_nleafpgid;
 
   /*
    * The root page must be logged, otherwise, in the event of a crash. The
@@ -2921,16 +2957,21 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  if (MVCC_IS_HEADER_DELID_VALID (&mvcc_header))
 	    {
 	      /* Vacuum must delete this object */
-	      mvcc_args.purpose = MVCC_BTREE_DELETE_OBJECT;
+	      mvcc_args.purpose = MVCC_BTREE_INSERT_DELID;
 	      mvcc_args.delete_mvccid = MVCC_GET_DELID (&mvcc_header);
 	    }
 	  else
 	    {
 	      /* Vacuum must remove insert MVCCID from this object */
 	      mvcc_args.purpose = MVCC_BTREE_INSERT_OBJECT;
-	      mvcc_args.delete_mvccid = MVCC_GET_INSID (&mvcc_header);
+	      mvcc_args.insert_mvccid = MVCC_GET_INSID (&mvcc_header);
 	    }
 
+	  /* clear flags for logging */
+	  btree_clear_mvcc_flags_from_oid (&this_oid);
+	  btree_clear_mvcc_flags_from_oid (&this_class_oid);
+
+	  /* append log data */
 	  ret =
 	    btree_rv_save_keyval (load_args->btid, &this_key, &this_class_oid,
 				  &this_oid, &mvcc_args, &data, &length);

@@ -98,6 +98,7 @@ extern int catcls_delete_catalog_classes (THREAD_ENTRY * thread_p,
 					  const char *name, OID * class_oid);
 extern int catcls_update_catalog_classes (THREAD_ENTRY * thread_p,
 					  const char *name, RECDES * record,
+					  OID * class_oid_p,
 					  bool force_in_place);
 extern int catcls_remove_entry (OID * class_oid);
 
@@ -6004,7 +6005,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	{
 	  error_code = catcls_update_catalog_classes (thread_p,
 						      old_classname, recdes,
-						      force_in_place);
+						      oid, force_in_place);
 	  if (error_code != NO_ERROR)
 	    {
 	      goto error;

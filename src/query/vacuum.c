@@ -4176,7 +4176,7 @@ vacuum_log_add_dropped_file (THREAD_ENTRY * thread_p, const VFID * vfid,
 
   /* Initialize recovery data */
   VFID_COPY (&rcv_data.vfid, vfid);
-  rcv_data.mvccid = MVCCID_NULL;      /* Not really used here */
+  rcv_data.mvccid = MVCCID_NULL;	/* Not really used here */
 
   addr.offset = -1;
   addr.pgptr = NULL;
@@ -4205,12 +4205,11 @@ vacuum_log_add_dropped_file (THREAD_ENTRY * thread_p, const VFID * vfid,
 int
 vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
-  MVCCID mvccid;
-  VFID *vfid = NULL;
   VACUUM_DROPPED_FILES_PAGE *page = NULL;
   int error = NO_ERROR, offset = 0;
   INT16 position = rcv->offset & VACUUM_DROPPED_FILES_RV_CLEAR_MASK;
   int mem_size;
+  VACUUM_DROPPED_FILES_RCV_DATA *rcv_data = NULL;
   bool replace = (rcv->offset & VACUUM_DROPPED_FILES_RV_FLAG_DUPLICATE) != 0;
   bool is_new_page =
     (rcv->offset & VACUUM_DROPPED_FILES_RV_FLAG_NEWPAGE) != 0;
@@ -4218,11 +4217,11 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
   /* We cannot have a new page and a duplicate at the same time */
   assert (!replace || !is_new_page);
 
-  vfid = (VFID *) (rcv->data + offset);
-  offset += sizeof (*vfid);
+  rcv_data = ((VACUUM_DROPPED_FILES_RCV_DATA *) rcv->data);
 
-  mvccid = *((MVCCID *) (rcv->data + offset));
-  offset += sizeof (mvccid);
+  assert_release (rcv->length == sizeof (*rcv_data));
+  assert_release (!VFID_ISNULL (&rcv_data->vfid));
+  assert_release (MVCCID_IS_VALID (rcv_data->mvccid));
 
   page = (VACUUM_DROPPED_FILES_PAGE *) rcv->pgptr;
 
@@ -4245,8 +4244,9 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 			 "position %d (only %d entries in page) while "
 			 "replacing old entry with vfid=(%d, %d) mvccid=%lld."
 			 " Page is (%d, %d) at lsa (%lld, %d). ",
-			 position, page->n_dropped_files, vfid->volid,
-			 vfid->fileid, mvccid,
+			 position, page->n_dropped_files,
+			 rcv_data->vfid.volid, rcv_data->vfid.fileid,
+			 rcv_data->mvccid,
 			 pgbuf_get_volume_id (rcv->pgptr),
 			 pgbuf_get_page_id (rcv->pgptr),
 			 (long long int) pgbuf_get_lsa (rcv->pgptr)->pageid,
@@ -4254,7 +4254,7 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	  assert_release (false);
 	  return ER_FAILED;
 	}
-      if (!VFID_EQ (vfid, &page->dropped_files[position].vfid))
+      if (!VFID_EQ (&rcv_data->vfid, &page->dropped_files[position].vfid))
 	{
 	  /* Error! */
 	  vacuum_er_log (VACUUM_ER_LOG_ERROR | VACUUM_ER_LOG_DROPPED_FILES
@@ -4263,7 +4263,8 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 			 "find vfid (%d, %d) at position %d and found "
 			 "(%d, %d) with MVCCID=%d. "
 			 "Page is (%d, %d) at lsa (%lld, %d). ",
-			 vfid->volid, vfid->fileid, position,
+			 rcv_data->vfid.volid, rcv_data->vfid.fileid,
+			 position,
 			 page->dropped_files[position].vfid.volid,
 			 page->dropped_files[position].vfid.fileid,
 			 page->dropped_files[position].mvccid,
@@ -4278,12 +4279,13 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 		     "VACUUM: Dropped files redo recovery, replace MVCCID for"
 		     " file (%d, %d) with %lld (position=%d). "
 		     "Page is (%d, %d) at lsa (%lld, %d).",
-		     vfid->volid, vfid->fileid, mvccid, position,
+		     rcv_data->vfid.volid, rcv_data->vfid.fileid,
+		     rcv_data->mvccid, position,
 		     pgbuf_get_volume_id (rcv->pgptr),
 		     pgbuf_get_page_id (rcv->pgptr),
 		     (long long int) pgbuf_get_lsa (rcv->pgptr)->pageid,
 		     (int) pgbuf_get_lsa (rcv->pgptr)->offset);
-      page->dropped_files[position].mvccid = mvccid;
+      page->dropped_files[position].mvccid = rcv_data->mvccid;
     }
   else
     {
@@ -4296,8 +4298,9 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 			 "position %d (only %d entries in page) while "
 			 "inserting new entry vfid=(%d, %d) mvccid=%lld. "
 			 "Page is (%d, %d) at lsa (%lld, %d). ",
-			 position, page->n_dropped_files, vfid->volid,
-			 vfid->fileid, mvccid,
+			 position, page->n_dropped_files,
+			 rcv_data->vfid.volid, rcv_data->vfid.fileid,
+			 rcv_data->mvccid,
 			 pgbuf_get_volume_id (rcv->pgptr),
 			 pgbuf_get_page_id (rcv->pgptr),
 			 (long long int) pgbuf_get_lsa (rcv->pgptr)->pageid,
@@ -4316,8 +4319,8 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 		  vacuum_Dropped_files_tmp_buffer, mem_size);
 	}
       /* Copy new dropped file */
-      VFID_COPY (&page->dropped_files[position].vfid, vfid);
-      page->dropped_files[position].mvccid = mvccid;
+      VFID_COPY (&page->dropped_files[position].vfid, &rcv_data->vfid);
+      page->dropped_files[position].mvccid = rcv_data->mvccid;
 
       /* Increment number of files */
       page->n_dropped_files++;
@@ -4326,7 +4329,8 @@ vacuum_rv_undoredo_add_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 		     "VACUUM: Dropped files redo recovery, insert new entry "
 		     "vfid=(%d, %d), mvccid=%lld at position %d. "
 		     "Page is (%d, %d) at lsa (%lld, %d).",
-		     vfid->volid, vfid->fileid, mvccid, position,
+		     rcv_data->vfid.volid, rcv_data->vfid.fileid,
+		     rcv_data->mvccid, position,
 		     pgbuf_get_volume_id (rcv->pgptr),
 		     pgbuf_get_page_id (rcv->pgptr),
 		     (long long int) pgbuf_get_lsa (rcv->pgptr)->pageid,
@@ -4372,11 +4376,11 @@ vacuum_notify_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
    * We will use the log_Gl.hdr.mvcc_next_id as borderline to distinguish
    * this file from newer files.
    * 1. All changes on this file must be done by transaction that have already
-   *	committed which means their MVCCID will be less than current
-   *	log_Gl.hdr.mvcc_next_id.
+   *    committed which means their MVCCID will be less than current
+   *    log_Gl.hdr.mvcc_next_id.
    * 2. All changes on a new file that reused VFID must be done by transaction
-   *	that start after this call, which means their MVCCID's will be at
-   *	least equal to current log_Gl.hdr.mvcc_next_id.
+   *    that start after this call, which means their MVCCID's will be at
+   *    least equal to current log_Gl.hdr.mvcc_next_id.
    */
 
   VFID_COPY (&new_rcv_data.vfid,
@@ -4389,7 +4393,7 @@ vacuum_notify_dropped_file (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
   /* Add dropped file to current list */
   error =
     vacuum_add_dropped_file (thread_p, &new_rcv_data.vfid,
-			     new_rcv_data.mvccid, rcv, pospone_ref_lsa);
+			     new_rcv_data.mvccid, &new_rcv, pospone_ref_lsa);
   if (error != NO_ERROR)
     {
       return error;

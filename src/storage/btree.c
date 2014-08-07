@@ -31981,6 +31981,19 @@ btree_set_mvcc_flags_into_oid (MVCC_REC_HEADER * p_mvcc_header, OID * oid)
 }
 
 /*
+ * btree_clear_mvcc_flags_from_oid () - 
+ *
+ * return	      : Void.
+ * p_mvcc_header (in) : MVCC info.
+ * oid (in/out)	      : Object identifier.
+ */
+void
+btree_clear_mvcc_flags_from_oid (OID * oid)
+{
+  oid->volid &= ~BTREE_LEAF_OID_MVCC_MASK;
+}
+
+/*
  * btree_compare_btids () - B-tree identifier comparator.
  *
  * return	  : Positive value is the first identifier is bigger,

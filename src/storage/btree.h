@@ -632,6 +632,7 @@ extern int btree_packed_mvccinfo_size (MVCC_REC_HEADER * p_mvcc_header);
 
 extern void btree_set_mvcc_flags_into_oid (MVCC_REC_HEADER * p_mvcc_header,
 					   OID * oid);
+extern void btree_clear_mvcc_flags_from_oid (OID * oid);
 
 extern void btree_rv_read_keyval_info_nocopy (THREAD_ENTRY * thread_p,
 					      char *datap, int data_size,

@@ -124,6 +124,7 @@ extern int catcls_delete_catalog_classes (THREAD_ENTRY * thread_p,
 					  const char *name, OID * class_oid);
 extern int catcls_update_catalog_classes (THREAD_ENTRY * thread_p,
 					  const char *name, RECDES * record,
+					  OID * class_oid_p,
 					  bool force_in_place);
 extern int catcls_finalize_class_oid_to_oid_hash_table (void);
 extern int catcls_remove_entry (OID * class_oid);
@@ -257,6 +258,8 @@ static void catcls_apply_component_type (OR_VALUE * value_p, int type);
 static int catcls_resolution_space (int name_space);
 static void catcls_apply_resolutions (OR_VALUE * value_p,
 				      OR_VALUE * resolution_p);
+static int catcls_is_mvcc_update_needed (THREAD_ENTRY * thread_p, OID * oid,
+					 bool * need_mvcc_update);
 
 /*
  * catcls_allocate_entry () -
@@ -731,8 +734,8 @@ catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p,
 {
   char *name_p = NULL;
   OID oid_buf;
-  OID *class_oid_p = NULL, *oid_p = NULL, *old_oid_p = NULL;
-  CATCLS_ENTRY *entry_p = NULL;
+  OID *class_oid_p, *oid_p;
+  CATCLS_ENTRY *entry_p;
 
   if (DB_IS_NULL (oid_val_p))
     {
@@ -741,63 +744,46 @@ catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p,
 
   class_oid_p = DB_PULL_OID (oid_val_p);
 
-  oid_p = &oid_buf;
-  name_p = heap_get_class_name (thread_p, class_oid_p);
-  if (name_p == NULL)
-    {
-      return NO_ERROR;
-    }
-
-  if (catcls_find_oid_by_class_name (thread_p, name_p, oid_p) != NO_ERROR)
-    {
-      free_and_init (name_p);
-
-      assert (er_errid () != NO_ERROR);
-      return er_errid ();
-    }
-
-  /* temporary disable search in catcls_Class_oid_to_oid_hash_table in MVCC */
-
   if (csect_enter_as_reader (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) !=
       NO_ERROR)
     {
-      free_and_init (name_p);
       return ER_FAILED;
     }
 
-  entry_p =
-    (CATCLS_ENTRY *) mht_get (catcls_Class_oid_to_oid_hash_table,
-			      class_oid_p);
-  if (entry_p != NULL)
-    {
-      old_oid_p = &entry_p->oid;
-    }
-
-  if (old_oid_p != NULL)
-    {
-      /* if is the same oid, nothing to do */
-      if (!OID_EQ (old_oid_p, oid_p))
-	{
-	  /* update hash entry with the last version */
-	  COPY_OID (&entry_p->oid, oid_p);
-	}
-    }
-  else if (!OID_ISNULL (oid_p))
-    {
-      entry_p = catcls_allocate_entry ();
-      if (entry_p == NULL)
-	{
-	  csect_exit (thread_p, CSECT_CT_OID_TABLE);
-	  free_and_init (name_p);
-	  return ER_FAILED;
-	}
-
-      COPY_OID (&entry_p->class_oid, class_oid_p);
-      COPY_OID (&entry_p->oid, oid_p);
-      catcls_put_entry (entry_p);
-    }
+  oid_p = catcls_find_oid (class_oid_p);
 
   csect_exit (thread_p, CSECT_CT_OID_TABLE);
+
+  if (oid_p == NULL)
+    {
+      oid_p = &oid_buf;
+      name_p = heap_get_class_name (thread_p, class_oid_p);
+      if (name_p == NULL)
+	{
+	  return NO_ERROR;
+	}
+
+      if (catcls_find_oid_by_class_name (thread_p, name_p, oid_p) != NO_ERROR)
+	{
+	  free_and_init (name_p);
+
+	  assert (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+
+      if (!OID_ISNULL (oid_p) && (entry_p = catcls_allocate_entry ()) != NULL)
+	{
+	  COPY_OID (&entry_p->class_oid, class_oid_p);
+	  COPY_OID (&entry_p->oid, oid_p);
+	  if (csect_enter (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) !=
+	      NO_ERROR)
+	    {
+	      return ER_FAILED;
+	    }
+	  catcls_put_entry (entry_p);
+	  csect_exit (thread_p, CSECT_CT_OID_TABLE);
+	}
+    }
 
   db_push_oid (oid_val_p, oid_p);
 
@@ -4458,30 +4444,104 @@ error:
 }
 
 /*
+ * catcls_is_mvcc_update_needed () - check whether mvcc update is needed
+ *   return: error code
+ *   thread_p(in): thread entry
+ *   oid(in): OID
+ *   need_mvcc_update(in/out): true, if mvcc update is needed
+ */
+int
+catcls_is_mvcc_update_needed (THREAD_ENTRY * thread_p, OID * oid,
+			      bool * need_mvcc_update)
+{
+  PAGE_PTR pgptr = NULL, forward_pgptr = NULL;
+  bool ignore_record = false;
+  MVCC_REC_HEADER mvcc_rec_header;
+  int error = NO_ERROR;
+
+  assert (oid != NULL && need_mvcc_update != NULL);
+  if (heap_get_pages_for_mvcc_chain_read (thread_p, oid, &pgptr,
+					  &forward_pgptr,
+					  &ignore_record) != NO_ERROR)
+    {
+      goto error;
+    }
+
+  if (ignore_record)
+    {
+      /* Is this possible? */
+      assert (0);
+      goto error;
+    }
+
+  if (heap_get_mvcc_data (thread_p, oid, &mvcc_rec_header, pgptr,
+			  forward_pgptr, NULL) != S_SUCCESS)
+    {
+      goto error;
+    }
+
+  if (mvcc_rec_header.mvcc_ins_id == logtb_get_current_mvccid (thread_p))
+    {
+      /* The record is inserted by current transaction, update in-place
+       * can be used instead of duplicating record
+       */
+      *need_mvcc_update = false;
+    }
+  else
+    {
+      /* MVCC update */
+      *need_mvcc_update = true;
+    }
+
+  if (pgptr != NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, pgptr);
+    }
+
+  if (forward_pgptr != NULL)
+    {
+      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+    }
+
+  return NO_ERROR;
+
+error:
+  if (pgptr != NULL)
+    {
+      pgbuf_unfix (thread_p, pgptr);
+    }
+
+  if (forward_pgptr != NULL)
+    {
+      pgbuf_unfix (thread_p, forward_pgptr);
+    }
+
+  error = er_errid ();
+  return ((error == NO_ERROR) ? ER_FAILED : error);
+}
+
+/*
  * catcls_update_catalog_classes () -
  *   return:
  *   name(in):
  *   record(in):
+ *   class_oid_p(in): class OID
  *   force_in_place(in): in MVCC the update of the instances will be made in
  *			 place. Otherwise the decision will be made in this
  *			 function. Doesn't matter in non-MVCC.
  */
 int
 catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
-			       RECDES * record_p, bool force_in_place)
+			       RECDES * record_p, OID * class_oid_p,
+			       bool force_in_place)
 {
   OR_VALUE *value_p = NULL;
-  OID oid, *class_oid_p;
+  OID oid, *catalog_class_oid_p;
   CLS_INFO *cls_info_p = NULL;
   HFID *hfid_p;
   HEAP_SCANCACHE scan;
   bool is_scan_inited = false;
-  PAGE_PTR pgptr = NULL, forward_pgptr = NULL;
   bool need_mvcc_update;
-  bool ignore_record = false;
-#if defined (SERVER_MODE)
-  MVCC_REC_HEADER mvcc_rec_header;
-#endif
 
   if (catcls_find_oid_by_class_name (thread_p, name_p, &oid) != NO_ERROR)
     {
@@ -4493,14 +4553,49 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
       return (catcls_insert_catalog_classes (thread_p, record_p));
     }
 
+  /* check whether mvcc update or update in place is needed */
+  if (force_in_place)
+    {
+      need_mvcc_update = false;
+    }
+  else
+    {
+#if !defined (SERVER_MODE)
+      need_mvcc_update = false;
+#else /* SERVER_MODE */
+      if (catcls_is_mvcc_update_needed (thread_p, &oid, &need_mvcc_update)
+	  != NO_ERROR)
+	{
+	  goto error;
+	}
+#endif /* SERVER_MODE */
+    }
+
+  if (need_mvcc_update == true)
+    {
+      /* since new OID version will be created, remove the old version */
+      if (csect_enter (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) != NO_ERROR)
+	{
+	  goto error;
+	}
+
+      if (catcls_remove_entry (class_oid_p) != NO_ERROR)
+	{
+	  csect_exit (thread_p, CSECT_CT_OID_TABLE);
+	  goto error;
+	}
+
+      csect_exit (thread_p, CSECT_CT_OID_TABLE);
+    }
+
   value_p = catcls_get_or_value_from_class_record (thread_p, record_p);
   if (value_p == NULL)
     {
       goto error;
     }
 
-  class_oid_p = &ct_Class.classoid;
-  cls_info_p = catalog_get_class_info (thread_p, class_oid_p);
+  catalog_class_oid_p = &ct_Class.classoid;
+  cls_info_p = catalog_get_class_info (thread_p, catalog_class_oid_p);
   if (cls_info_p == NULL)
     {
       goto error;
@@ -4508,7 +4603,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 
   hfid_p = &cls_info_p->hfid;
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p,
-				   class_oid_p,
+				   catalog_class_oid_p,
 				   SINGLE_ROW_UPDATE, NULL) != NO_ERROR)
     {
       goto error;
@@ -4516,118 +4611,41 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 
   is_scan_inited = true;
 
-  if (mvcc_Enabled == false)
+  /* update catalog classes in MVCC */
+
+  /* The oid is visible for current transaction, so it can't be
+   * removed by vacuum. More, can't be other transaction that
+   * concurrently update oid - can't be two concurrent transactions that 
+   * alter the same table.
+   */
+  if (need_mvcc_update == false)
     {
+      /* already inserted by the current transaction, need to replace
+       * the old version
+       */
       if (catcls_update_instance
-	  (thread_p, value_p, &oid, class_oid_p, hfid_p, &scan) != NO_ERROR)
+	  (thread_p, value_p, &oid, catalog_class_oid_p, hfid_p,
+	   &scan) != NO_ERROR)
 	{
 	  goto error;
 	}
     }
   else
     {
-      /* update catalog classes in MVCC */
-
-      /* The oid is visible for current transaction, so it can't be
-       * removed by vacuum. More, can't be other transaction that
-       * concurrently update oid - can't be two concurrent transactions that 
-       * alter the same table.
-       */
-
-      if (force_in_place)
+      /* not inserted by the current transaction - update to new version */
+      OID root_oid = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
+      OID new_oid;
+      if (catcls_mvcc_update_instance (thread_p, value_p, &oid, &new_oid,
+				       &root_oid, catalog_class_oid_p, hfid_p,
+				       &scan) != NO_ERROR)
 	{
-	  need_mvcc_update = false;
-	}
-      else
-	{
-#if !defined (SERVER_MODE)
-	  need_mvcc_update = false;
-#else /* SERVER_MODE */
-	  if (heap_get_pages_for_mvcc_chain_read (thread_p, &oid, &pgptr,
-						  &forward_pgptr,
-						  &ignore_record) != NO_ERROR)
-	    {
-	      goto error;
-	    }
-
-	  if (ignore_record)
-	    {
-	      /* Is this possible? */
-	      assert (0);
-	      goto error;
-	    }
-
-	  if (heap_get_mvcc_data (thread_p, &oid, &mvcc_rec_header, pgptr,
-				  forward_pgptr, NULL) != S_SUCCESS)
-	    {
-	      goto error;
-	    }
-
-	  if (mvcc_rec_header.mvcc_ins_id ==
-	      logtb_get_current_mvccid (thread_p))
-	    {
-	      /* The record is inserted by current transaction, update in-place
-	       * can be used instead of duplicating record
-	       */
-	      need_mvcc_update = false;
-	    }
-	  else
-	    {
-	      /* MVCC update */
-	      need_mvcc_update = true;
-	    }
-
-	  if (pgptr != NULL)
-	    {
-	      pgbuf_unfix_and_init (thread_p, pgptr);
-	    }
-
-	  if (forward_pgptr != NULL)
-	    {
-	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
-	    }
-
-#endif /* SERVER_MODE */
-	}
-      if (need_mvcc_update == false)
-	{
-	  /* already inserted by the current transaction, need to replace
-	   * the old version
-	   */
-	  if (catcls_update_instance
-	      (thread_p, value_p, &oid, class_oid_p, hfid_p,
-	       &scan) != NO_ERROR)
-	    {
-	      goto error;
-	    }
-	}
-      else
-	{
-	  /* not inserted by the current transaction - update to new version */
-	  OID root_oid = { NULL_PAGEID, NULL_SLOTID, NULL_VOLID };
-	  OID new_oid;
-	  if (catcls_mvcc_update_instance (thread_p, value_p, &oid, &new_oid,
-					   &root_oid, class_oid_p, hfid_p,
-					   &scan) != NO_ERROR)
-	    {
-	      goto error;
-	    }
+	  goto error;
 	}
     }
 
   heap_scancache_end_modify (thread_p, &scan);
   catalog_free_class_info (cls_info_p);
   catcls_free_or_value (value_p);
-
-  if (pgptr != NULL)
-    {
-      pgbuf_unfix (thread_p, pgptr);
-    }
-
-  if (forward_pgptr != NULL)
-    {
-      pgbuf_unfix (thread_p, forward_pgptr);
-    }
 
   return NO_ERROR;
 
@@ -4646,16 +4664,6 @@ error:
   if (value_p)
     {
       catcls_free_or_value (value_p);
-    }
-
-  if (pgptr != NULL)
-    {
-      pgbuf_unfix (thread_p, pgptr);
-    }
-
-  if (forward_pgptr != NULL)
-    {
-      pgbuf_unfix (thread_p, forward_pgptr);
     }
 
   return ER_FAILED;
