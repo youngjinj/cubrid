@@ -7341,7 +7341,6 @@ xlog_client_get_first_postpone (THREAD_ENTRY * thread_p, LOG_LSA * next_lsa)
 
   return log_client_find_actions (thread_p, tdes, next_lsa,
 				  LOG_CLIENT_USER_POSTPONE_DATA);
-
 }
 
 /*

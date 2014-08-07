@@ -1607,7 +1607,6 @@ slog_client_get_first_postpone (THREAD_ENTRY * thread_p, unsigned int rid,
   int num_records = 0;
 
   log_area = xlog_client_get_first_postpone (thread_p, &lsa);
-
   if (log_area == NULL)
     {
       return_error_to_client (thread_p, rid);
@@ -1615,12 +1614,14 @@ slog_client_get_first_postpone (THREAD_ENTRY * thread_p, unsigned int rid,
       desc_size = 0;
       content_ptr = NULL;
       content_size = 0;
+      LSA_SET_NULL (&lsa);
     }
   else
     {
       num_records = log_copy_area_send (log_area, &content_ptr, &content_size,
 					&desc_ptr, &desc_size);
     }
+
   ptr = or_pack_int (reply, num_records);
   ptr = or_pack_int (ptr, desc_size);
   ptr = or_pack_int (ptr, content_size);
@@ -1672,7 +1673,6 @@ slog_client_get_next_postpone (THREAD_ENTRY * thread_p, unsigned int rid,
   int num_records = 0;
 
   log_area = xlog_client_get_next_postpone (thread_p, &lsa);
-
   if (log_area == NULL)
     {
       return_error_to_client (thread_p, rid);
@@ -1680,12 +1680,14 @@ slog_client_get_next_postpone (THREAD_ENTRY * thread_p, unsigned int rid,
       desc_size = 0;
       content_ptr = NULL;
       content_size = 0;
+      LSA_SET_NULL (&lsa);
     }
   else
     {
       num_records = log_copy_area_send (log_area, &content_ptr, &content_size,
 					&desc_ptr, &desc_size);
     }
+
   ptr = or_pack_int (reply, num_records);
   ptr = or_pack_int (ptr, desc_size);
   ptr = or_pack_int (ptr, content_size);
@@ -1737,7 +1739,6 @@ slog_client_get_first_undo (THREAD_ENTRY * thread_p, unsigned int rid,
   int num_records = 0;
 
   log_area = xlog_client_get_first_undo (thread_p, &lsa);
-
   if (log_area == NULL)
     {
       return_error_to_client (thread_p, rid);
@@ -1745,12 +1746,14 @@ slog_client_get_first_undo (THREAD_ENTRY * thread_p, unsigned int rid,
       desc_size = 0;
       content_ptr = NULL;
       content_size = 0;
+      LSA_SET_NULL (&lsa);
     }
   else
     {
       num_records = log_copy_area_send (log_area, &content_ptr, &content_size,
 					&desc_ptr, &desc_size);
     }
+
   ptr = or_pack_int (reply, num_records);
   ptr = or_pack_int (ptr, desc_size);
   ptr = or_pack_int (ptr, content_size);
@@ -1810,6 +1813,7 @@ slog_client_get_next_undo (THREAD_ENTRY * thread_p, unsigned int rid,
       desc_size = 0;
       content_ptr = NULL;
       content_size = 0;
+      LSA_SET_NULL (&lsa);
     }
   else
     {
@@ -1868,7 +1872,6 @@ slog_client_unknown_state_abort_get_first_undo (THREAD_ENTRY * thread_p,
   int num_records = 0;
 
   log_area = xlog_client_unknown_state_abort_get_first_undo (thread_p, &lsa);
-
   if (log_area == NULL)
     {
       return_error_to_client (thread_p, rid);
@@ -1876,12 +1879,14 @@ slog_client_unknown_state_abort_get_first_undo (THREAD_ENTRY * thread_p,
       desc_size = 0;
       content_ptr = NULL;
       content_size = 0;
+      LSA_SET_NULL (&lsa);
     }
   else
     {
       num_records = log_copy_area_send (log_area, &content_ptr, &content_size,
 					&desc_ptr, &desc_size);
     }
+
   ptr = or_pack_int (reply, num_records);
   ptr = or_pack_int (ptr, desc_size);
   ptr = or_pack_int (ptr, content_size);
