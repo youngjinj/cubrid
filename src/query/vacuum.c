@@ -3809,22 +3809,6 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
        */
       if (page_count > 0)
 	{
-	  if (VACUUM_DROPPED_FILES_PAGE_CAPACITY <= page_count)
-	    {
-	      /* No room left for new entries, try next page */
-	      npages++;
-#if !defined (NDEBUG)
-	      if (!VPID_ISNULL (&vpid))
-		{
-		  /* Don't advance from last track page. A new page will be
-		   * added and we need to set a link between last track page
-		   * and new track page.
-		   */
-		  track_page = track_page->next_tracked_page;
-		}
-#endif
-	      continue;
-	    }
 	  /* dropped files are kept in ascending order */
 	  /* Use a binary search to find the right position for the new
 	   * dropped file. If a duplicate is found, just replace the previous
@@ -3954,6 +3938,23 @@ vacuum_add_dropped_file (THREAD_ENTRY * thread_p, VFID * vfid, MVCCID mvccid,
 			     vacuum_Dropped_files_count);
 	      vacuum_set_dirty_dropped_entries_page (thread_p, page, FREE);
 	      return NO_ERROR;
+	    }
+	  /* Not a duplicate */
+	  if (VACUUM_DROPPED_FILES_PAGE_CAPACITY <= page_count)
+	    {
+	      /* No room left for new entries, try next page */
+	      npages++;
+#if !defined (NDEBUG)
+	      if (!VPID_ISNULL (&vpid))
+		{
+		  /* Don't advance from last track page. A new page will be
+		   * added and we need to set a link between last track page
+		   * and new track page.
+		   */
+		  track_page = track_page->next_tracked_page;
+		}
+#endif
+	      continue;
 	    }
 	}
       else
