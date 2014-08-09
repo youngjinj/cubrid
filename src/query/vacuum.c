@@ -2695,6 +2695,10 @@ vacuum_flush_data (THREAD_ENTRY * thread_p, LOG_LSA * flush_to_lsa,
   /* Make sure that vacuum data is up to date before flushing it */
   if (vacuum_consume_buffer_log_blocks (thread_p, false) != NO_ERROR)
     {
+      if (!is_vacuum_data_locked)
+	{
+	  VACUUM_UNLOCK_DATA ();
+	}
       return ER_FAILED;
     }
 
