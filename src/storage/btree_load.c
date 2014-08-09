@@ -80,6 +80,8 @@ struct sort_args
   PRED_EXPR_WITH_CONTEXT *filter;
   PR_EVAL_FNC filter_eval_func;
   FUNCTION_INDEX_INFO *func_index_info;
+
+  MVCCID lowest_active_mvccid;
 };
 
 typedef struct btree_page BTREE_PAGE;
@@ -764,6 +766,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   save_volid = btid->vfid.volid;
 
   /* Initialize the fields of sorting argument structures */
+  sort_args->lowest_active_mvccid = logtb_get_lowest_active_mvccid (thread_p);
   sort_args->unique_pk = unique_pk;
   sort_args->not_null_flag = not_null_flag;
   sort_args->hfids = hfids;
@@ -1483,7 +1486,7 @@ btree_build_nleafs (THREAD_ENTRY * thread_p, LOAD_ARGS * load_args,
 
   /* Variables used in the second phase to go over lower level non-leaf
      pages */
-  VPID cur_nleafpgid, root_vpid;
+  VPID cur_nleafpgid;
   PAGE_PTR cur_nleafpgptr = NULL;
 
   BTREE_NODE *temp;
@@ -2344,7 +2347,6 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
   int oid_size = OR_OID_SIZE;
   int fixed_mvccid_size = 0;
   MVCC_REC_HEADER mvcc_header;
-  MVCCID lowest_active_mvccid;
   MVCC_BTREE_OP_ARGUMENTS mvcc_args;
 
   load_args = (LOAD_ARGS *) arg;
@@ -2353,7 +2355,6 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
     {
       (void) logtb_get_current_mvccid (thread_p);
       fixed_mvccid_size = 2 * OR_MVCCID_SIZE;
-      lowest_active_mvccid = logtb_get_lowest_active_mvccid (thread_p);
       if (BTREE_IS_UNIQUE (load_args->btid->unique_pk))
 	{
 	  oid_size = 2 * OR_OID_SIZE;
@@ -2421,14 +2422,6 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	}
 
       assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
-
-      /* Check if record is considered dead */
-      if (MVCC_IS_HEADER_DELID_VALID (&mvcc_header)
-	  && (MVCC_GET_DELID (&mvcc_header) < lowest_active_mvccid))
-	{
-	  /* This record is dead and will be vacuumed soon, just skip it */
-	  goto next_record;
-	}
 
       /* Do not copy the string--just use the pointer.  The pr_ routines
        * for strings and sets have different semantics for length.
@@ -2986,7 +2979,6 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  db_private_free (NULL, data);
 	}
 
-    next_record:
       /* set level 1 to leaf */
       load_args->leaf.hdr.node_level = 1;
 
@@ -3463,6 +3455,20 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	  return SORT_ERROR_OCCURRED;
 	}
 
+      /* filter out dead records before any more checks */
+      if (or_mvcc_get_header (&sort_args->in_recdes, &mvcc_header) !=
+	  NO_ERROR)
+	{
+	  return SORT_ERROR_OCCURRED;
+	}
+      if (MVCC_IS_HEADER_DELID_VALID (&mvcc_header)
+	  && (MVCC_GET_DELID (&mvcc_header) <
+	      sort_args->lowest_active_mvccid))
+
+	{
+	  continue;
+	}
+
       if (sort_args->fk_refcls_oid && !OID_ISNULL (sort_args->fk_refcls_oid))
 	{
 	  if (btree_check_foreign_key (thread_p,
@@ -3567,7 +3573,6 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	    }
 
 	  /* Pack insert and delete MVCCID's */
-	  or_mvcc_get_header (&sort_args->in_recdes, &mvcc_header);
 	  if (MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (&mvcc_header))
 	    {
 	      if (or_put_mvccid (&buf, MVCC_GET_INSID (&mvcc_header))

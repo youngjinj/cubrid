@@ -1194,6 +1194,11 @@ logtb_finalize_mvcctable (THREAD_ENTRY * thread_p)
 		{
 		  free_and_init (curr_mvcc_info->mvcc_snapshot.active_ids);
 		}
+
+	      if (curr_mvcc_info->mvcc_sub_ids != NULL)
+		{
+		  free_and_init (curr_mvcc_info->mvcc_sub_ids);
+		}
 	    }
 	  free_and_init (curr_mvcc_info_block->block);
 	}
@@ -4134,6 +4139,7 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
   MVCC_SNAPSHOT *snapshot = NULL;
   MVCC_INFO *elem = NULL, *curr_mvcc_info = NULL;
   MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
+  MVCCID mvcc_sub_id;
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
   tdes = LOG_FIND_TDES (tran_index);
@@ -4191,12 +4197,24 @@ logtb_get_mvcc_snapshot_data (THREAD_ENTRY * thread_p)
       if (elem->mvcc_id != curr_mvccid)
 	{
 	  snapshot->active_ids[cnt_active_trans++] = elem->mvcc_id;
+	  if (elem->count_sub_ids > 0 && elem->is_sub_active)
+	    {
+	      /* only the last sub-transaction may be active */
+	      assert (elem->mvcc_sub_ids != NULL);
+	      mvcc_sub_id = elem->mvcc_sub_ids[elem->count_sub_ids - 1];
+
+	      if (!mvcc_id_follow_or_equal (mvcc_sub_id,
+					    highest_completed_mvccid))
+		{
+		  snapshot->active_ids[cnt_active_trans++] = mvcc_sub_id;
+		}
+	    }
 	}
 
       elem = elem->prev;
     }
 
-  assert (cnt_active_trans <= (unsigned int) NUM_TOTAL_TRAN_INDICES);
+  assert (cnt_active_trans <= (unsigned int) 2 * NUM_TOTAL_TRAN_INDICES);
 
   /* set the lowest active MVCC id when we start the current transaction
    * if was not already set to not null value
@@ -4467,7 +4485,17 @@ logtb_find_current_mvccid (THREAD_ENTRY * thread_p)
 
   if (tdes != NULL && tdes->mvcc_info != NULL)
     {
-      mvcc_id = tdes->mvcc_info->mvcc_id;
+      if (tdes->mvcc_info->count_sub_ids > 0
+	  && tdes->mvcc_info->is_sub_active)
+	{
+	  assert (tdes->mvcc_info->mvcc_sub_ids != NULL);
+	  mvcc_id = tdes->mvcc_info->mvcc_sub_ids[tdes->mvcc_info->
+						  count_sub_ids - 1];
+	}
+      else
+	{
+	  mvcc_id = tdes->mvcc_info->mvcc_id;
+	}
     }
   return mvcc_id;
 }
@@ -4492,6 +4520,13 @@ logtb_get_current_mvccid (THREAD_ENTRY * thread_p)
       (void) logtb_get_new_mvccid (thread_p, curr_mvcc_info);
     }
 
+  if (tdes->mvcc_info->count_sub_ids > 0 && tdes->mvcc_info->is_sub_active)
+    {
+      assert (tdes->mvcc_info->mvcc_sub_ids != NULL);
+      return tdes->mvcc_info->mvcc_sub_ids[tdes->mvcc_info->count_sub_ids -
+					   1];
+    }
+
   return curr_mvcc_info->mvcc_id;
 }
 
@@ -4512,6 +4547,19 @@ logtb_is_current_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
   if (tdes->mvcc_info != NULL && tdes->mvcc_info->mvcc_id == mvccid)
     {
       return true;
+    }
+  else if (tdes->mvcc_info->count_sub_ids > 0)
+    {
+      int i;
+      /* is the child of current transaction ? */
+      assert (tdes->mvcc_info->mvcc_sub_ids != NULL);
+      for (i = 0; i < tdes->mvcc_info->count_sub_ids; i++)
+	{
+	  if (tdes->mvcc_info->mvcc_sub_ids[i] == mvccid)
+	    {
+	      return true;
+	    }
+	}
     }
 
   return false;
@@ -4564,6 +4612,16 @@ logtb_is_active_mvccid (THREAD_ENTRY * thread_p, MVCCID mvccid)
 	{
 	  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
 	  return true;
+	}
+      else if (elem->count_sub_ids > 0 && elem->is_sub_active)
+	{
+	  assert (elem->mvcc_sub_ids != NULL);
+	  if (MVCCID_IS_EQUAL (mvccid, elem->mvcc_sub_ids
+			       [elem->count_sub_ids - 1]))
+	    {
+	      csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
+	      return true;
+	    }
 	}
 
       elem = elem->prev;
@@ -4662,6 +4720,7 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 	  mvcc_table->highest_completed_mvccid = curr_mvcc_info->mvcc_id;
 	}
       curr_mvcc_info->mvcc_id = MVCCID_NULL;
+      curr_mvcc_info->count_sub_ids = 0;
       curr_mvcc_info->transaction_lowest_active_mvccid = MVCCID_NULL;
 
       /* remove current MVCC info from writers */
@@ -5081,6 +5140,7 @@ logtb_allocate_mvcc_info (THREAD_ENTRY * thread_p)
 
   tdes->mvcc_info = curr_mvcc_info;
   tdes->mvcc_info->mvcc_id = MVCCID_NULL;
+  tdes->mvcc_info->count_sub_ids = 0;
   tdes->mvcc_info->transaction_lowest_active_mvccid = MVCCID_NULL;
   tdes->mvcc_info->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
 
@@ -5158,6 +5218,7 @@ logtb_release_mvcc_info (THREAD_ENTRY * thread_p)
   curr_mvcc_info->transaction_lowest_active_mvccid =
     curr_mvcc_info->recent_snapshot_lowest_active_mvccid =
     curr_mvcc_info->mvcc_id = MVCCID_NULL;
+  tdes->mvcc_info->count_sub_ids = 0;
 
   curr_mvcc_info->prev = NULL;
 
@@ -5228,6 +5289,8 @@ logtb_alloc_mvcc_info_block (THREAD_ENTRY * thread_p)
       curr_mvcc_info->transaction_lowest_active_mvccid =
 	curr_mvcc_info->recent_snapshot_lowest_active_mvccid =
 	curr_mvcc_info->mvcc_id = MVCCID_NULL;
+      curr_mvcc_info->mvcc_sub_ids = NULL;
+      curr_mvcc_info->count_sub_ids = curr_mvcc_info->max_sub_ids = 0;
 
       curr_mvcc_info->prev = prev_mvcc_info;
       curr_mvcc_info->next = new_mvcc_info_block->block + i + 1;
@@ -5514,4 +5577,200 @@ logtb_has_deadlock_priority (int tran_index)
     }
 
   return false;
+}
+
+/*
+ * logtb_get_new_subtransaction_mvccid - assign a new sub-transaction MVCCID
+ *
+ * return: error code
+ *
+ *   thread_p(in): Thread entry
+ *   curr_mvcc_info(in): current MVCC info
+ *
+ *  Note: If transaction MVCCID is NULL then a new transaction MVCCID is
+ *    allocated first.
+ */
+int
+logtb_get_new_subtransaction_mvccid (THREAD_ENTRY * thread_p,
+				     MVCC_INFO * curr_mvcc_info)
+{
+  MVCCID mvcc_id;
+  MVCC_INFO *elem = NULL, *head_null_mvccids = NULL;
+  int error;
+  MVCCTABLE *mvcc_table;
+
+  assert (curr_mvcc_info != NULL);
+
+  /* allocate before acquiring CS */
+  if (curr_mvcc_info->mvcc_sub_ids == NULL)
+    {
+      curr_mvcc_info->mvcc_sub_ids = (MVCCID *) malloc (OR_MVCCID_SIZE * 10);
+      if (curr_mvcc_info->mvcc_sub_ids == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, sizeof (MVCCID) * 10);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      curr_mvcc_info->count_sub_ids = 0;
+      curr_mvcc_info->max_sub_ids = 10;
+    }
+  else if (curr_mvcc_info->count_sub_ids >= curr_mvcc_info->max_sub_ids)
+    {
+      curr_mvcc_info->mvcc_sub_ids =
+	(MVCCID *) realloc (curr_mvcc_info->mvcc_sub_ids,
+			    OR_MVCCID_SIZE
+			    * (curr_mvcc_info->max_sub_ids + 10));
+      if (curr_mvcc_info->mvcc_sub_ids == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, OR_MVCCID_SIZE * (curr_mvcc_info->max_sub_ids + 10));
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      curr_mvcc_info->max_sub_ids += 10;
+    }
+
+  mvcc_table = &log_Gl.mvcc_table;
+  /* do not allow others to read/write MVCC info list */
+  error = csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  if (!MVCCID_IS_VALID (curr_mvcc_info->mvcc_id))
+    {
+      /* if don't have MVCCID - assign an transaction MVCCID first and
+       * then sub-transaction MVCCID       
+       */
+
+      head_null_mvccids = mvcc_table->head_null_mvccids;
+
+      mvcc_id = log_Gl.hdr.mvcc_next_id;
+      MVCCID_FORWARD (log_Gl.hdr.mvcc_next_id);
+      curr_mvcc_info->mvcc_id = mvcc_id;
+
+      /* remove current MVCC info from null mvccid list */
+      if (curr_mvcc_info->next != NULL)
+	{
+	  curr_mvcc_info->next->prev = curr_mvcc_info->prev;
+	}
+
+      if (curr_mvcc_info->prev != NULL)
+	{
+	  curr_mvcc_info->prev->next = curr_mvcc_info->next;
+	}
+
+      if (curr_mvcc_info == head_null_mvccids)
+	{
+	  mvcc_table->head_null_mvccids = curr_mvcc_info->next;
+	  head_null_mvccids = curr_mvcc_info->next;
+	}
+
+      /* move current MVCC info into writers list */
+      elem = mvcc_table->head_writers;
+      if (elem == NULL)
+	{
+	  /* empty writer list */
+	  curr_mvcc_info->prev = NULL;
+	  curr_mvcc_info->next = head_null_mvccids;
+	  if (head_null_mvccids != NULL)
+	    {
+	      head_null_mvccids->prev = curr_mvcc_info;
+	    }
+	  mvcc_table->head_writers = mvcc_table->tail_writers =
+	    curr_mvcc_info;
+	}
+      else
+	{
+	  /* writers list is not null */
+	  while (elem != head_null_mvccids)
+	    {
+	      if (mvcc_id > elem->mvcc_id)
+		{
+		  break;
+		}
+	      elem = elem->next;
+	    }
+
+	  if (elem == NULL)
+	    {
+	      /* tail_writers is not null */
+	      assert (mvcc_table->tail_writers != NULL);
+	      /* head_null_mvccids list is null - insert at the end of the list */
+	      curr_mvcc_info->next = NULL;
+	      curr_mvcc_info->prev = mvcc_table->tail_writers;
+	      mvcc_table->tail_writers->next = curr_mvcc_info;
+
+	      mvcc_table->tail_writers = curr_mvcc_info;
+	    }
+	  else
+	    {
+	      /* insert before elem */
+	      curr_mvcc_info->prev = elem->prev;
+	      curr_mvcc_info->next = elem;
+
+	      if (elem->prev != NULL)
+		{
+		  elem->prev->next = curr_mvcc_info;
+		  if (elem == head_null_mvccids)
+		    {
+		      /* insert before head_null_mvccids - update tail_writers */
+		      mvcc_table->tail_writers = curr_mvcc_info;
+		    }
+		}
+	      else
+		{
+		  /* insert at head writer */
+		  mvcc_table->head_writers = curr_mvcc_info;
+		}
+
+	      elem->prev = curr_mvcc_info;
+	    }
+	}
+    }
+
+  mvcc_id = log_Gl.hdr.mvcc_next_id;
+  MVCCID_FORWARD (log_Gl.hdr.mvcc_next_id);
+  curr_mvcc_info->mvcc_sub_ids[curr_mvcc_info->count_sub_ids] = mvcc_id;
+  curr_mvcc_info->count_sub_ids++;
+  curr_mvcc_info->is_sub_active = true;
+
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
+  return NO_ERROR;
+}
+
+/*
+ * logtb_complete_sub_mvcc () - Called at end of sub-transaction 
+ *
+ * return	  : Void. 
+ * thread_p (in)  : Thread entry.
+ * tdes (in)	  : Transaction descriptor.
+ */
+void
+logtb_complete_sub_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
+{
+  MVCC_INFO *curr_mvcc_info = NULL;
+  MVCCID mvcc_sub_id;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
+
+  assert (mvcc_Enabled == true && tdes != NULL);
+
+  curr_mvcc_info = tdes->mvcc_info;
+
+  if (curr_mvcc_info == NULL)
+    {
+      return;
+    }
+  
+  (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
+
+  curr_mvcc_info->is_sub_active = false;
+  mvcc_sub_id =
+    curr_mvcc_info->mvcc_sub_ids[curr_mvcc_info->count_sub_ids - 1];
+  if (mvcc_id_precedes (mvcc_table->highest_completed_mvccid, mvcc_sub_id))
+    {
+      mvcc_table->highest_completed_mvccid = mvcc_sub_id;
+    }
+
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
 }

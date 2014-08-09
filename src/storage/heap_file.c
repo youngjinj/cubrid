@@ -1316,6 +1316,7 @@ static int heap_mvcc_check_and_lock_for_delete (THREAD_ENTRY * thread_p,
 						recdes_header,
 						PAGE_PTR * pgptr,
 						PAGE_PTR * forward_pgptr,
+						OID * forward_oid,
 						HEAP_MVCC_DELETE_INFO *
 						mvcc_delete_info);
 static int heap_get_pages_for_mvcc_chain_write (THREAD_ENTRY * thread_p,
@@ -21855,9 +21856,8 @@ heap_rv_mvcc_undo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
     }
   else
     {
-      if (heap_get_mvcc_rec_header_from_overflow (rcv->pgptr,
-						  &mvcc_rec_header,
-						  &peek_recdes) != NO_ERROR)
+      if (heap_get_mvcc_rec_header_from_overflow
+	  (rcv->pgptr, &mvcc_rec_header, &peek_recdes) != NO_ERROR)
 	{
 	  return ER_FAILED;
 	}
@@ -21981,9 +21981,8 @@ heap_rv_mvcc_redo_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
     }
   else
     {
-      if (heap_get_mvcc_rec_header_from_overflow (rcv->pgptr,
-						  &mvcc_rec_header,
-						  &peek_recdes) != NO_ERROR)
+      if (heap_get_mvcc_rec_header_from_overflow
+	  (rcv->pgptr, &mvcc_rec_header, &peek_recdes) != NO_ERROR)
 	{
 	  return ER_FAILED;
 	}
@@ -22329,23 +22328,11 @@ xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
   HEAP_SCANCACHE scan_cache;
   RECDES recdes;
   SCAN_CODE r;
-  MVCC_SNAPSHOT *mvcc_snapshot = NULL;
-
-
-  if (mvcc_Enabled)
-    {
-      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
-      if (mvcc_snapshot == NULL)
-	{
-	  int error = er_errid ();
-	  return (error == NO_ERROR ? ER_FAILED : error);
-	}
-    }
 
   OID_SET_NULL (&oid);
 
   if (heap_scancache_start (thread_p, &scan_cache, hfid, class_oid, true,
-			    false, mvcc_snapshot) != NO_ERROR)
+			    false, NULL) != NO_ERROR)
     {
       return ER_FAILED;
     }
@@ -25120,6 +25107,7 @@ heap_prev_record_info (THREAD_ENTRY * thread_p, const HFID * hfid,
  *   recdes_header(in/out): MVCC record header
  *   pgptr(in): page where the record reside, already latched for write
  *   forward_pgptr(in): forward page, needed in case of REC_BIGONE records 
+ *   forward_oid(out): forward OID
  *   mvcc_delete_info(in/out): MVCC delete info
  *
  *  Note: The function preserve the acquired lock only if the row can be
@@ -25132,6 +25120,7 @@ heap_mvcc_check_and_lock_for_delete (THREAD_ENTRY * thread_p,
 				     MVCC_REC_HEADER * recdes_header,
 				     PAGE_PTR * pgptr,
 				     PAGE_PTR * forward_pgptr,
+				     OID * forward_oid,
 				     HEAP_MVCC_DELETE_INFO * mvcc_delete_info)
 {
   MVCC_SATISFIES_DELETE_RESULT satisfies_delete_result;
@@ -25212,7 +25201,8 @@ try_again:
       record_locked = true;
 
       if (heap_get_pages_for_mvcc_chain_read
-	  (thread_p, oid, pgptr, forward_pgptr, &ignore_record) != NO_ERROR)
+	  (thread_p, oid, pgptr, forward_pgptr, forward_oid,
+	   &ignore_record) != NO_ERROR)
 	{
 	  goto error;
 	}
@@ -25347,6 +25337,7 @@ error:
  *   oid(in): oid
  *   pgptr(in/out): page where oid reside 
  *   forward_pgptr(out): forward page
+ *   forward_oid(out): forward OID
  *   ignore_record(out): true if the record is REC_RELOCATION type and
  *			 forward record is not a REC_NEWHOME.
  *
@@ -25358,11 +25349,11 @@ int
 heap_get_pages_for_mvcc_chain_read (THREAD_ENTRY * thread_p, const OID * oid,
 				    PAGE_PTR * pgptr,
 				    PAGE_PTR * forward_pgptr,
-				    bool * ignore_record)
+				    OID * forward_oid, bool * ignore_record)
 {
   RECDES forward_recdes;
   VPID vpid, *vpidptr;
-  OID forward_oid;
+  OID local_forward_oid;
   int again_count = 0;
   int again_max = 20;
   INT16 type;
@@ -25373,6 +25364,12 @@ heap_get_pages_for_mvcc_chain_read (THREAD_ENTRY * thread_p, const OID * oid,
     {
       *ignore_record = false;
     }
+
+  if (forward_oid == NULL)
+    {
+      forward_oid = &local_forward_oid;
+    }
+  OID_SET_NULL (forward_oid);
 
 try_again:
 
@@ -25443,7 +25440,7 @@ try_again:
   assert (forward_pgptr != NULL);
 
   /* REC_BIGONE - get overflow pages */
-  forward_recdes.data = (char *) &forward_oid;
+  forward_recdes.data = (char *) forward_oid;
   forward_recdes.length = sizeof (OID);
   forward_recdes.area_size = sizeof (OID);
   if (spage_get_record (*pgptr, oid->slotid,
@@ -25459,8 +25456,8 @@ try_again:
   /* should not create any deadlocks, since header page latch
    * has been already acquired
    */
-  vpid.volid = forward_oid.volid;
-  vpid.pageid = forward_oid.pageid;
+  vpid.volid = forward_oid->volid;
+  vpid.pageid = forward_oid->pageid;
 
   if (*forward_pgptr != NULL)
     {
@@ -26743,6 +26740,7 @@ heap_mvcc_get_for_delete (THREAD_ENTRY * thread_p,
   MVCC_SCAN_REEV_DATA *scan_reev_data = NULL;
   RECDES chain_recdes;
   HEAP_CHAIN *chain;
+  bool record_locked_and_pages_fetched = false;
 
   if (mvcc_reev_data != NULL && mvcc_reev_data->type == REEV_DATA_SCAN)
     {
@@ -26806,8 +26804,36 @@ try_again:
    * page
    */
 
-  if (scan_cache != NULL && scan_cache->cache_last_fix_page == true
-      && scan_cache->pgptr != NULL)
+  if (record_locked_and_pages_fetched)
+    {
+      /* the home page already cached in previous iteration, the OID is the same
+       * but record type has been changed - check VPID just to be sure
+       */
+      if (pgptr == NULL)
+	{
+	  assert (false);
+	  goto error;
+	}
+      vpidptr_incache = pgbuf_get_vpid_ptr (pgptr);
+      if (!VPID_EQ (&home_vpid, vpidptr_incache))
+	{
+	  assert (false);
+	  goto error;
+	}
+      if (forward_pgptr != NULL)
+	{
+	  vpidptr_incache = pgbuf_get_vpid_ptr (forward_pgptr);
+	  forward_vpid.volid = forward_oid.volid;
+	  forward_vpid.pageid = forward_oid.pageid;
+	  if (!VPID_EQ (&forward_vpid, vpidptr_incache))
+	    {
+	      assert (false);
+	      goto error;
+	    }
+	}
+    }
+  else if (scan_cache != NULL && scan_cache->cache_last_fix_page == true
+	   && scan_cache->pgptr != NULL)
     {
       vpidptr_incache = pgbuf_get_vpid_ptr (scan_cache->pgptr);
       if (VPID_EQ (&home_vpid, vpidptr_incache))
@@ -26894,6 +26920,17 @@ try_again:
   switch (type)
     {
     case REC_RELOCATION:
+      if (record_locked_and_pages_fetched)
+	{
+	  assert (pgptr != NULL && forward_pgptr != NULL);
+	  assert (lock_get_object_lock (oid, class_oid,
+					LOG_FIND_THREAD_TRAN_INDEX (thread_p))
+		  >= X_LOCK);
+
+	  scan = S_SUCCESS;
+	  goto get_data_for_delete_relocation;
+	}
+
       /*
        * The record stored on the page is a relocation record, get the new
        * home of the record
@@ -27029,6 +27066,7 @@ try_again:
 						       class_oid,
 						       X_LOCK, &mvcc_header,
 						       &pgptr, &forward_pgptr,
+						       &forward_oid,
 						       mvcc_delete_info)
 		  != NO_ERROR)
 		{
@@ -27045,6 +27083,18 @@ try_again:
 		   */
 		  goto end;
 		}
+
+	      assert_release (pgptr != NULL);
+	      if (spage_get_record_type (pgptr, oid->slotid) !=
+		  REC_RELOCATION)
+		{
+		  /* record type has been changed, but OID is the same
+		   * need to get the data only, since snapshots already
+		   * checked and the object already locked
+		   */
+		  record_locked_and_pages_fetched = true;
+		  goto try_again;
+		}
 	    }
 	  else
 	    {
@@ -27052,24 +27102,7 @@ try_again:
 	    }
 	}
 
-      /* Although we not have lock on object, it is still possible that we
-       * had to wait for someone else to finish his change. This change could
-       * also mean change of record type. If that is the case, go back from
-       * top and repeat steps (note that object is already locked so it
-       * shouldn't be changed a second time).
-       * TODO: Find a better solution which doesn't require refixing pages.
-       */
-      assert_release (pgptr != NULL);
-      if (spage_get_record_type (pgptr, oid->slotid) != REC_RELOCATION)
-	{
-	  if (forward_pgptr != NULL)
-	    {
-	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
-	    }
-	  pgbuf_unfix_and_init (thread_p, pgptr);
-	  goto try_again;
-	}
-
+    get_data_for_delete_relocation:
       if (scan == S_SUCCESS)
 	{
 	  /* allocate space if is the case */
@@ -27150,6 +27183,17 @@ try_again:
       break;
 
     case REC_HOME:
+      if (record_locked_and_pages_fetched)
+	{
+	  assert (pgptr != NULL && forward_pgptr == NULL);
+	  assert (lock_get_object_lock (oid, class_oid,
+					LOG_FIND_THREAD_TRAN_INDEX (thread_p))
+		  >= X_LOCK);
+
+	  scan = S_SUCCESS;
+	  goto get_data_for_delete_home;
+	}
+
       if (use_mvcc)
 	{
 	  scan = spage_get_record (pgptr, oid->slotid, &temp_recdes, PEEK);
@@ -27197,6 +27241,7 @@ try_again:
 						       class_oid,
 						       X_LOCK, &mvcc_header,
 						       &pgptr, &forward_pgptr,
+						       &forward_oid,
 						       mvcc_delete_info)
 		  != NO_ERROR)
 		{
@@ -27213,6 +27258,18 @@ try_again:
 		   */
 		  goto end;
 		}
+
+	      assert_release (pgptr != NULL);
+	      if (spage_get_record_type (pgptr, oid->slotid) != REC_HOME)
+		{
+		  /* record type has been changed, but OID is the same
+		   * need to get the data only, since snapshots already checked
+		   * and the object already locked
+		   */
+		  record_locked_and_pages_fetched = true;
+		  goto try_again;
+		}
+
 	      assert (spage_get_record_type (pgptr, oid->slotid));
 	    }
 	  else
@@ -27221,24 +27278,7 @@ try_again:
 	    }
 	}
 
-      /* Although we not have lock on object, it is still possible that we
-       * had to wait for someone else to finish his change. This change could
-       * also mean change of record type. If that is the case, go back from
-       * top and repeat steps (note that object is already locked so it
-       * shouldn't be changed a second time).
-       * TODO: Find a better solution which doesn't require refixing pages.
-       */
-      assert_release (pgptr != NULL);
-      if (spage_get_record_type (pgptr, oid->slotid) != REC_HOME)
-	{
-	  if (forward_pgptr != NULL)
-	    {
-	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
-	    }
-	  pgbuf_unfix_and_init (thread_p, pgptr);
-	  goto try_again;
-	}
-
+    get_data_for_delete_home:
       if (scan == S_SUCCESS)
 	{
 	  /* allocate space if is the case */
@@ -27288,6 +27328,17 @@ try_again:
       break;
 
     case REC_BIGONE:
+      if (record_locked_and_pages_fetched)
+	{
+	  /* get the record only */
+	  assert (pgptr != NULL && forward_pgptr != NULL);
+	  assert (lock_get_object_lock (oid, class_oid,
+					LOG_FIND_THREAD_TRAN_INDEX (thread_p))
+		  >= X_LOCK);
+
+	  goto get_data_for_delete_bigone;
+	}
+
       /* Get the address of the content of the multipage object in overflow */
       forward_recdes.data = (char *) &forward_oid;
       forward_recdes.length = sizeof (forward_oid);
@@ -27415,6 +27466,7 @@ try_again:
 						   class_oid,
 						   X_LOCK, &mvcc_header,
 						   &pgptr, &forward_pgptr,
+						   &forward_oid,
 						   mvcc_delete_info) !=
 	      NO_ERROR)
 	    {
@@ -27430,32 +27482,33 @@ try_again:
 	       */
 	      goto end;
 	    }
-	}
 
-      /* Although we not have lock on object, it is still possible that we
-       * had to wait for someone else to finish his change. This change could
-       * also mean change of record type. If that is the case, go back from
-       * top and repeat steps (note that object is already locked so it
-       * shouldn't be changed a second time).
-       * TODO: Find a better solution which doesn't require refixing pages.
-       */
-      assert_release (pgptr != NULL);
-      if (spage_get_record_type (pgptr, oid->slotid) != REC_BIGONE)
-	{
-	  if (forward_pgptr != NULL)
+	  assert_release (pgptr != NULL);
+	  if (spage_get_record_type (pgptr, oid->slotid) != REC_BIGONE)
 	    {
-	      pgbuf_unfix_and_init (thread_p, forward_pgptr);
+	      /* record type has been changed, but OID is the same
+	       * need to get the data only, since snapshots already checked
+	       * and the object already locked
+	       */
+	      record_locked_and_pages_fetched = true;
+
+	      goto try_again;
 	    }
-	  pgbuf_unfix_and_init (thread_p, pgptr);
-	  goto try_again;
 	}
 
+    get_data_for_delete_bigone:
       /*
        * Now get the content of the multipage object, if not already obtained.
        */
 
-      if (scan_reev_data == NULL || scan_reev_data->data_filter == NULL)
+      if (record_locked_and_pages_fetched
+	  || scan_reev_data == NULL || scan_reev_data->data_filter == NULL)
 	{
+	  /* release pgptr in order to get others chance to access the page
+	   * this is safe since we already acquired the lock on oid
+	   * forward_pgptr will be release at the end of this function
+	   */
+	  pgbuf_unfix_and_init (thread_p, pgptr);
 	  scan =
 	    heap_get_bigone_content (thread_p, scan_cache, ispeeking,
 				     &forward_oid, recdes);
@@ -27907,7 +27960,7 @@ fetch_row:
   /* get new pages for read, release old pages if is the case */
   if (heap_get_pages_for_mvcc_chain_read (thread_p, &curr_row_version,
 					  &scan_cache->pgptr, &forward_pgptr,
-					  &ignore_record) != NO_ERROR)
+					  NULL, &ignore_record) != NO_ERROR)
     {
       goto error;
     }
@@ -27998,7 +28051,7 @@ fetch_row:
 
       if (heap_mvcc_check_and_lock_for_delete
 	  (thread_p, &curr_row_version, class_oid,
-	   lock, &mvcc_header, &scan_cache->pgptr, &forward_pgptr,
+	   lock, &mvcc_header, &scan_cache->pgptr, &forward_pgptr, NULL,
 	   &mvcc_local_delete_info) != NO_ERROR)
 	{
 	  goto error;

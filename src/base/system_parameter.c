@@ -1908,14 +1908,14 @@ static int prm_vacuum_master_wakeup_interval_default = 1;
 static int prm_vacuum_master_wakeup_interval_lower = 1;
 static unsigned int prm_vacuum_master_wakeup_interval_flag = 0;
 
-int PRM_VACUUM_DATA_PAGES = 10;
-static int prm_vacuum_data_pages_default = 10;
+int PRM_VACUUM_DATA_PAGES = 40;
+static int prm_vacuum_data_pages_default = 40;
 static int prm_vacuum_data_pages_lower = 10;
 static int prm_vacuum_data_pages_upper = 10000;
 static unsigned int prm_vacuum_data_pages_flag = 0;
 
-int PRM_VACUUM_LOG_BLOCK_PAGES = 16;
-static int prm_vacuum_log_block_pages_default = 16;
+int PRM_VACUUM_LOG_BLOCK_PAGES = 32;
+static int prm_vacuum_log_block_pages_default = 32;
 static int prm_vacuum_log_block_pages_lower = 4;
 static int prm_vacuum_log_block_pages_upper = 1024;
 static unsigned int prm_vacuum_log_block_pages_flag = 0;

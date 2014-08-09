@@ -193,6 +193,11 @@ struct mvcc_info
    */
   MVCCID recent_snapshot_lowest_active_mvccid;
   MVCC_INFO *next, *prev;	/* link to the next/previous active mvcc info */
+
+  MVCCID *mvcc_sub_ids;		/* MVCC sub-transaction ID array */
+  int max_sub_ids;		/* allocated MVCC sub-transaction ids */
+  int count_sub_ids;		/* count sub-transaction ids */
+  bool is_sub_active;		/* true in case that sub-transaction is running */
 };
 
 /* MVCC INFO BLOCK Structure */

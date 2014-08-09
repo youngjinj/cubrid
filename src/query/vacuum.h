@@ -69,11 +69,11 @@
 
 typedef INT64 VACUUM_LOG_BLOCKID;
 #define VACUUM_NULL_LOG_BLOCKID -1
-#define VACUUM_LOG_PAGES_PER_BLOCK    16
+extern int vacuum_Log_pages_per_blocks;
 
 #define VACUUM_GET_LOG_BLOCKID(page_id) \
   (((page_id) != NULL_PAGEID) ? \
-   (page_id) / VACUUM_LOG_PAGES_PER_BLOCK : \
+   (page_id) / vacuum_Log_pages_per_blocks : \
    VACUUM_NULL_LOG_BLOCKID)
 
 #define VACUUM_MAX_WORKER_COUNT	  20

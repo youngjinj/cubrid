@@ -48,17 +48,14 @@
 /* The default number of cached entries in a vacuum statistics cache */
 #define VACUUM_STATS_CACHE_SIZE 100
 
-
+int vacuum_Log_pages_per_blocks = -1;
 
 /* Get first log page identifier in a log block */
 #define VACUUM_FIRST_LOG_PAGEID_IN_BLOCK(blockid) \
-  ((blockid) * VACUUM_LOG_PAGES_PER_BLOCK)
+  ((blockid) * vacuum_Log_pages_per_blocks)
 /* Get last log page identifier in a log block */
 #define VACUUM_LAST_LOG_PAGEID_IN_BLOCK(blockid) \
   (VACUUM_FIRST_LOG_PAGEID_IN_BLOCK (blockid + 1) - 1)
-/* Get for a log page the identifier for the block to which it belongs. */
-#define VACUUM_GET_LOG_BLOCKID_FOR_PAGE(pageid) \
-  (pageid / VACUUM_LOG_PAGES_PER_BLOCK)
 
 /*
  * Vacuum data section.
@@ -2497,9 +2494,16 @@ int
 vacuum_load_data_from_disk (THREAD_ENTRY * thread_p)
 {
   int error_code = NO_ERROR, i;
+  /* TODO: Save the number of pages in header and don't reload from system
+   *       parameters. If somebody changes the parameter off-line and database
+   *       restarts, we are in trouble.
+   */
   int vacuum_data_npages = prm_get_integer_value (PRM_ID_VACUUM_DATA_PAGES);
   int vol_fd;
   VACUUM_DATA_ENTRY *entry = NULL;
+
+  vacuum_Log_pages_per_blocks =
+    prm_get_integer_value (PRM_ID_VACUUM_LOG_BLOCK_PAGES);
 
   assert_release (vacuum_Data == NULL);
   assert_release (!VFID_ISNULL (&vacuum_Data_vfid));

@@ -13749,6 +13749,9 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   RECDES copy_recdes;
   bool scan_cache_inited = false;
   SCAN_CODE scan_code;
+  MVCC_INFO *curr_mvcc_info = NULL;
+  LOG_TDES *tdes = NULL;
+  MVCCTABLE *mvcc_table = &log_Gl.mvcc_table;
 
   if (mvcc_Enabled == true)
     {
@@ -13773,6 +13776,16 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
     {
       repl_start_flush_mark (thread_p);
     }
+
+  tdes = LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+  curr_mvcc_info = tdes->mvcc_info;
+
+  if (logtb_get_new_subtransaction_mvccid (thread_p, curr_mvcc_info)
+      != NO_ERROR)
+    {
+      goto exit_on_error;
+    }
+
   /* do increment operation */
   for (selupd = list; selupd; selupd = selupd->next)
     {
@@ -14037,6 +14050,7 @@ qexec_execute_selupd_list (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
 
 exit:
   lock_stop_instant_lock_mode (thread_p, tran_index, true);
+  logtb_complete_sub_mvcc (thread_p, tdes);
 
   if (err != NO_ERROR)
     {
@@ -14050,6 +14064,7 @@ exit:
 
 exit_on_error:
 
+  logtb_complete_sub_mvcc (thread_p, tdes);
   if (mvcc_Enabled == true && scan_cache_inited == true)
     {
       (void) heap_scancache_end (thread_p, &scan_cache);

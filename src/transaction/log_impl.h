@@ -2387,6 +2387,8 @@ extern MVCCID logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p);
 
 extern int logtb_get_new_mvccid (THREAD_ENTRY * thread_p,
 				 MVCC_INFO * curr_mvcc_info);
+extern int logtb_get_new_subtransaction_mvccid (THREAD_ENTRY * thread_p,
+						MVCC_INFO * curr_mvcc_info);
 extern int logtb_allocate_mvcc_info (THREAD_ENTRY * thread_p);
 extern int logtb_release_mvcc_info (THREAD_ENTRY * thread_p);
 
@@ -2438,4 +2440,6 @@ extern int logtb_mvcc_prepare_count_optim_classes (THREAD_ENTRY * thread_p,
 						   LC_PREFETCH_FLAGS * flags,
 						   int n_classes);
 extern void logtb_mvcc_reset_count_optim_state (THREAD_ENTRY * thread_p);
+extern void logtb_complete_sub_mvcc (THREAD_ENTRY * thread_p,
+				     LOG_TDES * tdes);
 #endif /* _LOG_IMPL_H_ */

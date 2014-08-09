@@ -4551,6 +4551,52 @@ classobj_filter_attribute_props (DB_SEQ * props)
 }
 
 /*
+ * classobj_initialize_attributes() - Initializes attribute
+ *
+ *   return: nothing
+ *   attributes(in): attributes
+ */
+void
+classobj_initialize_attributes (SM_ATTRIBUTE * attributes)
+{
+  SM_ATTRIBUTE *attr;
+
+  for (attr = attributes; attr != NULL;
+       attr = (SM_ATTRIBUTE *) (attr->header.next))
+    {
+      attr->constraints = NULL;
+      attr->order_link = NULL;
+      attr->properties = NULL;
+      attr->triggers = NULL;
+      attr->header.name = NULL;
+      attr->domain = NULL;
+      db_value_put_null (&attr->default_value.value);
+      db_value_put_null (&attr->default_value.original_value);
+    }
+}
+
+/*
+ * classobj_initialize_methods() - Initializes methods
+ *
+ *   return: nothing
+ *   attributes(in): attributes
+ */
+void
+classobj_initialize_methods (SM_METHOD * methods)
+{
+  SM_METHOD *method;
+
+  for (method = methods; method != NULL;
+       method = (SM_METHOD *) (method->header.next))
+    {
+      method->properties = NULL;
+      method->function = NULL;
+      method->signatures = NULL;
+      method->header.name = NULL;
+    }
+}
+
+/*
  * classobj_init_attribute() - Initializes an attribute using the contents of
  *    another attribute. This is used when an attribute list is flattened
  *    during class definition and the attribute lists are converted into

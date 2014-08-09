@@ -12946,6 +12946,7 @@ key_deletion:
       pkey_deleted = &key_deleted;
       key_deleted = false;
     }
+
   if (btree_delete_from_leaf (thread_p, pkey_deleted, &btid_int,
 			      &P_vpid, key, &class_oid, oid,
 			      p_slot_id, mvcc_args) != NO_ERROR)
@@ -19261,7 +19262,6 @@ key_insertion:
 				    P, key, &class_oid, oid, &P_vpid,
 				    op_type, key_found, p_slot_id,
 				    p_mvcc_rec_header);
-
   if (ret_val != NO_ERROR)
     {
       /* defence code */
@@ -24810,11 +24810,17 @@ btree_rv_keyval_undo_insert_internal (THREAD_ENTRY * thread_p, LOG_RCV * recv,
   if (is_mvcc_operation)
     {
       /* TODO: We should pass insert MVCCID here...? */
-      mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
+      /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery issue
+       *       regarding MVCCID. Must find a solution to recover MVCC info on
+       *       rollback (otherwise we will have inconsistencies regarding
+       *       visibility).
+       */
+      /* mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT; */
     }
   if (btree_delete (thread_p, btid.sys_btid, &key, &cls_oid, &oid,
 		    BTREE_NO_KEY_LOCKED, &dummy, SINGLE_ROW_MODIFY,
-		    (BTREE_UNIQUE_STATS *) NULL, mvcc_args_p) == NULL)
+		    (BTREE_UNIQUE_STATS *) NULL,
+		    NULL /* mvcc_args_p */ ) == NULL)
     {
       int err;
 

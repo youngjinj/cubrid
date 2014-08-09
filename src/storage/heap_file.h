@@ -681,6 +681,7 @@ extern int heap_get_pages_for_mvcc_chain_read (THREAD_ENTRY * thread_p,
 					       const OID * oid,
 					       PAGE_PTR * pgptr,
 					       PAGE_PTR * forward_pgptr,
+					       OID * forward_oid,
 					       bool * ignore_record);
 extern SCAN_CODE heap_get_mvcc_data (THREAD_ENTRY * thread_p, const OID * oid,
 				     MVCC_REC_HEADER * mvcc_rec_header,

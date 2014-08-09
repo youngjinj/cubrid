@@ -1314,4 +1314,6 @@ extern int classobj_check_index_exist (SM_CLASS_CONSTRAINT * constraints,
 				       const int *asc_desc,
 				       SM_PREDICATE_INFO * filter_index,
 				       SM_FUNCTION_INFO * func_index_info);
+extern void classobj_initialize_attributes (SM_ATTRIBUTE * attributes);
+extern void classobj_initialize_methods (SM_METHOD * methods);
 #endif /* _CLASS_OBJECT_H_ */

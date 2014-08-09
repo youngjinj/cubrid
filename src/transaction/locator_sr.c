@@ -8498,10 +8498,15 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 		    btree_get_locked_keys (&btid, search_btid,
 					   search_btid_duplicate_key_locked);
 		}
-	      else if (use_mvcc)
+	      else
 		{
-		  mvcc_args_p = &mvcc_args;
-		  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
+		  /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery
+		   *       issue regarding MVCCID. Must find a solution to
+		   *	   recover MVCC info on rollback (otherwise we will
+		   *	   have inconsistencies regarding visibility).
+		   */
+		  /* mvcc_args_p = &mvcc_args;
+		  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT; */
 		}
 
 #if defined(ENABLE_SYSTEMTAP)
@@ -8511,7 +8516,8 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p,
 	      key_ins_del = btree_delete (thread_p, &btid, key_dbvalue,
 					  class_oid, inst_oid, locked_keys,
 					  &dummy_unique, op_type,
-					  unique_stat_info, mvcc_args_p);
+					  unique_stat_info,
+					  NULL /* mvcc_args_p */);
 #if defined(ENABLE_SYSTEMTAP)
 	      if (key_ins_del == NULL)
 		{
@@ -9071,7 +9077,11 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
   BTREE_LOCKED_KEYS locked_keys;
   bool use_mvcc = false;
   MVCC_REC_HEADER *p_mvcc_rec_header = NULL;
-  MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
+  /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery issue regarding
+   *	   MVCCID. Must find a solution to recover MVCC info on rollback
+   *	  (otherwise we will have inconsistencies regarding visibility).
+   */
+  /* MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL; */
   MVCCID mvccid;
 /* temporary disable standalone optimization (non-mvcc insert/delete style).
  * Must be activated when dynamic heap is introduced */
@@ -9424,14 +9434,20 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes,
 			}
 		      else
 			{
-			  mvcc_args_p = &mvcc_args;
-			  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
+			  /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to
+			   * recovery issue regarding MVCCID. Must find a
+			   * solution to recover MVCC info on rollback
+			   * (otherwise we will have inconsistencies regarding
+			   * visibility).
+			   */
+			  /* mvcc_args_p = &mvcc_args;
+			  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT; */
 			}
 
 		      if (btree_delete
 			  (thread_p, &old_btid, old_key, class_oid, old_oid,
 			   locked_keys, &unique, op_type,
-			   unique_stat_info, mvcc_args_p) == NULL)
+			   unique_stat_info, NULL /* mvcc_args_p */) == NULL)
 			{
 			  error_code = er_errid ();
 			  if (!(unique && error_code == ER_BTREE_UNKNOWN_KEY))
@@ -9740,7 +9756,11 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
   OR_INDEX *index = NULL;
   DB_LOGICAL ev_res;
   MVCC_SNAPSHOT *mvcc_snapshot = NULL;
-  MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
+  /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery issue regarding
+   *	   MVCCID. Must find a solution to recover MVCC info on rollback
+   *	  (otherwise we will have inconsistencies regarding visibility).
+   */
+  /* MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL; */
 
   if (mvcc_Enabled && class_oid != NULL && !OID_IS_ROOTOID (class_oid))
     {
@@ -9912,13 +9932,18 @@ xlocator_remove_class_from_index (THREAD_ENTRY * thread_p, OID * class_oid,
 
       if (mvcc_Enabled)
 	{
-	  mvcc_args_p = &mvcc_args;
-	  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
+	  /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery issue
+	   *       regarding MVCCID. Must find a solution to recover MVCC info
+	   *	   on rollback (otherwise we will have inconsistencies
+	   *	   regarding visibility).
+	   */
+	  /* mvcc_args_p = &mvcc_args;
+	  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT; */
 	}
       key_del =
 	btree_delete (thread_p, btid, dbvalue_ptr, class_oid, &inst_oid,
 		      BTREE_NO_KEY_LOCKED, &dummy_unique, MULTI_ROW_DELETE,
-		      &unique_info, mvcc_args_p);
+		      &unique_info, NULL /* mvcc_args_p */);
     }
 
   if (unique_info.num_nulls != 0 || unique_info.num_keys != 0
@@ -10162,7 +10187,11 @@ locator_repair_btree_by_delete (THREAD_ENTRY * thread_p, OID * class_oid,
   int dummy_unique;
   LOG_LSA lsa;
   DISK_ISVALID isvalid = DISK_INVALID;
-  MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
+  /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery issue regarding
+   *	   MVCCID. Must find a solution to recover MVCC info on rollback
+   *	  (otherwise we will have inconsistencies regarding visibility).
+   */
+  /* MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL; */
 #if defined(SERVER_MODE)
   int tran_index;
 
@@ -10182,12 +10211,17 @@ locator_repair_btree_by_delete (THREAD_ENTRY * thread_p, OID * class_oid,
 	{
 	  if (mvcc_Enabled)
 	    {
-	      mvcc_args_p = &mvcc_args;
-	      mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
+	      /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery
+	       *       issue regarding MVCCID. Must find a solution to recover
+	       *       MVCC info on rollback (otherwise we will have
+	       *       inconsistencies regarding visibility).
+	       */
+	      /* mvcc_args_p = &mvcc_args;
+	      mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT; */
 	    }
 	  if (btree_delete (thread_p, btid, &key, class_oid, inst_oid,
 			    locked_keys, &dummy_unique, SINGLE_ROW_DELETE,
-			    NULL, mvcc_args_p) != NULL)
+			    NULL, NULL /* mvcc_args_p */) != NULL)
 	    {
 	      isvalid = DISK_VALID;
 	      xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_COMMIT,

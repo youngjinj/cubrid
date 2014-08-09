@@ -2213,6 +2213,7 @@ disk_to_domain2 (OR_BUF * buf)
       domain->class_mop = ws_mop (&domain->class_oid, NULL);
       if (domain->class_mop == NULL)
 	{
+	  free_var_table (vars);
 	  or_abort (buf);
 	}
     }
@@ -3070,8 +3071,11 @@ disk_to_attribute (OR_BUF * buf, SM_ATTRIBUTE * att)
        * initialized in classobj_make_attribute and here as well
        */
       att->header.name_space = ID_NULL;	/* must set this later ! */
+      att->header.name = NULL;
+      att->domain = NULL;
       att->constraints = NULL;
       att->properties = NULL;
+      att->order_link = NULL;
       att->triggers = NULL;
       att->auto_increment = NULL;
       att->is_fk_cache_attr = false;
@@ -4092,6 +4096,7 @@ disk_to_class (OR_BUF * buf, SM_CLASS ** class_ptr)
       or_abort (buf);
       return NULL;
     }
+  classobj_initialize_attributes (class_->attributes);
 
   class_->shared = (SM_ATTRIBUTE *)
     classobj_alloc_threaded_array (sizeof (SM_ATTRIBUTE),
@@ -4103,6 +4108,7 @@ disk_to_class (OR_BUF * buf, SM_CLASS ** class_ptr)
       or_abort (buf);
       return NULL;
     }
+  classobj_initialize_attributes (class_->shared);
 
   class_->class_attributes = (SM_ATTRIBUTE *)
     classobj_alloc_threaded_array (sizeof (SM_ATTRIBUTE),
@@ -4114,6 +4120,7 @@ disk_to_class (OR_BUF * buf, SM_CLASS ** class_ptr)
       or_abort (buf);
       return NULL;
     }
+  classobj_initialize_attributes (class_->class_attributes);
 
   class_->methods = (SM_METHOD *)
     classobj_alloc_threaded_array (sizeof (SM_METHOD), class_->method_count);
@@ -4124,6 +4131,7 @@ disk_to_class (OR_BUF * buf, SM_CLASS ** class_ptr)
       or_abort (buf);
       return NULL;
     }
+  classobj_initialize_methods (class_->methods);
 
   class_->class_methods = (SM_METHOD *)
     classobj_alloc_threaded_array (sizeof (SM_METHOD),
@@ -4135,6 +4143,7 @@ disk_to_class (OR_BUF * buf, SM_CLASS ** class_ptr)
       or_abort (buf);
       return NULL;
     }
+  classobj_initialize_methods (class_->class_methods);
 
   /* variable 5 */
   install_substructure_set (buf, (DB_LIST *) class_->attributes,

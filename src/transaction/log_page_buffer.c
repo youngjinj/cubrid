@@ -3488,7 +3488,17 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
 	}
       else
 	{
-	  *mvccid_p = tdes->mvcc_info->mvcc_id;
+	  if (tdes->mvcc_info->count_sub_ids > 0
+	      && tdes->mvcc_info->is_sub_active)
+	    {
+	      assert (tdes->mvcc_info->mvcc_sub_ids != NULL);
+	      *mvccid_p = tdes->mvcc_info->mvcc_sub_ids[tdes->mvcc_info->
+							count_sub_ids - 1];
+	    }
+	  else
+	    {
+	      *mvccid_p = tdes->mvcc_info->mvcc_id;
+	    }
 	}
     }
 

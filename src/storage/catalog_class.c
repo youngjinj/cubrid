@@ -4461,7 +4461,7 @@ catcls_is_mvcc_update_needed (THREAD_ENTRY * thread_p, OID * oid,
 
   assert (oid != NULL && need_mvcc_update != NULL);
   if (heap_get_pages_for_mvcc_chain_read (thread_p, oid, &pgptr,
-					  &forward_pgptr,
+					  &forward_pgptr, NULL,
 					  &ignore_record) != NO_ERROR)
     {
       goto error;
