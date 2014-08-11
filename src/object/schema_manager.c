@@ -13928,8 +13928,15 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 			      NULL, NULL, -1, NULL, filter_index,
 			      function_index);
     }
+
   if (error == NO_ERROR)
     {
+      /* promote the class lock as SCH_M lock and mark class as dirty */
+      if (locator_update_class (classop) == NULL)
+	{
+	  goto severe_error;
+	}
+
       /* modify the class to point at the new index */
       if (classobj_put_index_id (&(class_->properties), constraint_type,
 				 constraint_name, attrs, asc_desc,
@@ -13939,38 +13946,25 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 	{
 	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
-	  goto general_error;
+	  goto severe_error;
 	}
 
       error = classobj_cache_class_constraints (class_);
       if (error != NO_ERROR)
 	{
-	  goto general_error;
+	  goto severe_error;
 	}
 
       if (!classobj_cache_constraints (class_))
 	{
 	  assert (er_errid () != NO_ERROR);
 	  error = er_errid ();
-	  goto general_error;
-	}
-
-      /* now that the index is physically attached to the class, we must
-       * mark it as dirty and flush it again to make sure the catalog
-       * is updated correctly.  This is necessary because the allocation
-       * and loading of the instance are done at the same time.  We need
-       * to be able to allocate the index and flush the class BEFORE
-       * the loading to avoid this extra step.
-       */
-
-      /* If either of these operations fail, the transaction should
-       * be aborted
-       */
-      if (locator_update_class (classop) == NULL)
-	{
 	  goto severe_error;
 	}
 
+      /* now that the index is physically attached to the class, we must
+       * flush it again to make sure the catalog is updated correctly.  
+       */
       if (locator_flush_class (classop) != NO_ERROR)
 	{
 	  goto severe_error;
