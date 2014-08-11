@@ -257,6 +257,9 @@ struct recins_struct
 typedef struct rec_mvcc_delid_ins_struct REC_MVCC_DELID_INS_STRUCT;
 struct rec_mvcc_delid_ins_struct
 {
+#if !defined (NDEBUG)
+  BTID btid;			/* BTID is needed for record checker */
+#endif
   int oid_offset;		/* oid offset in record */
   bool is_unique;		/* is unique B-tree? */
   bool is_overflow;		/* is overflow node? */
@@ -25307,7 +25310,12 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	  BTREE_MVCC_SET_HEADER_FIXED_SIZE (p_mvcc_rec_header);
 	}
 
+#if defined (NDEBUG)
       if (is_unique)
+#else
+      /* On debug always get btid_int to check the record */
+      if (true)
+#endif
 	{
 	  VPID root_vpid;
 	  PAGE_PTR root = NULL;
@@ -25443,6 +25451,11 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	    }
 	}
 
+#if !defined (NDEBUG)
+      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+				       BTREE_LEAF_NODE, NULL);
+#endif
+
       assert (slotid > 0);
       sp_success = spage_update (thread_p, recv->pgptr, slotid, &rec);
       if (sp_success != SP_SUCCESS)
@@ -25545,6 +25558,11 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 		  goto error;
 		}
 
+#if !defined (NDEBUG)
+	      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+					       BTREE_OVERFLOW_NODE, NULL);
+#endif
+
 	      assert (slotid > 0);
 	      sp_success = spage_update (thread_p, recv->pgptr, slotid, &rec);
 	      if (sp_success != SP_SUCCESS)
@@ -25600,6 +25618,9 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
   int data_offset = 0, mvcc_delid_offset = 0;
   REC_MVCC_DELID_INS_STRUCT *rec_mvcc_delid_ins;
   bool have_mvcc_fixed_size = false;
+#if !defined (NDEBUG)
+  BTID_INT btid_int;
+#endif
 
   /* Read DELID insert recovery structure */
   rec_mvcc_delid_ins = (REC_MVCC_DELID_INS_STRUCT *) recv->data;
@@ -25607,6 +25628,45 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 
   /* Safe guard */
   assert (data_offset == recv->length);
+
+#if !defined (NDEBUG)
+  {
+    VPID root_vpid;
+    PAGE_PTR root = NULL;
+    BTREE_ROOT_HEADER *root_header = NULL;
+
+    root_vpid.pageid = rec_mvcc_delid_ins->btid.root_pageid;
+    root_vpid.volid = rec_mvcc_delid_ins->btid.vfid.volid;
+
+    /* unconditional latch since I'm the only active transaction */
+    root =
+      pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
+		 PGBUF_UNCONDITIONAL_LATCH);
+    if (root == NULL)
+      {
+	goto error;
+      }
+
+    (void) pgbuf_check_page_ptype (thread_p, root, PAGE_BTREE);
+
+    root_header = btree_get_root_header (root);
+    if (root_header == NULL)
+      {
+	pgbuf_unfix_and_init (thread_p, root);
+	goto error;
+      }
+
+    btid_int.sys_btid = &(rec_mvcc_delid_ins->btid);
+    if (btree_glean_root_header_info (thread_p, root_header, &btid_int)
+	!= NO_ERROR)
+      {
+	pgbuf_unfix_and_init (thread_p, root);
+	goto error;
+      }
+
+    pgbuf_unfix_and_init (thread_p, root);
+  }
+#endif
 
   rec.area_size = DB_PAGESIZE;
   rec.data = PTR_ALIGN (rec_buf, BTREE_MAX_ALIGN);
@@ -25656,6 +25716,13 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
       btree_add_mvcc_delid (&rec, rec_mvcc_delid_ins->oid_offset,
 			    mvcc_delid_offset, &recv->mvcc_id);
     }
+
+#if !defined (NDEBUG)
+  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+				   rec_mvcc_delid_ins->
+				   is_overflow ? BTREE_OVERFLOW_NODE :
+				   BTREE_LEAF_NODE, NULL);
+#endif
 
   sp_success = spage_update (thread_p, recv->pgptr, slotid, &rec);
   if (sp_success != SP_SUCCESS)
@@ -31416,6 +31483,9 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 
   rv_data = PTR_ALIGN (rv_data_buf, BTREE_MAX_ALIGN);
 
+#if !defined (NDEBUG)
+  BTID_COPY (&rec_mvcc_delid_ins.btid, btid->sys_btid);
+#endif
   rec_mvcc_delid_ins.oid_offset = oid_offset;
   rec_mvcc_delid_ins.is_unique = false;
   rec_mvcc_delid_ins.is_overflow = false;
