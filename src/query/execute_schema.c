@@ -481,7 +481,7 @@ static int do_check_fk_constraints_internal (DB_CTMPL * ctemplate,
 static int get_index_type_qualifiers (MOP obj, bool * is_reverse,
 				      bool * is_unique,
 				      const char *index_name);
-static int has_fk_with_cache_attr_constraint (DB_OBJECT * mop);
+static int pt_has_fk_with_cache_attr_constraint (PT_NODE * constraints);
 
 /*
  * Function Group :
@@ -9181,7 +9181,8 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
 	      do_flush_class_mop = true;
 	    }
 	}
-      if (has_fk_with_cache_attr_constraint (class_obj))
+      if (pt_has_fk_with_cache_attr_constraint (node->info.create_entity.
+						constraint_list))
 	{
 	  do_flush_class_mop = true;
 	}
@@ -14688,28 +14689,31 @@ get_index_type_qualifiers (MOP obj, bool * is_reverse, bool * is_unique,
 }
 
 /*
- * has_fk_with_cache_attr_constraint() - Check if class has foreign key with
+ * pt_has_fk_with_cache_attr_constraint() - Check if class has foreign key with
  *				  cache attribute constraint
  *   return: 1 if the class has foreign key with cache attribute, otherwise 0
  *   mop(in): Class object
  */
 static int
-has_fk_with_cache_attr_constraint (DB_OBJECT * mop)
+pt_has_fk_with_cache_attr_constraint (PT_NODE * constraints)
 {
-  DB_CONSTRAINT *constraint_list, *c;
+  PT_NODE *c = NULL;
+  PT_FOREIGN_KEY_INFO *fk_info = NULL;
 
-  if (mop == NULL)
+  if (constraints == NULL)
     {
       return 0;
     }
 
-  constraint_list = db_get_constraints (mop);
-  for (c = constraint_list; c; c = c->next)
+  for (c = constraints; c != NULL; c = c->next)
     {
-      if (c->type == SM_CONSTRAINT_FOREIGN_KEY
-	  && c->fk_info != NULL && c->fk_info->cache_attr_id >= 0)
+      if (c->info.constraint.type == PT_CONSTRAIN_FOREIGN_KEY)
 	{
-	  return 1;
+	  fk_info = &(c->info.constraint.un.foreign_key);
+	  if (fk_info->cache_attr >= 0)
+	    {
+	      return 1;
+	    }
 	}
     }
 
