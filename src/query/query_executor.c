@@ -9759,6 +9759,11 @@ qexec_execute_update (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   UPDDEL_MVCC_COND_REEVAL *mvcc_reev_classes = NULL, *mvcc_reev_class = NULL;
   UPDATE_MVCC_REEV_ASSIGNMENT *mvcc_reev_assigns = NULL;
 
+  /* get the snapshot, before acquiring locks, since the transaction may
+   * be blocked and we need the snapshot when update starts, not later
+   */
+  (void) logtb_get_mvcc_snapshot (thread_p);
+
   mvcc_upddel_reev_data.copyarea = NULL;
   SET_MVCC_UPDATE_REEV_DATA (&mvcc_reev_data, &mvcc_upddel_reev_data, V_TRUE,
 			     NULL);
@@ -10823,6 +10828,11 @@ qexec_execute_delete (THREAD_ENTRY * thread_p, XASL_NODE * xasl,
   MVCC_REEV_DATA mvcc_reev_data;
   MVCC_UPDDEL_REEV_DATA mvcc_upddel_reev_data;
   UPDDEL_MVCC_COND_REEVAL *mvcc_reev_classes = NULL, *mvcc_reev_class = NULL;
+
+  /* get the snapshot, before acquiring locks, since the transaction may
+   * be blocked and we need the snapshot when delete starts, not later
+   */
+  (void) logtb_get_mvcc_snapshot (thread_p);
 
   class_oid_cnt = delete_->no_classes;
   mvcc_reev_class_cnt = delete_->no_reev_classes;

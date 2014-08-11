@@ -13115,7 +13115,8 @@ btree_insert_oid_with_new_key (THREAD_ENTRY * thread_p, BTID_INT * btid,
    */
   if (btree_is_new_file (btid) != true)
     {
-      if (p_mvcc_rec_header != NULL)
+      if (p_mvcc_rec_header != NULL
+	  && MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
 	{
 	  MVCC_BTREE_OP_ARGUMENTS mvcc_args;
 	  mvcc_args.purpose = MVCC_BTREE_INSERT_OBJECT;
@@ -13375,7 +13376,7 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
   else
     {
       if (p_mvcc_rec_header != NULL
-	  && (MVCC_GET_INSID (p_mvcc_rec_header) != MVCCID_ALL_VISIBLE))
+	  && MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
 	{
 	  /* This is an MVCC operation and must be logged accordingly to be
 	   * processed by vacuum.
@@ -13622,7 +13623,7 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
   else
     {
       if (p_mvcc_rec_header != NULL
-	  && (MVCC_GET_INSID (p_mvcc_rec_header) != MVCCID_ALL_VISIBLE))
+	  && MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
 	{
 	  /* This is an MVCC operation and must be logged accordingly to be
 	   * processed by vacuum.
@@ -13813,7 +13814,7 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
   else
     {
       if (p_mvcc_rec_header != NULL
-	  && (MVCC_GET_INSID (p_mvcc_rec_header) != MVCCID_ALL_VISIBLE))
+	  && MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
 	{
 	  /* This is an MVCC operation and must be logged accordingly to be
 	   * processed by vacuum.
@@ -19486,14 +19487,21 @@ btree_update (THREAD_ENTRY * thread_p, BTID * btid, DB_VALUE * old_key,
     }
   else
     {
-      MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
-      if (mvcc_Enabled)
-	{
-	  mvcc_args_p = &mvcc_args;
-	  mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
-	}
+      /* TODO: We should pass insert MVCCID here...? */
+      /* TODO: MVCC_BTREE_DELETE_OBJECT is removed due to recovery issue
+       *       regarding MVCCID. Must find a solution to recover MVCC info on
+       *       rollback (otherwise we will have inconsistencies regarding
+       *       visibility).
+       */
+      /* MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
+         if (mvcc_Enabled)
+         {
+         mvcc_args_p = &mvcc_args;
+         mvcc_args_p->purpose = MVCC_BTREE_DELETE_OBJECT;
+         } */
       if (btree_delete (thread_p, btid, old_key, cls_oid, oid, locked_keys,
-			unique, op_type, unique_stat_info, mvcc_args_p)
+			unique, op_type, unique_stat_info,
+			NULL /* mvcc_args_p */ )
 	  == NULL)
 	{
 	  /* if the btree we are updating is a btree for unique attributes

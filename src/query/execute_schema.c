@@ -481,7 +481,7 @@ static int do_check_fk_constraints_internal (DB_CTMPL * ctemplate,
 static int get_index_type_qualifiers (MOP obj, bool * is_reverse,
 				      bool * is_unique,
 				      const char *index_name);
-
+static int has_fk_with_cache_attr_constraint (DB_OBJECT * mop);
 
 /*
  * Function Group :
@@ -509,7 +509,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
   const char *attr_name, *mthd_name, *mthd_file, *attr_mthd_name;
   const char *new_name, *old_name, *domain;
   const char *property_type;
-  char *norm_new_name;
   DB_CTMPL *ctemplate = NULL;
   DB_OBJECT *vclass, *sup_class, *partition_obj = NULL;
   int error = NO_ERROR;
@@ -530,7 +529,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 #endif
   SM_PARTITION_ALTER_INFO pinfo;
   SM_CLASS_CONSTRAINT *sm_constraint = NULL;
-  DB_CONSTRAINT_TYPE ctype;
   bool partition_savepoint = false;
   const PT_ALTER_CODE alter_code = alter->info.alter.code;
   SM_CONSTRAINT_FAMILY constraint_family;
@@ -9183,6 +9181,10 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
 	      do_flush_class_mop = true;
 	    }
 	}
+      if (has_fk_with_cache_attr_constraint (class_obj))
+	{
+	  do_flush_class_mop = true;
+	}
       error = sm_set_class_collation (class_obj, collation_id);
       break;
 
@@ -14683,4 +14685,33 @@ get_index_type_qualifiers (MOP obj, bool * is_reverse, bool * is_unique,
     }
 
   return error_code;
+}
+
+/*
+ * has_fk_with_cache_attr_constraint() - Check if class has foreign key with
+ *				  cache attribute constraint
+ *   return: 1 if the class has foreign key with cache attribute, otherwise 0
+ *   mop(in): Class object
+ */
+static int
+has_fk_with_cache_attr_constraint (DB_OBJECT * mop)
+{
+  DB_CONSTRAINT *constraint_list, *c;
+
+  if (mop == NULL)
+    {
+      return 0;
+    }
+
+  constraint_list = db_get_constraints (mop);
+  for (c = constraint_list; c; c = c->next)
+    {
+      if (c->type == SM_CONSTRAINT_FOREIGN_KEY
+	  && c->fk_info != NULL && c->fk_info->cache_attr_id >= 0)
+	{
+	  return 1;
+	}
+    }
+
+  return 0;
 }

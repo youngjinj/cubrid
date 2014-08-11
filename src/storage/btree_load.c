@@ -130,7 +130,10 @@ struct load_args
   bool overflowing;		/* Currently, are we filling in an
 				   overflow page (then, true); or a regular
 				   leaf page (then, false) */
-  int n_keys;			/* Number of keys */
+  int n_keys;			/* Number of keys - note that in the context
+				 * of MVCC, only keys that have at least one
+				 * non-deleted object are counted.
+				 */
 
   int curr_non_del_obj_count;	/* Number of objects that have not been
 				 * deleted. Unique indexes must have only one
@@ -1050,9 +1053,13 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
       pr_clear_value (&load_args->current_key);
 
       btid->vfid.volid = save_volid;
-      xbtree_add_index (thread_p, btid, key_type, &class_oids[0], attr_ids[0],
-			unique_pk, sort_args->n_oids, sort_args->n_nulls,
-			load_args->n_keys);
+      if (xbtree_add_index (thread_p, btid, key_type, &class_oids[0],
+			    attr_ids[0], unique_pk, sort_args->n_oids,
+			    sort_args->n_nulls, load_args->n_keys) == NULL)
+	{
+	  goto error;
+	}
+      file_created = 1;
     }
 
   if (!VFID_ISNULL (&load_args->btid->ovfid))
@@ -2449,8 +2456,6 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  /* This is the first call to this function; so, initialize some fields
 	     in the LOAD_ARGS structure */
 
-	  (load_args->n_keys)++;	/* Increment the key counter */
-
 	  /* Allocate the first page for the index */
 	  load_args->leaf.pgptr =
 	    btree_get_page (thread_p, load_args->btid->sys_btid,
@@ -2481,6 +2486,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	    {
 	      /* Object was not deleted, increment curr_non_del_obj_count */
 	      load_args->curr_non_del_obj_count = 1;
+	      /* Increment the key counter if object is not deleted */
+	      (load_args->n_keys)++;
 	    }
 	  else
 	    {
@@ -2525,13 +2532,20 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  if (same_key)
 	    {
 	      /* This key (retrieved key) is the same with the current one. */
-
-	      /* instance level uniqueness checking */
-	      if (BTREE_IS_UNIQUE (load_args->btid->unique_pk)
-		  && !MVCC_IS_HEADER_DELID_VALID (&mvcc_header))
+	      if (!MVCC_IS_HEADER_DELID_VALID (&mvcc_header))
 		{
 		  load_args->curr_non_del_obj_count++;
-
+		}
+	      if (load_args->curr_non_del_obj_count == 1)
+		{
+		  /* When first non-deleted object is found, we must
+		   * increment that number of keys for statistics.
+		   */
+		  (load_args->n_keys)++;
+		}
+	      if (BTREE_IS_UNIQUE (load_args->btid->unique_pk))
+		{
+		  /* instance level uniqueness checking */
 		  if (load_args->curr_non_del_obj_count > 1)
 		    {
 		      /* Unique constrain violation - more than one visible
@@ -2546,7 +2560,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		      ret = ER_BTREE_UNIQUE_FAILED;
 		      goto error;
 		    }
-		  else
+		  else if (load_args->curr_non_del_obj_count == 1)
 		    {
 		      /* this is the first non-deleted OID of the key; it
 		         must be placed as the first OID */
@@ -2815,8 +2829,6 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	    {
 	      /* Current key is finished; dump this output record to the disk page */
 
-	      (load_args->n_keys)++;	/* Increment the key counter */
-
 	      /* Insert the current record to the current page */
 	      if (load_args->overflowing == false)
 		{
@@ -2910,6 +2922,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		   * curr_non_del_obj_count.
 		   */
 		  load_args->curr_non_del_obj_count = 1;
+		  (load_args->n_keys)++;	/* Increment the key counter */
 		}
 	      else
 		{
@@ -3391,6 +3404,18 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
        * Produce the sort item for this object
        */
 
+      /* filter out dead records before any more checks */
+      if (or_mvcc_get_header (&sort_args->in_recdes, &mvcc_header) !=
+	  NO_ERROR)
+	{
+	  return SORT_ERROR_OCCURRED;
+	}
+      if (MVCC_IS_HEADER_DELID_VALID (&mvcc_header)
+	  && MVCC_GET_DELID (&mvcc_header) < sort_args->lowest_active_mvccid)
+	{
+	  continue;
+	}
+
       if (sort_args->filter)
 	{
 	  if (heap_attrinfo_read_dbvalues (thread_p, &sort_args->cur_oid,
@@ -3455,20 +3480,6 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	  return SORT_ERROR_OCCURRED;
 	}
 
-      /* filter out dead records before any more checks */
-      if (or_mvcc_get_header (&sort_args->in_recdes, &mvcc_header) !=
-	  NO_ERROR)
-	{
-	  return SORT_ERROR_OCCURRED;
-	}
-      if (MVCC_IS_HEADER_DELID_VALID (&mvcc_header)
-	  && (MVCC_GET_DELID (&mvcc_header) <
-	      sort_args->lowest_active_mvccid))
-
-	{
-	  continue;
-	}
-
       if (sort_args->fk_refcls_oid && !OID_ISNULL (sort_args->fk_refcls_oid))
 	{
 	  if (btree_check_foreign_key (thread_p,
@@ -3511,8 +3522,15 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
       if (DB_IS_NULL (dbvalue_ptr)
 	  || btree_multicol_key_is_null (dbvalue_ptr))
 	{
-	  sort_args->n_oids++;	/* Increment the OID counter */
-	  sort_args->n_nulls++;	/* Increment the NULL counter */
+	  if (!MVCC_IS_HEADER_DELID_VALID (&mvcc_header))
+	    {
+	      /* All objects that were not candidates for vacuum are loaded,
+	       * but statistics should only care for objects that have not
+	       * been deleted and committed at the time of load.
+	       */
+	      sort_args->n_oids++;	/* Increment the OID counter */
+	      sort_args->n_nulls++;	/* Increment the NULL counter */
+	    }
 	  if (dbvalue_ptr == &dbvalue)
 	    {
 	      pr_clear_value (&dbvalue);
@@ -3623,7 +3641,14 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	    }
 	}
 
-      sort_args->n_oids++;	/* Increment the OID counter */
+      if (!MVCC_IS_HEADER_DELID_VALID (&mvcc_header))
+	{
+	  /* All objects that were not candidates for vacuum are loaded,
+	   * but statistics should only care for objects that have not
+	   * been deleted and committed at the time of load.
+	   */
+	  sort_args->n_oids++;	/* Increment the OID counter */
+	}
 
       if (key_len > 0)
 	{

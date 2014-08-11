@@ -22337,6 +22337,7 @@ xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
       return ER_FAILED;
     }
 
+  recdes.data = NULL;
   r = heap_first (thread_p, hfid, class_oid, &oid, &recdes, &scan_cache,
 		  true);
   heap_scancache_end (thread_p, &scan_cache);
