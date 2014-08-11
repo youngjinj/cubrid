@@ -4860,13 +4860,11 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 		{
 		case LOG_MVCC_UNDOREDO_DATA:
 		case LOG_MVCC_DIFF_UNDOREDO_DATA:
+		  is_mvcc_op = true;
+		  /* fall through */
+
 		case LOG_UNDOREDO_DATA:
 		case LOG_DIFF_UNDOREDO_DATA:
-		  /* Does the log record belong to a MVCC op? */
-		  is_mvcc_op =
-		    log_rec->type == LOG_MVCC_UNDOREDO_DATA
-		    || log_rec->type == LOG_MVCC_DIFF_UNDOREDO_DATA;
-
 		  LSA_COPY (&rcv_lsa, &log_lsa);
 		  /*
 		   * The transaction was active at the time of the crash. The
@@ -5968,7 +5966,7 @@ log_startof_nxrec (THREAD_ENTRY * thread_p, LOG_LSA * lsa,
       {
 	/* Read the DATA HEADER */
 	LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p,
-					  sizeof (struct log_undoredo),
+					  sizeof (struct log_mvcc_undoredo),
 					  &log_lsa, log_pgptr);
 	mvcc_undoredo =
 	  (struct log_mvcc_undoredo *) ((char *) log_pgptr->area +
@@ -5977,8 +5975,8 @@ log_startof_nxrec (THREAD_ENTRY * thread_p, LOG_LSA * lsa,
 	undo_length = (int) GET_ZIP_LEN (mvcc_undoredo->undoredo.ulength);
 	redo_length = (int) GET_ZIP_LEN (mvcc_undoredo->undoredo.rlength);
 
-	LOG_READ_ADD_ALIGN (thread_p, sizeof (struct log_undoredo), &log_lsa,
-			    log_pgptr);
+	LOG_READ_ADD_ALIGN (thread_p, sizeof (struct log_mvcc_undoredo),
+			    &log_lsa, log_pgptr);
 	LOG_READ_ADD_ALIGN (thread_p, undo_length, &log_lsa, log_pgptr);
 	LOG_READ_ADD_ALIGN (thread_p, redo_length, &log_lsa, log_pgptr);
 	break;
