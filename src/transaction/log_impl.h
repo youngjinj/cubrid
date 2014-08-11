@@ -507,6 +507,7 @@ enum logwr_mode
   LOGWR_MODE_SEMISYNC,
   LOGWR_MODE_SYNC
 };
+#define LOGWR_COPY_FROM_FIRST_PHY_PAGE_MASK	(0x80000000)
 
 typedef enum logwr_status LOGWR_STATUS;
 enum logwr_status
@@ -528,6 +529,7 @@ struct logwr_entry
   LOG_LSA last_eof_lsa;
   LOG_LSA tmp_last_eof_lsa;
   INT64 start_copy_time;
+  bool copy_from_first_phy_page;
   LOGWR_ENTRY *next;
 };
 
@@ -2384,6 +2386,10 @@ extern void logpb_get_nxio_lsa (LOG_LSA * lsa_p);
 extern const char *logpb_perm_status_to_string (enum LOG_PSTATUS val);
 
 extern MVCCID logtb_get_lowest_active_mvccid (THREAD_ENTRY * thread_p);
+
+extern LOG_PAGEID logpb_find_oldest_available_page_id (THREAD_ENTRY *
+						       thread_p);
+extern int logpb_find_oldest_available_arv_num (THREAD_ENTRY * thread_p);
 
 extern int logtb_get_new_mvccid (THREAD_ENTRY * thread_p,
 				 MVCC_INFO * curr_mvcc_info);

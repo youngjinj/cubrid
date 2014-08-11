@@ -6732,6 +6732,7 @@ btree_check_page_key (THREAD_ENTRY * thread_p, const OID * class_oid_p,
   NON_LEAF_REC nleaf_pnt;
   DISK_ISVALID valid = DISK_ERROR;
   int c;
+  char err_buf[LINE_MAX];
 
   /* initialize */
   leaf_pnt.key_len = 0;
@@ -6747,8 +6748,10 @@ btree_check_page_key (THREAD_ENTRY * thread_p, const OID * class_oid_p,
   header = btree_get_node_header (page_ptr);
   if (header == NULL)
     {
-      er_log_debug (ARG_FILE_LINE, "btree_check_page_key: "
-		    "get node header failure: %d\n", key_cnt);
+      snprintf (err_buf, LINE_MAX, "btree_check_page_key: "
+		"get node header failure: %d\n", key_cnt);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_EMERGENCY_ERROR, 1,
+	      err_buf);
       valid = DISK_INVALID;
       goto error;
     }
@@ -6759,8 +6762,10 @@ btree_check_page_key (THREAD_ENTRY * thread_p, const OID * class_oid_p,
   if ((node_type == BTREE_NON_LEAF_NODE && key_cnt <= 0)
       || (node_type == BTREE_LEAF_NODE && key_cnt < 0))
     {
-      er_log_debug (ARG_FILE_LINE, "btree_check_page_key: "
-		    "node key count underflow: %d\n", key_cnt);
+      snprintf (err_buf, LINE_MAX, "btree_check_page_key: "
+		"node key count underflow: %d\n", key_cnt);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_EMERGENCY_ERROR, 1,
+	      err_buf);
       valid = DISK_INVALID;
       goto error;
     }
@@ -6815,12 +6820,15 @@ btree_check_page_key (THREAD_ENTRY * thread_p, const OID * class_oid_p,
 	   && (btree_get_key_length (&key1) > header->max_key_len))
 	  || (overflow_key1 && (DISK_VPID_SIZE > header->max_key_len)))
 	{
-	  er_log_debug (ARG_FILE_LINE, "btree_check_page_key: "
-			"--- max key length test failed for page "
-			"{%d , %d}. Check key_rec = %d\n",
-			page_vpid->volid, page_vpid->pageid, k);
 	  btree_dump_page (thread_p, stdout, class_oid_p, btid, btname,
 			   page_ptr, page_vpid, 2, 2);
+
+	  snprintf (err_buf, LINE_MAX, "btree_check_page_key: "
+		    "--- max key length test failed for page "
+		    "{%d , %d}. Check key_rec = %d\n",
+		    page_vpid->volid, page_vpid->pageid, k);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_EMERGENCY_ERROR, 1,
+		  err_buf);
 	  valid = DISK_INVALID;
 	  goto error;
 	}
@@ -6857,12 +6865,15 @@ btree_check_page_key (THREAD_ENTRY * thread_p, const OID * class_oid_p,
 	   && (btree_get_key_length (&key2) > header->max_key_len))
 	  || (overflow_key2 && (DISK_VPID_SIZE > header->max_key_len)))
 	{
-	  er_log_debug (ARG_FILE_LINE, "btree_check_page_key: "
-			"--- max key length test failed for page "
-			"{%d , %d}. Check key_rec = %d\n",
-			page_vpid->volid, page_vpid->pageid, k + 1);
 	  btree_dump_page (thread_p, stdout, class_oid_p, btid, btname,
 			   page_ptr, page_vpid, 2, 2);
+
+	  snprintf (err_buf, LINE_MAX, "btree_check_page_key: "
+		    "--- max key length test failed for page "
+		    "{%d , %d}. Check key_rec = %d\n",
+		    page_vpid->volid, page_vpid->pageid, k + 1);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_EMERGENCY_ERROR, 1,
+		  err_buf);
 	  valid = DISK_INVALID;
 	  goto error;
 	}
@@ -6879,12 +6890,15 @@ btree_check_page_key (THREAD_ENTRY * thread_p, const OID * class_oid_p,
 
       if (c != DB_LT)
 	{
-	  er_log_debug (ARG_FILE_LINE, "btree_check_page_key:"
-			"--- key order test failed for page"
-			" {%d , %d}. Check key_recs = %d and %d\n",
-			page_vpid->volid, page_vpid->pageid, k, k + 1);
 	  btree_dump_page (thread_p, stdout, class_oid_p, btid, btname,
 			   page_ptr, page_vpid, 2, 2);
+
+	  snprintf (err_buf, LINE_MAX, "btree_check_page_key:"
+		    "--- key order test failed for page"
+		    " {%d , %d}. Check key_recs = %d and %d\n",
+		    page_vpid->volid, page_vpid->pageid, k, k + 1);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_EMERGENCY_ERROR, 1,
+		  err_buf);
 	  valid = DISK_INVALID;
 	  goto error;
 	}
@@ -6933,6 +6947,7 @@ btree_verify_subtree (THREAD_ENTRY * thread_p, const OID * class_oid_p,
   BTREE_NODE_INFO INFO2;
   BTREE_NODE_HEADER *header = NULL;
   BTREE_NODE_TYPE node_type;
+  char err_buf[LINE_MAX];
 
   db_make_null (&INFO2.max_key);
 
@@ -6961,10 +6976,12 @@ btree_verify_subtree (THREAD_ENTRY * thread_p, const OID * class_oid_p,
   if ((node_type == BTREE_NON_LEAF_NODE && key_cnt <= 0)
       || (node_type == BTREE_LEAF_NODE && key_cnt < 0))
     {
-      er_log_debug (ARG_FILE_LINE, "btree_verify_subtree: "
-		    "node key count underflow: %d\n", key_cnt);
       btree_dump_page (thread_p, stdout, class_oid_p, btid, btname,
 		       pg_ptr, pg_vpid, 2, 2);
+      snprintf (err_buf, LINE_MAX, "btree_verify_subtree: "
+		"node key count underflow: %d\n", key_cnt);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_EMERGENCY_ERROR, 1,
+	      err_buf);
       valid = DISK_INVALID;
       goto error;
     }
@@ -6982,10 +6999,13 @@ btree_verify_subtree (THREAD_ENTRY * thread_p, const OID * class_oid_p,
     {				/* a non-leaf page */
       if (key_cnt < 0)
 	{
-	  er_log_debug (ARG_FILE_LINE, "btree_verify_subtree: "
-			"node key count underflow: %d\n", key_cnt);
 	  btree_dump_page (thread_p, stdout, class_oid_p, btid, btname,
 			   pg_ptr, pg_vpid, 2, 2);
+
+	  snprintf (err_buf, LINE_MAX, "btree_verify_subtree: "
+		    "node key count underflow: %d\n", key_cnt);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_EMERGENCY_ERROR, 1,
+		  err_buf);
 	  valid = DISK_INVALID;
 	  goto error;
 	}
@@ -7039,7 +7059,6 @@ btree_verify_subtree (THREAD_ENTRY * thread_p, const OID * class_oid_p,
 	}
       INFO->page_cnt += 1;
       INFO->nleafpg_cnt += 1;
-
     }
   else
     {				/* a leaf page */
@@ -18473,8 +18492,10 @@ start_point:
 	    {
 	      assert (!OID_ISNULL (&saved_N_oid));
 	      assert (!OID_ISNULL (&saved_N_class_oid));
-	      lock_remove_object_lock (thread_p, &saved_N_oid,
-				       &saved_N_class_oid, NS_LOCK);
+	      lock_unlock_object_donot_move_to_non2pl (thread_p,
+						       &saved_N_oid,
+						       &saved_N_class_oid,
+						       NS_LOCK);
 	      next_lock_flag = false;
 	      OID_SET_NULL (&saved_N_oid);
 	      OID_SET_NULL (&saved_N_class_oid);
@@ -18573,8 +18594,10 @@ start_point:
 		{
 		  assert (!OID_ISNULL (&saved_N_oid));
 		  assert (!OID_ISNULL (&saved_N_class_oid));
-		  lock_remove_object_lock (thread_p, &saved_N_oid,
-					   &saved_N_class_oid, NS_LOCK);
+		  lock_unlock_object_donot_move_to_non2pl (thread_p,
+							   &saved_N_oid,
+							   &saved_N_class_oid,
+							   NS_LOCK);
 		  next_lock_flag = false;
 		  OID_SET_NULL (&saved_N_oid);
 		  OID_SET_NULL (&saved_N_class_oid);
@@ -18610,8 +18633,8 @@ start_point:
 
       assert (!OID_ISNULL (&saved_N_oid));
       assert (!OID_ISNULL (&saved_N_class_oid));
-      lock_remove_object_lock (thread_p, &saved_N_oid, &saved_N_class_oid,
-			       NS_LOCK);
+      lock_unlock_object_donot_move_to_non2pl (thread_p, &saved_N_oid,
+					       &saved_N_class_oid, NS_LOCK);
       next_lock_flag = false;
       OID_SET_NULL (&saved_N_oid);
       OID_SET_NULL (&saved_N_class_oid);
@@ -19374,7 +19397,8 @@ key_insertion:
       assert (!mvcc_Enabled);
       assert (!OID_ISNULL (&N_oid));
       assert (!OID_ISNULL (&N_class_oid));
-      lock_remove_object_lock (thread_p, &N_oid, &N_class_oid, NS_LOCK);
+      lock_unlock_object_donot_move_to_non2pl (thread_p, &N_oid,
+					       &N_class_oid, NS_LOCK);
     }
 
   mnt_bt_inserts (thread_p);
@@ -19422,14 +19446,16 @@ error:
     {
       assert (!OID_ISNULL (&N_oid));
       assert (!OID_ISNULL (&N_class_oid));
-      lock_remove_object_lock (thread_p, &N_oid, &N_class_oid, NS_LOCK);
+      lock_unlock_object_donot_move_to_non2pl (thread_p, &N_oid,
+					       &N_class_oid, NS_LOCK);
     }
   if (curr_lock_flag)
     {
       assert (!OID_ISNULL (&C_oid));
       assert (!OID_ISNULL (&C_class_oid));
 
-      lock_unlock_object (thread_p, &C_oid, &C_class_oid, current_lock, true);
+      lock_unlock_object_donot_move_to_non2pl (thread_p, &C_oid,
+					       &C_class_oid, current_lock);
     }
 
   (void) thread_set_check_interrupt (thread_p, old_check_interrupt);
@@ -22885,8 +22911,8 @@ btree_lock_current_key (THREAD_ENTRY * thread_p, BTREE_SCAN * bts,
     {
       assert (!OID_ISNULL (ck_pseudo_oid));
       assert (!OID_ISNULL (class_oid));
-      lock_remove_object_lock (thread_p, ck_pseudo_oid, class_oid,
-			       bts->key_lock_mode);
+      lock_unlock_object_donot_move_to_non2pl (thread_p, ck_pseudo_oid,
+					       class_oid, bts->key_lock_mode);
       OID_SET_NULL (ck_pseudo_oid);
     }
 
@@ -23121,8 +23147,9 @@ start_point:
     {
       assert (!OID_ISNULL (nk_pseudo_oid));
       assert (!OID_ISNULL (nk_class_oid));
-      lock_remove_object_lock (thread_p, nk_pseudo_oid, nk_class_oid,
-			       bts->key_lock_mode);
+      lock_unlock_object_donot_move_to_non2pl (thread_p, nk_pseudo_oid,
+					       nk_class_oid,
+					       bts->key_lock_mode);
       OID_SET_NULL (nk_pseudo_oid);
       OID_SET_NULL (nk_class_oid);
     }
@@ -26609,16 +26636,22 @@ btree_range_opt_check_add_index_key (THREAD_ENTRY * thread_p,
 		{
 		  assert (!OID_ISNULL (ck_pseudo_oid));
 		  assert (!OID_ISNULL (class_oid));
-		  lock_remove_object_lock (thread_p, ck_pseudo_oid,
-					   class_oid, bts->key_lock_mode);
+		  lock_unlock_object_donot_move_to_non2pl (thread_p,
+							   ck_pseudo_oid,
+							   class_oid,
+							   bts->
+							   key_lock_mode);
 		}
 
 	      if (nk_pseudo_oid != NULL && !OID_ISNULL (nk_pseudo_oid))
 		{
 		  assert (!OID_ISNULL (nk_pseudo_oid));
 		  assert (!OID_ISNULL (class_oid));
-		  lock_remove_object_lock (thread_p, nk_pseudo_oid,
-					   class_oid, bts->key_lock_mode);
+		  lock_unlock_object_donot_move_to_non2pl (thread_p,
+							   nk_pseudo_oid,
+							   class_oid,
+							   bts->
+							   key_lock_mode);
 		}
 	    }
 
@@ -26642,20 +26675,24 @@ btree_range_opt_check_add_index_key (THREAD_ENTRY * thread_p,
 	    {
 	      assert (!OID_ISNULL (&(last_item->ck_ps_oid)));
 	      assert (!OID_ISNULL (&(last_item->class_oid)));
-	      lock_remove_object_lock (thread_p,
-				       &(last_item->ck_ps_oid),
-				       &(last_item->class_oid),
-				       bts->key_lock_mode);
+	      lock_unlock_object_donot_move_to_non2pl (thread_p,
+						       &(last_item->
+							 ck_ps_oid),
+						       &(last_item->
+							 class_oid),
+						       bts->key_lock_mode);
 	    }
 
 	  if (!OID_ISNULL (&(last_item->nk_ps_oid)))
 	    {
 	      assert (!OID_ISNULL (&(last_item->nk_ps_oid)));
 	      assert (!OID_ISNULL (&(last_item->class_oid)));
-	      lock_remove_object_lock (thread_p,
-				       &(last_item->nk_ps_oid),
-				       &(last_item->class_oid),
-				       bts->key_lock_mode);
+	      lock_unlock_object_donot_move_to_non2pl (thread_p,
+						       &(last_item->
+							 nk_ps_oid),
+						       &(last_item->
+							 class_oid),
+						       bts->key_lock_mode);
 	    }
 	}
 
@@ -29615,12 +29652,15 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
 			   ? &btrs_helper->saved_nk_pseudo_oid
 			   : &btrs_helper->nk_pseudo_oid));
       assert (!OID_ISNULL (&btrs_helper->saved_nk_class_oid));
-      lock_remove_object_lock (thread_p,
-			       OID_ISNULL (&btrs_helper->nk_pseudo_oid)
-			       ? &btrs_helper->saved_nk_pseudo_oid
-			       : &btrs_helper->nk_pseudo_oid,
-			       &btrs_helper->saved_nk_class_oid,
-			       bts->key_lock_mode);
+      lock_unlock_object_donot_move_to_non2pl (thread_p,
+					       OID_ISNULL (&btrs_helper->
+							   nk_pseudo_oid) ?
+					       &btrs_helper->
+					       saved_nk_pseudo_oid :
+					       &btrs_helper->nk_pseudo_oid,
+					       &btrs_helper->
+					       saved_nk_class_oid,
+					       bts->key_lock_mode);
       OID_SET_NULL (&btrs_helper->saved_nk_pseudo_oid);
       OID_SET_NULL (&btrs_helper->saved_nk_class_oid);
       btrs_helper->next_key_locked = false;
@@ -29755,23 +29795,28 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
 			       ? &btrs_helper->saved_nk_pseudo_oid
 			       : &btrs_helper->nk_pseudo_oid));
 	  assert (!OID_ISNULL (&btrs_helper->saved_nk_class_oid));
-	  lock_remove_object_lock (thread_p,
-				   OID_ISNULL (&btrs_helper->
-					       nk_pseudo_oid)
-				   ? &btrs_helper->saved_nk_pseudo_oid
-				   : &btrs_helper->nk_pseudo_oid,
-				   &btrs_helper->saved_nk_class_oid,
-				   bts->key_lock_mode);
+	  lock_unlock_object_donot_move_to_non2pl (thread_p,
+						   OID_ISNULL (&btrs_helper->
+							       nk_pseudo_oid)
+						   ? &btrs_helper->
+						   saved_nk_pseudo_oid :
+						   &btrs_helper->
+						   nk_pseudo_oid,
+						   &btrs_helper->
+						   saved_nk_class_oid,
+						   bts->key_lock_mode);
 	}
 
       if (btrs_helper->curr_key_locked)
 	{
 	  assert (!OID_ISNULL (&btrs_helper->saved_ck_pseudo_oid));
 	  assert (!OID_ISNULL (&btrs_helper->saved_class_oid));
-	  lock_remove_object_lock (thread_p,
-				   &btrs_helper->saved_ck_pseudo_oid,
-				   &btrs_helper->saved_class_oid,
-				   bts->key_lock_mode);
+	  lock_unlock_object_donot_move_to_non2pl (thread_p,
+						   &btrs_helper->
+						   saved_ck_pseudo_oid,
+						   &btrs_helper->
+						   saved_class_oid,
+						   bts->key_lock_mode);
 	}
 
       /*

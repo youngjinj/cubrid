@@ -1106,6 +1106,15 @@ loop:
       thread_p = &thread_Manager.thread_array[i];
       if (thread_p->status != TS_DEAD)
 	{
+	  if (thread_p->status == TS_FREE
+	      && thread_p->resume_status == THREAD_JOB_QUEUE_SUSPENDED)
+	    {
+	      /* Defence code of a bug.
+	       * wake up a thread which is not in the list of Job queue,
+	       * but is waiting for a job.
+	       */
+	      thread_wakeup (thread_p, THREAD_RESUME_DUE_TO_SHUTDOWN);
+	    }
 	  repeat_loop = true;
 	}
     }

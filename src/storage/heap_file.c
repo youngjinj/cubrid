@@ -6921,20 +6921,8 @@ int
 xheap_destroy_newly_created (THREAD_ENTRY * thread_p, const HFID * hfid)
 {
   VFID vfid;
-  FILE_IS_NEW_FILE is_new_file;
   FILE_TYPE file_type;
   int ret;
-
-  is_new_file = file_is_new_file (thread_p, &(hfid->vfid));
-  if (is_new_file == FILE_ERROR)
-    {
-      return ER_FAILED;
-    }
-
-  if (is_new_file == FILE_NEW_FILE)
-    {
-      return xheap_destroy (thread_p, hfid);
-    }
 
   file_type = file_get_type (thread_p, &(hfid->vfid));
   if (file_type == FILE_HEAP_REUSE_SLOTS)
@@ -19574,6 +19562,7 @@ heap_check_all_pages (THREAD_ENTRY * thread_p, HFID * hfid)
   HEAP_HDR_STATS *heap_hdr;	/* Header of heap structure          */
   RECDES hdr_recdes;		/* Header record descriptor          */
   DISK_ISVALID valid_pg = DISK_VALID;
+  DISK_ISVALID valid = DISK_VALID;
   DISK_ISVALID tmp_valid_pg = DISK_VALID;
   INT32 npages = 0, tmp_npages;
   int i;
@@ -19677,16 +19666,17 @@ heap_check_all_pages (THREAD_ENTRY * thread_p, HFID * hfid)
 	}
 
       heap_hdr = (HEAP_HDR_STATS *) hdr_recdes.data;
-      for (i = 0; i < HEAP_NUM_BEST_SPACESTATS; i++)
+      for (i = 0; i < HEAP_NUM_BEST_SPACESTATS && valid_pg != DISK_ERROR; i++)
 	{
 	  if (!VPID_ISNULL (&heap_hdr->estimates.best[i].vpid))
 	    {
-	      valid_pg =
+	      valid =
 		file_isvalid_page_partof (thread_p,
 					  &heap_hdr->estimates.best[i].vpid,
 					  &hfid->vfid);
-	      if (valid_pg != DISK_VALID)
+	      if (valid != DISK_VALID)
 		{
+		  valid_pg = valid;
 		  break;
 		}
 	    }
@@ -19792,6 +19782,7 @@ heap_check_all_heaps (THREAD_ENTRY * thread_p)
   int num_files;
   HFID hfid;
   DISK_ISVALID allvalid = DISK_VALID;
+  DISK_ISVALID valid = DISK_VALID;
   FILE_TYPE file_type;
   int i;
 
@@ -19820,9 +19811,10 @@ heap_check_all_heaps (THREAD_ENTRY * thread_p)
 	  continue;
 	}
 
-      if (heap_check_heap_file (thread_p, &hfid) != DISK_VALID)
+      valid = heap_check_heap_file (thread_p, &hfid);
+      if (valid != DISK_VALID)
 	{
-	  allvalid = DISK_ERROR;
+	  allvalid = valid;
 	}
     }
 
