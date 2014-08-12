@@ -2466,6 +2466,7 @@ btree_leaf_get_nth_oid_ptr (BTID_INT * btid, RECDES * recp,
 	  assert_release (false);
 	  return NULL;
 	}
+      n--;
     }
   /* buf.ptr points to nth object */
   assert (buf.ptr < buf.endptr);

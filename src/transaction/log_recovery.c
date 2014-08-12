@@ -4860,9 +4860,6 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 		{
 		case LOG_MVCC_UNDOREDO_DATA:
 		case LOG_MVCC_DIFF_UNDOREDO_DATA:
-		  is_mvcc_op = true;
-		  /* fall through */
-
 		case LOG_UNDOREDO_DATA:
 		case LOG_DIFF_UNDOREDO_DATA:
 		  LSA_COPY (&rcv_lsa, &log_lsa);
@@ -4877,6 +4874,16 @@ log_recovery_undo (THREAD_ENTRY * thread_p)
 		  else
 		    {
 		      last_tranlogrec = false;
+		    }
+
+		  if (log_rec->type == LOG_MVCC_UNDOREDO_DATA
+		      || log_rec->type == LOG_MVCC_DIFF_UNDOREDO_DATA)
+		    {
+		      is_mvcc_op = true;
+		    }
+		  else
+		    {
+		      is_mvcc_op = false;
 		    }
 
 		  /* Get the DATA HEADER */

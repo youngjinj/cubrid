@@ -4692,6 +4692,7 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
     {
       return;
     }
+  (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
   if (MVCCID_IS_VALID (curr_mvcc_info->mvcc_id))
     {
       /* reflect accumulated statistics to B-trees
@@ -4703,13 +4704,6 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 	{
 	  assert (false);
 	}
-
-      /* lock CSECT_TRAN_TABLE while clearing mvccid
-       * and updating highest_completed_mvccid in order to not remove this
-       * mvccid from set of "running" mvccids while other concurrent
-       * transaction is taking a snapshot.
-       */
-      (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
 
       head_null_mvccids = mvcc_table->head_null_mvccids;
 
@@ -4779,14 +4773,12 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 	  head_null_mvccids->prev = curr_mvcc_info;
 	  mvcc_table->head_null_mvccids = curr_mvcc_info;
 	}
-
-
-      csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
     }
   else
     {
       curr_mvcc_info->transaction_lowest_active_mvccid = MVCCID_NULL;
     }
+  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
 
   curr_mvcc_info->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
   p_mvcc_snapshot = &(curr_mvcc_info->mvcc_snapshot);

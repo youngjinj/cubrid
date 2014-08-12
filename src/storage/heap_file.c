@@ -1398,9 +1398,9 @@ static int heap_mvcc_update_relocated_record (THREAD_ENTRY * thread_p,
 					      RECDES * new_version_recdes,
 					      HEAP_SCANCACHE * scan_cache,
 					      OID * new_oid);
-static int heap_insert_into_page (THREAD_ENTRY * thread_p, RECDES * recdes,
-				  const HFID * hfid, PAGE_PTR page,
-				  PGSLOTID * slotid);
+static int heap_mvcc_insert_into_page (THREAD_ENTRY * thread_p,
+				       RECDES * recdes, const HFID * hfid,
+				       PAGE_PTR page, PGSLOTID * slotid);
 
 
 /*
@@ -7097,7 +7097,6 @@ heap_insert_internal (THREAD_ENTRY * thread_p, const HFID * hfid, OID * oid,
   LOG_DATA_ADDR addr;		/* Address of logging data */
   int sp_success;
   bool isnew_rec;
-  RECDES *undo_recdes;
 
   addr.vfid = &hfid->vfid;
 
@@ -7163,14 +7162,15 @@ heap_insert_internal (THREAD_ENTRY * thread_p, const HFID * hfid, OID * oid,
 	      tmp_recdes.area_size = sizeof (bytes_reserved);
 	      tmp_recdes.length = sizeof (bytes_reserved);
 	      tmp_recdes.data = (char *) &bytes_reserved;
-	      undo_recdes = &tmp_recdes;
+	      /* non MVCC insert logging */
+	      log_append_undoredo_recdes (thread_p, RVHF_INSERT, &addr, NULL,
+					  &tmp_recdes);
 	    }
 	  else
 	    {
-	      undo_recdes = recdes;
+	      /* MVCC insert logging */
+	      heap_mvcc_log_insert (thread_p, recdes, &addr);
 	    }
-	  log_append_undoredo_recdes (thread_p, RVHF_INSERT, &addr, NULL,
-				      undo_recdes);
 	}
 
       pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
@@ -7387,6 +7387,7 @@ heap_insert_with_lock_internal (THREAD_ENTRY * thread_p, const HFID * hfid,
 
   /* Log the insertion, set the page dirty, free, and unlock */
   addr.offset = oid->slotid;
+  /* non MVCC insert logging */
   log_append_undoredo_recdes (thread_p, RVHF_INSERT, &addr, NULL,
 			      undo_recdes);
   pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
@@ -8359,8 +8360,9 @@ try_again:
 	    SET_OID (&mvcc_next_oid, home_vpid.volid, home_vpid.pageid,
 		     slotid);
 	    addr.offset = slotid;
-	    log_append_undoredo_recdes (thread_p, RVHF_INSERT, &addr,
-					NULL, new_recdes);
+	    /* MVCC insert logging */
+	    heap_mvcc_log_insert (thread_p, new_recdes, &addr);
+
 	    pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
 	  }
 	else
@@ -8717,8 +8719,9 @@ try_again:
 	  {
 	    SET_OID (&mvcc_next_oid, oid->volid, oid->pageid, slotid);
 	    addr.offset = slotid;
-	    log_append_undoredo_recdes (thread_p, RVHF_INSERT, &addr, NULL,
-					new_recdes);
+
+	    /* MVCC insert logging */
+	    heap_mvcc_log_insert (thread_p, new_recdes, &addr);
 	    pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
 	  }
 	else if (heap_insert_internal
@@ -24401,6 +24404,7 @@ heap_mvcc_insert_internal (THREAD_ENTRY * thread_p,
 
   /* Log the insertion, set the page dirty, free, and unlock */
   addr.offset = oid->slotid;
+  /* MVCC insert logging */
   heap_mvcc_log_insert (thread_p, recdes, &addr);
 
   pgbuf_set_dirty (thread_p, addr.pgptr, DONT_FREE);
@@ -29453,9 +29457,9 @@ heap_mvcc_update_relocated_record (THREAD_ENTRY * thread_p,
 	  if (spage_is_mvcc_updatable (thread_p, home_page, oid->slotid,
 				       old_version_new_size,
 				       new_version_recdes->length)
-	      && (heap_insert_into_page (thread_p, new_version_recdes, hfid,
-					 home_page, &new_version_slotid)
-		  == NO_ERROR))
+	      && (heap_mvcc_insert_into_page (thread_p, new_version_recdes,
+					      hfid, home_page,
+					      &new_version_slotid) == NO_ERROR))
 	    {
 	      /* Successfully inserted new version into home page */
 	      is_new_version_in_home_page = true;
@@ -29465,9 +29469,9 @@ heap_mvcc_update_relocated_record (THREAD_ENTRY * thread_p,
 		       new_version_slotid);
 	    }
 	  /* Check if at least the record can be fitted in forward page */
-	  else if (heap_insert_into_page (thread_p, new_version_recdes, hfid,
-					  forward_page, &new_version_slotid)
-		   == NO_ERROR)
+	  else if (heap_mvcc_insert_into_page (thread_p, new_version_recdes,
+					       hfid, forward_page,
+					       &new_version_slotid) == NO_ERROR)
 	    {
 	      /* Successfully inserted new version into forward page */
 	      is_new_version_in_forward_page = true;
@@ -29491,9 +29495,9 @@ heap_mvcc_update_relocated_record (THREAD_ENTRY * thread_p,
 				       forward_oid_p->slotid,
 				       old_version_new_size,
 				       new_version_recdes->length)
-	      && (heap_insert_into_page (thread_p, forward_recdes_p, hfid,
-					 forward_page, &new_version_slotid)
-		  == NO_ERROR))
+	      && (heap_mvcc_insert_into_page (thread_p, forward_recdes_p, hfid,
+					      forward_page, &new_version_slotid)
+					      == NO_ERROR))
 	    {
 	      /* Successfully inserted new version into forward page */
 	      is_new_version_in_forward_page = true;
@@ -29504,9 +29508,10 @@ heap_mvcc_update_relocated_record (THREAD_ENTRY * thread_p,
 		       forward_vpid.pageid, new_version_slotid);
 	    }
 	  /* Check if at least the record can be fitted in home page */
-	  else if (heap_insert_into_page (thread_p, new_version_recdes, hfid,
-					  home_page, &new_version_slotid)
-		   == NO_ERROR)
+	  else
+	    if (heap_mvcc_insert_into_page (thread_p, new_version_recdes, hfid,
+					    home_page, &new_version_slotid)
+					    == NO_ERROR)
 	    {
 	      /* Successfully inserted new version into home page */
 	      is_new_version_in_home_page = true;
@@ -29680,7 +29685,7 @@ error:
 }
 
 /*
- * heap_insert_into_page () - Try to insert record in the given page. If
+ * heap_mvcc_insert_into_page () - Try to insert record in the given page. If
  *			      insert is successful, log the changes and
  *			      set page dirty.
  *
@@ -29693,8 +29698,9 @@ error:
  *		   Will be NULL_SLOTID otherwise.
  */
 static int
-heap_insert_into_page (THREAD_ENTRY * thread_p, RECDES * recdes,
-		       const HFID * hfid, PAGE_PTR page, PGSLOTID * slotid)
+heap_mvcc_insert_into_page (THREAD_ENTRY * thread_p, RECDES * recdes,
+			    const HFID * hfid, PAGE_PTR page,
+			    PGSLOTID * slotid)
 {
   LOG_DATA_ADDR addr;
   assert (slotid != NULL);
@@ -29706,7 +29712,8 @@ heap_insert_into_page (THREAD_ENTRY * thread_p, RECDES * recdes,
       addr.vfid = &hfid->vfid;
       addr.offset = *slotid;
 
-      log_append_undoredo_recdes (thread_p, RVHF_INSERT, &addr, NULL, recdes);
+      /* MVCC insert logging */
+      heap_mvcc_log_insert (thread_p, recdes, &addr);
       pgbuf_set_dirty (thread_p, page, DONT_FREE);
       return NO_ERROR;
     }

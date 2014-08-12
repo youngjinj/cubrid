@@ -6653,10 +6653,10 @@ disk_rv_alloctable_vhdr_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
    *       The number is passed to volume header recovery so update
    *       it to avoid header corruption.
    */
-  if (mtb->num == 0)
-    {
-      return NO_ERROR;
-    }
+  if (mtb->num == 0)	      /* <---- */
+    {			      /* <---- */
+      return NO_ERROR;	      /* <---- */
+    }			      /* <---- */
 
   assert (mtb->num > 0);
 
@@ -6703,7 +6703,7 @@ disk_rv_alloctable_vhdr_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 		  /* TODO: Uncomment the check after fixing the multiple
 		   *       deallocation issue.
 		   */
-		  /*assert_release (vhdr->used_index_npages >= 0); */
+		  /* assert_release (vhdr->used_index_npages >= 0); */
 		  vhdr->used_index_npages = 0;
 		}
 	    }
@@ -6731,7 +6731,7 @@ disk_rv_alloctable_vhdr_only (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 		  /* TODO: Uncomment the check after fixing the multiple
 		   *       deallocation issue.
 		   */
-		  /*assert_release (vhdr->used_index_npages >= 0); */
+		  /* assert_release (vhdr->used_index_npages >= 0); */
 		  vhdr->used_index_npages = 0;
 		}
 	    }
@@ -6773,6 +6773,24 @@ disk_rv_alloctable_with_volheader (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
   VPID vhdr_vpid, page_vpid;
 
   LOG_DATA_ADDR page_addr, vhdr_addr;
+  /* TODO: Remove this code when double deallocations issue is fixed. */
+  /* disk_rv_alloctable_bitmap_only updates the number of deallocated because
+   * some pages are already deallocated (this is a known issue due to vacuum
+   * worker merge b-tree and destroy index file). The real number of
+   * deallocated must be passed to header in order to not mess up with its
+   * statistics on volume pages.
+   * However, when the run postpones are appended, bitmap and header each
+   * should receive its own number.
+   * The fix for this issue is high priority after merging MVCC into trunk and
+   * requires two changes:
+   * 1. Mark root page header that the file is being dropped and prevent any
+   *	further merges.
+   * 2. Deallocate file pages in the b-tree normal traverse order (to be
+   *	blocked on merges that started before deleting file).
+   */
+  int bitmap_num =				    /* <----- */
+    ((DISK_RECV_MTAB_BITS_WITH *) rcv->data)->num;  /* <----- */
+  int vhdr_num = 0;
 
   assert (rcv->pgptr != NULL);
   assert (rcv->length > 0);
@@ -6811,6 +6829,10 @@ disk_rv_alloctable_with_volheader (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
   disk_rv_alloctable_bitmap_only (thread_p, rcv, DISK_ALLOCTABLE_CLEAR);
   disk_rv_alloctable_vhdr_only (thread_p, &vhdr_rcv, DISK_ALLOCTABLE_CLEAR);
 
+  /* TODO: Remove this code when double deallocations issue is fixed. */
+  vhdr_num =					    /* <----- */
+    ((DISK_RECV_MTAB_BITS_WITH *) rcv->data)->num;  /* <----- */
+
   if (ref_lsa != NULL)
     {
       /*
@@ -6819,6 +6841,10 @@ disk_rv_alloctable_with_volheader (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
        */
       page_addr.offset = rcv->offset;
       page_addr.pgptr = rcv->pgptr;
+
+      /* TODO: Remove this code when double deallocations issue is fixed. */
+      ((DISK_RECV_MTAB_BITS_WITH *) rcv->data)->num = bitmap_num; /* <--- */
+
       log_append_run_postpone (thread_p,
 			       RVDK_IDDEALLOC_BITMAP_ONLY,
 			       &page_addr,
@@ -6826,6 +6852,10 @@ disk_rv_alloctable_with_volheader (THREAD_ENTRY * thread_p, LOG_RCV * rcv,
 
       vhdr_addr.offset = 0;
       vhdr_addr.pgptr = vhdr_rcv.pgptr;
+
+      /* TODO: Remove this code when double deallocations issue is fixed. */
+      ((DISK_RECV_MTAB_BITS_WITH *) rcv->data)->num = vhdr_num; /* <--- */
+
       log_append_run_postpone (thread_p,
 			       RVDK_IDDEALLOC_VHDR_ONLY,
 			       &vhdr_addr,
