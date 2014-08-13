@@ -2398,10 +2398,9 @@ btree_leaf_get_nth_oid_ptr (BTID_INT * btid, RECDES * recp,
   int fixed_size;
   int oids_size;
   int vpid_size;
+  int mvcc_info_size;
   short mvcc_flags;
-  bool is_fixed_size =
-    !mvcc_Enabled || (node_type == BTREE_OVERFLOW_NODE)
-    || BTREE_IS_UNIQUE (btid->unique_pk);
+  bool is_fixed_size;
 
   assert (node_type == BTREE_LEAF_NODE || node_type == BTREE_OVERFLOW_NODE);
 
@@ -2411,9 +2410,9 @@ btree_leaf_get_nth_oid_ptr (BTID_INT * btid, RECDES * recp,
       return recp->data;
     }
 
-  vpid_size =
-    btree_leaf_is_flaged (recp, BTREE_LEAF_RECORD_OVERFLOW_OIDS) ?
-    DB_ALIGN (DISK_VPID_SIZE, INT_ALIGNMENT) : 0;
+  vpid_size = (btree_leaf_is_flaged (recp, BTREE_LEAF_RECORD_OVERFLOW_OIDS)
+	       ? DB_ALIGN (DISK_VPID_SIZE, INT_ALIGNMENT) : 0);
+
   if (BTREE_IS_UNIQUE (btid->unique_pk))
     {
       oids_size = 2 * OR_OID_SIZE;
@@ -2423,6 +2422,8 @@ btree_leaf_get_nth_oid_ptr (BTID_INT * btid, RECDES * recp,
       oids_size = OR_OID_SIZE;
     }
 
+  is_fixed_size = (!mvcc_Enabled || (node_type == BTREE_OVERFLOW_NODE)
+		   || BTREE_IS_UNIQUE (btid->unique_pk));
   if (is_fixed_size)
     {
       /* Each object has fixed size */
@@ -2432,6 +2433,7 @@ btree_leaf_get_nth_oid_ptr (BTID_INT * btid, RECDES * recp,
 	  /* MVCCID's are also saved */
 	  fixed_size += 2 * OR_MVCCID_SIZE;
 	}
+
       if (node_type == BTREE_OVERFLOW_NODE)
 	{
 	  assert (oid_list_offset == 0);
@@ -2440,36 +2442,41 @@ btree_leaf_get_nth_oid_ptr (BTID_INT * btid, RECDES * recp,
 	}
       else			/* node_type == BTREE_LEAF_NODE */
 	{
-	  assert (oid_list_offset + (n - 1) * fixed_size + vpid_size <
-		  recp->length);
+	  assert ((oid_list_offset + (n - 1) * fixed_size + vpid_size)
+		  < recp->length);
 	  return recp->data + oid_list_offset + (n - 1) * fixed_size;
 	}
     }
 
   assert (mvcc_Enabled);
+
   or_init (&buf, recp->data + oid_list_offset,
 	   recp->length - vpid_size - oid_list_offset);
+
   if (node_type == BTREE_LEAF_NODE)
     {
       /* In case of leaf node, oid_list_offset is after the first object */
       n = n - 1;
     }
+
   while (n > 0)
     {
       /* Skip object */
       mvcc_flags = btree_leaf_key_oid_get_mvcc_flag (buf.ptr);
-      if (or_advance
-	  (&buf,
-	   oids_size +
-	   BTREE_GET_MVCC_INFO_SIZE_FROM_MVCC_FLAG (mvcc_flags)) != NO_ERROR)
+      mvcc_info_size = BTREE_GET_MVCC_INFO_SIZE_FROM_MVCC_FLAG (mvcc_flags);
+
+      if (or_advance (&buf, oids_size + mvcc_info_size) != NO_ERROR)
 	{
 	  assert_release (false);
 	  return NULL;
 	}
+
       n--;
     }
+
   /* buf.ptr points to nth object */
   assert (buf.ptr < buf.endptr);
+
   return buf.ptr;
 }
 
