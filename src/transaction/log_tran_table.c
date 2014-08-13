@@ -3909,6 +3909,11 @@ logtb_mvcc_reflect_unique_statistics (THREAD_ENTRY * thread_p)
       return ER_FAILED;
     }
 
+  if (log_start_system_op (thread_p) == NULL)
+    {
+      return ER_FAILED;
+    }
+
   for (entry = tdes->log_upd_stats.crt_tran_entries; entry != NULL;
        entry = entry->next)
     {
@@ -3935,10 +3940,13 @@ logtb_mvcc_reflect_unique_statistics (THREAD_ENTRY * thread_p)
 	    btree_reflect_unique_statistics (thread_p, &btree_stats, false);
 	  if (error_code != NO_ERROR)
 	    {
+	      log_end_system_op (thread_p, LOG_RESULT_TOPOP_ABORT);
 	      return error_code;
 	    }
 	}
     }
+
+  log_end_system_op (thread_p, LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
 
   return error_code;
 }

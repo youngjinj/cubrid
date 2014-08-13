@@ -6336,7 +6336,7 @@ log_abort_partial (THREAD_ENTRY * thread_p, const char *savepoint_name,
 
   state = log_end_system_op (thread_p, LOG_RESULT_TOPOP_ABORT);
 
-  log_cleanup_modified_class_list (thread_p, tdes, true, true);
+  log_cleanup_modified_class_list (thread_p, tdes, false, true);
 
   log_clear_lob_locator_list (thread_p, tdes, false, savept_lsa);
 

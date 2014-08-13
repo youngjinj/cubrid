@@ -11247,6 +11247,11 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_,
       locator_assign_permanent_oid (classop);
     }
 
+  if (locator_update_class (classop) == NULL)
+    {
+      goto structure_error;
+    }
+
   for (con = class_->constraints; con != NULL; con = con->next)
     {
       /* check for non-shared indexes */
@@ -11289,11 +11294,6 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_,
 
   /* when we're done, make sure that each attribute's cache is also updated */
   if (!classobj_cache_constraints (class_))
-    {
-      goto structure_error;
-    }
-
-  if (locator_update_class (classop) == NULL)
     {
       goto structure_error;
     }
@@ -14161,6 +14161,11 @@ sm_drop_index (MOP classop, const char *constraint_name)
 	  return error;
 	}
 
+      if (locator_update_class (classop) == NULL)
+	{
+	  goto severe_error;
+	}
+
       /*
        *  Remove the index from the class.  We do this is an awkward
        *  way.  First we remove it from the class constraint cache and
@@ -14193,10 +14198,6 @@ sm_drop_index (MOP classop, const char *constraint_name)
          the catalog is updated.  Also update statistics so that
          the optimizer will know that the index no longer exists.
        */
-      if (locator_update_class (classop) == NULL)
-	{
-	  goto severe_error;
-	}
 
       if (locator_flush_class (classop) != NO_ERROR)
 	{

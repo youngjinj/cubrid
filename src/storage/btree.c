@@ -14975,7 +14975,8 @@ btree_find_oid_from_leaf (BTID_INT * btid, RECDES * rec_p,
 	  if (btree_or_get_mvccinfo (&buf, &mvcc_header, mvcc_flags)
 	      != NO_ERROR)
 	    {
-	      return ER_FAILED;
+	      assert (false);
+	      return NOT_FOUND;
 	    }
 	}
 
@@ -25783,6 +25784,32 @@ btree_rv_leafrec_dump_insert_oid (FILE * fp, int length, void *data)
 }
 
 /*
+ * btree_rv_dump_redo_insert_mvcc_delid () - Dump redo log record of
+ *					     insert delete MVCCID operation.
+ *   return: nothing
+ *   length(in): Length of Recovery Data
+ *   data(in): The data being logged
+ */
+void
+btree_rv_dump_redo_insert_mvcc_delid (FILE * fp, int length, void *data)
+{
+  REC_MVCC_DELID_INS_STRUCT *rcv_data = (REC_MVCC_DELID_INS_STRUCT *) data;
+
+  fprintf (fp, "MVCC DELETE ID INSERTION STRUCTURE: \n");
+  fprintf (fp, "OID offset: %d \n",
+	   rcv_data->oid_offset);
+  fprintf (fp, "UNQIUE: %s \n",
+	   rcv_data->is_unique ? "true" : "false");
+  fprintf (fp, "RECORD TYPE: %s \n",
+	   rcv_data->is_overflow ? "REGULAR" : "OVERFLOW");
+#if !defined (NDEBUG)
+  fprintf (fp, "BTID: {{%d, %d}, %d} \n",
+	   rcv_data->btid.vfid.volid, rcv_data->btid.vfid.fileid,
+	   rcv_data->btid.root_pageid);
+#endif
+}
+
+/*
  * btree_rv_nop () -
  *   return: int
  *   recv(in): Recovery structure
@@ -29789,7 +29816,6 @@ btree_range_search_handle_previous_locks (THREAD_ENTRY * thread_p,
 	{
 	  if (btrs_helper->CLS_satisfied == true)
 	    {
-	      assert (mvcc_Enabled == false);
 	      if (btree_handle_current_oid (thread_p, bts, btrs_helper,
 					    key_limit_lower, key_limit_upper,
 					    index_scan_id_p,
