@@ -699,13 +699,14 @@ locator_lock (MOP mop, LC_OBJTYPE isclass, LOCK lock, bool retain_lock)
        * is really necessary
        */
       if (current_lock != NULL_LOCK
-	  && ((lock = lock_Conv[lock][current_lock]) == current_lock)
-	  || OID_ISTEMP (oid))
+	  && (((lock = lock_Conv[lock][current_lock]) == current_lock)
+	      || OID_ISTEMP (oid)))
 	{
 	  /* Object is fetched and locked, and no lock upgrade is required */
 	  /* Skip fetch from server */
 	  goto end;
 	}
+
       if (mvcc_enabled		/* MVCC is enabled */
 	  /* And object is not a class */
 	  && class_mop != NULL && class_mop != sm_Root_class_mop
