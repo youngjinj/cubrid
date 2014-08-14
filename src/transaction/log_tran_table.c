@@ -4700,18 +4700,21 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
     {
       return;
     }
-  (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
   if (MVCCID_IS_VALID (curr_mvcc_info->mvcc_id))
     {
       /* reflect accumulated statistics to B-trees
        * temporary reflected before acquiring CSECT_TRAN_TABLE critical section,
        * in order to not affect the performance
+       * Don't hold CS here because it will generate a deadlock on latch
+       * pages.
        */
       if (committed
 	  && logtb_mvcc_reflect_unique_statistics (thread_p) != NO_ERROR)
 	{
 	  assert (false);
 	}
+
+      (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
 
       head_null_mvccids = mvcc_table->head_null_mvccids;
 
@@ -4781,12 +4784,14 @@ logtb_complete_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool committed)
 	  head_null_mvccids->prev = curr_mvcc_info;
 	  mvcc_table->head_null_mvccids = curr_mvcc_info;
 	}
+      csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
     }
   else
     {
+      (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
       curr_mvcc_info->transaction_lowest_active_mvccid = MVCCID_NULL;
+      csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
     }
-  csect_exit (thread_p, CSECT_MVCC_ACTIVE_TRANS);
 
   curr_mvcc_info->recent_snapshot_lowest_active_mvccid = MVCCID_NULL;
   p_mvcc_snapshot = &(curr_mvcc_info->mvcc_snapshot);

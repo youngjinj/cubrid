@@ -25376,6 +25376,11 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	  goto error;
 	}
 
+#if !defined (NDEBUG)
+      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+				       BTREE_LEAF_NODE, NULL);
+#endif
+
       if (recins->oid_inserted == true)
 	{
 	  MVCC_REC_HEADER saved_first_mvcc_rec_header;
@@ -25559,6 +25564,11 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	      assert (rec.length >= OR_OID_SIZE);
 	      assert (rec.length % 4 == 0);
 
+#if !defined (NDEBUG)
+	      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+					       BTREE_LEAF_NODE, NULL);
+#endif
+
 	      if (btree_insert_oid_with_order
 		  (&rec, &recins->oid, &recins->class_oid, is_unique,
 		   p_mvcc_rec_header) != NO_ERROR)
@@ -25686,6 +25696,11 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
       goto error;
     }
 
+#if !defined (NDEBUG)
+  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+				   BTREE_LEAF_NODE, NULL);
+#endif
+
   if (rec_mvcc_delid_ins->is_unique)
     {
       if (rec_mvcc_delid_ins->is_overflow == true
@@ -25699,7 +25714,9 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 
   mvcc_delid_offset = rec_mvcc_delid_ins->oid_offset + oid_size;
   if ((rec_mvcc_delid_ins->is_unique && rec_mvcc_delid_ins->oid_offset > 0)
-      || (rec_mvcc_delid_ins->is_overflow == true))
+      || (rec_mvcc_delid_ins->is_overflow == true)
+      || btree_leaf_is_flaged (&rec, BTREE_LEAF_RECORD_OVERFLOW_OIDS)
+      && (rec_mvcc_delid_ins->oid_offset == 0))
     {
       have_mvcc_fixed_size = true;
       mvcc_delid_offset += OR_MVCCID_SIZE;
@@ -25796,10 +25813,8 @@ btree_rv_dump_redo_insert_mvcc_delid (FILE * fp, int length, void *data)
   REC_MVCC_DELID_INS_STRUCT *rcv_data = (REC_MVCC_DELID_INS_STRUCT *) data;
 
   fprintf (fp, "MVCC DELETE ID INSERTION STRUCTURE: \n");
-  fprintf (fp, "OID offset: %d \n",
-	   rcv_data->oid_offset);
-  fprintf (fp, "UNQIUE: %s \n",
-	   rcv_data->is_unique ? "true" : "false");
+  fprintf (fp, "OID offset: %d \n", rcv_data->oid_offset);
+  fprintf (fp, "UNQIUE: %s \n", rcv_data->is_unique ? "true" : "false");
   fprintf (fp, "RECORD TYPE: %s \n",
 	   rcv_data->is_overflow ? "REGULAR" : "OVERFLOW");
 #if !defined (NDEBUG)
@@ -31525,7 +31540,7 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
   rec_mvcc_delid_ins.is_overflow = false;
   if (BTREE_IS_UNIQUE (btid->unique_pk))
     {
-      if (node_type != BTREE_LEAF_NODE || oid_offset > 0
+      if (node_type == BTREE_OVERFLOW_NODE || oid_offset > 0
 	  || btree_leaf_is_flaged (rec, BTREE_LEAF_RECORD_SUBCLASS))
 	{
 	  /* unique index containing OID, CLASS OID */
@@ -31536,7 +31551,9 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 
   mvcc_delid_offset = oid_offset + oid_size;
   if ((BTREE_IS_UNIQUE (btid->unique_pk) && oid_offset > 0)
-      || (node_type == BTREE_OVERFLOW_NODE))
+      || (node_type == BTREE_OVERFLOW_NODE)
+      || (btree_leaf_is_flaged (rec, BTREE_LEAF_RECORD_OVERFLOW_OIDS)
+	  && oid_offset == 0))
     {
       have_mvcc_fixed_size = true;
       mvcc_delid_offset += OR_MVCCID_SIZE;
@@ -31711,11 +31728,6 @@ btree_delete_mvcc_delid_from_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       || (del_oid_offset == 0
 	  && btree_leaf_is_flaged (rec, BTREE_LEAF_RECORD_OVERFLOW_OIDS)))
     {
-      if (del_oid_offset == 0
-	  && btree_leaf_is_flaged (rec, BTREE_LEAF_RECORD_OVERFLOW_OIDS))
-	{
-	  int x = 1;
-	}
       have_mvcc_fixed_size = true;
     }
 

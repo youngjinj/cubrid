@@ -13378,6 +13378,14 @@ xlocator_upgrade_instances_domain (THREAD_ENTRY * thread_p, OID * class_oid,
 
       for (i = 0; i < mobjs->num_objs; i++)
 	{
+	  if (obj->operation == LC_FETCH_DECACHE_LOCK)
+	    {
+	      /* Skip decache lock objects, they have been added by
+	       * lock_notify_isolation_incons function.
+	       */
+	      obj = LC_NEXT_ONEOBJ_PTR_IN_COPYAREA (obj);
+	      continue;
+	    }
 	  LC_RECDES_TO_GET_ONEOBJ (fetch_area, obj, &recdes);
 
 	  error = heap_attrinfo_clear_dbvalues (&attr_info);
