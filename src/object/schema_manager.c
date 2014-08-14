@@ -13931,6 +13931,9 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 
   if (error == NO_ERROR)
     {
+      er_log_debug (ARG_FILE_LINE, "ADD_INDEX %s (btid %d %d %d) (class %s)(pid %d)",
+		    constraint_name, index.vfid.volid, index.vfid.fileid,
+		    index.root_pageid, class_->header.name, getpid ());
       /* promote the class lock as SCH_M lock and mark class as dirty */
       if (locator_update_class (classop) == NULL)
 	{
@@ -13970,6 +13973,9 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 	  goto severe_error;
 	}
 
+      er_log_debug (ARG_FILE_LINE, "ADD_INDEX %s (btid %d %d %d) (class %s)(pid %d)",
+		    constraint_name, index.vfid.volid, index.vfid.fileid,
+		    index.root_pageid, class_->header.name, getpid ());
       /* since we almost always want to use the index after
        * it has been created, cause the statistics for this
        * class to be updated so that the optimizer is able
@@ -14189,6 +14195,10 @@ sm_drop_index (MOP classop, const char *constraint_name)
 	  goto severe_error;
 	}
 
+      er_log_debug (ARG_FILE_LINE, "ADD_INDEX DROP %s (btid %d %d %d) (class %s)(pid %d)",
+		    constraint_name, found->index_btid.vfid.volid, 
+		    found->index_btid.vfid.fileid, found->index_btid.root_pageid,
+		    class_->header.name, getpid ());
       /* Make sure the class is now marked dirty and flushed so that
          the catalog is updated.  Also update statistics so that
          the optimizer will know that the index no longer exists.
@@ -14228,6 +14238,10 @@ severe_error:
   assert (er_errid () != NO_ERROR);
   error = er_errid ();
   (void) tran_unilaterally_abort ();
+  if (error == ER_NET_SERVER_CRASHED)
+    {
+      assert (false);
+    }
 
   return error;
 }
