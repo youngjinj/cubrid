@@ -28658,6 +28658,16 @@ qexec_create_internal_classes (THREAD_ENTRY * thread_p,
       class_->btids = NULL;
       class_->btids_dup_key_locked = NULL;
 
+      class_->btid = NULL;
+      class_->btid_dup_key_locked = NULL;
+
+      class_->no_lob_attrs = 0;
+      class_->lob_attr_ids = NULL;
+      class_->crt_del_lob_info = NULL;
+      class_->extra_assign_reev_cnt = 0;
+      class_->mvcc_extra_assign_reev = NULL;
+      class_->mvcc_reev_assigns = NULL;
+
       partition_init_pruning_context (&class_->context);
 
       class_->unique_stats.scan_cache_inited = false;
@@ -28702,7 +28712,6 @@ qexec_create_internal_classes (THREAD_ENTRY * thread_p,
 	(bool **) db_private_alloc (thread_p,
 				    query_class->no_subclasses *
 				    sizeof (bool *));
-
       if (class_->btids_dup_key_locked == NULL)
 	{
 	  goto exit_on_error;
@@ -28713,15 +28722,6 @@ qexec_create_internal_classes (THREAD_ENTRY * thread_p,
 	  BTID_SET_NULL (&class_->btids[cl_index]);
 	  class_->btids_dup_key_locked[cl_index] = NULL;
 	}
-      class_->btid = NULL;
-      class_->btid_dup_key_locked = NULL;
-
-      class_->no_lob_attrs = 0;
-      class_->lob_attr_ids = NULL;
-      class_->crt_del_lob_info = NULL;
-      class_->extra_assign_reev_cnt = 0;
-      class_->mvcc_extra_assign_reev = NULL;
-      class_->mvcc_reev_assigns = NULL;
     }
 
   *internal_classes = classes;
