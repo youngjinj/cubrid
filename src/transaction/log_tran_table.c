@@ -3946,7 +3946,7 @@ logtb_mvcc_reflect_unique_statistics (THREAD_ENTRY * thread_p)
 	}
     }
 
-  log_end_system_op (thread_p, LOG_RESULT_TOPOP_ATTACH_TO_OUTER);
+  log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
 
   return error_code;
 }
@@ -5766,7 +5766,7 @@ logtb_complete_sub_mvcc (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
     {
       return;
     }
-  
+
   (void) csect_enter (NULL, CSECT_MVCC_ACTIVE_TRANS, INF_WAIT);
 
   curr_mvcc_info->is_sub_active = false;

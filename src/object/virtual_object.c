@@ -116,9 +116,10 @@ vid_is_new_oobj (MOP mop)
   SM_CLASS *class_p;
   int return_code = 0;
 
-  return_code = mop && mop->is_vid
-    && ws_find (ws_class_mop (mop), (MOBJ *) & class_p) != WS_FIND_MOP_DELETED
-    && (mop->oid_info.vid_info->flags & VID_NEW);
+  return_code = (mop && mop->is_vid
+		 && ws_find (ws_class_mop (mop),
+			     (MOBJ *) (&class_p)) != WS_FIND_MOP_DELETED
+		 && (mop->oid_info.vid_info->flags & VID_NEW));
 
   return return_code;
 }
@@ -135,8 +136,8 @@ int
 vid_is_new_pobj (MOP mop)
 {
   int return_code = 0;
-  return_code = mop && mop->is_vid
-    && (mop->oid_info.vid_info->flags & VID_NEW);
+  return_code = (mop && mop->is_vid
+		 && (mop->oid_info.vid_info->flags & VID_NEW));
 
   return return_code;
 }

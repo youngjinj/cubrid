@@ -471,9 +471,11 @@ pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
   PT_CLASS_LOCKS lcks;
   int error = NO_ERROR;
+
   lcks.classes = NULL;
   lcks.only_all = NULL;
   lcks.locks = NULL;
+  lcks.flags = NULL;
 
   /* we don't pre fetch for non query statements */
   if (statement == NULL)
@@ -813,8 +815,8 @@ pt_find_lck_classes (PARSER_CONTEXT * parser, PT_NODE * node,
   if (node->node_type == PT_SELECT)
     {
       /* count optimization */
-      PT_NODE *list = list = node->info.query.q.select.list;
-      PT_NODE *from = from = node->info.query.q.select.from;
+      PT_NODE *list = node->info.query.q.select.list;
+      PT_NODE *from = node->info.query.q.select.from;
 
       /* Check if query is of form 'SELECT count(*) from t' */
       if (list != NULL && list->next == NULL && list->node_type == PT_FUNCTION
@@ -825,12 +827,12 @@ pt_find_lck_classes (PARSER_CONTEXT * parser, PT_NODE * node,
 	  && node->info.query.q.select.where == NULL)
 	{
 	  /* only add to the array, if not there already in this lock mode. */
-	  if (!pt_in_lck_array
-	      (lcks, from->info.spec.entity_name->info.name.original,
-	       LC_PREF_FLAG_COUNT_OPTIM))
+	  if (!pt_in_lck_array (lcks,
+				from->info.spec.entity_name->info.name.
+				original, LC_PREF_FLAG_COUNT_OPTIM))
 	    {
-	      if (pt_add_lock_class
-		  (parser, lcks, from, LC_PREF_FLAG_COUNT_OPTIM) != NO_ERROR)
+	      if (pt_add_lock_class (parser, lcks, from,
+				     LC_PREF_FLAG_COUNT_OPTIM) != NO_ERROR)
 		{
 		  *continue_walk = PT_STOP_WALK;
 		  return node;
@@ -864,12 +866,11 @@ pt_find_lck_classes (PARSER_CONTEXT * parser, PT_NODE * node,
 	}
     }
   /* only add to the array, if not there already in this lock mode. */
-  if (!pt_in_lck_array
-      (lcks, node->info.spec.entity_name->info.name.original,
-       LC_PREF_FLAG_LOCK))
+  if (!pt_in_lck_array (lcks, node->info.spec.entity_name->info.name.original,
+			LC_PREF_FLAG_LOCK))
     {
-      if (pt_add_lock_class (parser, lcks, node, LC_PREF_FLAG_LOCK) !=
-	  NO_ERROR)
+      if (pt_add_lock_class (parser, lcks, node, LC_PREF_FLAG_LOCK)
+	  != NO_ERROR)
 	{
 	  *continue_walk = PT_STOP_WALK;
 	  return node;

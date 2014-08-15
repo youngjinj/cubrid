@@ -4335,10 +4335,10 @@ tr_drop_trigger_internal (TR_TRIGGER * trigger, int rollback)
 		       * is rarely used.
 		       * A better solution would be to get & lock the last
 		       * version from beginning, not the visible one.
-		       */		      
+		       */
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 			      ER_TR_TRIGGER_NOT_FOUND, 1, trigger->name);
-		      error = ER_TR_TRIGGER_NOT_FOUND;		      
+		      error = ER_TR_TRIGGER_NOT_FOUND;
 		    }
 		  else if (error == ER_HEAP_UNKNOWN_OBJECT)
 		    {
@@ -5997,10 +5997,11 @@ tr_drop_deferred_activities (DB_OBJECT * trigger_object, DB_OBJECT * target)
 	  if ((trigger_object == NULL || t->trigger->object == trigger_object)
 	      && (target == NULL || t->target == target))
 	    {
-
 	      if (ws_is_same_object (Au_user, Au_dba_user)
 		  || ws_is_same_object (Au_user, t->trigger->owner))
-		remove_deferred_activity (c, t);
+		{
+		  remove_deferred_activity (c, t);
+		}
 	      else
 		{
 		  error = ER_TR_ACTIVITY_NOT_OWNED;
@@ -6008,8 +6009,11 @@ tr_drop_deferred_activities (DB_OBJECT * trigger_object, DB_OBJECT * target)
 		}
 	    }
 	}
+
       if (c->head == NULL)
-	remove_deferred_context (c);
+	{
+	  remove_deferred_context (c);
+	}
     }
 
   return (error);

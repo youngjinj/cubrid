@@ -5850,7 +5850,7 @@ fetch_class (MOP op, MOP * return_mop, SM_CLASS ** return_class,
 }
 
 /*
- * au_fetch_class - helper function for au_fetch_class families
+ * au_fetch_class_internal - helper function for au_fetch_class families
  *   return: error code
  *   op(in): class or instance
  *   class_ptr(out): returned pointer to class structure
@@ -6538,9 +6538,6 @@ au_start (void)
   int error = NO_ERROR;
   MOPLIST mops;
   MOP class_mop;
-  int save_lock_wait_in_msecs;
-  TRAN_ISOLATION save_tran_isolation;
-  bool async_ws;
 
   /*
    * NEED TO MAKE SURE THIS IS 1 IF THE SERVER CRASHED BECAUSE WE'RE
@@ -6559,14 +6556,9 @@ au_start (void)
   class_mop = sm_find_class (AU_ROOT_CLASS_NAME);
   if (class_mop == NULL)
     {
-      /* kludge, temporarily recognize the old name */
-      class_mop = sm_find_class (AU_OLD_ROOT_CLASS_NAME);
-      if (class_mop == NULL)
-	{
-	  error = ER_AU_NO_AUTHORIZATION;
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
-	  return (error);
-	}
+      error = ER_AU_NO_AUTHORIZATION;
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
+      return (error);
     }
   Au_authorizations_class = class_mop;
 
@@ -6597,14 +6589,7 @@ au_start (void)
     }
   Au_password_class = class_mop;
 
-  tran_get_tran_settings (&save_lock_wait_in_msecs,
-			  &save_tran_isolation, &async_ws);
-
-  (void) tran_reset_isolation (TRAN_READ_COMMITTED, async_ws);
-
   mops = db_get_all_objects (Au_authorizations_class);
-  (void) tran_reset_isolation (save_tran_isolation, async_ws);
-
   if (mops == NULL)
     {
       error = ER_AU_NO_AUTHORIZATION;
@@ -6622,8 +6607,9 @@ au_start (void)
       Au_root = mops->op;
       db_objlist_free (mops);
 
-      if (((Au_public_user = au_find_user (AU_PUBLIC_USER_NAME)) == NULL) ||
-	  ((Au_dba_user = au_find_user (AU_DBA_USER_NAME)) == NULL))
+      Au_public_user = au_find_user (AU_PUBLIC_USER_NAME);
+      Au_dba_user = au_find_user (AU_DBA_USER_NAME);
+      if (Au_public_user == NULL || Au_dba_user == NULL)
 	{
 	  error = ER_AU_INCOMPLETE_AUTH;
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
@@ -7099,7 +7085,9 @@ add_class_grant (CLASS_AUTH * auth, MOP source, MOP user, int cache)
   u = find_or_add_user (auth, source);
 
   for (g = u->grants; g != NULL && !ws_is_same_object (g->user->obj, user);
-       g = g->next);
+       g = g->next)
+    ;
+
   if (g == NULL)
     {
       if (!ws_is_same_object (source, user))

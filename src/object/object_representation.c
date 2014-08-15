@@ -56,22 +56,24 @@
 #define BITS_TO_BYTES(bit_cnt)		(((bit_cnt) + 7) / 8)
 
 /* move the data inside the record */
-#define HEAP_MOVE_INSIDE_RECORD(rec, dest_offset, src_offset)  \
-  do {	\
-  assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true && (rec) != NULL \
-	  && (dest_offset) >= 0 && (src_offset) >= 0); \
-  assert (((rec)->length - (src_offset)) >= 0);  \
-  assert (((rec)->area_size <= 0) || ((rec)->area_size >= (rec)->length));  \
-  assert (((rec)->area_size <= 0) \
-	  || (((rec)->length + ((dest_offset) - (src_offset)))	\
-	      <= (rec)->area_size));  \
-  if ((dest_offset) != (src_offset))  \
+#define HEAP_MOVE_INSIDE_RECORD(rec, dest_offset, src_offset) \
+  do \
     { \
-    memmove ((rec)->data + (dest_offset), (rec)->data + (src_offset),	\
-	     (rec)->length - (src_offset)); \
-    (rec)->length = (rec)->length + ((dest_offset) - (src_offset)); \
+      assert (prm_get_bool_value (PRM_ID_MVCC_ENABLED) == true \
+              && (rec) != NULL && (dest_offset) >= 0 && (src_offset) >= 0); \
+      assert (((rec)->length - (src_offset)) >= 0); \
+      assert (((rec)->area_size <= 0) || ((rec)->area_size >= (rec)->length)); \
+      assert (((rec)->area_size <= 0) \
+              || (((rec)->length + ((dest_offset) - (src_offset))) \
+                  <= (rec)->area_size)); \
+      if ((dest_offset) != (src_offset)) \
+        { \
+          memmove ((rec)->data + (dest_offset), (rec)->data + (src_offset), \
+                   (rec)->length - (src_offset)); \
+          (rec)->length = (rec)->length + ((dest_offset) - (src_offset)); \
+        } \
     } \
-  }while (0)
+  while (0)
 
 static TP_DOMAIN *unpack_domain (OR_BUF * buf, int *is_null);
 static char *or_pack_method_sig (char *ptr, void *method_sig_ptr);
@@ -586,7 +588,7 @@ or_mvcc_set_repid_and_flags (OR_BUF * buf,
 }
 
 /*
- * or_mvcc_flag () - Gets MVCC flags.
+ * or_mvcc_get_flag () - Gets MVCC flags.
  *
  * return	   : MVCC flags.
  * record (in)	   : Record descriptor.
@@ -601,7 +603,7 @@ or_mvcc_get_flag (RECDES * record)
 }
 
 /*
- * or_set_mvcc_flag () - Set mvcc flags to record header.
+ * or_mvcc_set_flag () - Set mvcc flags to record header.
  *
  * return      : Void.
  * record (in) : Record descriptor.
@@ -632,7 +634,7 @@ or_mvcc_set_flag (RECDES * record, char flags)
 }
 
 /*
- * or_mvcc_insert_id () - Get insert MVCCID from record data.
+ * or_mvcc_get_insid () - Get insert MVCCID from record data.
  *
  * return	   : Insert MVCCID.
  * buf (in/out)	   : or buffer
@@ -661,7 +663,6 @@ or_mvcc_get_insid (OR_BUF * buf, int mvcc_flags, int *error)
       *error = NO_ERROR;
       return insert_id;
     }
-
 }
 
 /*
@@ -684,7 +685,7 @@ or_mvcc_set_insid (OR_BUF * buf, MVCC_REC_HEADER * mvcc_rec_header)
 }
 
 /*
- * or_mvcc_delete_id () - Get MVCC delete id or chn
+ * or_mvcc_get_delid_chn () - Get MVCC delete id or chn
  *
  * return	   : MVCC delete id or chn
  * buf (in/out)	   : or buffer

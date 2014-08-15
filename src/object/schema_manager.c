@@ -6040,10 +6040,10 @@ sm_flush_and_decache_objects (MOP obj, int decache)
 	      if (error == NO_ERROR)
 		{
 		  /* don't need to pin here, we only wanted to check authorization */
-		  if (ws_class_mop (obj) != NULL)
+		  object_class_mop = ws_class_mop (obj);
+		  if (object_class_mop != NULL)
 		    {
-		      if (locator_flush_class (ws_class_mop (obj)) !=
-			  NO_ERROR)
+		      if (locator_flush_class (object_class_mop) != NO_ERROR)
 			{
 			  assert (er_errid () != NO_ERROR);
 			  return er_errid ();
@@ -6060,11 +6060,9 @@ sm_flush_and_decache_objects (MOP obj, int decache)
 			  switch (class_->class_type)
 			    {
 			    case SM_CLASS_CT:
-			      if (locator_flush_all_instances (ws_class_mop
-							       (obj),
-							       decache,
-							       LC_STOP_ON_ERROR)
-				  != NO_ERROR)
+			      if (locator_flush_all_instances
+				  (object_class_mop, decache,
+				   LC_STOP_ON_ERROR) != NO_ERROR)
 				{
 				  assert (er_errid () != NO_ERROR);
 				  error = er_errid ();
@@ -8897,8 +8895,8 @@ retain_former_ids (SM_TEMPLATE * flat)
       bool is_partition = false;
       int error = NO_ERROR;
 
-      if (flat->current->partition_of != NULL &&
-	  !db_is_deleted (flat->current->partition_of))
+      if (flat->current->partition_of != NULL
+	  && !db_is_deleted (flat->current->partition_of))
 	{
 	  int save;
 
@@ -12415,8 +12413,10 @@ lock_subclasses_internal (SM_TEMPLATE * def, MOP op,
       if (error != NO_ERROR)
 	{
 	  if (WS_IS_DELETED (op))
-	    /* in this case, just ignore the error */
-	    error = NO_ERROR;
+	    {
+	      /* in this case, just ignore the error */
+	      error = NO_ERROR;
+	    }
 	}
       else
 	{
@@ -13931,7 +13931,8 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 
   if (error == NO_ERROR)
     {
-      er_log_debug (ARG_FILE_LINE, "ADD_INDEX %s (btid %d %d %d) (class %s)(pid %d)",
+      er_log_debug (ARG_FILE_LINE,
+		    "ADD_INDEX %s (btid %d %d %d) (class %s)(pid %d)",
 		    constraint_name, index.vfid.volid, index.vfid.fileid,
 		    index.root_pageid, class_->header.name, getpid ());
       /* promote the class lock as SCH_M lock and mark class as dirty */
@@ -13973,7 +13974,8 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
 	  goto severe_error;
 	}
 
-      er_log_debug (ARG_FILE_LINE, "ADD_INDEX %s (btid %d %d %d) (class %s)(pid %d)",
+      er_log_debug (ARG_FILE_LINE,
+		    "ADD_INDEX %s (btid %d %d %d) (class %s)(pid %d)",
 		    constraint_name, index.vfid.volid, index.vfid.fileid,
 		    index.root_pageid, class_->header.name, getpid ());
       /* since we almost always want to use the index after
@@ -14195,10 +14197,12 @@ sm_drop_index (MOP classop, const char *constraint_name)
 	  goto severe_error;
 	}
 
-      er_log_debug (ARG_FILE_LINE, "ADD_INDEX DROP %s (btid %d %d %d) (class %s)(pid %d)",
-		    constraint_name, found->index_btid.vfid.volid, 
-		    found->index_btid.vfid.fileid, found->index_btid.root_pageid,
-		    class_->header.name, getpid ());
+      er_log_debug (ARG_FILE_LINE,
+		    "ADD_INDEX DROP %s (btid %d %d %d) (class %s)(pid %d)",
+		    constraint_name, found->index_btid.vfid.volid,
+		    found->index_btid.vfid.fileid,
+		    found->index_btid.root_pageid, class_->header.name,
+		    getpid ());
       /* Make sure the class is now marked dirty and flushed so that
          the catalog is updated.  Also update statistics so that
          the optimizer will know that the index no longer exists.

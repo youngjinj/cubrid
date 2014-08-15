@@ -712,6 +712,7 @@ DB_VALUE *
 pt_find_value_of_label (const char *label)
 {
   DB_VALUE *db_valp;
+
   if (!pt_Label_table || !label)
     {
       return NULL;
@@ -768,7 +769,6 @@ pt_make_label_list (const void *key, void *data, void *args)
 
   return (NO_ERROR);
 }
-
 
 /*
  * pt_find_labels () - Sets a pointer to a list of all session interpreter
@@ -845,7 +845,6 @@ do_drop_variable (PARSER_CONTEXT * parser, PT_NODE * stmt)
   return NO_ERROR;
 }
 
-
 /*
  * pt_free_label () - release all memory occupied by an interpreter variable
  *   return:  NO_ERROR
@@ -857,10 +856,11 @@ do_drop_variable (PARSER_CONTEXT * parser, PT_NODE * stmt)
 static int
 pt_free_label (const void *key, void *data, void *args)
 {
+  DB_VALUE *val = (DB_VALUE *) data;
+  MOP mop;
+
   if (key != NULL)
     {
-      DB_VALUE *val = (DB_VALUE *) data;
-      MOP mop;
       ws_free_string ((char *) key);
       if (DB_VALUE_TYPE (val) == DB_TYPE_OBJECT)
 	{
@@ -872,7 +872,6 @@ pt_free_label (const void *key, void *data, void *args)
 
   return NO_ERROR;
 }
-
 
 /*
  * pt_free_label_table () - release all memory occupied by the label_table

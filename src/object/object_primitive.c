@@ -4777,12 +4777,14 @@ mr_data_writemem_object (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
 
   oidp = NULL;
   if (mem != NULL)
-    oidp = &mem->oid;
+    {
+      oidp = &mem->oid;
+    }
 
   if (oidp == NULL)
     {
       /* construct an unbound oid */
-      oidp = (OID *) & oid_Null_oid;
+      oidp = (OID *) (&oid_Null_oid);
     }
   else if (OID_ISTEMP (oidp))
     {
@@ -4791,7 +4793,7 @@ mr_data_writemem_object (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
          Check for deletion */
       if ((mem->pointer == NULL) || (WS_IS_DELETED (mem->pointer)))
 	{
-	  oidp = (OID *) & oid_Null_oid;
+	  oidp = (OID *) (&oid_Null_oid);
 	  er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
 		  ER_MR_TEMP_OID_WITHOUT_MOP, 0);
 	}
@@ -4805,8 +4807,10 @@ mr_data_writemem_object (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
 	       */
 	      oidp = tf_need_permanent_oid (buf, mem->pointer);
 	      if (oidp == NULL)
-		/* normally would have used or_abort by now */
-		oidp = (OID *) & oid_Null_oid;
+		{
+		  /* normally would have used or_abort by now */
+		  oidp = (OID *) (&oid_Null_oid);
+		}
 	    }
 	}
     }
@@ -4814,7 +4818,9 @@ mr_data_writemem_object (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
     {
       /* normal OID check for deletion */
       if ((mem->pointer != NULL) && (WS_IS_DELETED (mem->pointer)))
-	oidp = (OID *) & oid_Null_oid;
+	{
+	  oidp = (OID *) (&oid_Null_oid);
+	}
     }
 
   or_put_oid (buf, oidp);
@@ -4888,7 +4894,7 @@ mr_data_writeval_object (OR_BUF * buf, DB_VALUE * value)
       mop = db_get_object (value);
       if ((mop == NULL) || (WS_IS_DELETED (mop)))
 	{
-	  rc = or_put_oid (buf, (OID *) & oid_Null_oid);
+	  rc = or_put_oid (buf, (OID *) (&oid_Null_oid));
 	}
       else if (WS_ISVID (mop))
 	{
@@ -4917,7 +4923,7 @@ mr_data_writeval_object (OR_BUF * buf, DB_VALUE * value)
 	      oidp = tf_need_permanent_oid (buf, mop);
 	      if (oidp == NULL)
 		/* normally would have used or_abort by now */
-		oidp = (OID *) & oid_Null_oid;
+		oidp = (OID *) (&oid_Null_oid);
 	    }
 	  rc = or_put_oid (buf, oidp);
 	}
@@ -4930,7 +4936,7 @@ mr_data_writeval_object (OR_BUF * buf, DB_VALUE * value)
   else
     {
       /* should never get here ! */
-      rc = or_put_oid (buf, (OID *) & oid_Null_oid);
+      rc = or_put_oid (buf, (OID *) (&oid_Null_oid));
     }
 #else /* SERVER_MODE */
   /* on the server, the value must contain an OID */
@@ -5067,7 +5073,7 @@ mr_cmpval_object (DB_VALUE * value1, DB_VALUE * value2,
   else
     {
       obj = DB_GET_OBJECT (value1);
-      o1 = (obj) ? WS_OID (obj) : (OID *) & oid_Null_oid;
+      o1 = (obj) ? WS_OID (obj) : (OID *) (&oid_Null_oid);
     }
 
   if (DB_VALUE_DOMAIN_TYPE (value2) == DB_TYPE_OID)
@@ -5077,7 +5083,7 @@ mr_cmpval_object (DB_VALUE * value1, DB_VALUE * value2,
   else
     {
       obj = DB_GET_OBJECT (value2);
-      o2 = (obj) ? WS_OID (obj) : (OID *) & oid_Null_oid;
+      o2 = (obj) ? WS_OID (obj) : (OID *) (&oid_Null_oid);
     }
 
   c = oid_compare (o1, o2);

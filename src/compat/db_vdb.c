@@ -3222,7 +3222,7 @@ db_open_buffer_and_compile_first_statement (const char *CSQL_query,
 
   /* Open buffer and generate session */
   *session = db_open_buffer_local (CSQL_query);
-  if (!(*session))
+  if (*session == NULL)
     {
       assert (er_errid () != NO_ERROR);
       return (er_errid ());
@@ -3256,15 +3256,7 @@ db_open_buffer_and_compile_first_statement (const char *CSQL_query,
       return (er_errid ());
     }
 
-  if (error < 0)
-    {
-      db_close_session_local (*session);
-      *session = NULL;
-      assert (er_errid () != NO_ERROR);
-      return (er_errid ());
-    }
-
-  return (error);
+  return error;
 }
 
 /*
@@ -3394,7 +3386,7 @@ db_compile_and_execute_queries_internal (const char *CSQL_query,
 
   db_close_session_local (session);
 
-  return (error);
+  return error;
 }
 
 /*
@@ -3574,8 +3566,8 @@ db_get_all_chosen_classes (int (*p) (MOBJ o))
 	  for (i = 0; i < lmops->num; i++)
 	    {
 	      /* is it necessary to have this check ? */
-	      if (!WS_IS_DELETED (lmops->mops[i]) &&
-		  lmops->mops[i] != sm_Root_class_mop)
+	      if (!WS_IS_DELETED (lmops->mops[i])
+		  && lmops->mops[i] != sm_Root_class_mop)
 		{
 		  /* should have a ext_ append function */
 		  new_ = ml_ext_alloc_link ();
@@ -4165,8 +4157,10 @@ db_invalidate_mvcc_snapshot_after_statement (void)
    *       way by saving invalidated snapshot on client and use first request
    *       in next statement execution to invalidate on server.
    */
+
   /* Invalidate snapshot on server */
   log_invalidate_mvcc_snapshot ();
+
   /* Increment snapshot version in work space */
   ws_increment_mvcc_snapshot_version ();
 }

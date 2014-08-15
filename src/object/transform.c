@@ -496,6 +496,7 @@ bool
 tf_is_catalog_class (OID * class_oid)
 {
   int c;
+
   for (c = 0; ct_Classes[c] != NULL; c++)
     {
       if (OID_EQ (&ct_Classes[c]->classoid, class_oid))

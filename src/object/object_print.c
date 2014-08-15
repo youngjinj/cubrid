@@ -3343,7 +3343,9 @@ help_fprint_resident_instances (FILE * fp, MOP op)
   if (locator_is_class (op, DB_FETCH_QUERY_READ))
     {
       if (!WS_IS_DELETED (op))
-	classmop = op;
+	{
+	  classmop = op;
+	}
     }
   else
     {

@@ -8441,6 +8441,7 @@ sbtree_get_key_type (THREAD_ENTRY * thread_p, unsigned int rid,
       reply_data = NULL;
       error = (error == NO_ERROR) ? ER_FAILED : error;
     }
+
   ptr = or_pack_int (reply, reply_data_size);
   ptr = or_pack_int (ptr, error);
 
@@ -8448,7 +8449,10 @@ sbtree_get_key_type (THREAD_ENTRY * thread_p, unsigned int rid,
 				     OR_ALIGNED_BUF_SIZE (a_reply),
 				     reply_data, reply_data_size);
 
-  free_and_init (reply_data);
+  if (reply_data != NULL)
+    {
+      free_and_init (reply_data);
+    }
 }
 
 /*

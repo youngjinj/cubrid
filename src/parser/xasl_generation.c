@@ -830,15 +830,17 @@ static DB_VALUE **pt_make_reserved_value_list (PARSER_CONTEXT * parser,
 					       PT_RESERVED_NAME_TYPE type);
 static int pt_mvcc_flag_specs_cond_reev (PARSER_CONTEXT * parser,
 					 PT_NODE * spec_list, PT_NODE * cond);
-static int pt_mvcc_flag_specs_asign_reev (PARSER_CONTEXT * parser,
-					  PT_NODE * spec_list,
-					  PT_NODE * assign_list);
-static int pt_mvcc_set_spec_asign_reev_extra_indexes (PARSER_CONTEXT * parser,
-						      PT_NODE * spec_assign,
-						      PT_NODE * spec_list,
-						      PT_NODE * assign_list,
-						      int *indexes,
-						      int indexes_alloc_size);
+static int pt_mvcc_flag_specs_assign_reev (PARSER_CONTEXT * parser,
+					   PT_NODE * spec_list,
+					   PT_NODE * assign_list);
+static int pt_mvcc_set_spec_assign_reev_extra_indexes (PARSER_CONTEXT *
+						       parser,
+						       PT_NODE * spec_assign,
+						       PT_NODE * spec_list,
+						       PT_NODE * assign_list,
+						       int *indexes,
+						       int
+						       indexes_alloc_size);
 static PT_NODE *pt_mvcc_prepare_upd_del_select (PARSER_CONTEXT * parser,
 						PT_NODE * select_stmt);
 static int pt_get_mvcc_reev_range_data (PARSER_CONTEXT * parser,
@@ -855,9 +857,8 @@ static PT_NODE *pt_has_reev_in_subquery_pre (PARSER_CONTEXT * parser,
 static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
 					      PT_NODE * tree, void *arg,
 					      int *continue_walk);
-static PT_NODE *pt_has_reev_in_subquery_post (PARSER_CONTEXT * parser,
-					      PT_NODE * tree, void *arg,
-					      int *continue_walk);
+static bool pt_has_reev_in_subquery (PARSER_CONTEXT * parser,
+				     PT_NODE * statement);
 static int pt_add_constant_object_regu_variable (PARSER_CONTEXT * parser,
 						 PT_NODE * node1,
 						 REGU_VARIABLE * regu_var1,
@@ -20083,8 +20084,8 @@ pt_mvcc_flag_specs_cond_reev (PARSER_CONTEXT * parser, PT_NODE * spec_list,
 }
 
 /*
- * pt_mvcc_flag_specs_asign_reev () - flag specs that are involved in
- *				      assignments
+ * pt_mvcc_flag_specs_assign_reev () - flag specs that are involved in
+ *				       assignments
  *   return: NO_ERROR or error code.
  *   parser(in):
  *   spec_list(in): List of specs that can be involved in assignments
@@ -20095,8 +20096,8 @@ pt_mvcc_flag_specs_cond_reev (PARSER_CONTEXT * parser, PT_NODE * spec_list,
  * The specs flagged in this function are used in MVCC assignments reevaluation
  */
 static int
-pt_mvcc_flag_specs_asign_reev (PARSER_CONTEXT * parser, PT_NODE * spec_list,
-			       PT_NODE * assign_list)
+pt_mvcc_flag_specs_assign_reev (PARSER_CONTEXT * parser, PT_NODE * spec_list,
+				PT_NODE * assign_list)
 {
   PT_NODE *node = NULL, *spec = NULL;
   PT_NODE *real_refs = NULL;
@@ -20111,6 +20112,7 @@ pt_mvcc_flag_specs_asign_reev (PARSER_CONTEXT * parser, PT_NODE * spec_list,
   for (spec = spec_list; spec != NULL; spec = spec->next)
     {
       pt_init_assignments_helper (parser, &ah, assign_list);
+
       while (pt_get_next_assignment (&ah) != NULL)
 	{
 	  real_refs = spec->info.spec.referenced_attrs;
@@ -20131,12 +20133,12 @@ pt_mvcc_flag_specs_asign_reev (PARSER_CONTEXT * parser, PT_NODE * spec_list,
 }
 
 /*
- * pt_mvcc_set_spec_asign_reev_extra_indexes () - returns indexes of specs that
- *						  appear on the right side of
- *						  assignments (and not in
- *						  condition) and have a given
- *						  spec (spec_assign) on the left
- *						  side of assignments. 
+ * pt_mvcc_set_spec_assign_reev_extra_indexes () - returns indexes of specs that
+ *						   appear on the right side of
+ *						   assignments (and not in
+ *						   condition) and have a given
+ *						   spec (spec_assign) on the left
+ *						   side of assignments. 
  *   return: count of indexes.
  *   parser(in):
  *   spec_assign(in): spec that must be on the left side of assignments
@@ -20150,12 +20152,12 @@ pt_mvcc_flag_specs_asign_reev (PARSER_CONTEXT * parser, PT_NODE * spec_list,
  * The indexes refers the positions of specs in the spec_list
  */
 static int
-pt_mvcc_set_spec_asign_reev_extra_indexes (PARSER_CONTEXT * parser,
-					   PT_NODE * spec_assign,
-					   PT_NODE * spec_list,
-					   PT_NODE * assign_list,
-					   int *indexes,
-					   int indexes_alloc_size)
+pt_mvcc_set_spec_assign_reev_extra_indexes (PARSER_CONTEXT * parser,
+					    PT_NODE * spec_assign,
+					    PT_NODE * spec_list,
+					    PT_NODE * assign_list,
+					    int *indexes,
+					    int indexes_alloc_size)
 {
   PT_NODE *nodes_list = NULL, *spec = NULL, *node = NULL;
   PT_NODE *real_refs = NULL;
@@ -20170,14 +20172,14 @@ pt_mvcc_set_spec_asign_reev_extra_indexes (PARSER_CONTEXT * parser,
 
   for (spec = spec_list, idx = 0; spec != NULL; spec = spec->next, idx++)
     {
-      if ((spec->info.spec.
-	   flag & (PT_SPEC_FLAG_MVCC_COND_REEV |
-		   PT_SPEC_FLAG_MVCC_ASSIGN_REEV)) !=
-	  PT_SPEC_FLAG_MVCC_ASSIGN_REEV)
+      if ((spec->info.spec.flag
+	   & (PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV))
+	  != PT_SPEC_FLAG_MVCC_ASSIGN_REEV)
 	{
 	  /* Skip specs that are not only on the right side of assignments */
 	  continue;
 	}
+
       pt_init_assignments_helper (parser, &ah, assign_list);
       while (pt_get_next_assignment (&ah) != NULL)
 	{
@@ -20186,8 +20188,10 @@ pt_mvcc_set_spec_asign_reev_extra_indexes (PARSER_CONTEXT * parser,
 	      /* we found our spec on the left side of assignment */
 	      real_refs = spec->info.spec.referenced_attrs;
 	      spec->info.spec.referenced_attrs = NULL;
+
 	      /* check whether the spec is referenced in the right side
-	       * of assigment */
+	       * of assignment.
+	       */
 	      nodes_list = mq_get_references (parser, ah.rhs, spec);
 	      if (nodes_list != NULL)
 		{
@@ -20240,6 +20244,7 @@ pt_mvcc_prepare_upd_del_select (PARSER_CONTEXT * parser,
   /* Find the insertion point in the SELECT list */
   upd_del_class_cnt = select_stmt->info.query.upd_del_class_cnt;
   assert (upd_del_class_cnt > 0);
+
   node = select_stmt->info.query.q.select.list;
   idx = 0;
   while (idx < upd_del_class_cnt && node != NULL)
@@ -20252,6 +20257,7 @@ pt_mvcc_prepare_upd_del_select (PARSER_CONTEXT * parser,
 	  idx++;
 	}
     }
+
   if (idx < upd_del_class_cnt)
     {
       PT_INTERNAL_ERROR (parser, "Invalid SELECT list");
@@ -20260,26 +20266,32 @@ pt_mvcc_prepare_upd_del_select (PARSER_CONTEXT * parser,
 
   from = select_stmt->info.query.q.select.from;
   list = select_stmt->info.query.q.select.list;
+
   /* Add pairs OID - CLASS OID to the SELECT list that are referenced in
-   * assignments and are not referenced in condition */
+   * assignments and are not referenced in condition 
+   */
   for (spec = from; spec != NULL; spec = spec->next)
     {
       /* Skip classes flagged for UPDATE/DELETE because they are already in
-       * SELECT list */
-      if ((spec->info.spec.
-	   flag & (PT_SPEC_FLAG_UPDATE | PT_SPEC_FLAG_DELETE |
-		   PT_SPEC_FLAG_MVCC_COND_REEV |
-		   PT_SPEC_FLAG_MVCC_ASSIGN_REEV)) ==
-	  PT_SPEC_FLAG_MVCC_ASSIGN_REEV)
+       * SELECT list 
+       */
+      if ((spec->info.spec.flag
+	   & (PT_SPEC_FLAG_UPDATE | PT_SPEC_FLAG_DELETE
+	      | PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV))
+	  == PT_SPEC_FLAG_MVCC_ASSIGN_REEV)
 	{
 	  save_next = spec->next;
 	  spec->next = NULL;
+
 	  select_stmt->info.query.q.select.from = spec;
 	  select_stmt->info.query.q.select.list = NULL;
+
 	  select_stmt = pt_add_row_classoid_name (parser, select_stmt, 1);
 	  assert (select_stmt != NULL);
+
 	  select_stmt = pt_add_row_oid_name (parser, select_stmt);
 	  assert (select_stmt != NULL);
+
 	  spec->next = save_next;
 	  select_stmt->info.query.q.select.list->next->next = prev->next;
 	  prev->next = select_stmt->info.query.q.select.list;
@@ -20290,24 +20302,29 @@ pt_mvcc_prepare_upd_del_select (PARSER_CONTEXT * parser,
     }
 
   /* Add pairs OID - CLASS OID to the SELECT list that are referenced in
-   * condition*/
+   * condition
+   */
   for (spec = from; spec != NULL; spec = spec->next)
     {
       /* Skip classes flagged for UPDATE/DELETE because they are already in
-       * SELECT list */
-      if ((spec->info.spec.
-	   flag & (PT_SPEC_FLAG_UPDATE | PT_SPEC_FLAG_DELETE |
-		   PT_SPEC_FLAG_MVCC_COND_REEV)) ==
-	  PT_SPEC_FLAG_MVCC_COND_REEV)
+       * SELECT list 
+       */
+      if ((spec->info.spec.flag
+	   & (PT_SPEC_FLAG_UPDATE | PT_SPEC_FLAG_DELETE
+	      | PT_SPEC_FLAG_MVCC_COND_REEV)) == PT_SPEC_FLAG_MVCC_COND_REEV)
 	{
 	  save_next = spec->next;
 	  spec->next = NULL;
+
 	  select_stmt->info.query.q.select.from = spec;
 	  select_stmt->info.query.q.select.list = NULL;
+
 	  select_stmt = pt_add_row_classoid_name (parser, select_stmt, 1);
 	  assert (select_stmt != NULL);
+
 	  select_stmt = pt_add_row_oid_name (parser, select_stmt);
 	  assert (select_stmt != NULL);
+
 	  spec->next = save_next;
 	  select_stmt->info.query.q.select.list->next->next = prev->next;
 	  prev->next = select_stmt->info.query.q.select.list;
@@ -20632,7 +20649,8 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED))
 	    {
 	      /* The locking at update/delete stage does not work with GROUP BY,
-	       * so, we will lock at SELECT stage. */
+	       * so, we will lock at SELECT stage. 
+	       */
 	      PT_SELECT_INFO_SET_FLAG (statement,
 				       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
 	    }
@@ -20669,7 +20687,8 @@ pt_to_upd_del_query (PARSER_CONTEXT * parser, PT_NODE * select_names,
 	  if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && !server_op)
 	    {
 	      /* When UPDATE/DELETE statement is broker-side executed we must
-	       * perform locking at SELECT stage */
+	       * perform locking at SELECT stage 
+	       */
 	      PT_SELECT_INFO_SET_FLAG (statement,
 				       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
 	    }
@@ -20736,7 +20755,8 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 
       /* Skip reevaluation if MVCC is not enbaled or at least a class referenced
        * in DELETE statement is partitioned. The case of partitioned classes
-       * referenced in DELETE will be handled in the future */
+       * referenced in DELETE will be handled in the future 
+       */
       if (prm_get_bool_value (PRM_ID_MVCC_ENABLED) && !has_partitioned)
 	{
 	  /* Flag specs that are referenced in conditions and assignments */
@@ -20803,19 +20823,21 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
       if (aptr_statement->info.query.q.select.group_by != NULL)
 	{
 	  /* remove reevaluation flags if we have GROUP BY because the locking will be
-	   * made at SELECT stage */
+	   * made at SELECT stage 
+	   */
 	  abort_reevaluation = true;
 	}
       else
 	{
 	  /* if at least one table involved in reevaluation is a derived table then
-	   * abort reevaluation and force locking on select */
+	   * abort reevaluation and force locking on select 
+	   */
 	  for (cl_name_node = aptr_statement->info.query.q.select.from;
 	       cl_name_node != NULL; cl_name_node = cl_name_node->next)
 	    {
 	      if (cl_name_node->info.spec.derived_table != NULL
-		  && (cl_name_node->info.spec.
-		      flag | PT_SPEC_FLAG_MVCC_COND_REEV))
+		  && (cl_name_node->info.spec.flag
+		      | PT_SPEC_FLAG_MVCC_COND_REEV))
 		{
 		  PT_SELECT_INFO_SET_FLAG (aptr_statement,
 					   PT_SELECT_INFO_MVCC_LOCK_NEEDED);
@@ -20827,11 +20849,13 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 
       PT_SELECT_INFO_SET_FLAG (aptr_statement,
 			       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
+
       abort_reevaluation = true;
       if (abort_reevaluation)
 	{
 	  /* In order to abort reevaluation is enough to clear reevaluation flags
-	   * from all specs (from both, delete and select statements)*/
+	   * from all specs (from both, delete and select statements)
+	   */
 	  for (cl_name_node = aptr_statement->info.query.q.select.from;
 	       cl_name_node != NULL; cl_name_node = cl_name_node->next)
 	    {
@@ -21110,9 +21134,9 @@ pt_to_delete_xasl (PARSER_CONTEXT * parser, PT_NODE * statement)
 
       for (cl_name_node = aptr_statement->info.query.q.select.list, i = j = 0;
 	   cl_name_node != NULL
-	   && i <
-	   aptr_statement->info.query.upd_del_class_cnt +
-	   aptr_statement->info.query.mvcc_reev_extra_cls_cnt;
+	   && (i <
+	       (aptr_statement->info.query.upd_del_class_cnt
+		+ aptr_statement->info.query.mvcc_reev_extra_cls_cnt));
 	   cl_name_node = cl_name_node->next->next, i++)
 	{
 	  node =
@@ -21373,12 +21397,14 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 
   /* Skip reevaluation if MVCC is not enbaled or at least a class referenced in
    * UPDATE statement is partitioned. The case of partitioned classes referenced
-   * in UPDATE will be handled in future */
+   * in UPDATE will be handled in future 
+   */
   if (mvcc_enabled && !has_partitioned)
     {
       /* Flag specs that are referenced in conditions and assignments. This must
        * be done before the generation of select statement, otherwise it will
-       * be difficult to flag specs from select statement */
+       * be difficult to flag specs from select statement 
+       */
 
       error = pt_mvcc_flag_specs_cond_reev (parser, from, where);
       if (error != NO_ERROR)
@@ -21386,8 +21412,8 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	  goto cleanup;
 	}
       error =
-	pt_mvcc_flag_specs_asign_reev (parser, from,
-				       statement->info.update.assignment);
+	pt_mvcc_flag_specs_assign_reev (parser, from,
+					statement->info.update.assignment);
       if (error != NO_ERROR)
 	{
 	  goto cleanup;
@@ -21411,7 +21437,8 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 			 class_specs, where, using_index, order_by,
 			 orderby_for, 1, S_UPDATE);
   /* restore assignment list here because we need to iterate through
-   * assignments later*/
+   * assignments later
+   */
   pt_restore_assignment_links (statement->info.update.assignment, links, -1);
 
   if (aptr_statement == NULL)
@@ -21442,14 +21469,16 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   if (aptr_statement->info.query.q.select.group_by != NULL)
     {
       /* remove reevaluation flags if we have GROUP BY because the locking will be
-       * made at SELECT stage */
+       * made at SELECT stage 
+       */
       abort_reevaluation = true;
     }
   else if (has_partitioned
 	   || pt_has_reev_in_subquery (parser, aptr_statement))
     {
       /* if we have at least one class partitioned then  perform locking at
-       * SELECT stage */
+       * SELECT stage 
+       */
       PT_SELECT_INFO_SET_FLAG (aptr_statement,
 			       PT_SELECT_INFO_MVCC_LOCK_NEEDED);
       abort_reevaluation = true;
@@ -21457,7 +21486,8 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   else
     {
       /* if at least one table involved in reevaluation is a derived table then
-       * abort reevaluation and force locking on select */
+       * abort reevaluation and force locking on select 
+       */
       for (p = aptr_statement->info.query.q.select.from; p != NULL;
 	   p = p->next)
 	{
@@ -21480,7 +21510,8 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   if (abort_reevaluation)
     {
       /* In order to abort reevaluation is enough to clear reevaluation flags
-       * from all specs (from both, update and select statements)*/
+       * from all specs (from both, update and select statements)
+       */
       for (p = aptr_statement->info.query.q.select.from; p != NULL;
 	   p = p->next)
 	{
@@ -21537,10 +21568,9 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	{
 	  ++no_cond_reev_classes;
 	}
-      if ((p->info.spec.
-	   flag & (PT_SPEC_FLAG_MVCC_COND_REEV |
-		   PT_SPEC_FLAG_MVCC_ASSIGN_REEV)) ==
-	  PT_SPEC_FLAG_MVCC_ASSIGN_REEV)
+      if ((p->info.spec.flag
+	   & (PT_SPEC_FLAG_MVCC_COND_REEV | PT_SPEC_FLAG_MVCC_ASSIGN_REEV))
+	  == PT_SPEC_FLAG_MVCC_ASSIGN_REEV)
 	{
 	  ++no_assign_reev_classes;
 	}
@@ -21614,11 +21644,11 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       if (no_assign_reev_classes > 0)
 	{
 	  a =
-	    pt_mvcc_set_spec_asign_reev_extra_indexes (parser, p, from,
-						       statement->info.update.
-						       assignment,
-						       mvcc_assign_extra_classes,
-						       no_assign_reev_classes);
+	    pt_mvcc_set_spec_assign_reev_extra_indexes (parser, p, from,
+							statement->info.
+							update.assignment,
+							mvcc_assign_extra_classes,
+							no_assign_reev_classes);
 	  if (a > 0)
 	    {
 	      upd_cls->mvcc_extra_assign_reev = regu_int_array_alloc (a);
@@ -21923,17 +21953,18 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
     }
 
   update->no_assign_reev_classes = 0;
+
   /* prepare data for MVCC condition reevaluation. For each class used in 
-   *  reevaluation (condition and assignement) set the position (index) into
-   *  select list.
+   * reevaluation (condition and assignement) set the position (index) into
+   * select list.
    */
 
-  for (cl_name_node = aptr_statement->info.query.q.select.list, cls_idx = cl =
-       0;
-       cl_name_node != NULL
-       && cls_idx <
-       aptr_statement->info.query.upd_del_class_cnt +
-       aptr_statement->info.query.mvcc_reev_extra_cls_cnt;
+  for (cl_name_node = aptr_statement->info.query.q.select.list, cls_idx = 0,
+       cl = 0;
+       (cl_name_node != NULL
+	&& (cls_idx <
+	    (aptr_statement->info.query.upd_del_class_cnt
+	     + aptr_statement->info.query.mvcc_reev_extra_cls_cnt)));
        cl_name_node = cl_name_node->next->next, cls_idx++)
     {
       int idx;
@@ -21947,20 +21978,23 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 	      break;
 	    }
 	}
+
       assert (p != NULL);
+
       if (PT_IS_SPEC_FLAG_SET (p,
-			       PT_SPEC_FLAG_MVCC_COND_REEV
-			       | PT_SPEC_FLAG_MVCC_ASSIGN_REEV))
+			       (PT_SPEC_FLAG_MVCC_COND_REEV
+				| PT_SPEC_FLAG_MVCC_ASSIGN_REEV)))
 	{
 	  /* Change index in FROM list with index in SELECT list for classes that
 	   * appear in right side of assignements but not in condition
 	   */
-	  if ((p->info.spec.
-	       flag & (PT_SPEC_FLAG_MVCC_COND_REEV |
-		       PT_SPEC_FLAG_MVCC_ASSIGN_REEV)) ==
+	  if ((p->info.spec.flag
+	       & (PT_SPEC_FLAG_MVCC_COND_REEV
+		  | PT_SPEC_FLAG_MVCC_ASSIGN_REEV)) ==
 	      PT_SPEC_FLAG_MVCC_ASSIGN_REEV)
 	    {
 	      int idx1, idx2;
+
 	      for (idx1 = 0; idx1 < no_classes; idx1++)
 		{
 		  upd_cls = &update->classes[idx1];
@@ -21974,6 +22008,7 @@ pt_to_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
 		}
 	      update->no_assign_reev_classes++;
 	    }
+
 	  /* set the position in SELECT list */
 	  update->mvcc_reev_classes[cl++] = cls_idx;
 	}
@@ -26184,11 +26219,13 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
       PT_INTERNAL_ERROR (parser, "merge update");
       goto cleanup;
     }
+
   /* need to jump upd_del_class_cnt OID-CLASS OID pairs */
   attr_offset =
     (aptr_statement->info.query.upd_del_class_cnt +
      aptr_statement->info.query.mvcc_reev_extra_cls_cnt) * 2 +
     (info->update.has_delete ? 1 : 0);
+
   error =
     pt_to_constraint_pred (parser, xasl, info->into, *non_null_attrs,
 			   select_names, attr_offset);
@@ -26199,6 +26236,7 @@ pt_to_merge_update_xasl (PARSER_CONTEXT * parser, PT_NODE * statement,
   error = pt_to_constraint_pred (parser, xasl, info->into,
 				 *non_null_attrs, select_names, attr_offset);
 #endif
+
   pt_restore_assignment_links (info->update.assignment, links, -1);
   if (error != NO_ERROR)
     {
@@ -27110,8 +27148,8 @@ pt_set_limit_optimization_flags (PARSER_CONTEXT * parser, QO_PLAN * qo_plan,
 }
 
 /*
- * pt_to_pred_expr_local_with_arg () - add constant regu variables to
- * 				     result list
+ * pt_add_constant_object_regu_variable () - add constant regu variables to
+ * 				             result list
  *   return: A NULL return indicates an error occurred
  *   parser(in):
  *   node1(in): parse expression node 1

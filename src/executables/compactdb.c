@@ -185,8 +185,8 @@ compactdb_start (bool verbose_flag)
   disk_init ();
   for (i = 0; i < class_table->num; i++)
     {
-      if (!WS_IS_DELETED (class_table->mops[i]) &&
-	  class_table->mops[i] != sm_Root_class_mop)
+      if (!WS_IS_DELETED (class_table->mops[i])
+	  && class_table->mops[i] != sm_Root_class_mop)
 	{
 	  process_class (class_table->mops[i], verbose_flag);
 	}

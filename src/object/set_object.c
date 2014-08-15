@@ -2432,8 +2432,9 @@ set_change_owner (DB_COLLECTION * ref, MOP owner, int attid,
     {
       pin = ws_pin (ref->owner, 1);
 
-      if (ref->owner == NULL ||
-	  (ws_is_same_object (ref->owner, owner) && ref->attribute == attid))
+      if (ref->owner == NULL
+	  || (ws_is_same_object (ref->owner, owner)
+	      && ref->attribute == attid))
 	{
 	  new_ = ref;
 	}
