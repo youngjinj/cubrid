@@ -1219,6 +1219,7 @@ $ LOADDB
 1150 İçerik uyumlu karşılaştırma gerektirmektedir.
 1151 %2$d hacımın %1$d sayfa yuva donanımlı değildir.
 1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
+1153 Attempt to use 'zero date'.
 2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
 2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
 2002 MVCC can't get snapshot
