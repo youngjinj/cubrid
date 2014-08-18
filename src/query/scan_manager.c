@@ -5607,8 +5607,9 @@ scan_next_heap_page_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	{
 	  return S_ERROR;
 	}
-      else if (ev_res == V_FALSE)
+      else if (ev_res != V_TRUE)
 	{
+	  /* V_FALSE || V_UNKNOWN */
 	  continue;
 	}
 
@@ -6399,13 +6400,14 @@ scan_next_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	}
 
       ev_res = eval_data_filter (thread_p, NULL, NULL, NULL, &data_filter);
-      if (ev_res == V_FALSE)
-	{
-	  continue;
-	}
-      else if (ev_res == V_ERROR)
+      if (ev_res == V_ERROR)
 	{
 	  return S_ERROR;
+	}
+      else if (ev_res != V_TRUE)
+	{
+	  /* V_FALSE || V_UNKNOWN */
+	  continue;
 	}
 
       if (isidp->key_info_regu_list != NULL && scan_id->val_list != NULL)
@@ -6460,8 +6462,9 @@ scan_next_index_node_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	{
 	  return S_ERROR;
 	}
-      else if (ev_res == V_FALSE)
+      else if (ev_res != V_TRUE)
 	{
+	  /* V_FALSE || V_UNKNOWN */
 	  continue;
 	}
 

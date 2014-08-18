@@ -2435,6 +2435,7 @@ qexec_clear_access_spec_list (XASL_NODE * xasl_p, THREAD_ENTRY * thread_p,
 		  db_value_clear (hpsidp->cache_page_info[i]);
 		}
 	    }
+	  break;
 
 	case S_INDX_SCAN:
 	  pg_cnt +=

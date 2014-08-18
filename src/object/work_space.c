@@ -3894,7 +3894,7 @@ ws_abort_mops (bool only_unpinned)
        * in the calling chain, and we would be removing something out
        * from under them.
        */
-      if (!only_unpinned)
+      if (!only_unpinned || !mop->pinned)
 	{
 	  /* always remove this so we can decache things without error */
 	  mop->pinned = 0;
