@@ -13662,17 +13662,20 @@ sm_add_index (MOP classop, DB_CONSTRAINT_TYPE db_constraint_type,
   assert (db_constraint_type == DB_CONSTRAINT_INDEX
 	  || db_constraint_type == DB_CONSTRAINT_REVERSE_INDEX);
 
-  error = sm_check_index_exist (classop, &out_shared_cons_name,
-				db_constraint_type, constraint_name,
-				attnames, asc_desc, filter_index,
-				function_index);
+  /* AU_FETCH_EXCLUSIVE_SCAN will set SIX-lock on the table.
+   * It will allow other reads but neither a write nor another index builder.
+   */
+  error = au_fetch_class_by_classmop (classop, &class_,
+				      AU_FETCH_EXCLUSIVE_SCAN, AU_INDEX);
   if (error != NO_ERROR)
     {
       return error;
     }
 
-  error = au_fetch_class_by_classmop (classop, &class_, AU_FETCH_SCAN,
-				      AU_INDEX);
+  error = sm_check_index_exist (classop, &out_shared_cons_name,
+				db_constraint_type, constraint_name,
+				attnames, asc_desc, filter_index,
+				function_index);
   if (error != NO_ERROR)
     {
       return error;

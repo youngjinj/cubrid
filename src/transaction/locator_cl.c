@@ -2287,6 +2287,11 @@ locator_fetch_mode_to_lock (DB_FETCH_MODE purpose, LC_OBJTYPE type)
       lock = S_LOCK;
       break;
 
+    case DB_FETCH_EXCLUSIVE_SCAN:
+      assert (type == LC_CLASS);
+      lock = SIX_LOCK;
+      break;
+
     default:
 #if defined(CUBRID_DEBUG)
       er_log_debug (ARG_FILE_LINE,
@@ -2467,7 +2472,8 @@ locator_fetch_class (MOP class_mop, DB_FETCH_MODE purpose)
 #endif /* CUBRID_DEBUG */
 
   lock = locator_fetch_mode_to_lock (purpose, LC_CLASS);
-  retain_lock = (purpose == DB_FETCH_SCAN);
+  retain_lock = (purpose == DB_FETCH_SCAN
+		 || purpose == DB_FETCH_EXCLUSIVE_SCAN);
   if (locator_lock (class_mop, LC_CLASS, lock, retain_lock) != NO_ERROR)
     {
       return NULL;

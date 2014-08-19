@@ -1600,7 +1600,13 @@ typedef enum
 				 * or Query delete (SQL delete)
 				 * INTERNAL USE ONLY
 				 */
-  DB_FETCH_SCAN = 7		/* Read the class for scan purpose
+  DB_FETCH_SCAN = 7,		/* Read the class for scan purpose
+				 * The lock of the lock should be kept
+				 * since the actual access happens later.
+				 * This is for loading an index.
+				 * INTERNAL USE ONLY
+				 */
+  DB_FETCH_EXCLUSIVE_SCAN = 8	/* Read the class for exclusive scan purpose
 				 * The lock of the lock should be kept
 				 * since the actual access happens later.
 				 * This is for loading an index.

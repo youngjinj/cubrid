@@ -135,7 +135,11 @@ MOP au_get_dba_user (void);
 typedef enum au_fetchmode
 {
   AU_FETCH_READ,
-  AU_FETCH_SCAN,		/* scan that does not allow write, i.e, scan for load index. */
+  AU_FETCH_SCAN,		/* scan that does not allow write */
+  AU_FETCH_EXCLUSIVE_SCAN,	/* scan that does allow neither write 
+				 * nor other exclusive scan, 
+				 * i.e, scan for load index. 
+				 */
   AU_FETCH_WRITE,
   AU_FETCH_UPDATE
 } AU_FETCHMODE;
