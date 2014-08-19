@@ -533,7 +533,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
   const PT_ALTER_CODE alter_code = alter->info.alter.code;
   SM_CONSTRAINT_FAMILY constraint_family;
   unsigned int save_custom;
-  bool update_drop_cls_btid_required = false;
 
   entity_name = alter->info.alter.entity_name->info.name.original;
   if (entity_name == NULL)
@@ -1289,8 +1288,6 @@ do_alter_one_clause_with_template (PARSER_CONTEXT * parser, PT_NODE * alter)
 	  return error;
 	}
       partition_savepoint = true;
-
-      update_drop_cls_btid_required = true;
 
       error = do_alter_partitioning_pre (parser, alter, &pinfo);
       if (ctemplate->partition_of == NULL

@@ -3447,12 +3447,14 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart,
     }
 
   oid_set_root (&boot_Db_parm->rootclass_oid);
+
   error_code = catcls_find_and_set_serial_class_oid (thread_p);
   if (error_code != NO_ERROR)
     {
       fileio_dismount_all (thread_p);
       goto error;
     }
+
   error_code = catcls_find_and_set_partition_class_oid (thread_p);
   if (error_code != NO_ERROR)
     {
@@ -5842,19 +5844,21 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
     {
       /* TODO: Compute vacuum data npages */
       vacuum_data_npages = prm_get_integer_value (PRM_ID_VACUUM_DATA_PAGES);
+
       /* Create files required for vacuum */
-      if (file_create
-	  (thread_p, &vacuum_data_vfid, vacuum_data_npages,
-	   FILE_DROPPED_FILES, NULL, &vacuum_data_vpid,
-	   -vacuum_data_npages) == NULL
+      if (file_create (thread_p, &vacuum_data_vfid, vacuum_data_npages,
+		       FILE_DROPPED_FILES, NULL, &vacuum_data_vpid,
+		       -vacuum_data_npages) == NULL
 	  || file_create (thread_p, &dropped_files_vfid, 1, FILE_VACUUM_DATA,
 			  NULL, &dropped_files_vpid, 1) == NULL)
 	{
 	  goto error;
 	}
+
       /* Save VFID's in boot_Db_parm */
       VFID_COPY (&boot_Db_parm->vacuum_data_vfid, &vacuum_data_vfid);
       VFID_COPY (&boot_Db_parm->dropped_files_vfid, &dropped_files_vfid);
+
       if (heap_update (thread_p, &boot_Db_parm->hfid,
 		       &boot_Db_parm->rootclass_oid, boot_Db_parm_oid,
 		       &recdes, NULL, &ignore_old, NULL,
@@ -5862,6 +5866,7 @@ boot_create_all_volumes (THREAD_ENTRY * thread_p,
 	{
 	  goto error;
 	}
+
       if (vacuum_init_vacuum_files (thread_p, &vacuum_data_vfid,
 				    &dropped_files_vfid) != NO_ERROR)
 	{

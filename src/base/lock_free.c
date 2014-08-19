@@ -40,6 +40,7 @@ bool
 lock_free_circular_queue_push (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
 {
   INT32 prev_tail, new_tail, prev_read_tail, new_read_tail;
+
   /* Use atomic compare and swap operation to make sure that two producers
    * do not write the same entry in queue.
    * First save queue tail value, compute new tail value and then try to
@@ -50,19 +51,24 @@ lock_free_circular_queue_push (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
     {
       /* Read current tail */
       prev_tail = queue->tail;
+
       if (LOCK_FREE_CIRCULAR_QUEUE_IS_FULL (queue))
 	{
 	  /* The queue is already full */
 	  return false;
 	}
+
       /* Compute next tail */
       new_tail = (prev_tail + 1) % queue->capacity;
+
       /* If tail value didn't change, replace it with next tail value */
     }
   while (!ATOMIC_CAS_32 (&queue->tail, prev_tail, new_tail));
+
   /* Copy data in the read tail value */
   memcpy (queue->data + (prev_tail * queue->data_size), data,
 	  queue->data_size);
+
   /* We can have next anomaly:
    * 1. Queue is empty (head == tail).
    * 2. Producer successfully increment tail.
@@ -85,6 +91,7 @@ lock_free_circular_queue_push (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
    *    data that was not updated.
    * 6. P1 updates its data and increments read_tail.
    */
+
   do
     {
       prev_read_tail = queue->read_tail;
@@ -106,12 +113,14 @@ bool
 lock_free_circular_queue_pop (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
 {
   INT32 prev_head, new_head;
+
   /* Need to synchronize consumers to avoid consuming the same entry.
    * Use atomic compare and swap: read head value, compute new head value
    * and then if the head value didn't change replace it with the new
    * value. Repeat until successful and then data can be read from
    * previous head entry.
    */
+
   do
     {
       if (LOCK_FREE_CIRCULAR_QUEUE_IS_EMPTY (queue))
@@ -119,13 +128,17 @@ lock_free_circular_queue_pop (LOCK_FREE_CIRCULAR_QUEUE * queue, void *data)
 	  /* Queue is empty, nothing to consume */
 	  return false;
 	}
+
       /* Read head */
       prev_head = queue->head;
+
       /* Compute new head */
       new_head = (prev_head + 1) % queue->capacity;
+
       /* Try to replace head value */
     }
   while (!ATOMIC_CAS_32 (&queue->head, prev_head, new_head));
+
   /* Return data from previous head value */
   memcpy (data, queue->data + (prev_head * queue->data_size),
 	  queue->data_size);
@@ -147,11 +160,13 @@ lock_free_circular_queue_create (INT32 capacity, int data_size)
 {
   LOCK_FREE_CIRCULAR_QUEUE *queue =
     (LOCK_FREE_CIRCULAR_QUEUE *) malloc (sizeof (LOCK_FREE_CIRCULAR_QUEUE));
+
   if (queue == NULL)
     {
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
 	      sizeof (LOCK_FREE_CIRCULAR_QUEUE));
     }
+
   queue->data = malloc (capacity * data_size);
   if (queue->data == NULL)
     {
@@ -160,6 +175,7 @@ lock_free_circular_queue_create (INT32 capacity, int data_size)
 	      capacity * data_size);
       return NULL;
     }
+
   queue->data_size = data_size;
   queue->capacity = capacity;
   queue->head = queue->tail = 0;
@@ -181,6 +197,7 @@ lock_free_circular_queue_destroy (LOCK_FREE_CIRCULAR_QUEUE * queue)
     {
       return;
     }
+
   if (queue->data != NULL)
     {
       free (queue->data);

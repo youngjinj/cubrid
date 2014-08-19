@@ -599,8 +599,8 @@ btree_rv_mvcc_save_increments (OID * class_oid, BTID * btid,
   char *datap;
 
   assert (recdes != NULL
-	  && recdes->area_size >=
-	  ((3 * OR_INT_SIZE) + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE));
+	  && (recdes->area_size >=
+	      ((3 * OR_INT_SIZE) + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE)));
 
   recdes->length = (3 * OR_INT_SIZE) + OR_OID_SIZE + OR_BTID_ALIGNED_SIZE;
   datap = (char *) recdes->data;
@@ -2407,21 +2407,25 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 
       /* Create MVCC header */
       BTREE_INIT_MVCC_HEADER (&mvcc_header);
+
       ret = or_get_mvccid (&buf, &MVCC_GET_INSID (&mvcc_header));
       if (ret != NO_ERROR)
 	{
 	  goto error;
 	}
+
       ret = or_get_mvccid (&buf, &MVCC_GET_DELID (&mvcc_header));
       if (ret != NO_ERROR)
 	{
 	  goto error;
 	}
+
       if (MVCC_GET_INSID (&mvcc_header) != MVCCID_ALL_VISIBLE)
 	{
 	  /* Set valid insert MVCCID flag */
 	  MVCC_SET_FLAG_BITS (&mvcc_header, OR_MVCC_FLAG_VALID_INSID);
 	}
+
       if (MVCC_GET_DELID (&mvcc_header) != MVCCID_NULL)
 	{
 	  /* Set valid delete MVCCID */
@@ -2486,6 +2490,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	    {
 	      /* Object was not deleted, increment curr_non_del_obj_count */
 	      load_args->curr_non_del_obj_count = 1;
+
 	      /* Increment the key counter if object is not deleted */
 	      (load_args->n_keys)++;
 	    }
@@ -2563,7 +2568,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		  else if (load_args->curr_non_del_obj_count == 1)
 		    {
 		      /* this is the first non-deleted OID of the key; it
-		         must be placed as the first OID */
+		       * must be placed as the first OID 
+		       */
 		      MVCC_REC_HEADER first_mvcc_header;
 		      OID first_oid, first_class_oid;
 		      RECDES replace_recdes;
@@ -2576,8 +2582,9 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		      if (load_args->overflowing)
 			{
 			  /* OID was already written to page so create a recdes
-			     pointing to page; NOTE: we know the first OID is
-			     of fixed size */
+			   * pointing to page; NOTE: we know the first OID is
+			   * of fixed size 
+			   */
 			  ret =
 			    spage_get_record (load_args->leaf.pgptr,
 					      load_args->
@@ -2711,9 +2718,8 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		      rec_length =
 			load_args->new_pos - load_args->out_recdes.data
 			+ DB_ALIGN (DISK_VPID_SIZE, INT_ALIGNMENT)
-			+
-			(BTREE_IS_UNIQUE (load_args->btid->unique_pk) ?
-			 OR_OID_SIZE : 0) + fixed_mvccid_size;
+			+ (BTREE_IS_UNIQUE (load_args->btid->unique_pk)
+			   ? OR_OID_SIZE : 0) + fixed_mvccid_size;
 
 		      if (cur_maxspace <
 			  rec_length + LOAD_FIXED_EMPTY_FOR_LEAF)
@@ -2803,6 +2809,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		  OR_PUT_OID (load_args->new_pos, &this_oid);
 		  load_args->out_recdes.length += OR_OID_SIZE;
 		  load_args->new_pos += OR_OID_SIZE;
+
 		  if (BTREE_IS_UNIQUE (load_args->btid->unique_pk))
 		    {
 		      /* Insert class OID */
@@ -2810,6 +2817,7 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 		      load_args->out_recdes.length += OR_OID_SIZE;
 		      load_args->new_pos += OR_OID_SIZE;
 		    }
+
 		  /* Insert MVCCID's */
 		  load_args->out_recdes.length +=
 		    btree_packed_mvccinfo_size (&mvcc_header);
@@ -2954,11 +2962,12 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  || MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (&mvcc_header))
 	{
 	  /* There is something to vacuum for this object */
-	  char *pgptr =
-	    (load_args->overflowing ? load_args->ovf.pgptr : load_args->leaf.
-	     pgptr);
+	  char *pgptr;
 	  char *data;
 	  int length;
+
+	  pgptr = (load_args->overflowing
+		   ? load_args->ovf.pgptr : load_args->leaf.pgptr);
 
 	  if (MVCC_IS_HEADER_DELID_VALID (&mvcc_header))
 	    {
@@ -3543,12 +3552,12 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
       if (key_len > 0)
 	{
 	  next_size = sizeof (char *);
-	  record_size = next_size +	/* Pointer to next */
-	    OR_INT_SIZE +	/* Has null */
-	    oid_size +		/* OID, Class OID */
-	    2 * OR_MVCCID_SIZE +	/* Insert and delete MVCCID */
-	    key_len +		/* Key length */
-	    (int) MAX_ALIGNMENT;	/* Alignment */
+	  record_size = (next_size	/* Pointer to next */
+			 + OR_INT_SIZE	/* Has null */
+			 + oid_size	/* OID, Class OID */
+			 + 2 * OR_MVCCID_SIZE	/* Insert and delete MVCCID */
+			 + key_len	/* Key length */
+			 + (int) MAX_ALIGNMENT /* Alignment */ );
 
 	  if (temp_recdes->area_size < record_size)
 	    {
@@ -3606,6 +3615,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 		  goto nofit;
 		}
 	    }
+
 	  if (MVCC_IS_HEADER_DELID_VALID (&mvcc_header))
 	    {
 	      if (or_put_mvccid (&buf, MVCC_GET_DELID (&mvcc_header))
@@ -3618,9 +3628,7 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	    {
 	      if (or_put_mvccid (&buf, MVCCID_NULL) != NO_ERROR)
 		{
-		  {
-		    goto nofit;
-		  }
+		  goto nofit;
 		}
 	    }
 

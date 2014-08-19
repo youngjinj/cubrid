@@ -194,25 +194,28 @@
 
 #define QEXEC_NULL_COMMAND_ID   -1	/* Invalid command identifier */
 
-
 #define SET_MVCC_SELECT_REEV_DATA(p_mvcc_reev_data, p_mvcc_sel_reev_data, \
 				  reev_filter_result, p_primary_key) \
-  do { \
-    assert ((p_mvcc_reev_data) != NULL);  \
-    (p_mvcc_reev_data)->type = REEV_DATA_SCAN;	\
-    (p_mvcc_reev_data)->select_reev_data = p_mvcc_sel_reev_data;  \
-    (p_mvcc_reev_data)->filter_result = reev_filter_result; \
-    (p_mvcc_reev_data)->primary_key = p_primary_key;  \
-    }while (0)
+  do \
+    { \
+      assert ((p_mvcc_reev_data) != NULL); \
+      (p_mvcc_reev_data)->type = REEV_DATA_SCAN; \
+      (p_mvcc_reev_data)->select_reev_data = (p_mvcc_sel_reev_data); \
+      (p_mvcc_reev_data)->filter_result = (reev_filter_result); \
+      (p_mvcc_reev_data)->primary_key = (p_primary_key); \
+    } \
+  while (0)
 
 #define SET_MVCC_UPDATE_REEV_DATA(p_mvcc_reev_data, p_mvcc_upddel_reev_data, \
 				  reev_filter_result, p_primary_key) \
-  do { \
-  (p_mvcc_reev_data)->type = REEV_DATA_UPDDEL;	\
-  (p_mvcc_reev_data)->upddel_reev_data = p_mvcc_upddel_reev_data;  \
-  (p_mvcc_reev_data)->filter_result = reev_filter_result; \
-  (p_mvcc_reev_data)->primary_key = p_primary_key;  \
-    }while (0)
+  do \
+    { \
+      (p_mvcc_reev_data)->type = REEV_DATA_UPDDEL; \
+      (p_mvcc_reev_data)->upddel_reev_data = (p_mvcc_upddel_reev_data); \
+      (p_mvcc_reev_data)->filter_result = (reev_filter_result); \
+      (p_mvcc_reev_data)->primary_key = (p_primary_key); \
+    } \
+  while (0)
 
 /*
  * Access specification information
@@ -507,7 +510,7 @@ struct update_mvcc_reev_assignment
 				 * NULL */
   REGU_VARIABLE *regu_right;	/* regu variable for right side of an
 				 * assignment */
-  struct update_mvcc_reev_assignment *next;	/* link to the next assignment */
+  UPDATE_MVCC_REEV_ASSIGNMENT *next;	/* link to the next assignment */
 };
 
 /* Structure used in condition reevaluation at SELECT */
@@ -539,7 +542,7 @@ struct upddel_mvcc_cond_reeval
   REGU_VARIABLE_LIST rest_regu_list;	/* regulator variable list */
   SCAN_ATTRS *rest_attrs;	/* attribute info for attribute that is not
 				 * involved in current filter */
-  struct upddel_mvcc_cond_reeval *next;	/* next upddel_mvcc_cond_reeval
+  UPDDEL_MVCC_COND_REEVAL *next;	/* next upddel_mvcc_cond_reeval
 					 * structure that will be processed on
 					 * reevaluation */
 };

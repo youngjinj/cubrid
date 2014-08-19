@@ -4394,7 +4394,7 @@ catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
     }
 
   hfid_p = &cls_info_p->hfid;
-  /* in MVCC, do not phisically remove the row */
+  /* in MVCC, do not physically remove the row */
   if (heap_scancache_start_modify (thread_p, &scan, hfid_p,
 				   ct_class_oid_p,
 				   SINGLE_ROW_DELETE, NULL) != NO_ERROR)
@@ -4623,9 +4623,9 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
       /* already inserted by the current transaction, need to replace
        * the old version
        */
-      if (catcls_update_instance
-	  (thread_p, value_p, &oid, catalog_class_oid_p, hfid_p,
-	   &scan) != NO_ERROR)
+      if (catcls_update_instance (thread_p, value_p, &oid,
+				  catalog_class_oid_p, hfid_p,
+				  &scan) != NO_ERROR)
 	{
 	  goto error;
 	}
@@ -5168,6 +5168,9 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
   int uflag = false;
   int error = NO_ERROR;
 
+  record.data = NULL;
+  old_record.data = NULL;
+
 #if defined(SERVER_MODE)
   /* lock the OID for delete purpose */
   if (lock_object (thread_p, oid_p, class_oid_p, X_LOCK, LK_UNCOND_LOCK) !=
@@ -5178,9 +5181,6 @@ catcls_mvcc_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p,
     }
   is_lock_inited = true;
 #endif /* SERVER_MODE */
-
-  record.data = NULL;
-  old_record.data = NULL;
 
   if (heap_get (thread_p, oid_p, &old_record, scan_p, COPY, NULL_CHN) !=
       S_SUCCESS)
@@ -5693,8 +5693,8 @@ catcls_get_apply_info_log_record_time (THREAD_ENTRY * thread_p,
     {
       HEAP_ATTRVALUE *heap_value = NULL;
 
-      if (heap_attrinfo_read_dbvalues
-	  (thread_p, &inst_oid, &recdes, NULL, &attr_info) != NO_ERROR)
+      if (heap_attrinfo_read_dbvalues (thread_p, &inst_oid, &recdes, NULL,
+				       &attr_info) != NO_ERROR)
 	{
 	  error = ER_FAILED;
 	  goto exit;
@@ -5753,14 +5753,17 @@ int
 catcls_find_and_set_serial_class_oid (THREAD_ENTRY * thread_p)
 {
   OID serial_class_oid;
-  LC_FIND_CLASSNAME status =
-    xlocator_find_class_oid (thread_p, CT_SERIAL_NAME, &serial_class_oid,
-			     NULL_LOCK);
+  LC_FIND_CLASSNAME status;
+
+  status = xlocator_find_class_oid (thread_p, CT_SERIAL_NAME,
+				    &serial_class_oid, NULL_LOCK);
   if (status == LC_CLASSNAME_ERROR)
     {
       return ER_FAILED;
     }
+
   oid_set_serial (&serial_class_oid);
+
   return NO_ERROR;
 }
 
@@ -5781,14 +5784,16 @@ int
 catcls_find_and_set_partition_class_oid (THREAD_ENTRY * thread_p)
 {
   OID partition_class_oid;
-  LC_FIND_CLASSNAME status =
-    xlocator_find_class_oid (thread_p, CT_PARTITION_NAME,
-			     &partition_class_oid,
-			     NULL_LOCK);
+  LC_FIND_CLASSNAME status;
+
+  status = xlocator_find_class_oid (thread_p, CT_PARTITION_NAME,
+				    &partition_class_oid, NULL_LOCK);
   if (status == LC_CLASSNAME_ERROR)
     {
       return ER_FAILED;
     }
+
   oid_set_partition (&partition_class_oid);
+
   return NO_ERROR;
 }

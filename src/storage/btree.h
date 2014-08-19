@@ -279,14 +279,15 @@ struct btree_node_scan
 };
 
 /* Initialize BTREE_NODE_SCAN stucture for node info scan */
-#define BTREE_NODE_SCAN_INIT(bns)  \
-  do				   \
-    {				   \
-      VPID_SET_NULL (&(bns)->crt_vpid);			\
-      (bns)->crt_page = NULL;				\
-      (bns)->queue_head = (bns)->queue_tail = NULL;	\
-      (bns)->first_call = true;				\
-    } while (0);
+#define BTREE_NODE_SCAN_INIT(bns) \
+  do \
+    { \
+      VPID_SET_NULL (&(bns)->crt_vpid); \
+      (bns)->crt_page = NULL; \
+      (bns)->queue_head = (bns)->queue_tail = NULL; \
+      (bns)->first_call = true; \
+    } \
+  while (0)
 
 /* Add new item to b-tree node queue */
 #define BTREE_NODE_SCAN_ADD_PAGE_TO_QUEUE(bns, node)	\
@@ -324,19 +325,20 @@ struct btree_node_scan
     }
 
 /* Check if b-tree node queue is empty */
-#define BTREE_NODE_SCAN_IS_QUEUE_EMPTY(bns)	\
-  ((bns)->queue_head == NULL)
+#define BTREE_NODE_SCAN_IS_QUEUE_EMPTY(bns) ((bns)->queue_head == NULL)
 
 #define DBVAL_BUFSIZE   4096
 
 #define BTREE_INIT_MVCC_HEADER(p_mvcc_rec_header) \
-  do {	\
-    MVCC_SET_FLAG (p_mvcc_rec_header, 0); \
-    MVCC_SET_INSID (p_mvcc_rec_header, MVCCID_NULL); \
-    MVCC_SET_DELID (p_mvcc_rec_header, MVCCID_NULL); \
-    MVCC_SET_REPID (p_mvcc_rec_header, 0);  \
-    MVCC_SET_NEXT_VERSION (p_mvcc_rec_header, &oid_Null_oid);  \
-  } while (0)
+  do \
+    { \
+      MVCC_SET_FLAG (p_mvcc_rec_header, 0); \
+      MVCC_SET_INSID (p_mvcc_rec_header, MVCCID_NULL); \
+      MVCC_SET_DELID (p_mvcc_rec_header, MVCCID_NULL); \
+      MVCC_SET_REPID (p_mvcc_rec_header, 0); \
+      MVCC_SET_NEXT_VERSION (p_mvcc_rec_header, &oid_Null_oid); \
+    } \
+  while (0)
 
 /* When MVCC is enabled, btree_delete/btree_insert functionality are extended
  * to do additional types of action. Depending on the context, an object can

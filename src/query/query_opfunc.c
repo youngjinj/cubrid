@@ -6718,9 +6718,9 @@ qdata_evaluate_aggregate_optimize (THREAD_ENTRY * thread_p,
 	  return ER_FAILED;
 	}
 
-      if (btree_get_unique_statistics_for_count
-	  (thread_p, &agg_p->btid, &oid_count, &null_count,
-	   &key_count) != NO_ERROR)
+      if (btree_get_unique_statistics_for_count (thread_p, &agg_p->btid,
+						 &oid_count, &null_count,
+						 &key_count) != NO_ERROR)
 	{
 	  return ER_FAILED;
 	}

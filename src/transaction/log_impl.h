@@ -115,12 +115,12 @@
   (thread_is_process_log_for_vacuum (thread_p) \
    || csect_check_own (thread_p, CSECT_LOG) == 2)
 
-#define LOG_ARCHIVE_CS_OWN(thread_p)                 \
-        (csect_check (thread_p, CSECT_LOG_ARCHIVE) >= 1)
-#define LOG_ARCHIVE_CS_OWN_WRITE_MODE(thread_p)     \
-       (csect_check_own (thread_p, CSECT_LOG_ARCHIVE) == 1)
-#define LOG_ARCHIVE_CS_OWN_READ_MODE(thread_p)      \
-       (csect_check_own (thread_p, CSECT_LOG_ARCHIVE) == 2)
+#define LOG_ARCHIVE_CS_OWN(thread_p) \
+  (csect_check (thread_p, CSECT_LOG_ARCHIVE) >= 1)
+#define LOG_ARCHIVE_CS_OWN_WRITE_MODE(thread_p) \
+  (csect_check_own (thread_p, CSECT_LOG_ARCHIVE) == 1)
+#define LOG_ARCHIVE_CS_OWN_READ_MODE(thread_p) \
+  (csect_check_own (thread_p, CSECT_LOG_ARCHIVE) == 2)
 
 #else /* SERVER_MODE */
 #define LOG_CS_OWN(thread_p) (true)
@@ -142,54 +142,73 @@
 #define LOG_IS_GROUP_COMMIT_ACTIVE() \
   (prm_get_integer_value (PRM_ID_LOG_GROUP_COMMIT_INTERVAL_MSECS) > 0)
 
-#define LOG_RESET_APPEND_LSA(lsa)                \
-  do {                                           \
-    LSA_COPY(&log_Gl.hdr.append_lsa, lsa);       \
-    LSA_COPY(&log_Gl.prior_info.prior_lsa, lsa); \
-  } while(0)
+#define LOG_RESET_APPEND_LSA(lsa) \
+  do \
+    { \
+      LSA_COPY (&log_Gl.hdr.append_lsa, (lsa)); \
+      LSA_COPY (&log_Gl.prior_info.prior_lsa, (lsa)); \
+    } \
+  while (0)
 
-#define LOG_RESET_PREV_LSA(lsa)                \
-  do {                                           \
-    LSA_COPY(&log_Gl.append.prev_lsa, lsa);       \
-    LSA_COPY(&log_Gl.prior_info.prev_lsa, lsa); \
-  } while(0)
+#define LOG_RESET_PREV_LSA(lsa) \
+  do \
+    { \
+      LSA_COPY (&log_Gl.append.prev_lsa, (lsa)); \
+      LSA_COPY (&log_Gl.prior_info.prev_lsa, (lsa)); \
+    } \
+  while (0)
 
-#define LOG_APPEND_PTR() ((char *)log_Gl.append.log_pgptr->area +             \
-                          log_Gl.hdr.append_lsa.offset)
+#define LOG_APPEND_PTR() ((char *)log_Gl.append.log_pgptr->area \
+                          + log_Gl.hdr.append_lsa.offset)
 
-#define LOG_GET_LOG_RECORD_HEADER(log_page_p, lsa)               \
-     ((LOG_RECORD_HEADER *)((log_page_p)->area + (lsa)->offset))
+#define LOG_GET_LOG_RECORD_HEADER(log_page_p, lsa) \
+  ((LOG_RECORD_HEADER *) ((log_page_p)->area + (lsa)->offset))
 
-#define LOG_READ_ALIGN(thread_p, lsa, log_pgptr)                                        \
-  do {                                                                        \
-    (lsa)->offset = DB_ALIGN((lsa)->offset, DOUBLE_ALIGNMENT);                                   \
-    while ((lsa)->offset >= (int)LOGAREA_SIZE) {                              \
-      assert(log_pgptr != NULL);                                              \
-      (lsa)->pageid++;                                                        \
-      if ((logpb_fetch_page((thread_p), (lsa)->pageid, log_pgptr)) == NULL)                 \
-        logpb_fatal_error((thread_p), true, ARG_FILE_LINE, "LOG_READ_ALIGN");               \
-      (lsa)->offset -= LOGAREA_SIZE;                                        \
-      (lsa)->offset = DB_ALIGN((lsa)->offset, DOUBLE_ALIGNMENT);                               \
-    }                                                                         \
-  } while(0)
+#define LOG_READ_ALIGN(thread_p, lsa, log_pgptr) \
+  do \
+    { \
+      (lsa)->offset = DB_ALIGN ((lsa)->offset, DOUBLE_ALIGNMENT); \
+      while ((lsa)->offset >= (int) LOGAREA_SIZE) \
+        { \
+          assert (log_pgptr != NULL); \
+          (lsa)->pageid++; \
+          if (logpb_fetch_page ((thread_p), (lsa)->pageid, (log_pgptr)) == \
+              NULL) \
+	    { \
+              logpb_fatal_error ((thread_p), true, ARG_FILE_LINE, \
+                                 "LOG_READ_ALIGN"); \
+	    } \
+          (lsa)->offset -= LOGAREA_SIZE; \
+          (lsa)->offset = DB_ALIGN ((lsa)->offset, DOUBLE_ALIGNMENT); \
+        } \
+    } \
+  while (0)
 
-#define LOG_READ_ADD_ALIGN(thread_p, add, lsa, log_pgptr)                               \
-  do {                                                                        \
-    (lsa)->offset += (add);                                                   \
-    LOG_READ_ALIGN((thread_p), (lsa), (log_pgptr));                                       \
-  } while(0)
+#define LOG_READ_ADD_ALIGN(thread_p, add, lsa, log_pgptr) \
+  do \
+    { \
+      (lsa)->offset += (add); \
+      LOG_READ_ALIGN ((thread_p), (lsa), (log_pgptr)); \
+    } \
+  while (0)
 
-#define LOG_READ_ADVANCE_WHEN_DOESNT_FIT(thread_p, length, lsa, log_pgptr)              \
-  do                                                                          \
-    if ((lsa)->offset + (int)(length) >= (int)LOGAREA_SIZE) {                 \
-      assert(log_pgptr != NULL);                                              \
-      (lsa)->pageid++;                                                        \
-      if ((logpb_fetch_page((thread_p), (lsa)->pageid, log_pgptr)) == NULL)                 \
-        logpb_fatal_error((thread_p), true, ARG_FILE_LINE,                                  \
-                        "LOG_READ_ADVANCE_WHEN_DOESNT_FIT");                  \
-      (lsa)->offset = 0;                                                      \
-    }                                                                         \
-  while(0)
+#define LOG_READ_ADVANCE_WHEN_DOESNT_FIT(thread_p, length, lsa, log_pgptr) \
+  do \
+    { \
+      if ((lsa)->offset + (int) (length) >= (int) LOGAREA_SIZE) \
+        { \
+          assert (log_pgptr != NULL); \
+          (lsa)->pageid++; \
+          if ((logpb_fetch_page ((thread_p), (lsa)->pageid, log_pgptr)) == \
+              NULL) \
+            { \
+              logpb_fatal_error ((thread_p), true, ARG_FILE_LINE, \
+                                 "LOG_READ_ADVANCE_WHEN_DOESNT_FIT"); \
+            } \
+          (lsa)->offset = 0; \
+        } \
+    } \
+  while (0)
 
 #define LOG_2PC_NULL_GTRID        (-1)
 #define LOG_2PC_OBTAIN_LOCKS      true
@@ -210,75 +229,75 @@
   log_Tran_index = (index)
 #endif /* SERVER_MODE */
 
-#define LOG_FIND_TDES(tran_index)                                             \
-  (((tran_index) >= 0 && (tran_index) < log_Gl.trantable.num_total_indices)   \
+#define LOG_FIND_TDES(tran_index) \
+  (((tran_index) >= 0 && (tran_index) < log_Gl.trantable.num_total_indices) \
    ? log_Gl.trantable.all_tdes[(tran_index)] : NULL)
 
 #define LOG_FIND_CURRENT_TDES(thrd) \
-  LOG_FIND_TDES(LOG_FIND_THREAD_TRAN_INDEX((thrd)))
+  LOG_FIND_TDES (LOG_FIND_THREAD_TRAN_INDEX ((thrd)))
 
-#define LOG_ISTRAN_ACTIVE(tdes)                                               \
-  ((tdes)->state == TRAN_ACTIVE && LOG_ISRESTARTED())
+#define LOG_ISTRAN_ACTIVE(tdes) \
+  ((tdes)->state == TRAN_ACTIVE && LOG_ISRESTARTED ())
 
-#define LOG_ISTRAN_COMMITTED(tdes)                                            \
-  ((tdes)->state == TRAN_UNACTIVE_COMMITTED                             ||    \
-   (tdes)->state == TRAN_UNACTIVE_WILL_COMMIT                           ||    \
-   (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE               ||    \
-   (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS ||    \
-   (tdes)->state == TRAN_UNACTIVE_2PC_COMMIT_DECISION                   ||    \
-   (tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS)
+#define LOG_ISTRAN_COMMITTED(tdes) \
+  ((tdes)->state == TRAN_UNACTIVE_COMMITTED \
+   || (tdes)->state == TRAN_UNACTIVE_WILL_COMMIT \
+   || (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE \
+   || (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_2PC_COMMIT_DECISION \
+   || (tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS)
 
-#define LOG_ISTRAN_ABORTED(tdes)                                              \
-  ((tdes)->state == TRAN_UNACTIVE_ABORTED                               ||    \
-   (tdes)->state == TRAN_UNACTIVE_UNILATERALLY_ABORTED                  ||    \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS   ||    \
-   (tdes)->state == TRAN_UNACTIVE_2PC_ABORT_DECISION                    ||    \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS)
+#define LOG_ISTRAN_ABORTED(tdes) \
+  ((tdes)->state == TRAN_UNACTIVE_ABORTED \
+   || (tdes)->state == TRAN_UNACTIVE_UNILATERALLY_ABORTED \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_2PC_ABORT_DECISION \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS)
 
-#define LOG_ISTRAN_LOOSE_ENDS(tdes)                                           \
-  ((tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS ||    \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS   ||    \
-   (tdes)->state ==                                                           \
-   TRAN_UNACTIVE_XTOPOPE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS          ||    \
-   (tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS      ||    \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS        ||    \
-   (tdes)->state == TRAN_UNACTIVE_2PC_COLLECTING_PARTICIPANT_VOTES      ||    \
-   (tdes)->state == TRAN_UNACTIVE_2PC_PREPARE)
+#define LOG_ISTRAN_LOOSE_ENDS(tdes) \
+  ((tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_XTOPOPE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS \
+   || (tdes)->state == TRAN_UNACTIVE_2PC_COLLECTING_PARTICIPANT_VOTES \
+   || (tdes)->state == TRAN_UNACTIVE_2PC_PREPARE)
 
-#define LOG_ISTRAN_CLIENT_LOOSE_ENDS(tdes)                                    \
-  ((tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS ||    \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS   ||    \
-   (tdes)->state ==                                                           \
-   TRAN_UNACTIVE_XTOPOPE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS)
+#define LOG_ISTRAN_CLIENT_LOOSE_ENDS(tdes) \
+  ((tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_XTOPOPE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS)
 
-#define LOG_ISTRAN_2PC_IN_SECOND_PHASE(tdes)                                  \
-  ((tdes)->state == TRAN_UNACTIVE_2PC_ABORT_DECISION                    ||    \
-   (tdes)->state == TRAN_UNACTIVE_2PC_COMMIT_DECISION                   ||    \
-   (tdes)->state == TRAN_UNACTIVE_WILL_COMMIT                           ||    \
-   (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE               ||    \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS   ||    \
-   (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS ||    \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS        ||    \
-   (tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS)
+#define LOG_ISTRAN_2PC_IN_SECOND_PHASE(tdes) \
+  ((tdes)->state == TRAN_UNACTIVE_2PC_ABORT_DECISION \
+   || (tdes)->state == TRAN_UNACTIVE_2PC_COMMIT_DECISION \
+   || (tdes)->state == TRAN_UNACTIVE_WILL_COMMIT \
+   || (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_COMMITTED_WITH_CLIENT_USER_LOOSE_ENDS \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS \
+   || (tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS)
 
-#define LOG_ISTRAN_2PC(tdes)                                                  \
-  ((tdes)->state == TRAN_UNACTIVE_2PC_COLLECTING_PARTICIPANT_VOTES ||         \
-   (tdes)->state == TRAN_UNACTIVE_2PC_PREPARE                      ||         \
-   LOG_ISTRAN_2PC_IN_SECOND_PHASE(tdes))
+#define LOG_ISTRAN_2PC(tdes) \
+  ((tdes)->state == TRAN_UNACTIVE_2PC_COLLECTING_PARTICIPANT_VOTES \
+   || (tdes)->state == TRAN_UNACTIVE_2PC_PREPARE \
+   || LOG_ISTRAN_2PC_IN_SECOND_PHASE (tdes))
 
 #define LOG_ISTRAN_2PC_PREPARE(tdes) \
   ((tdes)->state == TRAN_UNACTIVE_2PC_PREPARE)
 
-#define LOG_ISTRAN_2PC_INFORMING_PARTICIPANTS(tdes)                           \
-  ((tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS ||         \
-   (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS)
+#define LOG_ISTRAN_2PC_INFORMING_PARTICIPANTS(tdes) \
+  ((tdes)->state == TRAN_UNACTIVE_COMMITTED_INFORMING_PARTICIPANTS \
+   || (tdes)->state == TRAN_UNACTIVE_ABORTED_INFORMING_PARTICIPANTS)
 
 #define LOG_SET_DATA_ADDR(data_addr, page, vol_file_id, off) \
-  do { \
-      (data_addr)->pgptr  = page;	  \
-      (data_addr)->vfid   = vol_file_id;  \
-      (data_addr)->offset = off;	  \
-  } while (0)
+  do \
+    { \
+      (data_addr)->pgptr = (page); \
+      (data_addr)->vfid = (vol_file_id); \
+      (data_addr)->offset = (off); \
+    } \
+  while (0)
 
 #define MAXLOGNAME          (30 - 12)
 
@@ -303,8 +322,8 @@
 /* special action for log applier */
 #if defined (SERVER_MODE)
 #define LOG_CHECK_LOG_APPLIER(thread_p) \
-  (thread_p != NULL &&  \
-   logtb_find_client_type (thread_p->tran_index) == BOOT_CLIENT_LOG_APPLIER)
+  (thread_p != NULL \
+   && logtb_find_client_type (thread_p->tran_index) == BOOT_CLIENT_LOG_APPLIER)
 #else
 #define LOG_CHECK_LOG_APPLIER(thread_p) (0)
 #endif /* !SERVER_MODE */
@@ -312,8 +331,8 @@
 /* special action for log prefetcher */
 #if defined (SERVER_MODE)
 #define LOG_CHECK_LOG_PREFETCHER(thread_p) \
-  (thread_p != NULL &&  \
-   logtb_find_client_type (thread_p->tran_index) == BOOT_CLIENT_LOG_PREFETCHER)
+  (thread_p != NULL \
+   && logtb_find_client_type (thread_p->tran_index) == BOOT_CLIENT_LOG_PREFETCHER)
 #else
 #define LOG_CHECK_LOG_PREFETCHER(thread_p) (0)
 #endif /* !SERVER_MODE */
@@ -326,22 +345,26 @@ extern int db_Disable_modifications;
 #ifndef CHECK_MODIFICATION_NO_RETURN
 #if defined (SA_MODE)
 #define CHECK_MODIFICATION_NO_RETURN(thread_p, error) \
-  error = NO_ERROR;
+  (error) = NO_ERROR
 #else /* SA_MODE */
-#define CHECK_MODIFICATION_NO_RETURN(thread_p, error)  \
-  do                                                   \
-  {                                                    \
-      int mod_disabled;                                \
-      mod_disabled = logtb_is_tran_modification_disabled (thread_p);   \
-      if (mod_disabled) {            \
-      er_set(ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_DB_NO_MODIFICATIONS, 0); \
-      er_log_debug (ARG_FILE_LINE, "tdes->disable_modification = %d\n", \
-                    mod_disabled);  \
-      error = ER_DB_NO_MODIFICATIONS;          \
-    } else {                                   \
-      error = NO_ERROR;                        \
-    }                                          \
-  }                                            \
+#define CHECK_MODIFICATION_NO_RETURN(thread_p, error) \
+  do \
+    { \
+      int mod_disabled; \
+      mod_disabled = logtb_is_tran_modification_disabled (thread_p); \
+      if (mod_disabled) \
+        { \
+          er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_DB_NO_MODIFICATIONS, \
+                  0); \
+          er_log_debug (ARG_FILE_LINE, "tdes->disable_modification = %d\n", \
+                        mod_disabled); \
+          error = ER_DB_NO_MODIFICATIONS; \
+        } \
+      else \
+        { \
+          error = NO_ERROR; \
+        } \
+    } \
   while (0)
 #endif /* !SA_MODE */
 #endif /* CHECK_MODIFICATION_NO_RETURN */
@@ -386,9 +409,11 @@ extern int db_Disable_modifications;
 typedef enum log_flush LOG_FLUSH;
 enum log_flush
 { LOG_DONT_NEED_FLUSH, LOG_NEED_FLUSH };
+
 typedef enum log_setdirty LOG_SETDIRTY;
 enum log_setdirty
 { LOG_DONT_SET_DIRTY, LOG_SET_DIRTY };
+
 typedef enum log_getnewtrid LOG_GETNEWTRID;
 enum log_getnewtrid
 { LOG_DONT_NEED_NEWTRID, LOG_NEED_NEWTRID };
@@ -944,7 +969,7 @@ struct log_addr_tdesarea
 typedef struct trantable TRANTABLE;
 struct trantable
 {
-  int num_total_indices;	/* Number of total transaction indices     */
+  int num_total_indices;	/* Number of total transaction indices */
   int num_assigned_indices;	/* Number of assigned transaction indices
 				 * (i.e., number of active thread/clients)
 				 */
@@ -952,14 +977,10 @@ struct trantable
   int num_client_loose_end_indices;
   /* Number of coordinator loose end indices */
   int num_coord_loose_end_indices;
-  /* Number of prepared participant loose end
-   * indices
-   */
+  /* Number of prepared participant loose end indices */
   int num_prepared_loose_end_indices;
-  int hint_free_index;		/* Hint for a free index                   */
-  /* Number of transactions that must be
-   * interrupted
-   */
+  int hint_free_index;		/* Hint for a free index */
+  /* Number of transactions that must be interrupted */
 #if defined(_AIX)
   sig_atomic_t num_interrupts;
 #else				/* _AIX */
@@ -977,9 +998,9 @@ struct trantable
 typedef struct mvcctable MVCCTABLE;
 struct mvcctable
 {
-  MVCC_INFO *head_writers,	/* head of writer list */
-   *tail_writers,		/* tail of writer list */
-   *head_null_mvccids;		/* head of null MVCC id list */
+  MVCC_INFO *head_writers;	/* head of writer list */
+  MVCC_INFO *tail_writers;	/* tail of writer list */
+  MVCC_INFO *head_null_mvccids;	/* head of null MVCC id list */
   MVCC_INFO_BLOCK *block_list;	/* MVCC info block list */
   MVCC_INFO *free_list;		/* MVCC info free list */
   int mvcc_info_free_list_lock;	/* MVCC info free list spin lock */
@@ -987,7 +1008,7 @@ struct mvcctable
 };
 
 #define MVCCTABLE_INITIALIZER \
-  {NULL, NULL, NULL, NULL, MVCCID_NULL}
+  {NULL, NULL, NULL, NULL, NULL, 0, MVCCID_NULL}
 
 /*
  * This structure encapsulates various information and metrics related
@@ -1031,11 +1052,11 @@ struct log_header
 				 * run with the same page size
 				 */
   PGLENGTH db_logpagesize;	/* Size of log pages in the database. */
-  int is_shutdown;		/* Was the log shutdown ?                   */
-  TRANID next_trid;		/* Next Transaction identifier              */
+  int is_shutdown;		/* Was the log shutdown ? */
+  TRANID next_trid;		/* Next Transaction identifier */
   MVCCID mvcc_next_id;		/* Next MVCC ID */
-  int avg_ntrans;		/* Number of average transactions           */
-  int avg_nlocks;		/* Average number of object locks           */
+  int avg_ntrans;		/* Number of average transactions */
+  int avg_nlocks;		/* Average number of object locks */
   DKNPAGES npages;		/* Number of pages in the active log portion.
 				 * Does not include the log header page.
 				 */
@@ -1046,24 +1067,24 @@ struct log_header
   LOG_PAGEID fpageid;		/* Logical pageid at physical location 1 in
 				 * active log
 				 */
-  LOG_LSA append_lsa;		/* Current append location                  */
+  LOG_LSA append_lsa;		/* Current append location */
   LOG_LSA chkpt_lsa;		/* Lowest log sequence address to start the
 				 * recovery process
 				 */
-  LOG_PAGEID nxarv_pageid;	/* Next logical page to archive             */
+  LOG_PAGEID nxarv_pageid;	/* Next logical page to archive */
   LOG_PHY_PAGEID nxarv_phy_pageid;	/* Physical location of logical page to
 					 * archive
 					 */
-  int nxarv_num;		/* Next log archive number                  */
+  int nxarv_num;		/* Next log archive number */
   int last_arv_num_for_syscrashes;	/* Last log archive needed for system
 					 * crashes
 					 */
-  int last_deleted_arv_num;	/* Last deleted archive number              */
-  LOG_LSA bkup_level0_lsa;	/* Lsa of backup level 0                    */
-  LOG_LSA bkup_level1_lsa;	/* Lsa of backup level 1                    */
-  LOG_LSA bkup_level2_lsa;	/* Lsa of backup level 2                    */
-  char prefix_name[MAXLOGNAME];	/* Log prefix name                          */
-  bool has_logging_been_skipped;	/* Has logging been skipped ?       */
+  int last_deleted_arv_num;	/* Last deleted archive number */
+  LOG_LSA bkup_level0_lsa;	/* Lsa of backup level 0 */
+  LOG_LSA bkup_level1_lsa;	/* Lsa of backup level 1 */
+  LOG_LSA bkup_level2_lsa;	/* Lsa of backup level 2 */
+  char prefix_name[MAXLOGNAME];	/* Log prefix name */
+  bool has_logging_been_skipped;	/* Has logging been skipped ? */
   int reserved_int_1;		/* for backward compitablity
 				 * - previously used for lowest_arv_num_for_backup */
   int reserved_int_2;		/* for backward compitablity
@@ -1198,19 +1219,19 @@ struct log_header
 struct log_arv_header
 {				/* Log archive header information */
   char magic[CUBRID_MAGIC_MAX_LENGTH];	/* Magic value for file/magic Unix
-					 * utility     */
+					 * utility */
   INT32 dummy;			/* for 8byte align */
   INT64 db_creation;		/* Database creation time. For safety reasons,
 				 * this value is set on all volumes and the
 				 * log. The value is generated by the log
 				 * manager
 				 */
-  TRANID next_trid;		/* Next Transaction identifier              */
-  DKNPAGES npages;		/* Number of pages in the archive log       */
+  TRANID next_trid;		/* Next Transaction identifier */
+  DKNPAGES npages;		/* Number of pages in the archive log */
   LOG_PAGEID fpageid;		/* Logical pageid at physical location 1 in
 				 * archive log
 				 */
-  int arv_num;			/* The archive number                       */
+  int arv_num;			/* The archive number */
   INT32 dummy2;			/* Dummy field for 8byte align */
 };
 
@@ -1238,16 +1259,16 @@ typedef enum log_rectype LOG_RECTYPE;
 enum log_rectype
 {
   /* In order of likely of appearance in the log */
-  LOG_SMALLER_LOGREC_TYPE = 0,	/* A lower bound check             */
+  LOG_SMALLER_LOGREC_TYPE = 0,	/* A lower bound check */
 
   LOG_CLIENT_NAME = 1,		/* Name of the client associated
 				   with transaction
 				 */
-  LOG_UNDOREDO_DATA = 2,	/* An undo and redo data record    */
-  LOG_UNDO_DATA = 3,		/* Only undo data                  */
-  LOG_REDO_DATA = 4,		/* Only redo data                  */
+  LOG_UNDOREDO_DATA = 2,	/* An undo and redo data record */
+  LOG_UNDO_DATA = 3,		/* Only undo data */
+  LOG_REDO_DATA = 4,		/* Only redo data */
   LOG_DBEXTERN_REDO_DATA = 5,	/* Only database external redo data */
-  LOG_POSTPONE = 6,		/* Postpone redo data              */
+  LOG_POSTPONE = 6,		/* Postpone redo data */
   LOG_RUN_POSTPONE = 7,		/* Run/redo a postpone data. Only
 				   for transactions committed with
 				   postpone operations
@@ -1258,8 +1279,8 @@ enum log_rectype
   LOG_LCOMPENSATE = 9,		/* Compensation record (compensate a
 				   logical undo of an aborted tran)
 				 */
-  LOG_CLIENT_USER_UNDO_DATA = 10,	/* User client undo data           */
-  LOG_CLIENT_USER_POSTPONE_DATA = 11,	/* User client postpone            */
+  LOG_CLIENT_USER_UNDO_DATA = 10,	/* User client undo data */
+  LOG_CLIENT_USER_POSTPONE_DATA = 11,	/* User client postpone */
   LOG_RUN_NEXT_CLIENT_UNDO = 12,	/* Used to indicate that a set of
 					   client undo operations has
 					   been executed and the address of
@@ -1278,7 +1299,7 @@ enum log_rectype
   LOG_COMMIT_WITH_CLIENT_USER_LOOSE_ENDS = 16,	/* Committing client postpone
 						   operations
 						 */
-  LOG_COMMIT = 17,		/* A commit record                 */
+  LOG_COMMIT = 17,		/* A commit record */
   LOG_COMMIT_TOPOPE_WITH_POSTPONE = 18,	/* Committing server top system
 					   postpone operations
 					 */
@@ -1289,8 +1310,8 @@ enum log_rectype
   LOG_COMMIT_TOPOPE = 20,	/* A partial commit record, usually
 				   from a top system operation
 				 */
-  LOG_ABORT_WITH_CLIENT_USER_LOOSE_ENDS = 21,	/* Aborting client loose ends      */
-  LOG_ABORT = 22,		/* An abort record                 */
+  LOG_ABORT_WITH_CLIENT_USER_LOOSE_ENDS = 21,	/* Aborting client loose ends */
+  LOG_ABORT = 22,		/* An abort record */
   LOG_ABORT_TOPOPE_WITH_CLIENT_USER_LOOSE_ENDS = 23,
   /* Committing client postpone
      top system operations
@@ -1299,10 +1320,10 @@ enum log_rectype
 				   from a top system operation or
 				   partial rollback to a save point
 				 */
-  LOG_START_CHKPT = 25,		/* Start a checkpoint              */
-  LOG_END_CHKPT = 26,		/* Checkpoint information          */
-  LOG_SAVEPOINT = 27,		/* A user savepoint record         */
-  LOG_2PC_PREPARE = 28,		/* A prepare to commit record      */
+  LOG_START_CHKPT = 25,		/* Start a checkpoint */
+  LOG_END_CHKPT = 26,		/* Checkpoint information */
+  LOG_SAVEPOINT = 27,		/* A user savepoint record */
+  LOG_2PC_PREPARE = 28,		/* A prepare to commit record */
   LOG_2PC_START = 29,		/* Start the 2PC protocol by sending
 				   vote request messages to
 				   participants of distributed tran.
@@ -1326,8 +1347,8 @@ enum log_rectype
 				   decision on the fate of dist.
 				   trans.
 				 */
-  LOG_END_OF_LOG = 35,		/* End of log                      */
-  LOG_DUMMY_HEAD_POSTPONE = 36,	/* A dummy log record. No-op       */
+  LOG_END_OF_LOG = 35,		/* End of log */
+  LOG_DUMMY_HEAD_POSTPONE = 36,	/* A dummy log record. No-op */
   LOG_DUMMY_CRASH_RECOVERY = 37,	/* A dummy log record which indicate
 					   the start of crash recovery.
 					   No-op
@@ -1345,7 +1366,7 @@ enum log_rectype
   LOG_UNLOCK_ABORT = 42,	/* transaction commit, we append the unlock info.
 				   before calling lock_unlock_all()
 				 */
-  LOG_DIFF_UNDOREDO_DATA = 43,	/* diff undo redo data             */
+  LOG_DIFF_UNDOREDO_DATA = 43,	/* diff undo redo data */
   LOG_DUMMY_HA_SERVER_STATE = 44,	/* HA server state */
   LOG_DUMMY_OVF_RECORD = 45,	/* indicator of the first part of an overflow record */
 
@@ -1355,7 +1376,7 @@ enum log_rectype
   LOG_MVCC_UNDO_DATA = 47,	/* Undo for MVCC operations */
   LOG_MVCC_REDO_DATA = 48,	/* Redo for MVCC operations */
   LOG_MVCC_DIFF_UNDOREDO_DATA = 49,	/* diff undo redo data for MVCC operations */
-  LOG_LARGER_LOGREC_TYPE	/* A higher bound for checks       */
+  LOG_LARGER_LOGREC_TYPE	/* A higher bound for checks */
 };
 
 typedef enum log_repl_flush LOG_REPL_FLUSH;
@@ -1419,8 +1440,8 @@ enum log_repl_flush
 
 /* Is log record for a change on vacuum data */
 #define LOG_IS_VACUUM_DATA_RECOVERY(rcvindex) \
-  ((rcvindex) == RVVAC_LOG_BLOCK_APPEND	  \
-   || (rcvindex) == RVVAC_LOG_BLOCK_REMOVE  \
+  ((rcvindex) == RVVAC_LOG_BLOCK_APPEND	\
+   || (rcvindex) == RVVAC_LOG_BLOCK_REMOVE \
    || (rcvindex) == RVVAC_LOG_BLOCK_MODIFY)
 
 #define LOG_IS_VACUUM_DATA_BUFFER_RECOVERY(rcvindex) \
@@ -1446,41 +1467,41 @@ struct log_rec_header
   LOG_LSA prev_tranlsa;		/* Address of previous log record for the
 				 * same transaction
 				 */
-  LOG_LSA back_lsa;		/* Backward log address                      */
-  LOG_LSA forw_lsa;		/* Forward  log address                      */
+  LOG_LSA back_lsa;		/* Backward log address */
+  LOG_LSA forw_lsa;		/* Forward  log address */
   TRANID trid;			/* Transaction identifier of the log record  */
-  LOG_RECTYPE type;		/* Log record type (e.g., commit, abort)     */
+  LOG_RECTYPE type;		/* Log record type (e.g., commit, abort) */
 };
 
 /* Common information of log data records */
 struct log_data
 {
-  LOG_RCVINDEX rcvindex;	/* Index to recovery function                */
-  PAGEID pageid;		/* Pageid of recovery data                   */
-  PGLENGTH offset;		/* offset of recovery data in pageid         */
-  VOLID volid;			/* Volume identifier of recovery data        */
+  LOG_RCVINDEX rcvindex;	/* Index to recovery function */
+  PAGEID pageid;		/* Pageid of recovery data */
+  PGLENGTH offset;		/* offset of recovery data in pageid */
+  VOLID volid;			/* Volume identifier of recovery data */
 };
 
 /* Information of undo_redo log records */
 struct log_undoredo
 {
-  struct log_data data;		/* Location of recovery data                 */
-  int ulength;			/* Length of undo data                       */
-  int rlength;			/* Length of redo data                       */
+  struct log_data data;		/* Location of recovery data */
+  int ulength;			/* Length of undo data */
+  int rlength;			/* Length of redo data */
 };
 
 /* Information of undo log records */
 struct log_undo
 {
-  struct log_data data;		/* Location of recovery data                 */
-  int length;			/* Length of undo data                       */
+  struct log_data data;		/* Location of recovery data */
+  int length;			/* Length of undo data */
 };
 
 /* Information of redo log records */
 struct log_redo
 {
-  struct log_data data;		/* Location of recovery data                 */
-  int length;			/* Length of redo data                       */
+  struct log_data data;		/* Location of recovery data */
+  int length;			/* Length of redo data */
 };
 
 /* Log information required for vacuum */
@@ -1501,39 +1522,39 @@ struct log_vacuum_info
 /* Information of undo_redo log records for MVCC operations */
 struct log_mvcc_undoredo
 {
-  struct log_undoredo undoredo;	/* Undoredo information               */
-  MVCCID mvccid;		/* MVCC Identifier for transaction    */
-  struct log_vacuum_info vacuum_info;	/* Info required for vacuum           */
+  struct log_undoredo undoredo;	/* Undoredo information */
+  MVCCID mvccid;		/* MVCC Identifier for transaction */
+  struct log_vacuum_info vacuum_info;	/* Info required for vacuum */
 };
 
 /* Information of undo log records for MVCC operations */
 struct log_mvcc_undo
 {
-  struct log_undo undo;		/* Undo information                  */
-  MVCCID mvccid;		/* MVCC Identifier for transaction   */
-  struct log_vacuum_info vacuum_info;	/* Info required for vacuum          */
+  struct log_undo undo;		/* Undo information */
+  MVCCID mvccid;		/* MVCC Identifier for transaction */
+  struct log_vacuum_info vacuum_info;	/* Info required for vacuum */
 };
 
 /* Information of redo log records for MVCC operations */
 struct log_mvcc_redo
 {
-  struct log_redo redo;		/* Location of recovery data                 */
-  MVCCID mvccid;		/* MVCC Identifier for transaction           */
+  struct log_redo redo;		/* Location of recovery data */
+  MVCCID mvccid;		/* MVCC Identifier for transaction */
 };
 
 /* Information of database external redo log records */
 struct log_dbout_redo
 {
-  LOG_RCVINDEX rcvindex;	/* Index to recovery function                */
-  int length;			/* Length of redo data                       */
+  LOG_RCVINDEX rcvindex;	/* Index to recovery function */
+  int length;			/* Length of redo data */
 };
 
 /* Information of a compensating log records */
 struct log_compensate
 {
-  struct log_data data;		/* Location of recovery data                 */
-  LOG_LSA undo_nxlsa;		/* Address of next log record to undo        */
-  int length;			/* Length of compensating data               */
+  struct log_data data;		/* Location of recovery data */
+  LOG_LSA undo_nxlsa;		/* Address of next log record to undo */
+  int length;			/* Length of compensating data */
 };
 
 /*
@@ -1542,8 +1563,8 @@ struct log_compensate
  */
 struct log_logical_compensate
 {
-  LOG_RCVINDEX rcvindex;	/* Index to recovery function                */
-  LOG_LSA undo_nxlsa;		/* Address of next log record to undo        */
+  LOG_RCVINDEX rcvindex;	/* Index to recovery function */
+  LOG_LSA undo_nxlsa;		/* Address of next log record to undo */
 };
 
 /* This entry is included during commit */
@@ -1564,9 +1585,9 @@ struct log_topope_start_postpone
 /* Information of execution of a postpone data */
 struct log_run_postpone
 {
-  struct log_data data;		/* Location of recovery data                 */
-  LOG_LSA ref_lsa;		/* Address of the original postpone record   */
-  int length;			/* Length of redo data                       */
+  struct log_data data;		/* Location of recovery data */
+  LOG_LSA ref_lsa;		/* Address of the original postpone record */
+  int length;			/* Length of redo data */
 };
 
 /* A checkpoint record */
@@ -1575,8 +1596,8 @@ struct log_chkpt
   LOG_LSA redo_lsa;		/* Oldest LSA of dirty data page in page
 				 * buffers
 				 */
-  int ntrans;			/* Number of active transactions             */
-  int ntops;			/* Total number of system operations         */
+  int ntrans;			/* Number of active transactions */
+  int ntops;			/* Total number of system operations */
 };
 
 /* replication log structure */
@@ -1637,7 +1658,7 @@ struct log_client
   LOG_RCVCLIENT_INDEX rcvclient_index;	/* Index to recovery function on
 					 * client
 					 */
-  int length;			/* Length of client data          */
+  int length;			/* Length of client data */
 };
 
 /* Hint where to start looking for client actions either for commit or abort */
@@ -1650,7 +1671,7 @@ struct log_start_client
 struct log_topope_start_client
 {
   LOG_LSA lastparent_lsa;	/* The last address of the parent transaction. */
-  LOG_LSA lsa;			/* Starting page with a client record          */
+  LOG_LSA lsa;			/* Starting page with a client record */
 };
 
 /*
@@ -1700,8 +1721,8 @@ struct log_2pc_prepcommit
 struct log_2pc_start
 {
   char user_name[DB_MAX_USER_LENGTH + 1];	/* Name of the client */
-  int gtrid;			/* Identifier of the global tran      */
-  int num_particps;		/* number of participants             */
+  int gtrid;			/* Identifier of the global tran */
+  int num_particps;		/* number of participants */
   int particp_id_length;	/* length of a participant identifier */
 };
 
@@ -1711,7 +1732,7 @@ struct log_2pc_start
  */
 struct log_2pc_particp_ack
 {
-  int particp_index;		/* Index of the acknowledging participant   */
+  int particp_index;		/* Index of the acknowledging participant */
 };
 
 /* Log the time of termination of transaction */
@@ -1755,11 +1776,11 @@ enum log_recvphase
 
 struct log_archives
 {
-  int vdes;			/* Last archived accessed        */
-  struct log_arv_header hdr;	/* The log archive header        */
+  int vdes;			/* Last archived accessed */
+  struct log_arv_header hdr;	/* The log archive header */
   int max_unav;			/* Max size of unavailable array */
-  int next_unav;		/* Last unavailable entry        */
-  int *unav_archives;		/* Unavailable archives          */
+  int next_unav;		/* Last unavailable entry */
+  int *unav_archives;		/* Unavailable archives */
 };
 
 #define LOG_ARCHIVES_INITIALIZER                     \
@@ -1847,10 +1868,10 @@ struct log_prior_lsa_info
 typedef struct log_global LOG_GLOBAL;
 struct log_global
 {
-  TRANTABLE trantable;		/* Transaction table           */
-  struct log_append_info append;	/* The log append info         */
+  TRANTABLE trantable;		/* Transaction table */
+  struct log_append_info append;	/* The log append info */
   LOG_PRIOR_LSA_INFO prior_info;
-  struct log_header hdr;	/* The log header              */
+  struct log_header hdr;	/* The log header */
   struct log_archives archive;	/* Current archive information */
   LOG_PAGEID run_nxchkpt_atpageid;
 #if defined(SERVER_MODE)
@@ -1861,7 +1882,7 @@ struct log_global
   DKNPAGES chkpt_every_npages;	/* How frequent a checkpoint
 				   should be taken ?
 				 */
-  LOG_RECVPHASE rcv_phase;	/* Phase of the recovery       */
+  LOG_RECVPHASE rcv_phase;	/* Phase of the recovery */
   LOG_LSA rcv_phase_lsa;	/* LSA of phase (e.g. Restart) */
 
 #if defined(SERVER_MODE)

@@ -37,16 +37,16 @@
   (logtb_is_active_mvccid (thread_p, (rec_header_p)->delid_chn.mvcc_del_id))
 
 #define MVCC_IS_REC_INSERTER_IN_SNAPSHOT(thread_p, rec_header_p, snapshot) \
-  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->mvcc_ins_id, snapshot))
+  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->mvcc_ins_id, (snapshot)))
 
 #define MVCC_IS_REC_DELETER_IN_SNAPSHOT(thread_p, rec_header_p, snapshot) \
-  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->delid_chn.mvcc_del_id, snapshot))
+  (mvcc_is_id_in_snapshot (thread_p, (rec_header_p)->delid_chn.mvcc_del_id, (snapshot)))
 
 #define MVCC_IS_REC_INSERTED_SINCE_MVCCID(rec_header_p, mvcc_id) \
-  (!mvcc_id_precedes ((rec_header_p)->mvcc_ins_id, mvcc_id))
+  (!mvcc_id_precedes ((rec_header_p)->mvcc_ins_id, (mvcc_id)))
 
 #define MVCC_IS_REC_DELETED_SINCE_MVCCID(rec_header_p, mvcc_id) \
-  (!mvcc_id_precedes ((rec_header_p)->delid_chn.mvcc_del_id, mvcc_id))
+  (!mvcc_id_precedes ((rec_header_p)->delid_chn.mvcc_del_id, (mvcc_id)))
 
 
 /* Used by mvcc_chain_satisfies_vacuum to avoid handling the same OID twice */
@@ -77,6 +77,7 @@ mvcc_is_id_in_snapshot (THREAD_ENTRY * thread_p, MVCCID mvcc_id,
 			MVCC_SNAPSHOT * snapshot)
 {
   unsigned int i;
+
   assert (snapshot != NULL);
 
   if (mvcc_id_precedes (mvcc_id, snapshot->lowest_active_mvccid))
@@ -258,6 +259,7 @@ mvcc_satisfies_delete (THREAD_ENTRY * thread_p, MVCC_REC_HEADER * rec_header)
 	  /* Record was inserted and is visible for all transactions */
 	  return DELETE_RECORD_CAN_DELETE;
 	}
+
       if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header))
 	{
 	  /* Record is only visible to current transaction and can be safely
@@ -328,8 +330,8 @@ mvcc_satisfies_dirty (THREAD_ENTRY * thread_p,
 {
   assert (rec_header != NULL && snapshot != NULL);
 
-  snapshot->lowest_active_mvccid = snapshot->highest_completed_mvccid =
-    MVCCID_NULL;
+  snapshot->lowest_active_mvccid = MVCCID_NULL;
+  snapshot->highest_completed_mvccid = MVCCID_NULL;
 
   if (!MVCC_IS_FLAG_SET (rec_header, OR_MVCC_FLAG_VALID_DELID))
     {

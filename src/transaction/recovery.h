@@ -233,7 +233,7 @@ struct log_rcv
 
 struct rvfun
 {
-  LOG_RCVINDEX recv_index;	/* For verification   */
+  LOG_RCVINDEX recv_index;	/* For verification */
   const char *recv_string;
   int (*undofun) (THREAD_ENTRY * thread_p, LOG_RCV * logrcv);
   int (*redofun) (THREAD_ENTRY * thread_p, LOG_RCV * logrcv);
@@ -248,24 +248,23 @@ extern const char *rv_rcvindex_string (LOG_RCVINDEX rcvindex);
 extern void rv_check_rvfuns (void);
 #endif /* CUBRID_DEBUG */
 
-#define RCV_IS_LOGICAL_LOG(vpid, idx)                       \
-          ( (((vpid)->volid == NULL_VOLID)                  \
-             || ((vpid)->pageid == NULL_PAGEID)            \
-             || ((idx) == RVBT_KEYVAL_INS_LFRECORD_KEYINS) \
-             || ((idx) == RVBT_KEYVAL_INS_LFRECORD_OIDINS) \
-             || ((idx) == RVBT_KEYVAL_INS)                 \
-             || ((idx) == RVBT_KEYVAL_DEL)                 \
-             || ((idx) == RVBT_KEYVAL_DEL_LFRECORD_DEL)    \
-             || ((idx) == RVBT_KEYVAL_DEL_NDRECORD_UPD)    \
-             || ((idx) == RVBT_KEYVAL_DEL_NDHEADER_UPD)    \
-             || ((idx) == RVBT_KEYVAL_DEL_OID_TRUNCATE)	   \
-	     || ((idx) == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID)	\
-	     || ((idx) == RVBT_KEYVAL_DEL_RECORD_MVCC_DELID)	\
-	     || ((idx) == RVBT_KEYVAL_MVCC_INS)	\
-	     || ((idx) == RVBT_KEYVAL_MVCC_INS_LFRECORD_KEYINS)	\
-	     || ((idx) == RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS)	\
-	     || ((idx) == RVBT_MVCC_INCREMENTS_UPD)   \
-	     || ((idx) == RVBT_MVCC_NOTIFY_VACUUM)   \
-) ? true : false )
+#define RCV_IS_LOGICAL_LOG(vpid, idx) \
+  ((((vpid)->volid == NULL_VOLID) \
+    || ((vpid)->pageid == NULL_PAGEID) \
+    || ((idx) == RVBT_KEYVAL_INS_LFRECORD_KEYINS) \
+    || ((idx) == RVBT_KEYVAL_INS_LFRECORD_OIDINS) \
+    || ((idx) == RVBT_KEYVAL_INS) \
+    || ((idx) == RVBT_KEYVAL_DEL) \
+    || ((idx) == RVBT_KEYVAL_DEL_LFRECORD_DEL) \
+    || ((idx) == RVBT_KEYVAL_DEL_NDRECORD_UPD) \
+    || ((idx) == RVBT_KEYVAL_DEL_NDHEADER_UPD) \
+    || ((idx) == RVBT_KEYVAL_DEL_OID_TRUNCATE) \
+    || ((idx) == RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID) \
+    || ((idx) == RVBT_KEYVAL_DEL_RECORD_MVCC_DELID) \
+    || ((idx) == RVBT_KEYVAL_MVCC_INS) \
+    || ((idx) == RVBT_KEYVAL_MVCC_INS_LFRECORD_KEYINS) \
+    || ((idx) == RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS) \
+    || ((idx) == RVBT_MVCC_INCREMENTS_UPD) \
+    || ((idx) == RVBT_MVCC_NOTIFY_VACUUM)) ? true : false)
 
 #endif /* _RECOVERY_H_ */

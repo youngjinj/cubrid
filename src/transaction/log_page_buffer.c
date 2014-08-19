@@ -3159,6 +3159,7 @@ prior_lsa_copy_redo_crumbs_to_node (LOG_PRIOR_NODE * node,
 
   /* Safe guard: either num_crumbs is 0 or crumbs array is not NULL */
   assert (num_crumbs == 0 || crumbs != NULL);
+
   for (i = 0, length = 0; i < num_crumbs; i++)
     {
       length += crumbs[i].length;
@@ -3380,6 +3381,9 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
     case LOG_DIFF_UNDOREDO_DATA:
       node->data_header_length = sizeof (struct log_undoredo);
       break;
+    default:
+      assert (0);
+      break;
     }
 
   /* Allocate memory for data header */
@@ -3398,17 +3402,18 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
     case LOG_MVCC_UNDO_DATA:
       /* Use undo data from MVCC undo structure */
       mvcc_undo_p = (struct log_mvcc_undo *) node->data_header;
+
       /* Must also fill vacuum info */
       vacuum_info_p = &mvcc_undo_p->vacuum_info;
+
       /* Must also fill MVCCID field */
       mvccid_p = &mvcc_undo_p->mvccid;
 
       /* Fall through */
     case LOG_UNDO_DATA:
-      undo_p =
-	node->log_header.type ==
-	LOG_UNDO_DATA ? (struct log_undo *) node->data_header : &mvcc_undo_p->
-	undo;
+      undo_p = (node->log_header.type == LOG_UNDO_DATA
+		? (struct log_undo *) node->data_header : &mvcc_undo_p->undo);
+
       data_header_ulength_p = &undo_p->length;
       log_data_p = &undo_p->data;
       break;
@@ -3416,15 +3421,15 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
     case LOG_MVCC_REDO_DATA:
       /* Use redo data from MVCC redo structure */
       mvcc_redo_p = (struct log_mvcc_redo *) node->data_header;
+
       /* Must also fill MVCCID field */
       mvccid_p = &mvcc_redo_p->mvccid;
 
       /* Fall through */
     case LOG_REDO_DATA:
-      redo_p =
-	node->log_header.type ==
-	LOG_REDO_DATA ? (struct log_redo *) node->data_header : &mvcc_redo_p->
-	redo;
+      redo_p = (node->log_header.type == LOG_REDO_DATA
+		? (struct log_redo *) node->data_header : &mvcc_redo_p->redo);
+
       data_header_rlength_p = &redo_p->length;
       log_data_p = &redo_p->data;
       break;
@@ -3433,22 +3438,28 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
     case LOG_MVCC_DIFF_UNDOREDO_DATA:
       /* Use undoredo data from MVCC undoredo structure */
       mvcc_undoredo_p = (struct log_mvcc_undoredo *) node->data_header;
+
       /* Must also fill vacuum info */
       vacuum_info_p = &mvcc_undoredo_p->vacuum_info;
+
       /* Must also fill MVCCID field */
       mvccid_p = &mvcc_undoredo_p->mvccid;
 
       /* Fall through */
     case LOG_UNDOREDO_DATA:
     case LOG_DIFF_UNDOREDO_DATA:
-      undoredo_p =
-	(node->log_header.type == LOG_UNDOREDO_DATA
-	 || node->log_header.type ==
-	 LOG_DIFF_UNDOREDO_DATA) ? (struct log_undoredo *) node->
-	data_header : &mvcc_undoredo_p->undoredo;
+      undoredo_p = ((node->log_header.type == LOG_UNDOREDO_DATA
+		     || node->log_header.type == LOG_DIFF_UNDOREDO_DATA)
+		    ? (struct log_undoredo *) node->data_header
+		    : &mvcc_undoredo_p->undoredo);
+
       data_header_ulength_p = &undoredo_p->ulength;
       data_header_rlength_p = &undoredo_p->rlength;
       log_data_p = &undoredo_p->data;
+      break;
+
+    default:
+      assert (0);
       break;
     }
 
@@ -3456,7 +3467,6 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
   assert (log_data_p != NULL);
 
   log_data_p->rcvindex = rcvindex;
-
   log_data_p->offset = addr->offset;
 
   if (addr->pgptr != NULL)
@@ -3474,6 +3484,7 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
   if (mvccid_p != NULL)
     {
       /* Fill mvccid field */
+
       /* Must be an MVCC operation */
       assert (LOG_IS_MVCC_OP_RECORD_TYPE (node->log_header.type));
       assert (LOG_IS_MVCC_OPERATION (rcvindex));
@@ -3505,6 +3516,7 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
   if (vacuum_info_p != NULL)
     {
       /* Fill vacuum info field */
+
       /* Must be an UNDO or UNDOREDO MVCC operation */
       assert (node->log_header.type == LOG_MVCC_UNDO_DATA
 	      || node->log_header.type == LOG_MVCC_UNDOREDO_DATA
@@ -3530,6 +3542,7 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
   if (is_undo_zip)
     {
       assert (has_undo && (data_header_ulength_p != NULL));
+
       *data_header_ulength_p = MAKE_ZIP_LEN (zip_undo->data_length);
       error_code =
 	prior_lsa_copy_undo_data_to_node (node, zip_undo->data_length,
@@ -3538,13 +3551,16 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
   else if (has_undo)
     {
       assert (data_header_ulength_p != NULL);
+
       *data_header_ulength_p = ulength;
-      error_code =
-	prior_lsa_copy_undo_crumbs_to_node (node, num_ucrumbs, ucrumbs);
+      error_code = prior_lsa_copy_undo_crumbs_to_node (node, num_ucrumbs,
+						       ucrumbs);
     }
+
   if (is_redo_zip)
     {
       assert (has_redo && (data_header_rlength_p != NULL));
+
       *data_header_rlength_p = MAKE_ZIP_LEN (zip_redo->data_length);
       error_code =
 	prior_lsa_copy_redo_data_to_node (node, zip_redo->data_length,
@@ -3553,9 +3569,10 @@ prior_lsa_gen_undoredo_record_from_crumbs (THREAD_ENTRY * thread_p,
   else if (has_redo)
     {
       *data_header_rlength_p = rlength;
-      error_code =
-	prior_lsa_copy_redo_crumbs_to_node (node, num_rcrumbs, rcrumbs);
+      error_code = prior_lsa_copy_redo_crumbs_to_node (node, num_rcrumbs,
+						       rcrumbs);
     }
+
   if (error_code != NO_ERROR)
     {
       goto error;
@@ -4240,10 +4257,12 @@ prior_lsa_next_record_internal (THREAD_ENTRY * thread_p,
 	  /* Read for mvcc_undoredo structure */
 	  assert (node->log_header.type == LOG_MVCC_UNDOREDO_DATA
 		  || node->log_header.type == LOG_MVCC_DIFF_UNDOREDO_DATA);
+
 	  mvcc_undoredo = (struct log_mvcc_undoredo *) node->data_header;
 	  vacuum_info = &mvcc_undoredo->vacuum_info;
 	  mvccid = mvcc_undoredo->mvccid;
 	}
+
       /* Save previous mvcc operation log lsa to vacuum info */
       LSA_COPY (&vacuum_info->prev_mvcc_op_log_lsa,
 		&log_Gl.hdr.mvcc_op_log_lsa);
@@ -4280,6 +4299,7 @@ prior_lsa_next_record_internal (THREAD_ENTRY * thread_p,
 	      /* A newer MVCCID was found */
 	      log_Gl.hdr.last_block_newest_mvccid = mvccid;
 	    }
+
 	  if (log_Gl.hdr.last_block_oldest_mvccid == MVCCID_NULL
 	      || mvcc_id_precedes (mvccid,
 				   log_Gl.hdr.last_block_oldest_mvccid))
@@ -4288,6 +4308,7 @@ prior_lsa_next_record_internal (THREAD_ENTRY * thread_p,
 	      log_Gl.hdr.last_block_oldest_mvccid = mvccid;
 	    }
 	}
+
       /* Replace last MVCC deleted/updated log record */
       LSA_COPY (&log_Gl.hdr.mvcc_op_log_lsa, &start_lsa);
     }
@@ -4319,7 +4340,10 @@ prior_lsa_next_record_internal (THREAD_ENTRY * thread_p,
       log_Gl.prior_info.prior_list_tail = node;
     }
 
-  log_Gl.prior_info.list_size += (sizeof (LOG_PRIOR_NODE) + node->data_header_length + node->ulength + node->rlength);	/* bytes */
+  /* list_size in bytes */
+  log_Gl.prior_info.list_size += (sizeof (LOG_PRIOR_NODE)
+				  + node->data_header_length
+				  + node->ulength + node->rlength);
 
   if (with_lock == LOG_PRIOR_LSA_WITHOUT_LOCK)
     {
@@ -12751,11 +12775,11 @@ logpb_dump_log_header (FILE * outfp)
 	   (long long int) log_Gl.hdr.mvcc_op_log_lsa.pageid,
 	   log_Gl.hdr.mvcc_op_log_lsa.offset);
 
-  fprintf (outfp, "\tLast block oldest MVCCID : (%d)\n",
-	   (int) log_Gl.hdr.last_block_oldest_mvccid);
+  fprintf (outfp, "\tLast block oldest MVCCID : (%lld)\n",
+	   (long long int) log_Gl.hdr.last_block_oldest_mvccid);
 
-  fprintf (outfp, "\tLast block newest MVCCID : (%d)\n",
-	   (int) log_Gl.hdr.last_block_newest_mvccid);
+  fprintf (outfp, "\tLast block newest MVCCID : (%lld)\n",
+	   (long long int) log_Gl.hdr.last_block_newest_mvccid);
 }
 
 /*

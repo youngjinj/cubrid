@@ -234,21 +234,23 @@ static THREAD_DAEMON *thread_Daemons = NULL;
   do \
     { \
       if (!(cond)) \
-	{ \
-	  thread_rc_track_dump_all (thread_p, outfp); \
-	} \
+        { \
+          thread_rc_track_dump_all (thread_p, outfp); \
+        } \
       assert_release (cond); \
-    } while (0)
+    } \
+  while (0)
 
 #define THREAD_RC_TRACK_METER_ASSERT(thread_p, outfp, meter, cond) \
   do \
     { \
       if (!(cond)) \
-	{ \
-	  thread_rc_track_meter_dump (thread_p, outfp, meter); \
-	} \
+        { \
+          thread_rc_track_meter_dump (thread_p, outfp, meter); \
+        } \
       assert_release (cond); \
-    } while (0)
+    } \
+  while (0)
 
 static int css_initialize_sync_object (void);
 static int thread_wakeup_internal (THREAD_ENTRY * thread_p, int resume_reason,
@@ -2998,7 +3000,7 @@ bool
 thread_is_vacuum_worker (THREAD_ENTRY * thread_p)
 {
   return (thread_get_vacuum_thread_entry (thread_p) != NULL);
-};
+}
 
 /*
  * thread_set_vacuum_worker_state () - Set whether the vacuum worker is in
@@ -3098,7 +3100,7 @@ thread_get_vacuum_worker_count (void)
 {
   assert (thread_is_manager_initialized ());
   return thread_Vacuum_worker_count;
-};
+}
 
 static THREAD_RET_T THREAD_CALLING_CONVENTION
 thread_session_control_thread (void *arg_p)

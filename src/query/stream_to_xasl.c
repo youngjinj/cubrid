@@ -2482,7 +2482,8 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
 
   ptr = or_unpack_int (ptr, &xasl->cat_fetched);
 
-  ptr = or_unpack_int (ptr, (int *) &xasl->scan_op_type);
+  ptr = or_unpack_int (ptr, &tmp);
+  xasl->scan_op_type = tmp;
 
   ptr = or_unpack_int (ptr, &xasl->upd_del_class_cnt);
 
@@ -3815,7 +3816,7 @@ stx_build_update_class_info (THREAD_ENTRY * thread_p, char *ptr,
   assert ((upd_cls->no_lob_attrs && upd_cls->lob_attr_ids)
 	  || (!upd_cls->no_lob_attrs && !upd_cls->lob_attr_ids));
 
-/* no_extra_assign_reev & mvcc_extra_assign_reev */
+  /* no_extra_assign_reev & mvcc_extra_assign_reev */
   ptr = or_unpack_int (ptr, &upd_cls->no_extra_assign_reev);
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0 || upd_cls->no_extra_assign_reev == 0)

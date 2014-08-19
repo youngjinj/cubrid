@@ -2439,58 +2439,39 @@ spage_check_mvcc_updatable (THREAD_ENTRY * thread_p, PAGE_PTR page_p,
 
   /* Make sure that there is enough space for the record and the slot */
   if (slot_id > page_header_p->num_slots)
-
     {				/* defense code */
-
       assert (false);
-
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
-
       return SP_ERROR;
-
     }
 
-
   if (slot_id == page_header_p->num_slots)
-
     {
-
       /* check whether is enough space for old record, new record and the slot */
       insert_record_space += sizeof (SPAGE_SLOT);
-
       space += sizeof (SPAGE_SLOT);
-
 
       if (spage_has_enough_total_space (thread_p, page_p, page_header_p,
 					space) == false)
 	{
 	  return SP_DOESNT_FIT;
 	}
-
       else if (spage_has_enough_contiguous_space (page_p, page_header_p,
 						  insert_record_space) ==
 	       false)
 	{
 	  return SP_ERROR;
 	}
-
     }
-
   else
-
     {
-
       /* We already know that there is total space available since the slot is
          reused and the space was checked above */
-      if (spage_has_enough_contiguous_space
-	  (page_p, page_header_p, insert_record_space) == false)
-
+      if (spage_has_enough_contiguous_space (page_p, page_header_p,
+					     insert_record_space) == false)
 	{
-
 	  return SP_ERROR;
-
 	}
-
     }
 
   return SP_SUCCESS;
@@ -5140,8 +5121,6 @@ spage_get_page_header_info (PAGE_PTR page_p, DB_VALUE ** page_header_info)
 	       page_header_p->anchor_type);
   DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_ALIGNMENT],
 	       page_header_p->alignment);
-  DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
-	       page_header_p->total_free);
   DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_TOTAL_FREE],
 	       page_header_p->total_free);
   DB_MAKE_INT (page_header_info[HEAP_PAGE_INFO_CONT_FREE],

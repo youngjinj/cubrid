@@ -8135,19 +8135,18 @@ update_check_for_constraints (PARSER_CONTEXT * parser, int *has_unique,
 	    }
 	  else
 	    {
-	      if (*has_unique == 0 && sm_att_unique_constrained (class_obj,
-								 att->info.
-								 name.
-								 original))
+	      if (*has_unique == 0
+		  && sm_att_unique_constrained (class_obj,
+						att->info.name.original))
 		{
 		  *has_unique = 1;
 		  spec->info.spec.flag |= PT_SPEC_FLAG_HAS_UNIQUE;
 		}
-	      if (*has_unique == 0 &&
-		  sm_att_in_unique_filter_constraint_predicate (class_obj,
-								att->info.
-								name.
-								original))
+	      if (*has_unique == 0
+		  && sm_att_in_unique_filter_constraint_predicate (class_obj,
+								   att->info.
+								   name.
+								   original))
 		{
 		  *has_unique = 1;
 		  spec->info.spec.flag |= PT_SPEC_FLAG_HAS_UNIQUE;

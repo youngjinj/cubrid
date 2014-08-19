@@ -3117,7 +3117,7 @@ xts_process_xasl_node (char *ptr, const XASL_NODE * xasl)
 
   ptr = or_pack_int (ptr, xasl->cat_fetched);
 
-  ptr = or_pack_int (ptr, xasl->scan_op_type);
+  ptr = or_pack_int (ptr, (int) xasl->scan_op_type);
 
   ptr = or_pack_int (ptr, xasl->upd_del_class_cnt);
 

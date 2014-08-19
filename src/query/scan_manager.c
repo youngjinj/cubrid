@@ -2889,13 +2889,6 @@ scan_init_scan_id (SCAN_ID * scan_id, bool mvcc_select_lock_needed,
   scan_id->scan_op_type = scan_op_type;
   scan_id->fixed = fixed;
 
-  /* DO NOT EVER, UNDER ANY CIRCUMSTANCES, LET A SCAN BE NON-FIXED.  YOU
-     WILL DIE A HIDEOUS DEATH, AND YOUR CHILDREN WILL BE SHUNNED FOR THE
-     REST OF THEIR LIVES.
-     YOU HAVE BEEN WARNED!!! */
-  /* NOTE: ONE CAN LET A SCAN BE NON-FIXED AND HIS CHILDREN WILL BE JUST FINE!
-   */
-
   scan_id->grouped = grouped;	/* is it grouped or single scan? */
   scan_id->qualified_block = false;
   scan_id->single_fetch = single_fetch;
@@ -3272,6 +3265,23 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   /* initialize INDEX_SCAN_ID structure */
   isidp = &scan_id->s.isid;
 
+  /* index information */
+  isidp->indx_info = indx_info;
+
+  /* init allocated fields */
+  isidp->bt_num_attrs = 0;
+  isidp->bt_attr_ids = NULL;
+  isidp->vstr_ids = NULL;
+  isidp->oid_list.oidp = NULL;
+  isidp->copy_buf = NULL;
+  isidp->copy_buf_len = 0;
+  isidp->key_vals = NULL;
+
+  isidp->indx_cov.type_list = NULL;
+  isidp->indx_cov.list_id = NULL;
+  isidp->indx_cov.tplrec = NULL;
+  isidp->indx_cov.lsid = NULL;
+
   /* index scan info */
   BTS = &isidp->bt_scan;
 
@@ -3288,19 +3298,6 @@ scan_open_index_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   pgbuf_unfix_and_init (thread_p, Root);
 
   BTREE_INIT_SCAN (BTS);
-
-  /* index information */
-  isidp->indx_info = indx_info;
-
-  /* init allocated fields */
-  isidp->bt_num_attrs = 0;
-  isidp->bt_attr_ids = NULL;
-  isidp->vstr_ids = NULL;
-  isidp->oid_list.oidp = NULL;
-  isidp->copy_buf = NULL;
-  isidp->copy_buf_len = 0;
-
-  isidp->key_vals = NULL;
 
   /* initialize key limits */
   if (scan_init_index_key_limit (thread_p, isidp, &indx_info->key_info, vd) !=
@@ -3643,8 +3640,12 @@ scan_open_index_key_info_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
   isidp->oid_list.oidp = NULL;
   isidp->copy_buf = NULL;
   isidp->copy_buf_len = 0;
-
   isidp->key_vals = NULL;
+
+  isidp->indx_cov.type_list = NULL;
+  isidp->indx_cov.list_id = NULL;
+  isidp->indx_cov.tplrec = NULL;
+  isidp->indx_cov.lsid = NULL;
 
   /* initialize key limits */
   if (scan_init_index_key_limit (thread_p, isidp, &indx_info->key_info, vd) !=
@@ -4190,6 +4191,7 @@ int
 scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 {
   int ret = NO_ERROR;
+  int i;
   HEAP_SCAN_ID *hsidp = NULL;
   INDX_SCAN_ID *isidp = NULL;
   INDEX_NODE_SCAN_ID *insidp = NULL;
@@ -4202,7 +4204,6 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
   switch (scan_id->type)
     {
-
     case S_HEAP_SCAN:
     case S_HEAP_SCAN_RECORD_INFO:
       hsidp = &scan_id->s.hsid;
@@ -4241,7 +4242,6 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 	}
       if (hsidp->caches_inited != true)
 	{
-	  int i;
 	  hsidp->pred_attrs.attr_cache->num_values = -1;
 	  ret = heap_attrinfo_start (thread_p, &hsidp->cls_oid,
 				     hsidp->pred_attrs.num_attrs,
@@ -4305,7 +4305,6 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       break;
 
     case S_INDX_SCAN:
-
       isidp = &scan_id->s.isid;
       if (mvcc_Enabled && !OID_IS_ROOTOID (&isidp->cls_oid))
 	{
@@ -4406,7 +4405,6 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
       if (!isidp->caches_inited)
 	{
-	  int i;
 	  for (i = 0; i < BTREE_KEY_INFO_COUNT; i++)
 	    {
 	      DB_MAKE_NULL (isidp->key_info_values[i]);
@@ -4424,7 +4422,6 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
 
       if (!insidp->caches_inited)
 	{
-	  int i;
 	  for (i = 0; i < BTREE_NODE_INFO_COUNT; i++)
 	    {
 	      DB_MAKE_NULL (insidp->node_info_values[i]);
@@ -4435,7 +4432,6 @@ scan_start_scan (THREAD_ENTRY * thread_p, SCAN_ID * scan_id)
       break;
 
     case S_LIST_SCAN:
-
       llsidp = &scan_id->s.llsid;
       /* open list file scan */
       if (qfile_open_list_scan (llsidp->list_id, &llsidp->lsid) != NO_ERROR)
@@ -6174,6 +6170,7 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 	{
 	  mvcc_sel_reev_data.range_filter = NULL;
 	}
+
       if (isidp->key_pred.regu_list != NULL)
 	{
 	  scan_init_filter_info (&key_filter, &isidp->key_pred,
@@ -6188,6 +6185,7 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 	{
 	  mvcc_sel_reev_data.key_filter = NULL;
 	}
+
       if (data_filter->scan_pred->regu_list != NULL)
 	{
 	  mvcc_sel_reev_data.data_filter = data_filter;
@@ -6196,6 +6194,7 @@ scan_next_index_lookup_heap (THREAD_ENTRY * thread_p, SCAN_ID * scan_id,
 	{
 	  mvcc_sel_reev_data.data_filter = NULL;
 	}
+
       mvcc_sel_reev_data.qualification = &scan_id->qualification;
       sp_scan = heap_mvcc_get_version_for_delete (thread_p,
 						  isidp->curr_oidp,

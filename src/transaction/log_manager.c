@@ -2472,12 +2472,12 @@ log_append_redo_crumbs (THREAD_ENTRY * thread_p, LOG_RCVINDEX rcvindex,
    * the transaction is not in the process of been aborted, we do nothing.
    * 
    * NOTE: One exception for this case is the recovery of vacuum data buffer.
-   *	   Because the buffer may not have been empty during the crash, the
-   *	   data in the buffer cannot be recovered using log records. It is
-   *	   however rebuilt in a similar manner as it is built online (by
-   *	   processing undo and undoredo log records of MVCC operations).
-   *	   At the end of redo recovery phase, the recovered data is consumed
-   *	   and added to vacuum data, operations that needs logging.
+   *       Because the buffer may not have been empty during the crash, the
+   *       data in the buffer cannot be recovered using log records. It is
+   *       however rebuilt in a similar manner as it is built online (by
+   *       processing undo and undoredo log records of MVCC operations).
+   *       At the end of redo recovery phase, the recovered data is consumed
+   *       and added to vacuum data, operations that needs logging.
    */
   if (tdes->topops.last < 0
       && !LOG_ISTRAN_ACTIVE (tdes) && !LOG_ISTRAN_ABORTED (tdes)
@@ -5707,7 +5707,8 @@ log_commit_local (THREAD_ENTRY * thread_p, LOG_TDES * tdes, bool retain_lock)
 	  /* This operation must be done before do_postpone because it stores
 	   * unique statistics for all B-trees and if an error occurs those
 	   * operations and all operations of current transaction must be rolled
-	   * back. */
+	   * back. 
+	   */
 	  logtb_complete_mvcc (thread_p, tdes, true);
 	}
 
@@ -7916,7 +7917,7 @@ log_dump_header (FILE * out_fp, struct log_header *log_header_p)
 	   "     Creation_time = %s"
 	   "     Release = %s, Compatibility_disk_version = %g,\n"
 	   "     Db_pagesize = %d, log_pagesize= %d, Shutdown = %d,\n"
-	   "     Next_trid = %d, Next_mvcc_id = %d , Num_avg_trans = %d, Num_avg_locks = %d,\n"
+	   "     Next_trid = %d, Next_mvcc_id = %lld, Num_avg_trans = %d, Num_avg_locks = %d,\n"
 	   "     Num_active_log_pages = %d, First_active_log_page = %lld,\n"
 	   "     Current_append = %lld|%d, Checkpoint = %lld|%d,\n",
 	   log_header_p->magic, (long long) offsetof (LOG_PAGE, area),
@@ -9688,28 +9689,26 @@ static void
 log_rollback (THREAD_ENTRY * thread_p, LOG_TDES * tdes,
 	      const LOG_LSA * upto_lsa_ptr)
 {
-  LOG_LSA prev_tranlsa;		/* Previous LSA                    */
-  LOG_LSA upto_lsa;		/* copy of upto_lsa_ptr contents   */
+  LOG_LSA prev_tranlsa;		/* Previous LSA */
+  LOG_LSA upto_lsa;		/* copy of upto_lsa_ptr contents */
   char log_pgbuf[IO_MAX_PAGE_SIZE + MAX_ALIGNMENT], *aligned_log_pgbuf;
-  LOG_PAGE *log_pgptr = NULL;	/* Log page pointer of LSA log
-				 * record
-				 */
+  LOG_PAGE *log_pgptr = NULL;	/* Log page pointer of LSA log record */
   LOG_LSA log_lsa;
-  LOG_RECORD_HEADER *log_rec = NULL;	/* The log record                 */
-  struct log_undoredo *undoredo = NULL;	/* An undoredo log record         */
+  LOG_RECORD_HEADER *log_rec = NULL;	/* The log record */
+  struct log_undoredo *undoredo = NULL;	/* An undoredo log record */
   struct log_mvcc_undoredo *mvcc_undoredo = NULL;	/* A MVCC undoredo log rec */
-  struct log_undo *undo = NULL;	/* An undo log record             */
-  struct log_mvcc_undo *mvcc_undo = NULL;	/* An undo log record        */
-  struct log_compensate *compensate = NULL;	/* A compensating log record      */
-  struct log_logical_compensate *logical_comp = NULL;	/* end of a logical undo     */
+  struct log_undo *undo = NULL;	/* An undo log record */
+  struct log_mvcc_undo *mvcc_undo = NULL;	/* An undo log record */
+  struct log_compensate *compensate = NULL;	/* A compensating log record */
+  struct log_logical_compensate *logical_comp = NULL;	/* end of a logical undo */
   struct log_topop_result *top_result = NULL;	/* Partial result from top system
 						 * operation
 						 */
-  LOG_RCV rcv;			/* Recovery structure             */
-  VPID rcv_vpid;		/* VPID of data to recover        */
-  LOG_RCVINDEX rcvindex;	/* Recovery index                 */
+  LOG_RCV rcv;			/* Recovery structure */
+  VPID rcv_vpid;		/* VPID of data to recover */
+  LOG_RCVINDEX rcvindex;	/* Recovery index */
   bool isdone;
-  int old_wait_msecs = 0;	/* Old transaction lock wait   */
+  int old_wait_msecs = 0;	/* Old transaction lock wait */
   LOG_ZIP *log_unzip_ptr = NULL;
   int data_header_size = 0;
   bool is_mvcc_op = false;

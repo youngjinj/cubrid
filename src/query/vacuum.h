@@ -21,8 +21,8 @@
  * vacuum.h - Vacuuming system (at Server).
  *
  */
-#ifndef _VACUUM_
-#define _VACUUM_
+#ifndef _VACUUM_H_
+#define _VACUUM_H_
 
 #include "dbtype.h"
 #include "thread.h"
@@ -59,6 +59,7 @@
 #define VACUUM_IS_ER_LOG_LEVEL_SET(er_log_level) \
   (mvcc_Enabled \
    && ((prm_get_integer_value (PRM_ID_ER_LOG_VACUUM) & (er_log_level)) != 0))
+
 #if defined(SERVER_MODE)
 #define vacuum_er_log(er_log_level, ...) \
   if (VACUUM_IS_ER_LOG_LEVEL_SET (er_log_level)) \
@@ -145,4 +146,4 @@ extern void vacuum_start_new_job (THREAD_ENTRY * thread_p,
 				  VACUUM_LOG_BLOCKID blockid);
 #endif /* SERVER_MODE */
 
-#endif /* _VACUUM_ */
+#endif /* _VACUUM_H_ */

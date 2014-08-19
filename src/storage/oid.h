@@ -46,21 +46,30 @@
 #endif /* !SERVER_MODE */
 
 #define SET_OID(dest_oid_ptr, vol_id, page_id, slot_id)  \
-  do {	\
+  do \
+    { \
       (dest_oid_ptr)->volid = vol_id; \
-      (dest_oid_ptr)->pageid = page_id;	\
-      (dest_oid_ptr)->slotid = slot_id;  \
-  }while(0)
+      (dest_oid_ptr)->pageid = page_id; \
+      (dest_oid_ptr)->slotid = slot_id; \
+    } \
+  while (0)
 
-#define COPY_OID(dest_oid_ptr, src_oid_ptr) do { \
-					     *(dest_oid_ptr)=*(src_oid_ptr);\
-					    } while (0)
+#define COPY_OID(dest_oid_ptr, src_oid_ptr) \
+  do \
+    { \
+      *(dest_oid_ptr) = *(src_oid_ptr); \
+    } \
+  while (0)
 
 #define SAFE_COPY_OID(dest_oid_ptr, src_oid_ptr) \
   if (src_oid_ptr) \
-    {*(dest_oid_ptr) = *(src_oid_ptr);} \
+    { \
+      *(dest_oid_ptr) = *(src_oid_ptr); \
+    } \
   else \
-    { OID_SET_NULL(dest_oid_ptr); }
+    { \
+      OID_SET_NULL (dest_oid_ptr); \
+    }
 
 #define OID_ISTEMP(oidp)        ((oidp)->pageid < NULL_PAGEID)
 #define OID_ISNULL(oidp)        ((oidp)->pageid == NULL_PAGEID)

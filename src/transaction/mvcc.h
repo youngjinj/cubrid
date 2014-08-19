@@ -29,47 +29,47 @@
 #include "storage_common.h"
 
 /* MVCC Header Macros */
-#define MVCC_GET_INSID(header)   \
+#define MVCC_GET_INSID(header) \
   ((header)->mvcc_ins_id)
 
-#define MVCC_SET_INSID(header, mvcc_id)   \
+#define MVCC_SET_INSID(header, mvcc_id) \
   ((header)->mvcc_ins_id = (mvcc_id))
 
-#define MVCC_GET_DELID(header)   \
+#define MVCC_GET_DELID(header) \
   ((header)->delid_chn.mvcc_del_id)
 
-#define MVCC_SET_DELID(header, mvcc_id)   \
+#define MVCC_SET_DELID(header, mvcc_id) \
   ((header)->delid_chn.mvcc_del_id = (mvcc_id))
 
-#define MVCC_SET_NEXT_VERSION(header, next_oid_version)  \
+#define MVCC_SET_NEXT_VERSION(header, next_oid_version) \
   ((header)->next_version = *(next_oid_version))
 
-#define MVCC_GET_NEXT_VERSION(header)  \
+#define MVCC_GET_NEXT_VERSION(header) \
   ((header)->next_version)
 
-#define MVCC_GET_REPID(header)	\
+#define MVCC_GET_REPID(header) \
   ((header)->repid)
 
-#define MVCC_SET_REPID(header, rep_id)	\
+#define MVCC_SET_REPID(header, rep_id) \
   ((header)->repid = (rep_id))
 
-#define MVCC_GET_CHN(header)  \
+#define MVCC_GET_CHN(header) \
   ((header)->delid_chn.chn)
 
-#define MVCC_SET_CHN(header, chn_)  \
-  ((header)->delid_chn.chn = chn_)
+#define MVCC_SET_CHN(header, chn_) \
+  ((header)->delid_chn.chn = (chn_))
 
 #define MVCC_GET_FLAG(header) \
   ((header)->mvcc_flag)
 
 #define MVCC_SET_FLAG(header, flag) \
-  ((header)->mvcc_flag = flag)
+  ((header)->mvcc_flag = (flag))
 
 #define MVCC_IS_ANY_FLAG_SET(rec_header_p) \
   (MVCC_IS_FLAG_SET (rec_header_p,  \
 		     OR_MVCC_FLAG_VALID_INSID \
-		     | OR_MVCC_FLAG_VALID_DELID  \
-		     | OR_MVCC_FLAG_VALID_NEXT_VERSION	\
+		     | OR_MVCC_FLAG_VALID_DELID \
+		     | OR_MVCC_FLAG_VALID_NEXT_VERSION \
 		     | OR_MVCC_FLAG_VALID_LONG_CHN))
 
 #define MVCC_IS_FLAG_SET(rec_header_p, flags) \
@@ -89,8 +89,8 @@
 #define MVCC_CLEAR_ALL_FLAG_BITS(rec_header_p) \
   (MVCC_CLEAR_FLAG_BITS (rec_header_p,	\
 			 OR_MVCC_FLAG_VALID_INSID \
-			 | OR_MVCC_FLAG_VALID_DELID  \
-			 | OR_MVCC_FLAG_VALID_NEXT_VERSION	\
+			 | OR_MVCC_FLAG_VALID_DELID \
+			 | OR_MVCC_FLAG_VALID_NEXT_VERSION \
 			 | OR_MVCC_FLAG_VALID_LONG_CHN))
 
 #define MVCC_CLEAR_FLAG_BITS(rec_header_p, flag) \
@@ -114,11 +114,11 @@
   (logtb_is_current_mvccid (thread_p, (rec_header_p)->delid_chn.mvcc_del_id))
 
 /* Check if record was inserted by the transaction identified by mvcc_id */
-#define MVCC_IS_REC_INSERTED_BY(rec_header_p, mvcc_id)	\
+#define MVCC_IS_REC_INSERTED_BY(rec_header_p, mvcc_id) \
   ((rec_header_p)->mvcc_ins_id == mvcc_id)
 
 /* Check if record was deleted by the transaction identified by mvcc_id */
-#define MVCC_IS_REC_DELETED_BY(rec_header_p, mvcc_id)	\
+#define MVCC_IS_REC_DELETED_BY(rec_header_p, mvcc_id) \
   ((rec_header_p)->delid_chn.mvcc_del_id == mvcc_id)
 
 /* Check if record has a valid chn. This is true when:
@@ -127,31 +127,35 @@
  *     deleted is not necessary. Other transactions cannot delete it, while
  *     current transaction would remove it completely.
  */
-#define MVCC_SHOULD_TEST_CHN(thread_p, rec_header_p)	    \
+#define MVCC_SHOULD_TEST_CHN(thread_p, rec_header_p) \
   (!MVCC_IS_FLAG_SET (rec_header_p, OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_VALID_DELID) \
     || MVCC_IS_REC_INSERTED_BY_ME (thread_p, rec_header_p))
 
 #define MVCC_SET_SNAPSHOT_DATA(snapshot, fnc, low_act_mvccid, \
 			       high_comp_mvccid, act_ids, cnt_act_ids, \
 			       is_valid) \
-  do { \
-  (snapshot)->snapshot_fnc = fnc; \
-  (snapshot)->lowest_active_mvccid = low_act_mvccid; \
-  (snapshot)->highest_completed_mvccid = high_comp_mvccid; \
-  (snapshot)->active_ids = act_ids; \
-  (snapshot)->cnt_active_ids = cnt_act_ids; \
-  (snapshot)->valid = is_valid;	\
-    } while (0)
+  do \
+    { \
+      (snapshot)->snapshot_fnc = fnc; \
+      (snapshot)->lowest_active_mvccid = low_act_mvccid; \
+      (snapshot)->highest_completed_mvccid = high_comp_mvccid; \
+      (snapshot)->active_ids = act_ids; \
+      (snapshot)->cnt_active_ids = cnt_act_ids; \
+      (snapshot)->valid = is_valid; \
+    } \
+  while (0)
 
 /* clear MVCC snapshot data - do not free active_ids since they are reused */
 #define MVCC_CLEAR_SNAPSHOT_DATA(snapshot) \
-  do { \
-    (snapshot)->snapshot_fnc = NULL; \
-    (snapshot)->lowest_active_mvccid = MVCCID_NULL; \
-    (snapshot)->highest_completed_mvccid = MVCCID_NULL; \
-    (snapshot)->cnt_active_ids = 0; \
-    (snapshot)->valid = false;	\
-  } while (0)
+  do \
+    { \
+      (snapshot)->snapshot_fnc = NULL; \
+      (snapshot)->lowest_active_mvccid = MVCCID_NULL; \
+      (snapshot)->highest_completed_mvccid = MVCCID_NULL; \
+      (snapshot)->cnt_active_ids = 0; \
+      (snapshot)->valid = false; \
+    } \
+  while (0)
 
 typedef struct mvcc_snapshot MVCC_SNAPSHOT;
 

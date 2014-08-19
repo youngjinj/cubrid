@@ -317,7 +317,7 @@ struct lorecdes
 
 #define DISK_VOLPURPOSE DB_VOLPURPOSE
 
-/* Types ans defines of transaction management */
+/* Types and defines of transaction management */
 
 typedef int TRANID;		/* Transaction identifier      */
 
@@ -336,18 +336,23 @@ typedef int TRANID;		/* Transaction identifier      */
 #define MVCCID_IS_EQUAL(id1,id2)	  ((id1) == (id2))
 
 /* advance MVCC ID */
-#define MVCCID_FORWARD(id)	\
-  do { \
-    (id)++; \
-    if ((id) < MVCCID_FIRST) \
-      (id) = MVCCID_FIRST; \
-    } while(0)
+#define MVCCID_FORWARD(id) \
+  do \
+    { \
+      (id)++; \
+      if ((id) < MVCCID_FIRST) \
+        (id) = MVCCID_FIRST; \
+    } \
+  while (0)
 
 /* back up MVCC ID */
-#define MVCCID_BACKWARD(id)	\
-  do { \
-    (id)--; \
-    } while ((id) < MVCCID_FIRST)
+#define MVCCID_BACKWARD(id) \
+  do \
+    { \
+      (id)--; \
+    } \
+  while ((id) < MVCCID_FIRST)
+
 
 #define COMPOSITE_LOCK(scan_op_type)	(scan_op_type != S_SELECT)
 #define READONLY_SCAN(scan_op_type)	(scan_op_type == S_SELECT)

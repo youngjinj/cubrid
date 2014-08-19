@@ -812,6 +812,7 @@ locator_lock (MOP mop, LC_OBJTYPE isclass, LOCK lock, bool retain_lock)
     {
       is_prefetch = false;
     }
+
   if (locator_fetch (oid, chn, lock, retain_lock, class_oid, class_chn,
 		     is_prefetch, &fetch_area) != NO_ERROR)
     {
@@ -4269,6 +4270,7 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 	       * 1. when operation is LC_FLUSH_UPDATE_PRUNE.
 	       * 2. MVCC implementation of LC_FLUSH_UPDATE.
 	       */
+
 	      /* TODO: Must investigate what happens with MVCC and pruning */
 	      if (error_code != ER_LC_PARTIALLY_FAILED_TO_FLUSH
 		  || obj->error_code == NO_ERROR)
@@ -4277,6 +4279,7 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 		    {
 		      assert (obj->operation == LC_FLUSH_UPDATE
 			      || obj->operation == LC_FLUSH_UPDATE_PRUNE);
+
 		      /* Check if object OID has changed */
 		      if ((!OID_ISNULL (&obj->updated_oid)
 			   && !OID_EQ (WS_OID (mop_toid->mop),
@@ -4288,6 +4291,7 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 			  MOP new_mop;
 			  MOP new_class_mop =
 			    ws_mop (&obj->class_oid, sm_Root_class_mop);
+
 			  if (new_class_mop == NULL)
 			    {
 			      /* Error */
@@ -4373,11 +4377,15 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 		      /* Unexpected case */
 		      assert (false);
 		    }
+
 		  /* Do not return in case of error. Allow the allocated
-		   * memory to be freed first */
+		   * memory to be freed first 
+		   */
 		}
 	    }
+
 	  next_mop_toid = mop_toid->next;
+
 	  /*
 	   * Set mop to NULL before freeing the structure, so that it does not
 	   * become a GC root for this mop..
@@ -4394,7 +4402,8 @@ locator_mflush_force (LOCATOR_MFLUSH_CACHE * mflush)
 	   * needed because in MVCC every update in _db_class produces new
 	   * OID. However, we assume that this is a temporary solution. The
 	   * correct one must integrate _db_partiton class in catalog classes
-	   * structure and unlink it from each partition schema */
+	   * structure and unlink it from each partition schema 
+	   */
 	  for (i = 0; error_code == NO_ERROR && i < mflush->mobjs->num_objs;
 	       i++)
 	    {

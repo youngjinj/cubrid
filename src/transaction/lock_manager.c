@@ -66,96 +66,98 @@ extern int lock_Comp[13][13];
 
 #if defined (SERVER_MODE)
 /* object lock hash function */
-#define LK_OBJ_LOCK_HASH(oid)    \
-  ((OID_ISTEMP(oid)) ? (unsigned int)(-((oid)->pageid) % lk_Gl.obj_hash_size) :\
-                       lock_get_hash_value(oid))
+#define LK_OBJ_LOCK_HASH(oid) \
+  ((OID_ISTEMP (oid)) \
+   ? (unsigned int) (-((oid)->pageid) % lk_Gl.obj_hash_size) \
+   : lock_get_hash_value (oid))
 
 /* thread is lock-waiting ? */
-#define LK_IS_LOCKWAIT_THREAD(thrd)                             \
-        ((thrd)->lockwait != NULL                               \
-         && (thrd)->lockwait_state == (int)LOCK_SUSPENDED)
+#define LK_IS_LOCKWAIT_THREAD(thrd) \
+  ((thrd)->lockwait != NULL \
+   && (thrd)->lockwait_state == (int) LOCK_SUSPENDED)
 
 /* transaction wait for only some msecs ? */
-#define LK_CAN_TIMEOUT(msecs)    ((msecs) != LK_INFINITE_WAIT)
+#define LK_CAN_TIMEOUT(msecs) ((msecs) != LK_INFINITE_WAIT)
 
 /* is younger transaction ? */
 #define LK_ISYOUNGER(young_tranid, old_tranid) (young_tranid > old_tranid)
 
 /* Defines for printing lock activity messages */
-#define LK_MSG_LOCK_HELPER(entry, msgnum)                               \
+#define LK_MSG_LOCK_HELPER(entry, msgnum) \
   fprintf(stdout, \
       msgcat_message (MSGCAT_CATALOG_CUBRID, MSGCAT_SET_LOCK, msgnum)), \
-      (entry)->tran_index, LOCK_TO_LOCKMODE_STRING((entry)->granted_mode),\
-      (entry)->res_head->oid->volid, (entry)->res_head->oid->pageid,    \
-      (entry)->oid->slotid);
+      (entry)->tran_index, LOCK_TO_LOCKMODE_STRING((entry)->granted_mode), \
+      (entry)->res_head->oid->volid, (entry)->res_head->oid->pageid, \
+      (entry)->oid->slotid)
 
-#define LK_MSG_LOCK_ACQUIRED(entry)                                     \
+#define LK_MSG_LOCK_ACQUIRED(entry) \
   LK_MSG_LOCK_HELPER(entry, MSGCAT_LK_OID_LOCK_ACQUIRED)
 
-#define LK_MSG_LOCK_CONVERTED(entry)                                    \
+#define LK_MSG_LOCK_CONVERTED(entry) \
   LK_MSG_LOCK_HELPER(entry, MSGCAT_LK_OID_LOCK_CONVERTED)
 
-#define LK_MSG_LOCK_WAITFOR(entry)                                      \
+#define LK_MSG_LOCK_WAITFOR(entry) \
   LK_MSG_LOCK_HELPER(entry, MSGCAT_LK_OID_LOCK_WAITFOR)
 
-#define LK_MSG_LOCK_RELEASE(entry)                                      \
+#define LK_MSG_LOCK_RELEASE(entry) \
   LK_MSG_LOCK_HELPER(entry, MSGCAT_LK_OID_LOCK_RELEASE)
 
-#define LK_MSG_LOCK_DEMOTE(entry)                                       \
+#define LK_MSG_LOCK_DEMOTE(entry) \
   LK_MSG_LOCK_HELPER(entry, MSGCAT_LK_OID_LOCK_DEMOTE)
 
-#define RECORD_LOCK_ACQUISITION_HISTORY(entry_ptr, history, lock)       \
-  do                                                                    \
-  {                                                                     \
-    (history)->req_mode = (lock); \
-    (history)->next = NULL; \
-    (history)->prev = (entry_ptr)->recent; \
-    /* append it to end of list */ \
-    if ((entry_ptr)->recent == NULL)                                    \
-      {                                                                 \
-      (entry_ptr)->history = (history); \
-      (entry_ptr)->recent = (history); \
+#define RECORD_LOCK_ACQUISITION_HISTORY(entry_ptr, history, lock) \
+  do \
+    { \
+      (history)->req_mode = (lock); \
+      (history)->next = NULL; \
+      (history)->prev = (entry_ptr)->recent; \
+      /* append it to end of list */ \
+      if ((entry_ptr)->recent == NULL) \
+        { \
+          (entry_ptr)->history = (history); \
+          (entry_ptr)->recent = (history); \
+        } \
+      else \
+        { \
+          (entry_ptr)->recent->next = (history); \
+          (entry_ptr)->recent = (history); \
+        } \
     } \
-    else                                                                \
-      {                                                                 \
-      (entry_ptr)->recent->next = (history); \
-      (entry_ptr)->recent = (history); \
-    } \
-  }                                                                     \
   while (0)
 
 #define NEED_LOCK_ACQUISITION_HISTORY(isolation, entry_ptr) \
   ((isolation) == TRAN_READ_COMMITTED)
 
-#define EXPAND_WAIT_FOR_ARRAY_IF_NEEDED()                               \
-  do                                                                    \
-  {                                                                     \
-    if (nwaits == max_waits)                                            \
-      {                                                                 \
-	if (wait_for == wait_for_buf)                                   \
-	  {                                                             \
-	    t = (int *) malloc (sizeof (int) * max_waits * 2);          \
-	    if (t != NULL)                                              \
-	      {                                                         \
-		memcpy (t, wait_for, sizeof (int) * max_waits);    \
-              }                                                         \
-          }                                                             \
-	else                                                            \
-	  {                                                             \
-	    t = (int *) realloc (wait_for, sizeof (int) * max_waits * 2);\
-          }                                                             \
-	if (t != NULL)                                                  \
-	  {                                                             \
-            wait_for = t;                                               \
-            max_waits *= 2;                                             \
-          }                                                             \
-	else                                                            \
-	  {                                                             \
-            goto set_error;                                             \
-          }                                                             \
-      }                                                                 \
-  }                                                                     \
+#define EXPAND_WAIT_FOR_ARRAY_IF_NEEDED() \
+  do \
+    { \
+      if (nwaits == max_waits) \
+        { \
+          if (wait_for == wait_for_buf) \
+            { \
+              t = (int *) malloc (sizeof (int) * max_waits * 2); \
+              if (t != NULL) \
+                { \
+                  memcpy (t, wait_for, sizeof (int) * max_waits); \
+                } \
+            } \
+          else \
+            { \
+              t = (int *) realloc (wait_for, sizeof (int) * max_waits * 2); \
+            } \
+          if (t != NULL) \
+            { \
+              wait_for = t; \
+              max_waits *= 2; \
+            } \
+          else \
+            { \
+              goto set_error; \
+            } \
+        } \
+    } \
   while (0)
+
 #endif /* SERVER_MODE */
 
 #define SET_SCANID_BIT(s, i)    (s[i/8] |= (1 << (i%8)))

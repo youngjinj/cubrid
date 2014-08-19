@@ -2175,6 +2175,7 @@ locator_return_object_assign (THREAD_ENTRY * thread_p,
 	  && assign->recdes.length > 0)
 	{
 	  MVCCID mvcc_insid;
+
 	  /* When object is updated to a new version (and to a new OID) the
 	   * client caches a new mop and creates an MVCC link between old
 	   * version and new version. If the new version is created by another
@@ -2183,6 +2184,7 @@ locator_return_object_assign (THREAD_ENTRY * thread_p,
 	   * transaction, it may be aborted, and the MVCC link will have to
 	   * be invalidated. To do so, the client must have this information.
 	   */
+
 	  OR_GET_MVCC_INSERT_ID (assign->recdes.data,
 				 OR_GET_MVCC_FLAG (assign->recdes.data),
 				 &mvcc_insid);
@@ -2512,6 +2514,7 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
 	  error_code = ER_FAILED;
 	  goto error;
 	}
+
       if ((-nxobj.recdes.length) > copyarea_length)
 	{
 	  copyarea_length =
@@ -6146,7 +6149,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		  && mvcc_reev_data->type == REEV_DATA_UPDDEL)
 		{
 		  /* The new recdes can be changed during reevaluation. That's
-		   * because new recdes fields may refer fields of old recdes */
+		   * because new recdes fields may refer fields of old recdes 
+		   */
 		  mvcc_reev_data->upddel_reev_data->new_recdes = recdes;
 		}
 
@@ -6180,12 +6184,14 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		  if (er_errid () == ER_HEAP_NODATA_NEWADDRESS)
 		    {
 		      is_update_inplace = true;
+
 		      /* The object is a new instance, that is only the address (no
 		       * content) is known by the heap manager. This is a normal
 		       * behaviour and, if we have an index, we need to add the
 		       * object to the index later. Because the following processing
 		       * can remove this error, we save it here in
-		       * no_data_new_address */
+		       * no_data_new_address 
+		       */
 		      no_data_new_address = true;
 		      er_clear ();
 		    }
@@ -6298,12 +6304,14 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	      else if (er_errid () == ER_HEAP_NODATA_NEWADDRESS)
 		{
 		  er_clear ();
+
 		  /* The object is a new instance, that is only the address (no
 		   * content) is known by the heap manager. This is a normal
 		   * behaviour and, if we have an index, we need to add the
 		   * object to the index later. Because the following processing
 		   * can remove this error, we save it here in
-		   * no_data_new_address */
+		   * no_data_new_address 
+		   */
 		  no_data_new_address = true;
 		}
 	      else
@@ -6512,7 +6520,8 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	}
 
       /* in non-MVCC or when we update in place then update indexes and then
-       * heap */
+       * heap 
+       */
       if (is_update_inplace)
 	{
 	  if (heap_update (thread_p, hfid, class_oid, oid, recdes, NULL,
@@ -6755,6 +6764,7 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
 	heap_get_with_class_oid (thread_p, &class_oid, oid, &copy_recdes,
 				 scan_cache, COPY);
     }
+
   if (scan_code != S_SUCCESS)
     {
       assert (er_errid () != NO_ERROR);
@@ -6912,6 +6922,7 @@ locator_delete_force_internal (THREAD_ENTRY * thread_p, HFID * hfid,
 		}
 	      deleted = true;
 	    }
+
 	  if (idx_action_flag == FOR_INSERT_OR_DELETE)
 	    {
 	      error_code =
@@ -7297,6 +7308,7 @@ locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 	      goto error;
 	    }
 	}
+
       for (s = 0; s < tdes->num_unique_btrees; s++)
 	{
 	  unique_stats = &tdes->tran_unique_stats[s];
@@ -7341,6 +7353,7 @@ locator_force_for_multi_update (THREAD_ENTRY * thread_p,
 		}
 	    }
 	}
+
       if (tdes->tran_unique_stats != NULL)
 	{
 	  free_and_init (tdes->tran_unique_stats);
@@ -7615,6 +7628,7 @@ error:
 
   /* The reevaluation at update phase of update is currently disabled */
   assert (error_code != ER_MVCC_NOT_SATISFIED_REEVALUATION);
+
   if (force_scancache != NULL)
     {
       locator_end_force_scan_cache (thread_p, force_scancache);
@@ -7755,6 +7769,7 @@ xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
     {
       local_has_index |= LC_FLAG_HAS_INDEX;
     }
+
   error_code = locator_update_force (thread_p, &hfid, class_oid,
 				     &unique_oid, NULL, NULL, false,
 				     &old_recdes, recdes, local_has_index,
@@ -7782,6 +7797,7 @@ xlocator_force_repl_update (THREAD_ENTRY * thread_p, BTID * btid,
   return error_code;
 
 error:
+
   /* The reevaluation at update phase of update is currently disabled */
   assert (error_code != ER_MVCC_NOT_SATISFIED_REEVALUATION);
 
@@ -8079,7 +8095,9 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
       else
 	{
 	  int has_index;
+
 	  assert (LC_IS_FLUSH_UPDATE (operation));
+
 	  /* MVCC snapshot no needed for now
 	   * scan_cache->mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
 	   */
@@ -8100,6 +8118,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid,
 				  pcontext, mvcc_reev_data,
 				  force_update_inplace);
 	}
+
       if (copyarea != NULL)
 	{
 	  locator_free_copy_area (copyarea);

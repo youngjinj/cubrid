@@ -2756,6 +2756,7 @@ update_logical_result (THREAD_ENTRY * thread_p, DB_LOGICAL ev_res,
 	    }
 	}
     }
+
   if (key_filter != NULL
       && prm_get_bool_value (PRM_ID_ORACLE_STYLE_EMPTY_STRING))
     {
@@ -2809,6 +2810,7 @@ update_logical_result (THREAD_ENTRY * thread_p, DB_LOGICAL ev_res,
 	    }
 	}
     }
+
   if (ev_res == V_ERROR)
     {
       return V_ERROR;
@@ -2926,13 +2928,11 @@ eval_set_last_version (THREAD_ENTRY * thread_p, OID * class_oid,
 		       HEAP_SCANCACHE * scan_cache,
 		       REGU_VARIABLE_LIST regu_list_last_version)
 {
-
   /* TO DO - add into a function */
   REGU_VARIABLE_LIST regup;
   RECDES mvcc_last_record;
   DB_VALUE *peek_dbval;
   OID mvcc_updated_oid;
-
 
   for (regup = regu_list_last_version; regup != NULL;
        regup = regu_list_last_version->next)
