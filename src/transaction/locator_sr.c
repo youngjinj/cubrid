@@ -6197,15 +6197,19 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 		    }
 		  else
 		    {
-		      if (er_errid () == ER_HEAP_UNKNOWN_OBJECT)
+		      error_code = er_errid ();
+		      if (error_code == ER_HEAP_UNKNOWN_OBJECT)
 			{
 			  er_log_debug (ARG_FILE_LINE,
 					"locator_update_force: "
 					"unknown oid ( %d|%d|%d )\n",
 					oid->pageid, oid->slotid, oid->volid);
 			}
+		      else if (error_code == NO_ERROR)
+			{
+			  error_code = ER_FAILED;
+			}
 
-		      error_code = ER_HEAP_UNKNOWN_OBJECT;
 		      goto error;
 		    }
 		}

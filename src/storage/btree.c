@@ -231,39 +231,108 @@ typedef enum
   BTREE_MERGE_SIZE,
 } BTREE_MERGE_STATUS;
 
-typedef enum
-{
-  KEY_INSOID_INSERT_AT_BEGINNING,	/* insert at the beginning of key buffer */
-  KEY_INSOID_REPLACE_FIRST_OID,	/* replace the first OID of key buffer */
-  KEY_INSOID_INSERT_DEFAULT	/* insert at end of normal key buffer,
-				 * insert with order in overflow OIDs
-				 */
-} KEY_INSOID_MODE;
+/* Redo recovery of insert structure and flags */
+#define BTREE_INSERT_RCV_FLAG_OID_INSERTED	0x8000
+#define BTREE_INSERT_RCV_FLAG_OVFL_CHANGED	0x4000
+#define BTREE_INSERT_RCV_FLAG_NEW_OVFLPG	0x2000
+#define BTREE_INSERT_RCV_FLAG_REC_TYPE		0x1000
+#define BTREE_INSERT_RCV_FLAG_INSOID_MODE	0x0C00
+#define BTREE_INSERT_RCV_FLAG_UNIQUE		0x0200
+#define BTREE_INSERT_RCV_FLAG_KEY_DOMAIN	0x0100
+
+/* Check flag bits are set */
+#define BTREE_INSERT_RCV_IS_OID_INSERTED(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_OID_INSERTED) != 0)
+#define BTREE_INSERT_RCV_IS_OVFL_CHANGED(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_OVFL_CHANGED) != 0)
+#define BTREE_INSERT_RCV_IS_NEW_OVFLPG(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_NEW_OVFLPG) != 0)
+#define BTREE_INSERT_RCV_IS_UNIQUE(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_UNIQUE) != 0)
+#define BTREE_INSERT_RCV_HAS_KEY_DOMAIN(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_KEY_DOMAIN) != 0)
+
+#define BTREE_INSERT_RCV_SET_FLAGS(recins, flags_) \
+  ((recins)->flags |= (flags_))
+
+/* Check record type */
+#define BTREE_INSERT_RCV_IS_RECORD_REGULAR(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_REC_TYPE) != 0)
+#define BTREE_INSERT_RCV_IS_RECORD_OVERFLOW(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_REC_TYPE) == 0)
+/* Set record type */
+#define BTREE_INSERT_RCV_SET_RECORD_REGULAR(recins) \
+  ((recins)->flags |= BTREE_INSERT_RCV_FLAG_REC_TYPE)
+#define BTREE_INSERT_RCV_SET_RECORD_OVERFLOW(recins) \
+  ((recins)->flags &= ~BTREE_INSERT_RCV_FLAG_REC_TYPE)
+
+/* Check insert OID mode */
+#define BTREE_INSERT_OID_MODE_AT_BEGINNING	0x0800
+#define BTREE_INSERT_OID_MODE_REPLACE_FIRST	0x0400
+#define BTREE_INSERT_OID_MODE_DEFAULT		0x0C00
+
+#define BTREE_INSERT_RCV_IS_INSMODE_AT_BEGINNING(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_INSOID_MODE) \
+   == BTREE_INSERT_OID_MODE_AT_BEGINNING)
+
+#define BTREE_INSERT_RCV_IS_INSMODE_REPLACE_FIRST(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_INSOID_MODE) \
+   == BTREE_INSERT_OID_MODE_REPLACE_FIRST)
+
+#define BTREE_INSERT_RCV_IS_INSMODE_DEFAULT(recins) \
+  (((recins)->flags & BTREE_INSERT_RCV_FLAG_INSOID_MODE) \
+   == BTREE_INSERT_OID_MODE_DEFAULT)
+
+/* Set insert OID mode */
+#define BTREE_INSERT_RCV_SET_INSMODE_AT_BEGINNING(recins) \
+  ((recins)->flags = \
+   (((recins)->flags & (~BTREE_INSERT_RCV_FLAG_INSOID_MODE)) \
+    | BTREE_INSERT_OID_MODE_AT_BEGINNING))
+
+#define BTREE_INSERT_RCV_SET_INSMODE_REPLACE_FIRST(recins) \
+  ((recins)->flags = \
+   (((recins)->flags & (~BTREE_INSERT_RCV_FLAG_INSOID_MODE)) \
+    | BTREE_INSERT_OID_MODE_REPLACE_FIRST))
+
+#define BTREE_INSERT_RCV_SET_INSMODE_DEFAULT(recins) \
+  ((recins)->flags = \
+   (((recins)->flags & (~BTREE_INSERT_RCV_FLAG_INSOID_MODE)) \
+    | BTREE_INSERT_OID_MODE_DEFAULT))
 
 typedef struct recins_struct RECINS_STRUCT;
 struct recins_struct
 {				/* Recovery leaf record oid insertion structure */
   OID class_oid;		/* class oid only in case of unique index */
   OID oid;			/* oid to be inserted to the record    */
-  LEAF_RECORD_TYPE rec_type;	/* Regular or Overflow Leaf Record  */
-  int oid_inserted;		/* oid inserted to the record ? */
-  int ovfl_changed;		/* next ovfl pageid changed ? */
-  int new_ovflpg;		/* A new overflow page ? */
-  int insoid_mode;		/* Key insert OID mode */
   VPID ovfl_vpid;		/* Next Overflow pageid  */
-  BTID btid;			/* Needed in MVCC */
+  INT16 flags;			/* Flags to describe different context of
+				 * recovered insert object:
+				 * - oid inserted
+				 * - is overflow changed
+				 * - is new overflow
+				 * - record type (regular or overflow)
+				 * - insert OID mode
+				 */
 };
 
-typedef struct rec_mvcc_delid_ins_struct REC_MVCC_DELID_INS_STRUCT;
-struct rec_mvcc_delid_ins_struct
-{
-#if !defined (NDEBUG)
-  BTID btid;			/* BTID is needed for record checker */
-#endif
-  int oid_offset;		/* oid offset in record */
-  bool is_unique;		/* is unique B-tree? */
-  bool is_overflow;		/* is overflow node? */
-};
+/* Redo recovery of insert delete MVCCID */
+#define BTREE_INSERT_DELID_RCV_FLAG_UNIQUE	0x80000000
+#define BTREE_INSERT_DELID_RCV_FLAG_OVERFLOW	0x40000000
+#define BTREE_INSERT_DELID_RCV_FLAG_KEY_DOMAIN	0x20000000
+
+#define BTREE_INSERT_DELID_RCV_FLAG_MASK	0xE0000000
+
+#define BTREE_INSERT_DELID_RCV_IS_UNIQUE(offset) \
+  (((offset) & BTREE_INSERT_DELID_RCV_FLAG_UNIQUE) != 0)
+#define BTREE_INSERT_DELID_RCV_IS_OVERFLOW(offset) \
+  (((offset) & BTREE_INSERT_DELID_RCV_FLAG_OVERFLOW) != 0)
+#define BTREE_INSERT_DELID_RCV_HAS_KEY_DOMAIN(offset) \
+  (((offset) & BTREE_INSERT_DELID_RCV_FLAG_KEY_DOMAIN) != 0)
+
+#define BTREE_INSERT_DELID_RCV_CLEAR_FLAGS(offset) \
+  ((offset) = (offset) & (~BTREE_INSERT_DELID_RCV_FLAG_MASK))
+
+#define BTID_DOMAIN_BUFFER_SIZE 64
 
 /* Offset of the fields in the Leaf/NonLeaf Record Recovery Log Data */
 #define OFFS1  0		/* Node Type Offset: Leaf/NonLeaf Information */
@@ -807,7 +876,7 @@ static int btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p,
 					   VPID * first_ovfl_vpid,
 					   MVCC_REC_HEADER *
 					   p_mvcc_rec_header,
-					   KEY_INSOID_MODE insoid_mode);
+					   INT16 insoid_mode);
 static int btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 					      BTID_INT * btid,
 					      PAGE_PTR page_ptr,
@@ -3420,6 +3489,7 @@ btree_start_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 			   VPID * next_ovfl_vpid,
 			   MVCC_REC_HEADER * p_mvcc_rec_header)
 {
+#define BTREE_START_OVERFLOW_PAGE_REDO_CRUMBS_MAX 3
   RECINS_STRUCT recins;		/* for recovery purposes */
   int ret = NO_ERROR;
   RECDES rec;
@@ -3427,6 +3497,13 @@ btree_start_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
   BTREE_OVERFLOW_HEADER ovf_header_info, *ovf_header = NULL;
   int oid_size = OR_OID_SIZE;
   LOG_RCVINDEX rcvindex;
+  LOG_DATA_ADDR addr;
+  LOG_CRUMB redo_crumbs[BTREE_START_OVERFLOW_PAGE_REDO_CRUMBS_MAX];
+  int n_redo_crumbs = 0;
+#if !defined (NDEBUG)
+  char domain_buf[BTID_DOMAIN_BUFFER_SIZE], *domain_ptr = NULL;
+  int domain_size = or_packed_domain_size (btid->key_type, 0);
+#endif
 
   ovf_header = &ovf_header_info;
 
@@ -3486,30 +3563,92 @@ btree_start_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 #endif
 
   /* log new overflow page changes for redo purposes */
-  recins.rec_type = LEAF_RECORD_OVERFLOW;
-  recins.oid_inserted = true;
+  recins.flags = 0;
+
+  /* Set record type */
+  BTREE_INSERT_RCV_SET_RECORD_OVERFLOW (&recins);
+
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_OID_INSERTED);
   recins.oid = *oid;
   if (BTREE_IS_UNIQUE (btid->unique_pk))
     {
+      BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_UNIQUE);
       COPY_OID (&recins.class_oid, class_oid);
     }
   else
     {
       OID_SET_NULL (&recins.class_oid);
     }
-  recins.ovfl_changed = true;
-  recins.new_ovflpg = true;
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_OVFL_CHANGED);
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_NEW_OVFLPG);
   recins.ovfl_vpid = *next_ovfl_vpid;
-  BTID_COPY (&(recins.btid), btid->sys_btid);
-  recins.insoid_mode = KEY_INSOID_INSERT_DEFAULT;
 
-  log_append_redo_data2 (thread_p, rcvindex,
-			 &btid->sys_btid->vfid, *new_page_ptr, -1,
-			 sizeof (RECINS_STRUCT), &recins);
+  BTREE_INSERT_RCV_SET_INSMODE_DEFAULT (&recins);
+
+#if !defined (NDEBUG)
+  if (domain_size > BTID_DOMAIN_BUFFER_SIZE)
+    {
+      domain_ptr = (char *) db_private_alloc (thread_p, domain_size);
+      if (domain_ptr == NULL)
+	{
+	  ret = ER_OUT_OF_VIRTUAL_MEMORY;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, domain_size);
+	  goto exit_on_error;
+	}
+    }
+  else
+    {
+      domain_ptr = domain_buf;
+    }
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_KEY_DOMAIN);
+#endif
+
+  /* Create redo crumbs */
+  redo_crumbs[n_redo_crumbs].length = sizeof (recins);
+  redo_crumbs[n_redo_crumbs++].data = &recins;
+
+  if (BTREE_IS_UNIQUE (btid->unique_pk))
+    {
+      /* Add top class OID to crumbs */
+      redo_crumbs[n_redo_crumbs].length = sizeof (btid->topclass_oid);
+      redo_crumbs[n_redo_crumbs++].data = &btid->topclass_oid;
+    }
+
+#if !defined (NDEBUG)
+  /* Pack and add domain to crumbs */
+  (void) or_pack_domain (domain_ptr, btid->key_type, 0, 0);
+  redo_crumbs[n_redo_crumbs].length = domain_size;
+  redo_crumbs[n_redo_crumbs++].data = domain_ptr;
+#endif
+
+  assert (n_redo_crumbs <= BTREE_START_OVERFLOW_PAGE_REDO_CRUMBS_MAX);
+
+  /* Initialized log data address */
+  addr.offset = -1;
+  addr.pgptr = *new_page_ptr;
+  addr.vfid = &btid->sys_btid->vfid;
+
+  log_append_redo_crumbs (thread_p, rcvindex, &addr, n_redo_crumbs,
+			  redo_crumbs);
+
+#if !defined (NDEBUG)
+  if (domain_ptr != NULL && domain_ptr != domain_buf)
+    {
+      db_private_free_and_init (thread_p, domain_ptr);
+    }
+#endif
 
   return ret;
 
 exit_on_error:
+
+#if !defined (NDEBUG)
+  if (domain_ptr != NULL && domain_ptr != domain_buf)
+    {
+      db_private_free_and_init (thread_p, domain_ptr);
+    }
+#endif
 
   return (ret == NO_ERROR
 	  && (ret = er_errid ()) == NO_ERROR) ? ER_FAILED : ret;
@@ -13339,8 +13478,10 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
 				OID * cls_oid, OID * oid, INT16 slot_id,
 				RECDES * rec, VPID * first_ovfl_vpid,
 				MVCC_REC_HEADER * p_mvcc_rec_header,
-				KEY_INSOID_MODE insoid_mode)
+				INT16 insoid_mode)
 {
+#define BTREE_INSERT_OID_INTO_LEAF_REDO_CRUMBS_MAX 3
+#define BTREE_INSERT_OID_INTO_LEAF_UNDO_CRUMBS_MAX 1
   int ret = NO_ERROR;
   int key_type = BTREE_NORMAL_KEY;
   char *rv_data, *rv_key = NULL;
@@ -13350,11 +13491,25 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
   MVCC_REC_HEADER saved_first_mvcc_rec_header, local_mvcc_header;
   LOG_RCVINDEX rcvindex;
   OID saved_first_oid, saved_first_class_oid;
+  LOG_DATA_ADDR addr;
+  LOG_CRUMB redo_crumbs[BTREE_INSERT_OID_INTO_LEAF_REDO_CRUMBS_MAX];
+  LOG_CRUMB undo_crumbs[BTREE_INSERT_OID_INTO_LEAF_UNDO_CRUMBS_MAX];
+  int n_redo_crumbs = 0, n_undo_crumbs = 0;
+#if !defined (NDEBUG)
+  char domain_buf[BTID_DOMAIN_BUFFER_SIZE], *domain_ptr = NULL;
+  int domain_size = or_packed_domain_size (btid->key_type, 0);
+#endif
 
   rv_data = PTR_ALIGN (rv_data_buf, BTREE_MAX_ALIGN);
 
-  recins.rec_type = LEAF_RECORD_REGULAR;
-  recins.oid_inserted = true;
+  /* Initialize log address data */
+  addr.pgptr = leaf_page;
+  addr.offset = slot_id;
+  addr.vfid = &btid->sys_btid->vfid;
+
+  recins.flags = 0;
+  BTREE_INSERT_RCV_SET_RECORD_REGULAR (&recins);
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_OID_INSERTED);
   COPY_OID (&recins.oid, oid);
 
   if (p_mvcc_rec_header != NULL)
@@ -13362,16 +13517,26 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
       assert ((mvcc_Enabled == true) &&
 	      (p_mvcc_rec_header->mvcc_flag & OR_MVCC_FLAG_VALID_INSID)
 	      && !(p_mvcc_rec_header->mvcc_flag & OR_MVCC_FLAG_VALID_DELID));
+
+      /* Now that we passed the assert check, in case insert MVCCID is all
+       * visible clear the flag for valid insert MVCCID to avoid storing it.
+       */
+      if (!MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
+	{
+	  /* Clear insert MVCCID flag */
+	  MVCC_CLEAR_FLAG_BITS (p_mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID);
+	}
     }
 
   if (BTREE_IS_UNIQUE (btid->unique_pk))
     {
+      BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_UNIQUE);
       COPY_OID (&recins.class_oid, cls_oid);
       /* in MVCC, in case of unique indexes, do not insert at end */
       assert (mvcc_Enabled == false
-	      || insoid_mode != KEY_INSOID_INSERT_DEFAULT);
+	      || insoid_mode != BTREE_INSERT_OID_MODE_DEFAULT);
 
-      if (insoid_mode == KEY_INSOID_REPLACE_FIRST_OID
+      if (insoid_mode == BTREE_INSERT_OID_MODE_REPLACE_FIRST
 	  || !VPID_ISNULL (first_ovfl_vpid))
 	{
 	  if (p_mvcc_rec_header == NULL)
@@ -13389,19 +13554,56 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
       OID_SET_NULL (&recins.class_oid);
     }
 
-  recins.ovfl_changed = false;
-  recins.new_ovflpg = false;
   recins.ovfl_vpid = *first_ovfl_vpid;
-  recins.insoid_mode = insoid_mode;
-  BTID_COPY (&(recins.btid), btid->sys_btid);
+
+  /* Set insert OID mode */
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, insoid_mode);
+
+#if !defined (NDEBUG)
+  if (domain_size > BTID_DOMAIN_BUFFER_SIZE)
+    {
+      domain_ptr = (char *) db_private_alloc (thread_p, domain_size);
+      if (domain_ptr == NULL)
+	{
+	  ret = ER_OUT_OF_VIRTUAL_MEMORY;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, domain_size);
+	  goto exit_on_error;
+	}
+    }
+  else
+    {
+      domain_ptr = domain_buf;
+    }
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_KEY_DOMAIN);
+#endif
+
+  /* Create redo crumbs */
+  redo_crumbs[n_redo_crumbs].length = sizeof (recins);
+  redo_crumbs[n_redo_crumbs++].data = &recins;
+
+  if (BTREE_IS_UNIQUE (btid->unique_pk))
+    {
+      /* Add top class OID */
+      redo_crumbs[n_redo_crumbs].length = sizeof (btid->topclass_oid);
+      redo_crumbs[n_redo_crumbs++].data = &btid->topclass_oid;
+    }
+
+#if !defined (NDEBUG)
+  /* Add key domain */
+  (void) or_pack_domain (domain_ptr, btid->key_type, 0, 0);
+  redo_crumbs[n_redo_crumbs].length = domain_size;
+  redo_crumbs[n_redo_crumbs++].data = domain_ptr;
+#endif
+
+  assert (n_redo_crumbs <= BTREE_INSERT_OID_INTO_LEAF_REDO_CRUMBS_MAX);
 
   if (btree_is_new_file (btid))
     {
       btree_rv_write_log_record (rv_data, &rv_data_len, rec, BTREE_LEAF_NODE);
 
-      log_append_undo_data2 (thread_p, RVBT_NDRECORD_UPD,
-			     &btid->sys_btid->vfid, leaf_page, slot_id,
-			     rv_data_len, rv_data);
+      log_append_undo_data (thread_p, RVBT_NDRECORD_UPD, &addr,
+			    rv_data_len, rv_data);
     }
   else
     {
@@ -13432,12 +13634,18 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	  return ret;
 	}
 
-      log_append_undoredo_data2 (thread_p, rcvindex, &btid->sys_btid->vfid,
-				 leaf_page, slot_id, rv_key_len,
-				 sizeof (RECINS_STRUCT), rv_key, &recins);
+      /* Create undo crumbs */
+      undo_crumbs[n_undo_crumbs].length = rv_key_len;
+      undo_crumbs[n_undo_crumbs++].data = rv_key;
+
+      assert (n_undo_crumbs <= BTREE_INSERT_OID_INTO_LEAF_UNDO_CRUMBS_MAX);
+
+      log_append_undoredo_crumbs (thread_p, rcvindex, &addr,
+				  n_undo_crumbs, n_redo_crumbs,
+				  undo_crumbs, redo_crumbs);
     }
 
-  if (insoid_mode != KEY_INSOID_INSERT_DEFAULT)
+  if (insoid_mode != BTREE_INSERT_OID_MODE_DEFAULT)
     {
       /* insert or replace in first position needed
        * save first oid that will be moved at the end of the buffer
@@ -13454,7 +13662,7 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
 				   p_mvcc_rec_header, NULL);
 
       /* prepare for insertion of saved first OID at the end of the buffer */
-      if (insoid_mode == KEY_INSOID_INSERT_AT_BEGINNING)
+      if (insoid_mode == BTREE_INSERT_OID_MODE_AT_BEGINNING)
 	{
 	  oid = &saved_first_oid;
 	  cls_oid = &saved_first_class_oid;
@@ -13462,7 +13670,7 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	}
     }
 
-  if (insoid_mode == KEY_INSOID_REPLACE_FIRST_OID)
+  if (insoid_mode == BTREE_INSERT_OID_MODE_REPLACE_FIRST)
     {
       /* nothing to do */
     }
@@ -13513,9 +13721,8 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
       /* TODO: Investigate if an MVCC log record type must be used for
        *       new files too.
        */
-      log_append_redo_data2 (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
-			     &btid->sys_btid->vfid, leaf_page, slot_id,
-			     sizeof (RECINS_STRUCT), &recins);
+      log_append_redo_crumbs (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
+			      &addr, n_redo_crumbs, redo_crumbs);
     }
 
   RANDOM_EXIT (thread_p);
@@ -13528,6 +13735,13 @@ end:
     {
       db_private_free_and_init (thread_p, rv_key);
     }
+
+#if !defined (NDEBUG)
+  if (domain_ptr != NULL && domain_ptr != domain_buf)
+    {
+      db_private_free_and_init (thread_p, domain_ptr);
+    }
+#endif
 
   return ret;
 
@@ -13559,6 +13773,8 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 				 MVCC_REC_HEADER * p_mvcc_rec_header,
 				 bool skip_overflow_undo)
 {
+#define BTREE_APPEND_OVF_OIDS_PAGE_REDO_CRUMBS_MAX 3
+#define BTREE_APPEND_OVF_OIDS_PAGE_UNDO_CRUMBS_MAX 1
   int ret = NO_ERROR;
   char *rv_data, *rv_key = NULL;
   int rv_data_len, rv_key_len;
@@ -13568,6 +13784,14 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
   PAGE_PTR ovfl_page = NULL;
   MVCC_REC_HEADER local_mvcc_header;
   LOG_RCVINDEX rcvindex;
+  LOG_DATA_ADDR addr;
+  LOG_CRUMB redo_crumbs[BTREE_APPEND_OVF_OIDS_PAGE_REDO_CRUMBS_MAX];
+  LOG_CRUMB undo_crumbs[BTREE_APPEND_OVF_OIDS_PAGE_UNDO_CRUMBS_MAX];
+  int n_redo_crumbs = 0, n_undo_crumbs = 0;
+#if !defined (NDEBUG)
+  char domain_buf[BTID_DOMAIN_BUFFER_SIZE], *domain_ptr = NULL;
+  int domain_size = or_packed_domain_size (btid->key_type, 0);
+#endif
 
   assert (mvcc_Enabled == true || !BTREE_IS_UNIQUE (btid->unique_pk));
   assert (mvcc_Enabled == true || !BTREE_IS_PRIMARY_KEY (btid->unique_pk));
@@ -13599,13 +13823,19 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 						btid->sys_btid);
 
   /* log the changes to the leaf node record for redo purposes */
-  recins.rec_type = LEAF_RECORD_REGULAR;
+  addr.offset = slot_id;
+  addr.pgptr = leaf_page;
+  addr.vfid = &btid->sys_btid->vfid;
+
+  recins.flags = 0;
+
+  BTREE_INSERT_RCV_SET_RECORD_REGULAR (&recins);
   recins.ovfl_vpid = ovfl_vpid;
-  recins.ovfl_changed = true;
-  recins.oid_inserted = false;
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_OVFL_CHANGED);
   OID_SET_NULL (&recins.oid);
   if (BTREE_IS_UNIQUE (btid->unique_pk))
     {
+      BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_UNIQUE);
       COPY_OID (&recins.class_oid, cls_oid);
     }
   else
@@ -13615,14 +13845,49 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
   if (VPID_ISNULL (first_ovfl_vpid))
     {
-      recins.new_ovflpg = true;
+      BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_NEW_OVFLPG);
+    }
+
+  BTREE_INSERT_RCV_SET_INSMODE_DEFAULT (&recins);
+
+#if !defined (NDEBUG)
+  if (domain_size > BTID_DOMAIN_BUFFER_SIZE)
+    {
+      domain_ptr = (char *) db_private_alloc (thread_p, domain_size);
+      if (domain_ptr == NULL)
+	{
+	  ret = ER_OUT_OF_VIRTUAL_MEMORY;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, domain_size);
+	  goto exit_on_error;
+	}
     }
   else
     {
-      recins.new_ovflpg = false;
+      domain_ptr = domain_buf;
     }
-  BTID_COPY (&(recins.btid), btid->sys_btid);
-  recins.insoid_mode = KEY_INSOID_INSERT_DEFAULT;
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_KEY_DOMAIN);
+#endif
+
+  /* Create redo crumbs */
+  redo_crumbs[n_redo_crumbs].length = sizeof (recins);
+  redo_crumbs[n_redo_crumbs++].data = &recins;
+
+  if (BTREE_IS_UNIQUE (btid->unique_pk))
+    {
+      /* Add top class OID */
+      redo_crumbs[n_redo_crumbs].length = sizeof (btid->topclass_oid);
+      redo_crumbs[n_redo_crumbs++].data = &btid->topclass_oid;
+    }
+
+#if !defined (NDEBUG)
+  /* Add key domain */
+  (void) or_pack_domain (domain_ptr, btid->key_type, 0, 0);
+  redo_crumbs[n_redo_crumbs].length = domain_size;
+  redo_crumbs[n_redo_crumbs++].data = domain_ptr;
+#endif
+
+  assert (n_redo_crumbs <= BTREE_APPEND_OVF_OIDS_PAGE_REDO_CRUMBS_MAX);
 
   if (btree_is_new_file (btid))
     {
@@ -13630,9 +13895,8 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 				 BTREE_LEAF_NODE);
       if (skip_overflow_undo == false)
 	{
-	  log_append_undo_data2 (thread_p, RVBT_NDRECORD_UPD,
-				 &btid->sys_btid->vfid, leaf_page,
-				 slot_id, rv_data_len, rv_data);
+	  log_append_undo_data (thread_p, RVBT_NDRECORD_UPD, &addr,
+				rv_data_len, rv_data);
 	}
     }
   else if (skip_overflow_undo)
@@ -13646,9 +13910,8 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	{
 	  rcvindex = RVBT_KEYVAL_INS_LFRECORD_OIDINS;
 	}
-      log_append_redo_data2 (thread_p, rcvindex, &btid->sys_btid->vfid,
-			     leaf_page, slot_id, sizeof (RECINS_STRUCT),
-			     &recins);
+      log_append_redo_crumbs (thread_p, rcvindex, &addr, n_redo_crumbs,
+			      redo_crumbs);
     }
   else
     {
@@ -13678,9 +13941,16 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	{
 	  goto exit_on_error;
 	}
-      log_append_undoredo_data2 (thread_p, rcvindex, &btid->sys_btid->vfid,
-				 leaf_page, slot_id, rv_key_len,
-				 sizeof (RECINS_STRUCT), rv_key, &recins);
+
+      /* Create undo crumbs */
+      undo_crumbs[n_undo_crumbs].length = rv_key_len;
+      undo_crumbs[n_undo_crumbs++].data = rv_key;
+
+      assert (n_undo_crumbs <= BTREE_APPEND_OVF_OIDS_PAGE_UNDO_CRUMBS_MAX);
+
+      log_append_undoredo_crumbs (thread_p, rcvindex, &addr,
+				  n_undo_crumbs, n_redo_crumbs,
+				  undo_crumbs, redo_crumbs);
     }
 
   if (VPID_ISNULL (first_ovfl_vpid))
@@ -13711,9 +13981,8 @@ btree_append_overflow_oids_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       /* TODO: Investigate if an MVCC log record type must be used for
        *       new files too.
        */
-      log_append_redo_data2 (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
-			     &btid->sys_btid->vfid, leaf_page,
-			     slot_id, sizeof (RECINS_STRUCT), &recins);
+      log_append_redo_crumbs (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
+			      &addr, n_redo_crumbs, redo_crumbs);
     }
 
   pgbuf_set_dirty (thread_p, ovfl_page, DONT_FREE);
@@ -13730,6 +13999,13 @@ end:
     {
       pgbuf_unfix_and_init (thread_p, ovfl_page);
     }
+
+#if !defined (NDEBUG)
+  if (domain_ptr != NULL && domain_ptr != domain_buf)
+    {
+      db_private_free_and_init (thread_p, domain_ptr);
+    }
+#endif
 
   return ret;
 
@@ -13759,6 +14035,8 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 				MVCC_REC_HEADER * p_mvcc_rec_header,
 				bool skip_overflow_undo)
 {
+#define BTREE_INSERT_OID_OVF_REDO_CRUMBS_MAX 3
+#define BTREE_INSERT_OID_OVF_UNDO_CRUMBS_MAX 1
   int ret = NO_ERROR;
   RECDES ovfl_rec;
   char ovfl_rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
@@ -13768,6 +14046,14 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
   RECINS_STRUCT recins;
   MVCC_REC_HEADER local_mvcc_header;
   LOG_RCVINDEX rcvindex;
+  LOG_DATA_ADDR addr;
+  LOG_CRUMB redo_crumbs[BTREE_INSERT_OID_OVF_REDO_CRUMBS_MAX];
+  LOG_CRUMB undo_crumbs[BTREE_INSERT_OID_OVF_UNDO_CRUMBS_MAX];
+  int n_redo_crumbs = 0, n_undo_crumbs = 0;
+#if !defined (NDEBUG)
+  char domain_buf[BTID_DOMAIN_BUFFER_SIZE], *domain_ptr = NULL;
+  int domain_size = or_packed_domain_size (btid->key_type, 0);
+#endif
 
   assert (mvcc_Enabled == true || !BTREE_IS_UNIQUE (btid->unique_pk));
   assert (mvcc_Enabled == true || !BTREE_IS_PRIMARY_KEY (btid->unique_pk));
@@ -13787,22 +14073,27 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
   assert (ovfl_rec.length % 4 == 0);
 
   /* log the new node record for redo purposes */
-  recins.rec_type = LEAF_RECORD_OVERFLOW;
-  recins.oid_inserted = true;
+  addr.offset = 1;
+  addr.pgptr = ovfl_page;
+  addr.vfid = &btid->sys_btid->vfid;
+
+  recins.flags = 0;
+
+  BTREE_INSERT_RCV_SET_RECORD_OVERFLOW (&recins);
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_OID_INSERTED);
   recins.oid = *oid;
   if (BTREE_IS_UNIQUE (btid->unique_pk))
     {
+      BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_UNIQUE);
       COPY_OID (&recins.class_oid, cls_oid);
     }
   else
     {
       OID_SET_NULL (&recins.class_oid);
     }
-  recins.ovfl_changed = false;
-  recins.new_ovflpg = false;
   VPID_SET_NULL (&recins.ovfl_vpid);
-  BTID_COPY (&(recins.btid), btid->sys_btid);
-  recins.insoid_mode = KEY_INSOID_INSERT_DEFAULT;
+
+  BTREE_INSERT_RCV_SET_INSMODE_DEFAULT (&recins);
 
   if (mvcc_Enabled == true)
     {
@@ -13816,15 +14107,53 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       BTREE_MVCC_SET_HEADER_FIXED_SIZE (p_mvcc_rec_header);
     }
 
+#if !defined (NDEBUG)
+  if (domain_size > BTID_DOMAIN_BUFFER_SIZE)
+    {
+      domain_ptr = (char *) db_private_alloc (thread_p, domain_size);
+      if (domain_ptr == NULL)
+	{
+	  ret = ER_OUT_OF_VIRTUAL_MEMORY;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, domain_size);
+	  goto exit_on_error;
+	}
+    }
+  else
+    {
+      domain_ptr = domain_buf;
+    }
+  BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_KEY_DOMAIN);
+#endif
+
+  /* Create redo crumbs */
+  redo_crumbs[n_redo_crumbs].length = sizeof (recins);
+  redo_crumbs[n_redo_crumbs++].data = &recins;
+
+  if (BTREE_IS_UNIQUE (btid->unique_pk))
+    {
+      /* Add top class OID */
+      redo_crumbs[n_redo_crumbs].length = sizeof (btid->topclass_oid);
+      redo_crumbs[n_redo_crumbs++].data = &btid->topclass_oid;
+    }
+
+#if !defined (NDEBUG)
+  /* Add key domain */
+  (void) or_pack_domain (domain_ptr, btid->key_type, 0, 0);
+  redo_crumbs[n_redo_crumbs].length = domain_size;
+  redo_crumbs[n_redo_crumbs++].data = domain_ptr;
+#endif
+
+  assert (n_redo_crumbs <= BTREE_INSERT_OID_OVF_REDO_CRUMBS_MAX);
+
   if (btree_is_new_file (btid))
     {
       btree_rv_write_log_record (rv_data, &rv_data_len, &ovfl_rec,
 				 BTREE_LEAF_NODE);
       if (skip_overflow_undo == false)
 	{
-	  log_append_undo_data2 (thread_p, RVBT_NDRECORD_UPD,
-				 &btid->sys_btid->vfid, ovfl_page, 1,
-				 rv_data_len, rv_data);
+	  log_append_undo_data (thread_p, RVBT_NDRECORD_UPD, &addr,
+				rv_data_len, rv_data);
 	}
     }
   else if (skip_overflow_undo)
@@ -13838,8 +14167,8 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	{
 	  rcvindex = RVBT_KEYVAL_INS_LFRECORD_OIDINS;
 	}
-      log_append_redo_data2 (thread_p, rcvindex, &btid->sys_btid->vfid,
-			     ovfl_page, 1, sizeof (RECINS_STRUCT), &recins);
+      log_append_redo_crumbs (thread_p, rcvindex, &addr, n_redo_crumbs,
+			      redo_crumbs);
     }
   else
     {
@@ -13870,10 +14199,15 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 	  goto exit_on_error;
 	}
 
-      log_append_undoredo_data2 (thread_p, rcvindex,
-				 &btid->sys_btid->vfid, ovfl_page, 1,
-				 rv_key_len, sizeof (RECINS_STRUCT),
-				 rv_key, &recins);
+      /* Create undo crumbs */
+      undo_crumbs[n_undo_crumbs].length = rv_key_len;
+      undo_crumbs[n_undo_crumbs++].data = rv_key;
+
+      assert (n_undo_crumbs <= BTREE_INSERT_OID_OVF_UNDO_CRUMBS_MAX);
+
+      log_append_undoredo_crumbs (thread_p, rcvindex, &addr,
+				  n_undo_crumbs, n_redo_crumbs,
+				  undo_crumbs, redo_crumbs);
     }
 
   if (btree_insert_oid_with_order (&ovfl_rec, oid, cls_oid,
@@ -13900,9 +14234,8 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       /* TODO: Investigate if an MVCC log record type must be used for
        *       new files too.
        */
-      log_append_redo_data2 (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
-			     &btid->sys_btid->vfid, ovfl_page, 1,
-			     sizeof (RECINS_STRUCT), &recins);
+      log_append_redo_crumbs (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
+			      &addr, n_redo_crumbs, redo_crumbs);
     }
 
   pgbuf_set_dirty (thread_p, ovfl_page, DONT_FREE);
@@ -13913,6 +14246,13 @@ end:
     {
       db_private_free_and_init (thread_p, rv_key);
     }
+
+#if !defined (NDEBUG)
+  if (domain_ptr != NULL && domain_ptr != domain_buf)
+    {
+      db_private_free_and_init (thread_p, domain_ptr);
+    }
+#endif
 
   return ret;
 
@@ -14016,7 +14356,7 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added_deleted,
   OID last_oid, last_class_oid;
   MVCC_SNAPSHOT mvcc_snapshot_dirty;
   int mvccid_size = 0;
-  KEY_INSOID_MODE insoid_mode = KEY_INSOID_INSERT_DEFAULT;
+  INT16 insoid_mode = BTREE_INSERT_OID_MODE_DEFAULT;
 #if 0
   OID saved_first_class_oid, saved_first_oid;
   MVCC_REC_HEADER saved_first_oid_mvcc_header;
@@ -14456,7 +14796,7 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added_deleted,
       if (mvcc_Enabled && BTREE_IS_UNIQUE (btid->unique_pk))
 	{
 	  /* insert in first position */
-	  insoid_mode = KEY_INSOID_INSERT_AT_BEGINNING;
+	  insoid_mode = BTREE_INSERT_OID_MODE_AT_BEGINNING;
 
 	  /* when insert in position 0, the minimum free space required in
 	   * page is OR_OID_SIZE + 2 * OR_MVCCID_SIZE + DISK_VPID_SIZE.
@@ -24380,7 +24720,8 @@ btree_rv_noderec_undo_insert (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 		 "BTREE_RECOVERY: btree_rv_noderec_undo_insert - "
 		 "page %d|%d, offset=%d, mvccid=%d",
 		 pgbuf_get_volume_id (recv->pgptr),
-		 pgbuf_get_page_id (recv->pgptr), recv->offset, recv->mvcc_id);
+		 pgbuf_get_page_id (recv->pgptr), recv->offset,
+		 recv->mvcc_id);
 
   slotid = recv->offset;
   assert (slotid > 0);
@@ -25328,29 +25669,58 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
   INT16 slotid = recv->offset;
   RECINS_STRUCT *recins = (RECINS_STRUCT *) recv->data;
   int sp_success;
+  int data_offset;
   char rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
   BTREE_OVERFLOW_HEADER ovf_header_info, *ovf_header = NULL;
   MVCC_REC_HEADER mvcc_rec_header, *p_mvcc_rec_header = NULL;
   bool is_unique = false;
+  bool ovfl_changed = false;
+  bool new_ovfl_page = false;
+  bool oid_inserted = false;
+  bool has_key_domain = false;
+  bool check_valid = false;
   BTID_INT btid_int;
 
-  if (!OID_ISNULL (&recins->class_oid))
+  is_unique = BTREE_INSERT_RCV_IS_UNIQUE (recins);
+  ovfl_changed = BTREE_INSERT_RCV_IS_OVFL_CHANGED (recins);
+  new_ovfl_page = BTREE_INSERT_RCV_IS_NEW_OVFLPG (recins);
+  oid_inserted = BTREE_INSERT_RCV_IS_OID_INSERTED (recins);
+  has_key_domain = BTREE_INSERT_RCV_HAS_KEY_DOMAIN (recins);
+
+  data_offset = sizeof (*recins);
+
+  btid_int.unique_pk = is_unique ? 1 : 0;
+  btid_int.key_type = NULL;
+  if (is_unique)
     {
-      is_unique = true;
+      /* Top class OID is packed */
+      COPY_OID (&btid_int.topclass_oid, (OID *) (recv->data + data_offset));
+      data_offset += sizeof (btid_int.topclass_oid);
     }
+  else
+    {
+      OID_SET_NULL (&btid_int.topclass_oid);
+    }
+
+#if !defined (NDEBUG)
+  if (has_key_domain)
+    {
+      (void) or_unpack_domain ((char *) recv->data + data_offset,
+			       &btid_int.key_type, NULL);
+      check_valid = true;
+    }
+#endif
 
   _er_log_debug (ARG_FILE_LINE,
 		 "BTREE_RECOVERY: btree_rv_leafrec_redo_insert_oid - "
 		 "page %d|%d, offset=%d, mvccid=%d, "
-		 "recins: ins_mode=%d, oid=%d|%d|%d, oid_inserted=%d, "
-		 "ovfl_changed=%d, ovfl_vpid=%d|%d, rec_type=%d",
+		 "recins: ins_mode=%d, oid=%d|%d|%d, flags=%d, "
+		 "ovfl_vpid=%d|%d.",
 		 pgbuf_get_volume_id (recv->pgptr),
 		 pgbuf_get_page_id (recv->pgptr), recv->offset, recv->mvcc_id,
-		 recins->insoid_mode, recins->oid.volid,
-		 recins->oid.pageid, recins->oid.slotid,
-		 recins->oid_inserted, recins->ovfl_changed,
-		 recins->ovfl_vpid.volid, recins->ovfl_vpid.pageid,
-		 recins->rec_type);
+		 recins->oid.volid, recins->oid.pageid, recins->oid.slotid,
+		 recins->flags, recins->ovfl_vpid.volid,
+		 recins->ovfl_vpid.pageid);
 
   if (mvcc_Enabled)
     {
@@ -25363,51 +25733,10 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	}
       p_mvcc_rec_header = &mvcc_rec_header;
 
-      if (recins->rec_type == LEAF_RECORD_OVERFLOW)
+      if (BTREE_INSERT_RCV_IS_RECORD_OVERFLOW (recins))
 	{
 	  /* fixed size when insert OID in unique btree */
 	  BTREE_MVCC_SET_HEADER_FIXED_SIZE (p_mvcc_rec_header);
-	}
-
-#if defined (NDEBUG)
-      if (is_unique)
-#else
-      /* On debug always get btid_int to check the record */
-      if (true)
-#endif
-	{
-	  VPID root_vpid;
-	  PAGE_PTR root = NULL;
-	  BTREE_ROOT_HEADER *root_header = NULL;
-
-	  root_vpid.pageid = recins->btid.root_pageid;
-	  root_vpid.volid = recins->btid.vfid.volid;
-	  /* unconditional latch since I'm the only active transaction */
-	  root = pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-			    PGBUF_UNCONDITIONAL_LATCH);
-	  if (root == NULL)
-	    {
-	      goto error;
-	    }
-
-	  (void) pgbuf_check_page_ptype (thread_p, root, PAGE_BTREE);
-
-	  root_header = btree_get_root_header (root);
-	  if (root_header == NULL)
-	    {
-	      pgbuf_unfix_and_init (thread_p, root);
-	      goto error;
-	    }
-
-	  btid_int.sys_btid = &(recins->btid);
-	  if (btree_glean_root_header_info (thread_p, root_header, &btid_int)
-	      != NO_ERROR)
-	    {
-	      pgbuf_unfix_and_init (thread_p, root);
-	      goto error;
-	    }
-
-	  pgbuf_unfix_and_init (thread_p, root);
 	}
     }
 
@@ -25416,7 +25745,7 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
   rec.area_size = DB_PAGESIZE;
   rec.data = PTR_ALIGN (rec_buf, BTREE_MAX_ALIGN);
 
-  if (recins->rec_type == LEAF_RECORD_REGULAR)
+  if (BTREE_INSERT_RCV_IS_RECORD_REGULAR (recins))
     {
       /* read the record */
       assert (slotid > 0);
@@ -25426,25 +25755,27 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	  goto error;
 	}
 
-#if !defined (NDEBUG)
-      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
-				       BTREE_LEAF_NODE, NULL);
-#endif
+      if (check_valid)
+	{
+	  /* Check record was valid before applying redo changes */
+	  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+					   BTREE_LEAF_NODE, NULL);
+	}
 
-      if (recins->oid_inserted == true)
+      if (oid_inserted)
 	{
 	  MVCC_REC_HEADER saved_first_mvcc_rec_header;
 	  OID saved_first_oid, saved_first_class_oid;
 	  OID *oid, *cls_oid;
 	  /* redo: btree_insert_oid_into_leaf_rec () */
 
-	  assert (recins->new_ovflpg == false);
-	  assert (recins->ovfl_changed == false);
+	  assert (new_ovfl_page == false);
+	  assert (ovfl_changed == false);
 
 	  oid = &(recins->oid);
 	  cls_oid = &(recins->class_oid);
 
-	  if (recins->insoid_mode != KEY_INSOID_INSERT_DEFAULT)
+	  if (!BTREE_INSERT_RCV_IS_INSMODE_DEFAULT (recins))
 	    {
 	      /* in MVCC, in case of unique indexes, do not insert at end */
 	      assert (mvcc_Enabled && is_unique);
@@ -25457,8 +25788,10 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 					   &recins->class_oid,
 					   p_mvcc_rec_header, NULL);
 
-	      /* prepare for insertion of saved first OID at the end of the buffer */
-	      if (recins->insoid_mode == KEY_INSOID_INSERT_AT_BEGINNING)
+	      /* prepare for insertion of saved first OID at the end of the
+	       * buffer.
+	       */
+	      if (BTREE_INSERT_RCV_IS_INSMODE_AT_BEGINNING (recins))
 		{
 		  oid = &saved_first_oid;
 		  cls_oid = &saved_first_class_oid;
@@ -25466,7 +25799,7 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 		}
 	    }
 
-	  if (recins->insoid_mode == KEY_INSOID_REPLACE_FIRST_OID)
+	  if (BTREE_INSERT_RCV_IS_INSMODE_REPLACE_FIRST (recins))
 	    {
 	      /* nothing to do */
 	    }
@@ -25487,7 +25820,7 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	    }
 	  else
 	    {
-	      assert (recins->oid_inserted == 1);
+	      assert (oid_inserted);
 	      btree_insert_oid_in_front_of_ovfl_vpid (&rec, oid, cls_oid,
 						      is_unique,
 						      &recins->ovfl_vpid,
@@ -25497,13 +25830,12 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
       else
 	{
 	  /* redo: btree_append_overflow_oids_page () */
-
-	  assert (recins->ovfl_changed == true);
+	  assert (ovfl_changed);
 	}
 
-      if (recins->ovfl_changed == true)
+      if (ovfl_changed)
 	{
-	  if (recins->new_ovflpg == true)
+	  if (new_ovfl_page)
 	    {
 	      btree_leaf_new_overflow_oids_vpid (&rec, &recins->ovfl_vpid,
 						 is_unique,
@@ -25515,10 +25847,11 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	    }
 	}
 
-#if !defined (NDEBUG)
-      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
-				       BTREE_LEAF_NODE, NULL);
-#endif
+      if (check_valid)
+	{
+	  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+					   BTREE_LEAF_NODE, NULL);
+	}
 
       assert (slotid > 0);
       sp_success = spage_update (thread_p, recv->pgptr, slotid, &rec);
@@ -25542,15 +25875,14 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	}
 #endif
 
-      assert (recins->oid_inserted == true);
+      assert (oid_inserted);
 
-      if (recins->new_ovflpg == true)
+      if (new_ovfl_page)
 	{
 	  /* redo: btree_start_overflow_page () */
 
-	  assert (recins->ovfl_changed == true);
-
-	  if (recins->ovfl_changed == true)
+	  assert (ovfl_changed);
+	  if (ovfl_changed)
 	    {
 	      ovf_header->next_vpid = recins->ovfl_vpid;
 	    }
@@ -25597,10 +25929,10 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	{
 	  /* redo: btree_insert_oid_overflow_page () */
 
-	  assert (recins->ovfl_changed == false);
+	  assert (ovfl_changed == false);
 	  assert (slotid == 1);
 
-	  if (recins->oid_inserted == true)
+	  if (oid_inserted)
 	    {
 	      /* read the record */
 	      assert (slotid > 0);
@@ -25614,10 +25946,11 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	      assert (rec.length >= OR_OID_SIZE);
 	      assert (rec.length % 4 == 0);
 
-#if !defined (NDEBUG)
-	      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
-					       BTREE_OVERFLOW_NODE, NULL);
-#endif
+	      if (check_valid)
+		{
+		  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+						   BTREE_OVERFLOW_NODE, NULL);
+		}
 
 	      if (btree_insert_oid_with_order
 		  (&rec, &recins->oid, &recins->class_oid, is_unique,
@@ -25627,10 +25960,11 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 		  goto error;
 		}
 
-#if !defined (NDEBUG)
-	      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
-					       BTREE_OVERFLOW_NODE, NULL);
-#endif
+	      if (check_valid)
+		{
+		  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+						   BTREE_OVERFLOW_NODE, NULL);
+		}
 
 	      assert (slotid > 0);
 	      sp_success = spage_update (thread_p, recv->pgptr, slotid, &rec);
@@ -25646,7 +25980,7 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 		}
 	    }
 
-	  if (recins->ovfl_changed == true)
+	  if (ovfl_changed)
 	    {
 	      ovf_header = btree_get_overflow_header (recv->pgptr);
 	      if (ovf_header == NULL)
@@ -25661,9 +25995,19 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 
   pgbuf_set_dirty (thread_p, recv->pgptr, DONT_FREE);
 
+  if (btid_int.key_type != NULL)
+    {
+      tp_domain_free (btid_int.key_type);
+    }
+
   return NO_ERROR;
 
 error:
+
+  if (btid_int.key_type != NULL)
+    {
+      tp_domain_free (btid_int.key_type);
+    }
 
   assert (er_errid () != NO_ERROR);
   return er_errid ();
@@ -25685,18 +26029,38 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
   char rec_buf[IO_MAX_PAGE_SIZE + BTREE_MAX_ALIGN];
   int oid_size = OR_OID_SIZE;
   int data_offset = 0, mvcc_delid_offset = 0;
-  REC_MVCC_DELID_INS_STRUCT *rec_mvcc_delid_ins;
+  int oid_offset = 0;
+  bool is_unique = false;
+  bool is_overflow = false;
+  bool has_key_domain = false;
+  bool check_valid = false;
   bool have_mvcc_fixed_size = false;
-#if !defined (NDEBUG)
   BTID_INT btid_int;
-#endif
+
+  btid_int.key_type = NULL;
 
   /* Read DELID insert recovery structure */
-  rec_mvcc_delid_ins = (REC_MVCC_DELID_INS_STRUCT *) recv->data;
-  data_offset += sizeof (*rec_mvcc_delid_ins);
+  oid_offset = *((int *) recv->data);
+  data_offset += sizeof (oid_offset);
 
-  /* Safe guard */
-  assert (data_offset == recv->length);
+  is_unique = BTREE_INSERT_DELID_RCV_IS_UNIQUE (oid_offset);
+  is_overflow = BTREE_INSERT_DELID_RCV_IS_OVERFLOW (oid_offset);
+  has_key_domain = BTREE_INSERT_DELID_RCV_HAS_KEY_DOMAIN (oid_offset);
+  BTREE_INSERT_DELID_RCV_CLEAR_FLAGS (oid_offset);
+
+#if !defined (NDEBUG)
+  if (has_key_domain)
+    {
+      (void) or_unpack_domain ((char *) (recv->data + data_offset),
+			       &btid_int.key_type, NULL);
+      btid_int.unique_pk = is_unique ? 1 : 0;
+      if (btid_int.key_type != NULL)
+	{
+	  /* If we have key domain available, we can check record validity */
+	  check_valid = true;
+	}
+    }
+#endif
 
   _er_log_debug (ARG_FILE_LINE,
 		 "BTREE_RECOVERY: btree_rv_redo_insert_mvcc_delid - "
@@ -25704,48 +26068,7 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 		 "rec_mvcc_delid_ins: is_ovf=%d, unique=%d, oid_offset=%d, ",
 		 pgbuf_get_volume_id (recv->pgptr),
 		 pgbuf_get_page_id (recv->pgptr), recv->offset, recv->mvcc_id,
-		 rec_mvcc_delid_ins->is_overflow,
-		 rec_mvcc_delid_ins->is_unique,
-		 rec_mvcc_delid_ins->oid_offset);
-
-#if !defined (NDEBUG)
-  {
-    VPID root_vpid;
-    PAGE_PTR root = NULL;
-    BTREE_ROOT_HEADER *root_header = NULL;
-
-    root_vpid.pageid = rec_mvcc_delid_ins->btid.root_pageid;
-    root_vpid.volid = rec_mvcc_delid_ins->btid.vfid.volid;
-
-    /* unconditional latch since I'm the only active transaction */
-    root =
-      pgbuf_fix (thread_p, &root_vpid, OLD_PAGE, PGBUF_LATCH_READ,
-		 PGBUF_UNCONDITIONAL_LATCH);
-    if (root == NULL)
-      {
-	goto error;
-      }
-
-    (void) pgbuf_check_page_ptype (thread_p, root, PAGE_BTREE);
-
-    root_header = btree_get_root_header (root);
-    if (root_header == NULL)
-      {
-	pgbuf_unfix_and_init (thread_p, root);
-	goto error;
-      }
-
-    btid_int.sys_btid = &(rec_mvcc_delid_ins->btid);
-    if (btree_glean_root_header_info (thread_p, root_header, &btid_int)
-	!= NO_ERROR)
-      {
-	pgbuf_unfix_and_init (thread_p, root);
-	goto error;
-      }
-
-    pgbuf_unfix_and_init (thread_p, root);
-  }
-#endif
+		 is_overflow, is_unique, oid_offset);
 
   rec.area_size = DB_PAGESIZE;
   rec.data = PTR_ALIGN (rec_buf, BTREE_MAX_ALIGN);
@@ -25756,17 +26079,17 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
       goto error;
     }
 
-#if !defined (NDEBUG)
-  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
-				   rec_mvcc_delid_ins->
-				   is_overflow ? BTREE_OVERFLOW_NODE :
-				   BTREE_LEAF_NODE, NULL);
-#endif
-
-  if (rec_mvcc_delid_ins->is_unique)
+  if (check_valid)
     {
-      if (rec_mvcc_delid_ins->is_overflow == true
-	  || rec_mvcc_delid_ins->oid_offset > 0
+      /* Check record was valid before making any changes */
+      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+				       is_overflow ? BTREE_OVERFLOW_NODE :
+				       BTREE_LEAF_NODE, NULL);
+    }
+
+  if (is_unique)
+    {
+      if (is_overflow == true || oid_offset > 0
 	  || btree_leaf_is_flaged (&rec, BTREE_LEAF_RECORD_SUBCLASS))
 	{
 	  /* unique index containing OID, CLASS OID */
@@ -25774,44 +26097,53 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 	}
     }
 
-  mvcc_delid_offset = rec_mvcc_delid_ins->oid_offset + oid_size;
-  if ((rec_mvcc_delid_ins->is_unique && rec_mvcc_delid_ins->oid_offset > 0)
-      || (rec_mvcc_delid_ins->is_overflow == true)
-      || btree_leaf_is_flaged (&rec, BTREE_LEAF_RECORD_OVERFLOW_OIDS)
-      && (rec_mvcc_delid_ins->oid_offset == 0))
+  /* Compute the offset for delete MVCCID */
+  mvcc_delid_offset = oid_offset + oid_size;
+  if ((is_unique && oid_offset > 0)
+      || (is_overflow == true)
+      || (btree_leaf_is_flaged (&rec, BTREE_LEAF_RECORD_OVERFLOW_OIDS)
+	  && (oid_offset == 0)))
     {
+      /* Fixed size when:
+       * 1. OID belongs to overflow page.
+       * 2. OID is non-first in an unique leaf record.
+       * 3. OID is first in a leaf record that has overflow OID's.
+       * Fixed size means also insert MVCCID which must be skipped.
+       */
       have_mvcc_fixed_size = true;
       mvcc_delid_offset += OR_MVCCID_SIZE;
     }
-  else if (btree_leaf_key_oid_is_mvcc_flaged (rec.data +
-					      rec_mvcc_delid_ins->oid_offset,
+  else if (btree_leaf_key_oid_is_mvcc_flaged (rec.data + oid_offset,
 					      BTREE_LEAF_OID_HAS_MVCC_INSID))
     {
-      assert (rec_mvcc_delid_ins->is_overflow == false);
+      /* Skip insert MVCCID */
       mvcc_delid_offset += OR_MVCCID_SIZE;
     }
 
   if (have_mvcc_fixed_size
-      || btree_leaf_key_oid_is_mvcc_flaged (rec.data +
-					    rec_mvcc_delid_ins->oid_offset,
+      || btree_leaf_key_oid_is_mvcc_flaged (rec.data + oid_offset,
 					    BTREE_LEAF_OID_HAS_MVCC_DELID))
     {
-      btree_set_mvcc_delid (&rec, rec_mvcc_delid_ins->oid_offset,
-			    mvcc_delid_offset, &recv->mvcc_id);
+      /* Replace current delete MVCCID */
+      btree_set_mvcc_delid (&rec, oid_offset, mvcc_delid_offset,
+			    &recv->mvcc_id);
     }
   else
     {
-      btree_add_mvcc_delid (&rec, rec_mvcc_delid_ins->oid_offset,
-			    mvcc_delid_offset, &recv->mvcc_id);
+      /* Add delete MVCCID to record */
+      btree_add_mvcc_delid (&rec, oid_offset, mvcc_delid_offset,
+			    &recv->mvcc_id);
     }
 
-#if !defined (NDEBUG)
-  (void) btree_check_valid_record (thread_p, &btid_int, &rec,
-				   rec_mvcc_delid_ins->
-				   is_overflow ? BTREE_OVERFLOW_NODE :
-				   BTREE_LEAF_NODE, NULL);
-#endif
+  if (check_valid)
+    {
+      /* Check record is valid after applied redo changes */
+      (void) btree_check_valid_record (thread_p, &btid_int, &rec,
+				       is_overflow ? BTREE_OVERFLOW_NODE :
+				       BTREE_LEAF_NODE, NULL);
+    }
 
+  /* Update record */
   sp_success = spage_update (thread_p, recv->pgptr, slotid, &rec);
   if (sp_success != SP_SUCCESS)
     {
@@ -25827,9 +26159,18 @@ btree_rv_redo_insert_mvcc_delid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 
   pgbuf_set_dirty (thread_p, recv->pgptr, DONT_FREE);
 
+  if (btid_int.key_type != NULL)
+    {
+      tp_domain_free (btid_int.key_type);
+    }
+
   return NO_ERROR;
 
 error:
+  if (btid_int.key_type != NULL)
+    {
+      tp_domain_free (btid_int.key_type);
+    }
   return er_errid ();
 }
 
@@ -25853,13 +26194,15 @@ btree_rv_leafrec_dump_insert_oid (FILE * fp, int length, void *data)
   fprintf (fp, "OID: { %d, %d, %d } \n",
 	   recins->oid.volid, recins->oid.pageid, recins->oid.slotid);
   fprintf (fp, "RECORD TYPE: %s \n",
-	   (recins->rec_type ==
-	    LEAF_RECORD_REGULAR) ? "REGULAR" : "OVERFLOW");
+	   (BTREE_INSERT_RCV_IS_RECORD_REGULAR (recins) ? "REGULAR" :
+	    "OVERFLOW"));
   fprintf (fp, "Overflow Page Id: {%d , %d}\n", recins->ovfl_vpid.volid,
 	   recins->ovfl_vpid.pageid);
   fprintf (fp,
 	   "Oid_Inserted: %d \n Ovfl_Changed: %d \n" "New_Ovfl Page: %d \n",
-	   recins->oid_inserted, recins->ovfl_changed, recins->new_ovflpg);
+	   BTREE_INSERT_RCV_IS_OID_INSERTED (recins),
+	   BTREE_INSERT_RCV_IS_OVFL_CHANGED (recins),
+	   BTREE_INSERT_RCV_IS_NEW_OVFLPG (recins));
 }
 
 /*
@@ -25872,18 +26215,32 @@ btree_rv_leafrec_dump_insert_oid (FILE * fp, int length, void *data)
 void
 btree_rv_dump_redo_insert_mvcc_delid (FILE * fp, int length, void *data)
 {
-  REC_MVCC_DELID_INS_STRUCT *rcv_data = (REC_MVCC_DELID_INS_STRUCT *) data;
+  int rcv_offset_and_flags = *((int *) data);
+  bool is_unique = BTREE_INSERT_DELID_RCV_IS_UNIQUE (rcv_offset_and_flags);
+  bool is_ovf = BTREE_INSERT_DELID_RCV_IS_OVERFLOW (rcv_offset_and_flags);
+  bool has_packed_domain =
+    BTREE_INSERT_DELID_RCV_HAS_KEY_DOMAIN (rcv_offset_and_flags);
+  TP_DOMAIN *key_domain = NULL;
 
-  fprintf (fp, "MVCC DELETE ID INSERTION STRUCTURE: \n");
-  fprintf (fp, "OID offset: %d \n", rcv_data->oid_offset);
-  fprintf (fp, "UNQIUE: %s \n", rcv_data->is_unique ? "true" : "false");
-  fprintf (fp, "RECORD TYPE: %s \n",
-	   rcv_data->is_overflow ? "REGULAR" : "OVERFLOW");
-#if !defined (NDEBUG)
-  fprintf (fp, "BTID: {{%d, %d}, %d} \n",
-	   rcv_data->btid.vfid.volid, rcv_data->btid.vfid.fileid,
-	   rcv_data->btid.root_pageid);
-#endif
+  if (has_packed_domain)
+    {
+      (void) or_unpack_domain ((char *) data + sizeof (int), &key_domain,
+			       NULL);
+    }
+
+  BTREE_INSERT_DELID_RCV_CLEAR_FLAGS (rcv_offset_and_flags);
+
+  fprintf (fp, "MVCC DELETE ID INSERTION: \n");
+  fprintf (fp, "OID offset: %d \n", rcv_offset_and_flags);
+  fprintf (fp, "UNQIUE: %s \n", is_unique ? "true" : "false");
+  fprintf (fp, "RECORD TYPE: %s \n", is_ovf ? "REGULAR" : "OVERFLOW");
+  fprintf (fp, "KEY TYPE: %d \n",
+	   (key_domain == NULL) ? DB_TYPE_UNKNOWN : key_domain->type->id);
+
+  if (key_domain != NULL)
+    {
+      tp_domain_free (key_domain);
+    }
 }
 
 /*
@@ -31577,6 +31934,8 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 				   int oid_offset,
 				   MVCC_REC_HEADER * p_mvcc_rec_header)
 {
+#define BTREE_INSERT_DELID_REDO_CRUMBS_MAX 2
+#define BTREE_INSERT_DELID_UNDO_CRUMBS_MAX 1
   int ret = NO_ERROR;
   int key_type = BTREE_NORMAL_KEY;
   char *rv_data, *rv_key = NULL;
@@ -31585,7 +31944,17 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
   int oid_size = OR_OID_SIZE;
   int mvcc_delid_offset;
   bool have_mvcc_fixed_size = false;
-  REC_MVCC_DELID_INS_STRUCT rec_mvcc_delid_ins;
+  int rcv_offset_and_flags;
+  LOG_CRUMB redo_crumbs[BTREE_INSERT_DELID_REDO_CRUMBS_MAX];
+  int n_redo_crumbs = 0;
+  LOG_CRUMB undo_crumbs[BTREE_INSERT_DELID_UNDO_CRUMBS_MAX];
+  int n_undo_crumbs = 0;
+  LOG_DATA_ADDR addr;
+#if !defined (NDEBUG)
+  /* We need to pack key domain to check record validity after recovery */
+  int domain_size = or_packed_domain_size (btid->key_type, 0);
+  char domain_buf[BTID_DOMAIN_BUFFER_SIZE], *domain_ptr = NULL;
+#endif
 
   assert ((mvcc_Enabled == true) && (page_ptr != NULL)
 	  && node_type != BTREE_NON_LEAF_NODE
@@ -31594,12 +31963,9 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 
   rv_data = PTR_ALIGN (rv_data_buf, BTREE_MAX_ALIGN);
 
-#if !defined (NDEBUG)
-  BTID_COPY (&rec_mvcc_delid_ins.btid, btid->sys_btid);
-#endif
-  rec_mvcc_delid_ins.oid_offset = oid_offset;
-  rec_mvcc_delid_ins.is_unique = false;
-  rec_mvcc_delid_ins.is_overflow = false;
+  /* Initialize redo recovery structure */
+  rcv_offset_and_flags = oid_offset;
+
   if (BTREE_IS_UNIQUE (btid->unique_pk))
     {
       if (node_type == BTREE_OVERFLOW_NODE || oid_offset > 0
@@ -31608,7 +31974,7 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 	  /* unique index containing OID, CLASS OID */
 	  oid_size += OR_OID_SIZE;
 	}
-      rec_mvcc_delid_ins.is_unique = true;
+      rcv_offset_and_flags |= BTREE_INSERT_DELID_RCV_FLAG_UNIQUE;
     }
 
   mvcc_delid_offset = oid_offset + oid_size;
@@ -31621,7 +31987,7 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
       mvcc_delid_offset += OR_MVCCID_SIZE;
       if (node_type == BTREE_OVERFLOW_NODE)
 	{
-	  rec_mvcc_delid_ins.is_overflow = true;
+	  rcv_offset_and_flags |= BTREE_INSERT_DELID_RCV_FLAG_OVERFLOW;
 	}
     }
   else if (btree_leaf_key_oid_is_mvcc_flaged (rec->data + oid_offset,
@@ -31630,6 +31996,41 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
       assert (node_type == BTREE_LEAF_NODE);
       mvcc_delid_offset += OR_MVCCID_SIZE;
     }
+
+  /* Create redo crumbs */
+  /* Append redo recovery data structure */
+  redo_crumbs[n_redo_crumbs].length = sizeof (rcv_offset_and_flags);
+  redo_crumbs[n_redo_crumbs++].data = &rcv_offset_and_flags;
+
+#if !defined (NDEBUG)
+  /* Append key type domain */
+  if (domain_size > BTID_DOMAIN_BUFFER_SIZE)
+    {
+      domain_ptr = (char *) db_private_alloc (thread_p, domain_size);
+      if (domain_ptr == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY,
+		  1, domain_size);
+	  ret = ER_OUT_OF_VIRTUAL_MEMORY;
+	  goto exit_on_error;
+	}
+    }
+  else
+    {
+      domain_ptr = domain_buf;
+    }
+  /* Set key domain flag into offset */
+  rcv_offset_and_flags |= BTREE_INSERT_DELID_RCV_FLAG_KEY_DOMAIN;
+  /* Pack key domain and add to crumbs */
+  (void) or_pack_domain (domain_ptr, btid->key_type, 0, 0);
+  redo_crumbs[n_redo_crumbs].length = domain_size;
+  redo_crumbs[n_redo_crumbs++].data = domain_ptr;
+#endif
+
+  /* Initialize log address data */
+  addr.pgptr = page_ptr;
+  addr.offset = slot_id;
+  addr.vfid = &btid->sys_btid->vfid;
 
   if (btree_is_new_file (btid))
     {
@@ -31645,9 +32046,8 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
        */
       btree_rv_write_log_record (rv_data, &rv_data_len, rec, BTREE_LEAF_NODE);
 
-      log_append_undo_data2 (thread_p, RVBT_NDRECORD_UPD,
-			     &btid->sys_btid->vfid, page_ptr, slot_id,
-			     rv_data_len, rv_data);
+      log_append_undo_data (thread_p, RVBT_NDRECORD_UPD, &addr,
+			    rv_data_len, rv_data);
     }
   else
     {
@@ -31661,12 +32061,16 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
 	  return ret;
 	}
 
-      log_append_undoredo_data2 (thread_p,
-				 RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID,
-				 &btid->sys_btid->vfid, page_ptr, slot_id,
-				 rv_key_len,
-				 sizeof (REC_MVCC_DELID_INS_STRUCT), rv_key,
-				 &rec_mvcc_delid_ins);
+      /* Create undo crumbs for undoredo logging */
+      undo_crumbs[n_undo_crumbs].length = rv_key_len;
+      undo_crumbs[n_undo_crumbs++].data = rv_key;
+
+      assert (n_undo_crumbs <= BTREE_INSERT_DELID_UNDO_CRUMBS_MAX);
+
+      log_append_undoredo_crumbs (thread_p,
+				  RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID, &addr,
+				  n_undo_crumbs, n_redo_crumbs,
+				  undo_crumbs, redo_crumbs);
     }
 
   if (have_mvcc_fixed_size
@@ -31717,10 +32121,8 @@ btree_insert_mvcc_delid_into_page (THREAD_ENTRY * thread_p,
       /* TODO: Fix me.
        * Read the comment at undo logging.
        */
-      log_append_redo_data2 (thread_p, RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID,
-			     &btid->sys_btid->vfid, page_ptr, slot_id,
-			     sizeof (rec_mvcc_delid_ins),
-			     &rec_mvcc_delid_ins);
+      log_append_redo_crumbs (thread_p, RVBT_KEYVAL_INS_LFRECORD_MVCC_DELID,
+			      &addr, n_redo_crumbs, redo_crumbs);
     }
 
   RANDOM_EXIT (thread_p);
@@ -31733,6 +32135,13 @@ end:
     {
       db_private_free_and_init (thread_p, rv_key);
     }
+
+#if !defined (NDEBUG)
+  if (domain_ptr != NULL && domain_ptr != domain_buf)
+    {
+      db_private_free_and_init (thread_p, domain_ptr);
+    }
+#endif /* !NDEBUG */
 
   return ret;
 
