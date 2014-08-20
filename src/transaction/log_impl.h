@@ -1164,9 +1164,9 @@ struct log_header
      /* mvcc_op_log_lsa */			 \
      {NULL_PAGEID, NULL_OFFSET},                 \
      /* last_block_oldest_mvccid */		 \
-     {MVCCID_NULL},				 \
+     MVCCID_NULL,				 \
      /* last_block_newest_mvccid */		 \
-     {MVCCID_NULL}				 \
+     MVCCID_NULL				 \
   }
 
 #define LOGWR_HEADER_INITIALIZER                 \
