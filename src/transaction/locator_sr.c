@@ -1042,6 +1042,12 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname,
       return LC_CLASSNAME_ERROR;
     }
 
+  renamed = xlocator_reserve_class_name (thread_p, newname, class_oid);
+  if (renamed != LC_CLASSNAME_RESERVED)
+    {
+      return renamed;
+    }
+
   if (csect_enter (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) !=
       NO_ERROR)
     {
@@ -1051,10 +1057,9 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname,
       return LC_CLASSNAME_ERROR;
     }
 
-  renamed = xlocator_reserve_class_name (thread_p, newname, class_oid);
   entry = (LOCATOR_TMP_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames,
 						   newname);
-  if (renamed == LC_CLASSNAME_RESERVED && entry != NULL)
+  if (entry != NULL)
     {
       entry->current.action = LC_CLASSNAME_RESERVED_RENAME;
       renamed = xlocator_delete_class_name (thread_p, oldname);
