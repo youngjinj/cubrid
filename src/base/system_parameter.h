@@ -365,6 +365,10 @@ enum param_id
   PRM_ID_VACUUM_WORKER_COUNT,
   PRM_ID_ER_LOG_VACUUM,
   PRM_ID_DISABLE_VACUUM,
+
+  /* Debugging system parameter */
+  PRM_ID_LOG_BTREE_OPS,
+
   PRM_ID_OBJECT_PRINT_FORMAT_OID,
   /* change PRM_LAST_ID when adding new system parameters */
   PRM_LAST_ID = PRM_ID_OBJECT_PRINT_FORMAT_OID

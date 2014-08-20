@@ -965,6 +965,18 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
     }
   load_args->btid->sys_btid->root_pageid = vpid.pageid;
 
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: load start on "
+		     "class(%d, %d, %d), btid(%d, (%d, %d)).",
+		     sort_args->class_ids[sort_args->cur_class].volid,
+		     sort_args->class_ids[sort_args->cur_class].pageid,
+		     sort_args->class_ids[sort_args->cur_class].slotid,
+		     sort_args->btid->sys_btid->root_pageid,
+		     sort_args->btid->sys_btid->vfid.volid,
+		     sort_args->btid->sys_btid->vfid.fileid);
+    }
+
   /* Build the leaf pages of the btree as the output of the sort.
    * We do not estimate the number of pages required.
    */
@@ -972,6 +984,15 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 			btree_construct_leafs, load_args) != NO_ERROR)
     {
       goto error;
+    }
+
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: load finished all. "
+		     "%d classes loaded, found %d nulls and %d oids, "
+		     "load %d keys.",
+		     sort_args->n_classes, sort_args->n_nulls,
+		     sort_args->n_oids, load_args->n_keys);
     }
 
   if (sort_args->attrinfo_inited)
@@ -1034,6 +1055,15 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
 	  goto error;
 	}
 
+      if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: "
+			 "load built index btid (%d, (%d, %d)).",
+			 load_args->btid->sys_btid->root_pageid,
+			 load_args->btid->sys_btid->vfid.volid,
+			 load_args->btid->sys_btid->vfid.fileid);
+	}
+
 #if !defined(NDEBUG)
       (void) btree_verify_tree (thread_p, &btdes.class_oid, &btid_int,
 				bt_name);
@@ -1042,6 +1072,14 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
     }
   else
     {
+      if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: "
+			 "load didn't build any leaves btid (%d, (%d, %d)).",
+			 load_args->btid->sys_btid->root_pageid,
+			 load_args->btid->sys_btid->vfid.volid,
+			 load_args->btid->sys_btid->vfid.fileid);
+	}
       /* there are no index entries, destroy index file and call index
          creation */
       if (file_destroy (thread_p, &btid->vfid) != NO_ERROR)
@@ -1126,6 +1164,15 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name,
   logpb_flush_pages_direct (thread_p);
   LOG_CS_EXIT (thread_p);
 
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      _er_log_debug (ARG_FILE_LINE, "BTREE_DEBUG: load finished successful "
+		     "index btid(%d, (%d, %d)).",
+		     load_args->btid->sys_btid->root_pageid,
+		     load_args->btid->sys_btid->vfid.volid,
+		     load_args->btid->sys_btid->vfid.fileid);
+    }
+
   return btid;
 
 error:
@@ -1204,6 +1251,15 @@ error:
 #endif
 
   log_end_system_op (thread_p, LOG_RESULT_TOPOP_ABORT);
+
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      _er_log_debug (ARG_FILE_LINE, "BTREE_DEBUG: load aborted index "
+		     "btid(%d, (%d, %d)).",
+		     load_args->btid->sys_btid->root_pageid,
+		     load_args->btid->sys_btid->vfid.volid,
+		     load_args->btid->sys_btid->vfid.fileid);
+    }
 
   return NULL;
 }
@@ -2434,6 +2490,22 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 
       assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));
 
+      if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: load new "
+			 "object(%d, %d, %d) "
+			 "class(%d, %d, %d) and btid(%d, (%d, %d)) with "
+			 "mvccinfo=%lld | %lld",
+			 this_oid.volid, this_oid.pageid, this_oid.slotid,
+			 this_class_oid.volid, this_class_oid.pageid,
+			 this_class_oid.slotid,
+			 load_args->btid->sys_btid->root_pageid,
+			 load_args->btid->sys_btid->vfid.volid,
+			 load_args->btid->sys_btid->vfid.fileid,
+			 MVCC_GET_INSID (&mvcc_header),
+			 MVCC_GET_DELID (&mvcc_header));
+	}
+
       /* Do not copy the string--just use the pointer.  The pr_ routines
        * for strings and sets have different semantics for length.
        */
@@ -2952,6 +3024,22 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	    }			/* different key */
 	}
 
+	if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	  {
+	    _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: load added "
+			   "object(%d, %d, %d) "
+			   "class(%d, %d, %d) and btid(%d, (%d, %d)) with "
+			   "mvccinfo=%lld | %lld",
+			   this_oid.volid, this_oid.pageid, this_oid.slotid,
+			   this_class_oid.volid, this_class_oid.pageid,
+			   this_class_oid.slotid,
+			   load_args->btid->sys_btid->root_pageid,
+			   load_args->btid->sys_btid->vfid.volid,
+			   load_args->btid->sys_btid->vfid.fileid,
+			   MVCC_GET_INSID (&mvcc_header),
+			   MVCC_GET_DELID (&mvcc_header));
+	  }
+
       /* Some objects have been recently deleted and couldn't be filtered
        * (because there may be running transaction that can still see them.
        * However, they must be vacuumed later. Vacuum can only find them by
@@ -2985,6 +3073,22 @@ btree_construct_leafs (THREAD_ENTRY * thread_p, const RECDES * in_recdes,
 	  /* clear flags for logging */
 	  btree_clear_mvcc_flags_from_oid (&this_oid);
 	  btree_clear_mvcc_flags_from_oid (&this_class_oid);
+
+	  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	    {
+	      _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: load notify "
+			     "vacuum object(%d, %d, %d) "
+			     "class(%d, %d, %d) and btid(%d, (%d, %d)) with "
+			     "mvccinfo=%lld | %lld",
+			     this_oid.volid, this_oid.pageid, this_oid.slotid,
+			     this_class_oid.volid, this_class_oid.pageid,
+			     this_class_oid.slotid,
+			     load_args->btid->sys_btid->root_pageid,
+			     load_args->btid->sys_btid->vfid.volid,
+			     load_args->btid->sys_btid->vfid.fileid,
+			     MVCC_GET_INSID (&mvcc_header),
+			     MVCC_GET_DELID (&mvcc_header));
+	    }
 
 	  /* append log data */
 	  ret =
@@ -3395,6 +3499,21 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 
 	      /* set the scan to the initial state for this new heap */
 	      OID_SET_NULL (&sort_args->cur_oid);
+
+	      if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+		{
+		  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: load start on "
+				 "class(%d, %d, %d), btid(%d, (%d, %d)).",
+				 sort_args->class_ids[sort_args->cur_class].
+				 volid,
+				 sort_args->class_ids[sort_args->cur_class].
+				 pageid,
+				 sort_args->class_ids[sort_args->cur_class].
+				 slotid,
+				 sort_args->btid->sys_btid->root_pageid,
+				 sort_args->btid->sys_btid->vfid.volid,
+				 sort_args->btid->sys_btid->vfid.fileid);
+		}
 	    }
 	  continue;
 
@@ -3544,6 +3663,24 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 	    {
 	      pr_clear_value (&dbvalue);
 	    }
+	  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	    {
+	      _er_log_debug (ARG_FILE_LINE,
+			     "DEBUG_BTREE: load sort found null at "
+			     "oid(%d, %d, %d)"
+			     ", class_oid(%d, %d, %d), btid(%d, (%d, %d).",
+			     sort_args->cur_oid.volid,
+			     sort_args->cur_oid.pageid,
+			     sort_args->cur_oid.slotid,
+			     sort_args->class_ids[sort_args->cur_class].volid,
+			     sort_args->class_ids[sort_args->cur_class].
+			     pageid,
+			     sort_args->class_ids[sort_args->cur_class].
+			     slotid,
+			     sort_args->btid->sys_btid->root_pageid,
+			     sort_args->btid->sys_btid->vfid.volid,
+			     sort_args->btid->sys_btid->vfid.fileid);
+	    }
 	  continue;
 	}
 
@@ -3630,6 +3767,27 @@ btree_sort_get_next (THREAD_ENTRY * thread_p, RECDES * temp_recdes, void *arg)
 		{
 		  goto nofit;
 		}
+	    }
+
+	  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	    {
+	      _er_log_debug (ARG_FILE_LINE,
+			     "DEBUG_BTREE: load sort found oid(%d, %d, %d)"
+			     ", class_oid(%d, %d, %d), btid(%d, (%d, %d), "
+			     "mvcc_info=%lld | %lld.",
+			     sort_args->cur_oid.volid,
+			     sort_args->cur_oid.pageid,
+			     sort_args->cur_oid.slotid,
+			     sort_args->class_ids[sort_args->cur_class].volid,
+			     sort_args->class_ids[sort_args->cur_class].
+			     pageid,
+			     sort_args->class_ids[sort_args->cur_class].
+			     slotid,
+			     sort_args->btid->sys_btid->root_pageid,
+			     sort_args->btid->sys_btid->vfid.volid,
+			     sort_args->btid->sys_btid->vfid.fileid,
+			     MVCC_GET_INSID (&mvcc_header),
+			     MVCC_GET_DELID (&mvcc_header));
 	    }
 
 	  assert (buf.ptr == PTR_ALIGN (buf.ptr, INT_ALIGNMENT));

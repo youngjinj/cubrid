@@ -13116,11 +13116,56 @@ key_deletion:
       key_deleted = false;
     }
 
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      if (mvcc_args)
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: delete oid(%d, %d, %d) "
+			 "class_oid(%d, %d, %d) and btid(%d, (%d, %d)) with "
+			 "mvcc_info=%lld | %lld, purpose=%d",
+			 oid->volid, oid->pageid, oid->slotid,
+			 cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+			 btid->root_pageid, btid->vfid.volid,
+			 btid->vfid.fileid, mvcc_args->insert_mvccid,
+			 mvcc_args->delete_mvccid, mvcc_args->purpose);
+	}
+      else
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: non-mvcc delete object "
+			 "oid(%d, %d, %d) "
+			 "class_oid(%d, %d, %d) and btid(%d, (%d, %d))",
+			 oid->volid, oid->pageid, oid->slotid,
+			 cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+			 btid->root_pageid, btid->vfid.volid,
+			 btid->vfid.fileid);
+	}
+    }
   if (btree_delete_from_leaf (thread_p, pkey_deleted, &btid_int,
 			      &P_vpid, key, &class_oid, oid,
 			      p_slot_id, mvcc_args) != NO_ERROR)
     {
+      if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: Failed delete "
+			 "oid(%d, %d, %d) "
+			 "class_oid(%d, %d, %d) and btid(%d, (%d, %d)) with "
+			 "mvcc_info=%lld | %lld, purpose=%d",
+			 oid->volid, oid->pageid, oid->slotid,
+			 cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+			 btid->root_pageid, btid->vfid.volid,
+			 btid->vfid.fileid);
+	}
       goto error;
+    }
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: Successful delete "
+		     "oid(%d, %d, %d) "
+		     "class_oid(%d, %d, %d) and btid(%d, (%d, %d)) with "
+		     "mvcc_info=%lld | %lld, purpose=%d",
+		     oid->volid, oid->pageid, oid->slotid,
+		     cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+		     btid->root_pageid, btid->vfid.volid, btid->vfid.fileid);
     }
 
 #if !defined(NDEBUG)
@@ -13495,6 +13540,7 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
   LOG_CRUMB redo_crumbs[BTREE_INSERT_OID_INTO_LEAF_REDO_CRUMBS_MAX];
   LOG_CRUMB undo_crumbs[BTREE_INSERT_OID_INTO_LEAF_UNDO_CRUMBS_MAX];
   int n_redo_crumbs = 0, n_undo_crumbs = 0;
+  MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
 #if !defined (NDEBUG)
   char domain_buf[BTID_DOMAIN_BUFFER_SIZE], *domain_ptr = NULL;
   int domain_size = or_packed_domain_size (btid->key_type, 0);
@@ -13512,6 +13558,7 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
   BTREE_INSERT_RCV_SET_FLAGS (&recins, BTREE_INSERT_RCV_FLAG_OID_INSERTED);
   COPY_OID (&recins.oid, oid);
 
+  rcvindex = RVBT_KEYVAL_INS_LFRECORD_OIDINS;
   if (p_mvcc_rec_header != NULL)
     {
       assert ((mvcc_Enabled == true) &&
@@ -13523,8 +13570,20 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
        */
       if (!MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
 	{
-	  /* Clear insert MVCCID flag */
+	  /* Clear insert MVCCID flag... We don't need to save or log it */
 	  MVCC_CLEAR_FLAG_BITS (p_mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID);
+	}
+      else
+	{
+	  /* We need to also log MVCCID for undo/redo purpose */
+	  /* TODO: We have an exception for undo operation in case of
+	   *	   new files which we need to fix in the future (in order to
+	   *	   allow vacuum find our object).
+	   */
+	  mvcc_args_p = &mvcc_args;
+	  mvcc_args_p->purpose = MVCC_BTREE_INSERT_OBJECT;
+	  mvcc_args_p->insert_mvccid = MVCC_GET_INSID (p_mvcc_rec_header);
+	  rcvindex = RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS;
 	}
     }
 
@@ -13607,28 +13666,9 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
     }
   else
     {
-      if (p_mvcc_rec_header != NULL
-	  && MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
-	{
-	  /* This is an MVCC operation and must be logged accordingly to be
-	   * processed by vacuum.
-	   * If insert MVCCID is "all visible", vacuum is no longer required.
-	   */
-	  MVCC_BTREE_OP_ARGUMENTS mvcc_args;
-	  mvcc_args.purpose = MVCC_BTREE_INSERT_OBJECT;
-	  mvcc_args.insert_mvccid = MVCC_GET_INSID (p_mvcc_rec_header);
-	  ret =
-	    btree_rv_save_keyval (btid, key, cls_oid, oid, &mvcc_args,
-				  &rv_key, &rv_key_len);
-	  rcvindex = RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS;
-	}
-      else
-	{
-	  ret =
-	    btree_rv_save_keyval (btid, key, cls_oid, oid, NULL, &rv_key,
-				  &rv_key_len);
-	  rcvindex = RVBT_KEYVAL_INS_LFRECORD_OIDINS;
-	}
+      ret =
+	btree_rv_save_keyval (btid, key, cls_oid, oid, mvcc_args_p, &rv_key,
+			      &rv_key_len);
       if (ret != NO_ERROR)
 	{
 	  return ret;
@@ -13718,11 +13758,8 @@ btree_insert_oid_into_leaf_rec (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
   if (btree_is_new_file (btid))
     {
-      /* TODO: Investigate if an MVCC log record type must be used for
-       *       new files too.
-       */
-      log_append_redo_crumbs (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
-			      &addr, n_redo_crumbs, redo_crumbs);
+      log_append_redo_crumbs (thread_p, rcvindex, &addr, n_redo_crumbs,
+			      redo_crumbs);
     }
 
   RANDOM_EXIT (thread_p);
@@ -14050,6 +14087,7 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
   LOG_CRUMB redo_crumbs[BTREE_INSERT_OID_OVF_REDO_CRUMBS_MAX];
   LOG_CRUMB undo_crumbs[BTREE_INSERT_OID_OVF_UNDO_CRUMBS_MAX];
   int n_redo_crumbs = 0, n_undo_crumbs = 0;
+  MVCC_BTREE_OP_ARGUMENTS mvcc_args, *mvcc_args_p = NULL;
 #if !defined (NDEBUG)
   char domain_buf[BTID_DOMAIN_BUFFER_SIZE], *domain_ptr = NULL;
   int domain_size = or_packed_domain_size (btid->key_type, 0);
@@ -14105,6 +14143,17 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
       /* MVCCID has fixed size in overflow page */
       BTREE_MVCC_SET_HEADER_FIXED_SIZE (p_mvcc_rec_header);
+    }
+
+  rcvindex = RVBT_KEYVAL_INS_LFRECORD_OIDINS;
+  if (p_mvcc_rec_header != NULL
+      && MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
+    {
+      mvcc_args_p = &mvcc_args;
+      mvcc_args_p->purpose = MVCC_BTREE_INSERT_OBJECT;
+      mvcc_args_p->insert_mvccid = MVCC_GET_INSID (p_mvcc_rec_header);
+      /* Set to MVCC log record type to log MVCCID */
+      rcvindex = RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS;
     }
 
 #if !defined (NDEBUG)
@@ -14172,28 +14221,9 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
     }
   else
     {
-      if (p_mvcc_rec_header != NULL
-	  && MVCC_IS_HEADER_INSID_NOT_ALL_VISIBLE (p_mvcc_rec_header))
-	{
-	  /* This is an MVCC operation and must be logged accordingly to be
-	   * processed by vacuum.
-	   * If insert MVCCID is "all visible", vacuum is no longer required.
-	   */
-	  MVCC_BTREE_OP_ARGUMENTS mvcc_args;
-	  mvcc_args.purpose = MVCC_BTREE_INSERT_OBJECT;
-	  mvcc_args.insert_mvccid = MVCC_GET_INSID (p_mvcc_rec_header);
-	  ret =
-	    btree_rv_save_keyval (btid, key, cls_oid, oid, &mvcc_args,
-				  &rv_key, &rv_key_len);
-	  rcvindex = RVBT_KEYVAL_MVCC_INS_LFRECORD_OIDINS;
-	}
-      else
-	{
-	  ret =
-	    btree_rv_save_keyval (btid, key, cls_oid, oid, NULL, &rv_key,
-				  &rv_key_len);
-	  rcvindex = RVBT_KEYVAL_INS_LFRECORD_OIDINS;
-	}
+      ret =
+	btree_rv_save_keyval (btid, key, cls_oid, oid, mvcc_args_p, &rv_key,
+			      &rv_key_len);
       if (ret != NO_ERROR)
 	{
 	  goto exit_on_error;
@@ -14234,8 +14264,8 @@ btree_insert_oid_overflow_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
       /* TODO: Investigate if an MVCC log record type must be used for
        *       new files too.
        */
-      log_append_redo_crumbs (thread_p, RVBT_KEYVAL_INS_LFRECORD_OIDINS,
-			      &addr, n_redo_crumbs, redo_crumbs);
+      log_append_redo_crumbs (thread_p, rcvindex, &addr, n_redo_crumbs,
+			      redo_crumbs);
     }
 
   pgbuf_set_dirty (thread_p, ovfl_page, DONT_FREE);
@@ -19634,10 +19664,69 @@ key_insertion:
    */
   key_added_deleted = 0;
 
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      if (p_mvcc_rec_header)
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: insert %s "
+			 "oid(%d, %d, %d) "
+			 "class_oid(%d, %d, %d) and btid(%d, (%d, %d)) with "
+			 "mvcc_info=%lld | %lld",
+			 MVCC_IS_HEADER_DELID_VALID (p_mvcc_rec_header) ?
+			 "delid" : "object",
+			 oid->volid, oid->pageid, oid->slotid,
+			 cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+			 btid->root_pageid, btid->vfid.volid,
+			 btid->vfid.fileid,
+			 MVCC_GET_INSID (p_mvcc_rec_header),
+			 MVCC_GET_DELID (p_mvcc_rec_header));
+	}
+      else
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: non-mvcc insert object "
+			 "oid(%d, %d, %d) "
+			 "class_oid(%d, %d, %d) and btid(%d, (%d, %d))",
+			 oid->volid, oid->pageid, oid->slotid,
+			 cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+			 btid->root_pageid, btid->vfid.volid,
+			 btid->vfid.fileid);
+	}
+    }
   ret_val = btree_insert_into_leaf (thread_p, &key_added_deleted, &btid_int,
 				    P, key, &class_oid, oid, &P_vpid,
 				    op_type, key_found, p_slot_id,
 				    p_mvcc_rec_header);
+  if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
+    {
+      if (p_mvcc_rec_header)
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: %s insert %s "
+			 "oid(%d, %d, %d) "
+			 "class_oid(%d, %d, %d) and btid(%d, (%d, %d)) with "
+			 "mvcc_info=%lld | %lld",
+			 ret_val == NO_ERROR ? "Successful" : "Failed",
+			 MVCC_IS_HEADER_DELID_VALID (p_mvcc_rec_header) ?
+			 "delid" : "object",
+			 oid->volid, oid->pageid, oid->slotid,
+			 cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+			 btid->root_pageid, btid->vfid.volid,
+			 btid->vfid.fileid,
+			 MVCC_GET_INSID (p_mvcc_rec_header),
+			 MVCC_GET_DELID (p_mvcc_rec_header));
+	}
+      else
+	{
+	  _er_log_debug (ARG_FILE_LINE, "DEBUG_BTREE: %s non-mvcc insert object "
+			 "oid(%d, %d, %d) "
+			 "class_oid(%d, %d, %d) and btid(%d, (%d, %d))",
+			 ret_val == NO_ERROR ? "Successful" : "Failed",
+			 oid->volid, oid->pageid, oid->slotid,
+			 cls_oid->volid, cls_oid->pageid, cls_oid->slotid,
+			 btid->root_pageid, btid->vfid.volid,
+			 btid->vfid.fileid);
+	}
+    }
+
   if (ret_val != NO_ERROR)
     {
       /* defence code */
@@ -25714,7 +25803,7 @@ btree_rv_leafrec_redo_insert_oid (THREAD_ENTRY * thread_p, LOG_RCV * recv)
   _er_log_debug (ARG_FILE_LINE,
 		 "BTREE_RECOVERY: btree_rv_leafrec_redo_insert_oid - "
 		 "page %d|%d, offset=%d, mvccid=%d, "
-		 "recins: ins_mode=%d, oid=%d|%d|%d, flags=%d, "
+		 "recins: oid=%d|%d|%d, flags=%d, "
 		 "ovfl_vpid=%d|%d.",
 		 pgbuf_get_volume_id (recv->pgptr),
 		 pgbuf_get_page_id (recv->pgptr), recv->offset, recv->mvcc_id,
