@@ -8227,7 +8227,7 @@ try_again:
 
 	  addr.offset = oid->slotid;
 	  log_append_undoredo_recdes (thread_p, RVHF_UPDATE, &addr,
-				      &forward_recdes, recdes);
+				      &home_recdes, recdes);
 
 	  /* Physical delete the relocated record (old home) */
 	  (void) heap_delete_internal (thread_p, hfid, class_oid,
