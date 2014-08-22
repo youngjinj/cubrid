@@ -22323,11 +22323,20 @@ xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
   HEAP_SCANCACHE scan_cache;
   RECDES recdes;
   SCAN_CODE r;
+  MVCC_SNAPSHOT * mvcc_snapshot = NULL;
 
   OID_SET_NULL (&oid);
 
+  if (mvcc_Enabled)
+    {
+      mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
+      if (mvcc_snapshot == NULL)
+	{
+	  return ER_FAILED;
+	}
+    }
   if (heap_scancache_start (thread_p, &scan_cache, hfid, class_oid, true,
-			    false, NULL) != NO_ERROR)
+			    false, mvcc_snapshot) != NO_ERROR)
     {
       return ER_FAILED;
     }
