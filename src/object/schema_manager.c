@@ -10536,7 +10536,7 @@ allocate_index (MOP classop, SM_CLASS * class_, DB_OBJLIST * subclasses,
 	  for (i = 0; i < n_classes; i++)
 	    {
 	      if (!HFID_IS_NULL (&hfids[i])
-		  && heap_has_instance (&hfids[i], &oids[i]))
+		  && heap_has_instance (&hfids[i], &oids[i], false))
 		{
 		  /* in case of error and instances exist */
 		  has_instances = 1;
@@ -10700,7 +10700,7 @@ check_fk_validity (MOP classop, SM_CLASS * class_, SM_ATTRIBUTE ** key_attrs,
   cls_oid = ws_oid (classop);
   hfid = &class_->header.heap;
 
-  if (!HFID_IS_NULL (hfid) && heap_has_instance (hfid, cls_oid))
+  if (!HFID_IS_NULL (hfid) && heap_has_instance (hfid, cls_oid, 0))
     {
       for (i = 0, n_attrs = 0; key_attrs[i] != NULL; i++, n_attrs++);
 

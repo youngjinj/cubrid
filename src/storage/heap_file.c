@@ -22314,10 +22314,11 @@ xheap_get_class_num_objects_pages (THREAD_ENTRY * thread_p, const HFID * hfid,
  *   return:
  *   hfid(in):
  *   class_oid(in):
+ *   has_visible_instance(in): true if we need to check for a visible record
  */
 int
 xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
-		    OID * class_oid)
+		    OID * class_oid, int has_visible_instance)
 {
   OID oid;
   HEAP_SCANCACHE scan_cache;
@@ -22327,7 +22328,7 @@ xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
 
   OID_SET_NULL (&oid);
 
-  if (mvcc_Enabled)
+  if (mvcc_Enabled && has_visible_instance)
     {
       mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
       if (mvcc_snapshot == NULL)

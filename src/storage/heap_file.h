@@ -555,7 +555,7 @@ extern int xheap_get_class_num_objects_pages (THREAD_ENTRY * thread_p,
 					      int *npages);
 
 extern int xheap_has_instance (THREAD_ENTRY * thread_p, const HFID * hfid,
-			       OID * class_oid);
+			       OID * class_oid, int has_visible_instance);
 
 extern int heap_init_func_pred_unpack_info (THREAD_ENTRY * thread_p,
 					    HEAP_CACHE_ATTRINFO * attr_info,

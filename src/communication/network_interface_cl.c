@@ -9887,15 +9887,16 @@ sysprm_dump_server_parameters (FILE * outfp)
  *
  *   hfid(in):
  *   class_oid(in):
+ *   has_visible_instance(in): true if we need to check for a visible record 
  *
  * NOTE:
  */
 int
-heap_has_instance (HFID * hfid, OID * class_oid)
+heap_has_instance (HFID * hfid, OID * class_oid, int has_visible_instance)
 {
 #if defined(CS_MODE)
   int req_error, status = ER_FAILED;
-  OR_ALIGNED_BUF (OR_HFID_SIZE + OR_OID_SIZE) a_request;
+  OR_ALIGNED_BUF (OR_HFID_SIZE + OR_OID_SIZE + OR_INT_SIZE) a_request;
   char *request;
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
   char *reply;
@@ -9906,6 +9907,7 @@ heap_has_instance (HFID * hfid, OID * class_oid)
 
   ptr = or_pack_hfid (request, hfid);
   ptr = or_pack_oid (ptr, class_oid);
+  ptr = or_pack_int (ptr, has_visible_instance);
 
   req_error = net_client_request (NET_SERVER_HEAP_HAS_INSTANCE,
 				  request, OR_ALIGNED_BUF_SIZE (a_request),
@@ -9921,7 +9923,7 @@ heap_has_instance (HFID * hfid, OID * class_oid)
   int r = ER_FAILED;
 
   ENTER_SERVER ();
-  r = xheap_has_instance (NULL, hfid, class_oid);
+  r = xheap_has_instance (NULL, hfid, class_oid, has_visible_instance);
   EXIT_SERVER ();
 
   return r;

@@ -8785,11 +8785,13 @@ shf_has_instance (THREAD_ENTRY * thread_p, unsigned int rid,
   OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
   char *reply = OR_ALIGNED_BUF_START (a_reply);
   char *ptr;
+  int has_visible_instance;
 
   ptr = or_unpack_hfid (request, &hfid);
   ptr = or_unpack_oid (ptr, &class_oid);
+  ptr = or_unpack_int (ptr, &has_visible_instance);
 
-  r = xheap_has_instance (thread_p, &hfid, &class_oid);
+  r = xheap_has_instance (thread_p, &hfid, &class_oid, has_visible_instance);
 
   if (r == -1)
     {

@@ -676,7 +676,7 @@ db_class_has_instance (DB_OBJECT * classobj)
     }
   else
     {
-      return heap_has_instance (sm_get_heap (classobj), WS_OID (classobj));
+      return heap_has_instance (sm_get_heap (classobj), WS_OID (classobj), 0);
     }
 
   return 0;

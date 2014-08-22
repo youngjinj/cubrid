@@ -5695,7 +5695,8 @@ do_check_for_empty_classes_in_delete (PARSER_CONTEXT * parser,
 		      free_and_init (partitions);
 		      goto cleanup;
 		    }
-		  error = heap_has_instance (hfid, ws_oid (partitions[idx]));
+		  error = heap_has_instance (hfid, ws_oid (partitions[idx]),
+					     1);
 		  if (error < NO_ERROR)
 		    {
 		      free_and_init (partitions);
@@ -5715,7 +5716,8 @@ do_check_for_empty_classes_in_delete (PARSER_CONTEXT * parser,
 		  goto cleanup;
 		}
 	      error =
-		heap_has_instance (hfid, ws_oid (flat->info.name.db_object));
+		heap_has_instance (hfid, ws_oid (flat->info.name.db_object),
+				   1);
 	      if (error < NO_ERROR)
 		{
 		  goto cleanup;
