@@ -4571,23 +4571,6 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 #endif /* SERVER_MODE */
     }
 
-  if (need_mvcc_update == true)
-    {
-      /* since new OID version will be created, remove the old version */
-      if (csect_enter (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) != NO_ERROR)
-	{
-	  goto error;
-	}
-
-      if (catcls_remove_entry (class_oid_p) != NO_ERROR)
-	{
-	  csect_exit (thread_p, CSECT_CT_OID_TABLE);
-	  goto error;
-	}
-
-      csect_exit (thread_p, CSECT_CT_OID_TABLE);
-    }
-
   value_p = catcls_get_or_value_from_class_record (thread_p, record_p);
   if (value_p == NULL)
     {
@@ -4641,6 +4624,23 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p,
 	{
 	  goto error;
 	}
+    }
+
+  if (need_mvcc_update == true)
+    {
+      /* since new OID version will be created, remove the old version */
+      if (csect_enter (thread_p, CSECT_CT_OID_TABLE, INF_WAIT) != NO_ERROR)
+	{
+	  goto error;
+	}
+
+      if (catcls_remove_entry (class_oid_p) != NO_ERROR)
+	{
+	  csect_exit (thread_p, CSECT_CT_OID_TABLE);
+	  goto error;
+	}
+
+      csect_exit (thread_p, CSECT_CT_OID_TABLE);
     }
 
   heap_scancache_end_modify (thread_p, &scan);
