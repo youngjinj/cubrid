@@ -1220,12 +1220,12 @@ $ LOADDB
 1151 The page %1$d of volume %2$d is not a slotted page.
 1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
 1153 'zero date'를 사용할 수 없습니다.
-2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
-2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 MVCC can't get snapshot
-2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
-2004 Serializable conflict due to concurent updates
-2005 마지막 에러
+1154 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
+1155 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+1156 MVCC can't get snapshot
+1157 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+1158 Serializable conflict due to concurent updates
+1159 마지막 에러
 
 $set 6 MSGCAT_SET_INTERNAL
 1 에러 서브 시스템에 에러 발생(라인 %1$d):

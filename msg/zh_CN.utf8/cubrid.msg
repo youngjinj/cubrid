@@ -1220,12 +1220,12 @@ $ LOADDB
 1151 卷 %2$d 的页 %1$d 不是一个 slotted 页.
 1152 The owner or a member of DBA group is only allowed to kill the transaction (%1$d).
 1153 Attempt to use 'zero date'.
-2000 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
-2001 MVCC invalid row for delete: %1$d|%2$d|%3$d.
-2002 MVCC can't get snapshot
-2003 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
-2004 Serializable conflict due to concurent updates
-2005 Last Error
+1154 MVCC row %1$d|%2$d|%3$d does not satisfies reevaluation.
+1155 MVCC invalid row for delete: %1$d|%2$d|%3$d.
+1156 MVCC can't get snapshot
+1157 Isolation level value in MVCC must be 'read committed', 'repeatable read' or 'serializable'.
+1158 Serializable conflict due to concurent updates
+1159 Last Error
 
 $set 6 MSGCAT_SET_INTERNAL
 1 在错误子系统中错误 (line %1$d):
