@@ -1273,8 +1273,6 @@ classobj_put_index_id (DB_SEQ ** properties,
   DB_SEQ *unique_property, *constraint;
   int found = 0;
 
-  er_log_debug (ARG_FILE_LINE, "ADD_INDEX PUT_INDEX START %s (pid %d)",
-		constraint_name, getpid ());
   /*
    *  If the property pointer is NULL, create an empty property sequence
    */
@@ -1568,8 +1566,6 @@ classobj_put_index_id (DB_SEQ ** properties,
       pr_clear_value (&pvalue);
     }
 
-   er_log_debug (ARG_FILE_LINE, "ADD_INDEX PUT_INDEX END %s (pid %d)",
-		    constraint_name, getpid ());
   return (ok);
 }
 
@@ -4368,8 +4364,6 @@ classobj_remove_class_constraint_node (SM_CLASS_CONSTRAINT ** constraints,
 	  con->next = NULL;
 	}
     }
-  er_log_debug (ARG_FILE_LINE, "ADD_INDEX REMOVE_INDEX END %s (pid %d)",
-		node->name, getpid ());
 }
 
 /*
