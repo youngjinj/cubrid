@@ -6221,54 +6221,28 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid,
 	      else
 		{
 		  oldrecdes = &copy_recdes;
-
-		  if (is_update_inplace == false)
-		    {
-		      LOG_TDES *tdes;
-
-		      /* if savepoint used, can't update in place, since may
-		       * corrupt unique B-tree.
-		       */
-		      tdes = LOG_FIND_CURRENT_TDES (thread_p);
-		      if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX)
-			  || LSA_ISNULL (&tdes->savept_lsa))
-			{
-			  MVCC_REC_HEADER old_rec_header;
-			  or_mvcc_get_header (oldrecdes, &old_rec_header);
-			  if (MVCC_IS_REC_INSERTED_BY_ME
-			      (thread_p, &old_rec_header))
-			    {
-			      /* When the row was inserted by me then just overwrite */
-			      is_update_inplace = true;
-			    }
-			}
-		    }
 		}
 	      COPY_OID (oid, &last_oid);
 	    }
-	  else
+	  if (is_update_inplace == false)
 	    {
-	      if (is_update_inplace == false)
+	      LOG_TDES *tdes;
+	      
+	      tdes = LOG_FIND_CURRENT_TDES (thread_p);
+	      if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX))
 		{
-		  LOG_TDES *tdes;
-
-		  /* if savepoint used, can't update in place, since may
-		   * corrupt unique B-tree.
-		   */
-
-		  tdes = LOG_FIND_CURRENT_TDES (thread_p);
-		  if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX)
-		      || LSA_ISNULL (&tdes->savept_lsa))
+		  MVCC_REC_HEADER old_rec_header;
+		  or_mvcc_get_header (oldrecdes, &old_rec_header);
+		  if (MVCC_IS_REC_INSERTED_BY_ME (thread_p, &old_rec_header))
 		    {
-		      MVCC_REC_HEADER old_rec_header;
-
-		      or_mvcc_get_header (oldrecdes, &old_rec_header);
-		      if (MVCC_IS_REC_INSERTED_BY_ME
-			  (thread_p, &old_rec_header))
-			{
-			  /* When the row was inserted by me then just overwrite */
-			  is_update_inplace = true;
-			}
+		      /* When the row was inserted by me then just overwrite.
+		       * Note that this optimization is disabled for classes
+		       * that have at least one unique index. Since in MVCC
+		       * there are no key locks, using in place update can
+		       * cause some anomalies regarding unique constraint
+		       * violation.
+		       */
+		      is_update_inplace = true;
 		    }
 		}
 	    }
