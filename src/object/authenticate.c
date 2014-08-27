@@ -6308,6 +6308,13 @@ au_perform_login (const char *name, const char *password,
     }
   else
     {
+      Au_public_user = au_find_user (AU_PUBLIC_USER_NAME);
+      Au_dba_user = au_find_user (AU_DBA_USER_NAME);
+      if (Au_public_user == NULL || Au_dba_user == NULL)
+	{
+	  error = ER_AU_INCOMPLETE_AUTH;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 0);
+	}
       user = au_find_user (dbuser);
       if (user == NULL)
 	{
