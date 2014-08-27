@@ -10050,6 +10050,19 @@ btree_delete_from_leaf (THREAD_ENTRY * thread_p, bool * key_deleted,
 					   "btree_delete_from_leaf: "
 					   "btree_search_leaf_page fails.");
 	    }
+	  else
+	    {
+	      vacuum_er_log (VACUUM_ER_LOG_WARNING | VACUUM_ER_LOG_BTREE,
+			     "VACUUM: Vacuum b-tree could not find key - "
+			     "oid(%d, %d, %d), class_oid(%d, %d, %d), "
+			     "btid(%d, (%d, %d))",
+			     oid->volid, oid->pageid, oid->slotid,
+			     class_oid->volid, class_oid->pageid,
+			     class_oid->slotid,
+			     btid->sys_btid->root_pageid,
+			     btid->sys_btid->vfid.volid,
+			     btid->sys_btid->vfid.fileid);
+	    }
 
 	  pgbuf_unfix_and_init (thread_p, leaf_page);
 	  goto exit_on_error;
@@ -14797,9 +14810,10 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added_deleted,
 
 	  if (oid_offset == NOT_FOUND)
 	    {
-	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE,
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
 		      ER_BTREE_UNKNOWN_OID, 3, oid->volid, oid->pageid,
 		      oid->slotid);
+	      assert (false);
 	      return ER_BTREE_UNKNOWN_OID;
 	    }
 
@@ -14997,8 +15011,9 @@ btree_insert_into_leaf (THREAD_ENTRY * thread_p, int *key_added_deleted,
 
       if (oid_offset == NOT_FOUND)
 	{
-	  er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_BTREE_UNKNOWN_OID,
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BTREE_UNKNOWN_OID,
 		  3, oid->volid, oid->pageid, oid->slotid);
+	  assert (false);
 	  return ER_BTREE_UNKNOWN_OID;
 	}
 
@@ -26322,7 +26337,7 @@ btree_rv_dump_redo_insert_mvcc_delid (FILE * fp, int length, void *data)
   fprintf (fp, "MVCC DELETE ID INSERTION: \n");
   fprintf (fp, "OID offset: %d \n", rcv_offset_and_flags);
   fprintf (fp, "UNQIUE: %s \n", is_unique ? "true" : "false");
-  fprintf (fp, "RECORD TYPE: %s \n", is_ovf ? "REGULAR" : "OVERFLOW");
+  fprintf (fp, "RECORD TYPE: %s \n", is_ovf ? "OVERFLOW" : "REGULAR");
   fprintf (fp, "KEY TYPE: %d \n",
 	   (key_domain == NULL) ? DB_TYPE_UNKNOWN : key_domain->type->id);
 
@@ -31946,6 +31961,11 @@ xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
 
 	  if (oid_cnt == -1)
 	    {
+	      if (er_errid () == NO_ERROR)
+		{
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR,
+			  0);
+		}
 	      status = BTREE_ERROR_OCCURRED;
 	      break;
 	    }
@@ -31956,7 +31976,15 @@ xbtree_mvcc_find_unique (THREAD_ENTRY * thread_p, BTID * btid,
 	    }
 	  else if (oid_cnt >= 1)
 	    {
+	      char *key_print = pr_valstring (key);
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE,
+		      ER_UNIQUE_VIOLATION_WITHKEY, 1,
+		      key_print == NULL ? "(null)" : key_print);
 	      status = BTREE_ERROR_OCCURRED;
+	      if (key_print != NULL)
+		{
+		  free_and_init (key_print);
+		}
 	      break;
 	    }
 	}
@@ -32293,11 +32321,15 @@ btree_delete_mvcc_delid_from_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
   mvcc_delid_offset = del_oid_offset + oid_size;
 
+#if !defined (NDEBUG)
   if (!btree_leaf_key_oid_is_mvcc_flaged (rec->data + del_oid_offset,
 					  BTREE_LEAF_OID_HAS_MVCC_DELID))
     {
-      return NO_ERROR;
+      /* Actually impossible case */
+      assert (false);
+      return ER_FAILED;
     }
+#endif
 
   if (have_mvcc_fixed_size
       || btree_leaf_key_oid_is_mvcc_flaged (rec->data + del_oid_offset,
@@ -32349,6 +32381,8 @@ btree_delete_mvcc_delid_from_page (THREAD_ENTRY * thread_p, BTID_INT * btid,
 
   if (spage_update (thread_p, page_ptr, slot_id, rec) != SP_SUCCESS)
     {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+      assert (false);
       goto exit_on_error;
     }
 
