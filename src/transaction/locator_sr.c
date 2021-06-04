@@ -311,7 +311,19 @@ locator_initialize (THREAD_ENTRY * thread_p)
 	  goto error;
 	}
 
+/* PoC - Proof of Concept */
+const char *username = POC_USER1_NAME;
+int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+strcat(user_dot_class_name, username);
+strcat(user_dot_class_name, ".");
+strcat(user_dot_class_name, classname);
+entry->e_name = user_dot_class_name;
+/**/
+
+      /* PoC - Proof of Concept *
       entry->e_name = strdup ((char *) classname);
+      /**/
       if (entry->e_name == NULL)
 	{
 	  free_and_init (entry);
@@ -479,8 +491,20 @@ start:
       return LC_CLASSNAME_ERROR;
     }
 
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  /**/
+
   /* Is there any entries on the classname hash table ? */
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
 
   if (locator_is_exist_class_name_entry (thread_p, entry))
     {
@@ -595,7 +619,19 @@ start:
 	  return LC_CLASSNAME_ERROR;
 	}
 
+/* PoC - Proof of Concept */
+const char *username = POC_USER1_NAME;
+int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+strcat(user_dot_class_name, username);
+strcat(user_dot_class_name, ".");
+strcat(user_dot_class_name, classname);
+entry->e_name = user_dot_class_name;
+/**/
+
+      /* PoC - Proof of Concept *
       entry->e_name = strdup ((char *) classname);
+      /**/
       if (entry->e_name == NULL)
 	{
 	  free_and_init (entry);
@@ -655,7 +691,7 @@ start:
 	    {
 	      locator_decr_num_transient_classnames (entry->e_tran_index);
 
-	      (void) mht_rem (locator_Mht_classnames, entry->e_name, NULL, NULL);
+              (void) mht_rem (locator_Mht_classnames, entry->e_name, NULL, NULL);
 
 	      free_and_init (entry->e_name);
 	      free_and_init (entry);
@@ -698,7 +734,20 @@ xlocator_get_reserved_class_name_oid (THREAD_ENTRY * thread_p, const char *class
       assert (false);
       return ER_FAILED;
     }
+
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  /**/
+
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
   if (entry == NULL)
     {
       assert (false);
@@ -780,7 +829,19 @@ start:
       return LC_CLASSNAME_ERROR;
     }
 
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  /**/
+
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
   if (entry != NULL)
     {
       assert (entry->e_tran_index == NULL_TRAN_INDEX || entry->e_tran_index == tran_index);
@@ -945,14 +1006,32 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
       return LC_CLASSNAME_ERROR;
     }
 
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  char old_user_dot_class_name[strlen(username) + 1 + strlen(oldname) + 1];
+  strcat(old_user_dot_class_name, username);
+  strcat(old_user_dot_class_name, ".");
+  strcat(old_user_dot_class_name, newname);
+  char new_user_dot_class_name[strlen(username) + 1 + strlen(newname) + 1];
+  strcat(new_user_dot_class_name, username);
+  strcat(new_user_dot_class_name, ".");
+  strcat(new_user_dot_class_name, newname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, new_user_dot_class_name);
+  /**/
+
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, newname);
+  /**/
   if (entry != NULL)
     {
       assert (entry->e_current.action == LC_CLASSNAME_RESERVED);
 
       entry->e_current.action = LC_CLASSNAME_RESERVED_RENAME;
       renamed = xlocator_delete_class_name (thread_p, oldname);
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, old_user_dot_class_name);
+      /* PoC - Proof of Concept *
       entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, oldname);
+      /**/
       if (renamed == LC_CLASSNAME_DELETED && entry != NULL)
 	{
 	  entry->e_current.action = LC_CLASSNAME_DELETED_RENAME;
@@ -974,7 +1053,10 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
 	}
       else
 	{
-	  entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, newname));
+	  entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, new_user_dot_class_name));
+          /* PoC - Proof of Concept *
+          entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, newname));
+          /**/
 	  if (entry == NULL)
 	    {
 	      renamed = LC_CLASSNAME_ERROR;
@@ -1048,7 +1130,19 @@ start:
       return LC_CLASSNAME_ERROR;
     }
 
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  /**/
+
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
 
   if (entry != NULL)
     {
@@ -1183,7 +1277,19 @@ locator_permoid_class_name (THREAD_ENTRY * thread_p, const char *classname, cons
       return ER_FAILED;
     }
 
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  /**/
+
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
   if (entry == NULL || entry->e_tran_index != LOG_FIND_THREAD_TRAN_INDEX (thread_p))
     {
       assert (false);
@@ -1356,7 +1462,19 @@ locator_drop_class_name_entry (THREAD_ENTRY * thread_p, const char *classname, L
   assert (csect_check_own (thread_p, CSECT_CT_OID_TABLE) == 1);
   assert (csect_check_own (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE) == 1);
 
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  /**/
+
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
   if (entry == NULL)
     {
       /* table is dropped by myself; not exist */
@@ -1676,7 +1794,19 @@ locator_savepoint_class_name_entry (const char *classname, LOG_LSA * savep_lsa)
 
   assert (csect_check_own (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE) == 1);
 
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  /**/
+
+  /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
   if (entry == NULL)
     {
       /* table is dropped by myself; not exist */
@@ -1975,11 +2105,23 @@ locator_check_class_names (THREAD_ENTRY * thread_p)
       assert (classname != NULL);
       assert (strlen (classname) < 255);
 
+      /* PoC - Proof of Concept */
+      const char *username = POC_USER1_NAME;
+      int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+      char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+      strcat(user_dot_class_name, username);
+      strcat(user_dot_class_name, ".");
+      strcat(user_dot_class_name, classname);
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+      /**/
+
       /*
        * Make sure that this class exists in classname_to_OID table and that
        * the OIDS matches
        */
+      /* PoC - Proof of Concept *
       entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+      /**/
       if (entry == NULL)
 	{
 	  isvalid = DISK_INVALID;
@@ -11087,7 +11229,19 @@ xlocator_find_lockhint_class_oids (THREAD_ENTRY * thread_p, int num_classes, con
 	      return LC_CLASSNAME_ERROR;
 	    }
 
-	  entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname));
+          /* PoC - Proof of Concept */
+          const char *username = POC_USER1_NAME;
+          int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+          char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+          strcat(user_dot_class_name, username);
+          strcat(user_dot_class_name, ".");
+          strcat(user_dot_class_name, classname);
+          entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+          /**/
+
+          /* PoC - Proof of Concept *
+          entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+          /**/
 
 	  if (entry != NULL)
 	    {

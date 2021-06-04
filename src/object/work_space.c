@@ -2218,6 +2218,35 @@ ws_add_classname (MOBJ classobj, MOP classmop, const char *cl_name)
       return;
     }
 
+/* PoC - Proof of Concept */
+const char *classname = sm_ch_name (classobj);
+
+assert(strcmp(classname, cl_name) == 0); // Both names must be the same.
+
+const char *username = POC_USER1_NAME;
+int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
+char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+strcat(user_dot_class_name, username);
+strcat(user_dot_class_name, ".");
+strcat(user_dot_class_name, classname);
+
+  current = (MOP) mht_get (Classname_cache, user_dot_class_name);
+
+  if (current == NULL)
+    {
+      mht_put (Classname_cache, user_dot_class_name, classmop);
+    }
+  else
+    {
+      if (current != classmop)
+	{
+	  mht_rem (Classname_cache, user_dot_class_name, NULL, NULL);
+	  mht_put (Classname_cache, user_dot_class_name, classmop);
+	}
+    }
+/**/
+
+  /* PoC - Proof of Concept *
   current = (MOP) mht_get (Classname_cache, sm_ch_name (classobj));
 
   if (current == NULL)
@@ -2232,6 +2261,7 @@ ws_add_classname (MOBJ classobj, MOP classmop, const char *cl_name)
 	  mht_put (Classname_cache, cl_name, classmop);
 	}
     }
+  /**/
 }
 
 /*
@@ -2259,7 +2289,20 @@ ws_drop_classname (MOBJ classobj)
       return;			// ignore
     }
 
+/* PoC - Proof of Concept */
+const char *username = POC_USER1_NAME;
+int user_dot_class_name_len = strlen(username) + 1 + strlen(class_name) + 1;
+char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+strcat(user_dot_class_name, username);
+strcat(user_dot_class_name, ".");
+strcat(user_dot_class_name, class_name);
+mht_rem (Classname_cache, user_dot_class_name, NULL, NULL);
+free_and_init (user_dot_class_name);
+/**/
+
+  /* PoC - Proof of Concept *
   mht_rem (Classname_cache, class_name, NULL, NULL);
+  /**/
 }
 
 /*
@@ -2277,11 +2320,19 @@ ws_drop_classname (MOBJ classobj)
 MOP
 ws_find_class (const char *name)
 {
-  MOP class_mop;
+  /* PoC - Proof of Concept */
+  const char *username = POC_USER1_NAME;
+  int user_dot_class_name_len = strlen(username) + 1 + strlen(name) + 1;
+  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
+  strcat(user_dot_class_name, username);
+  strcat(user_dot_class_name, ".");
+  strcat(user_dot_class_name, name);
+  return (MOP) mht_get (Classname_cache, user_dot_class_name);
+  /**/
 
-  class_mop = (MOP) mht_get (Classname_cache, name);
-
-  return (class_mop);
+  /* PoC - Proof of Concept *
+  return (MOP) mht_get (Classname_cache, name);
+  /**/
 }
 
 /*

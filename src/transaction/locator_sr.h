@@ -59,6 +59,9 @@ enum
   LOB_FLAG_INCLUDE_LOB
 };
 
+#define POC_USER1_NAME "DBA"
+#define POC_USER2_NAME "U1"
+
 extern bool locator_Dont_check_foreign_key;
 
 extern int locator_initialize (THREAD_ENTRY * thread_p);

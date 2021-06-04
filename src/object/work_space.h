@@ -433,6 +433,9 @@ struct ws_mop_table_entry
   MOP tail;
 };
 
+#define POC_USER1_NAME "DBA"
+#define POC_USER2_NAME "U1"
+
 /*
  * WORKSPACE GLOBALS
  */

@@ -1802,6 +1802,7 @@ boot_define_class (MOP class_mop)
   char domain_string[32];
   int error_code = NO_ERROR;
   const char *index_col_names[2] = { "class_name", NULL };
+  // const char *index_col_names[3] = { "class_name", "owner", NULL };
 
   def = smt_edit_class_mop (class_mop, AU_ALTER);
 
