@@ -1562,6 +1562,35 @@ slocator_find_class_oid (THREAD_ENTRY * thread_p, unsigned int rid, char *reques
   css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
 }
 
+void
+slocator_find_class_oid_yj (THREAD_ENTRY * thread_p, unsigned int rid, char *request, int reqlen)
+{
+  LC_FIND_CLASSNAME found;
+  char *class_name;
+  char *schema_name;
+  OID class_oid;
+  LOCK lock;
+  char *ptr;
+  OR_ALIGNED_BUF (OR_INT_SIZE + OR_OID_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+
+  ptr = or_unpack_string_nocopy (request, &class_name);
+  ptr = or_unpack_string_nocopy (request, &schema_name);
+  ptr = or_unpack_oid (ptr, &class_oid);
+  ptr = or_unpack_lock (ptr, &lock);
+
+  found = xlocator_find_class_oid_yj (thread_p, class_name, schema_name, &class_oid, lock);
+
+  if (found == LC_CLASSNAME_ERROR)
+    {
+      (void) return_error_to_client (thread_p, rid);
+    }
+
+  ptr = or_pack_int (reply, found);
+  ptr = or_pack_oid (ptr, &class_oid);
+  css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
+}
+
 /*
  * slocator_reserve_classnames -
  *
@@ -1618,6 +1647,54 @@ slocator_reserve_classnames (THREAD_ENTRY * thread_p, unsigned int rid, char *re
     }
 }
 
+void
+slocator_reserve_classnames_yj (THREAD_ENTRY * thread_p, unsigned int rid, char *request, int reqlen)
+{
+  LC_FIND_CLASSNAME reserved = LC_CLASSNAME_ERROR;
+  int num_classes;
+  char **class_names;
+  char **user_names;
+  OID *class_oids;
+  char *ptr;
+  int i;
+  int malloc_size;
+  char *malloc_area;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+
+  ptr = or_unpack_int (request, &num_classes);
+
+  malloc_size = ((sizeof (char *) + sizeof (char *) + sizeof (OID)) * num_classes);
+  malloc_area = (char *) db_private_alloc (thread_p, malloc_size);
+  if (malloc_area != NULL)
+    {
+      class_names = (char **) malloc_area;
+      user_names = (char **) ((char *) malloc_area + (sizeof (char *) * num_classes));
+      class_oids = (OID *) ((char *) ((char *) malloc_area + (sizeof (char *) * num_classes)) + (sizeof (char *) * num_classes));
+      for (i = 0; i < num_classes; i++)
+	{
+	  ptr = or_unpack_string_nocopy (ptr, &class_names[i]);
+	  ptr = or_unpack_string_nocopy (ptr, &user_names[i]);
+	  ptr = or_unpack_oid (ptr, &class_oids[i]);
+	}
+      reserved = xlocator_reserve_class_names_yj (thread_p, num_classes, (const char **) class_names, (const char **) user_names, class_oids);
+    }
+
+  if (reserved == LC_CLASSNAME_ERROR)
+    {
+      (void) return_error_to_client (thread_p, rid);
+    }
+
+  (void) or_pack_int (reply, reserved);
+
+  css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
+
+  if (malloc_area)
+    {
+      db_private_free_and_init (thread_p, malloc_area);
+    }
+}
+
 /*
  * slocator_get_reserved_class_name_oid () - Send to client whether class name was
  *					reserved by it.
@@ -1653,6 +1730,33 @@ slocator_get_reserved_class_name_oid (THREAD_ENTRY * thread_p, unsigned int rid,
   css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
 }
 
+void
+slocator_get_reserved_class_name_oid_yj (THREAD_ENTRY * thread_p, unsigned int rid, char *request, int reqlen)
+{
+  char *class_name;
+  char *schema_name;
+  OID class_oid = OID_INITIALIZER;
+  OR_ALIGNED_BUF (OR_OID_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  int error = NO_ERROR;
+
+  (void) or_unpack_string_nocopy (request, &class_name);
+  (void) or_unpack_string_nocopy (request, &schema_name);
+
+  error = xlocator_get_reserved_class_name_oid_yj (thread_p, class_name, schema_name, &class_oid);
+  if (error != NO_ERROR)
+    {
+      ASSERT_ERROR ();
+      (void) return_error_to_client (thread_p, rid);
+    }
+  else
+    {
+      assert (!OID_ISNULL (&class_oid));
+    }
+  (void) or_pack_oid (reply, &class_oid);
+  css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
+}
+
 /*
  * slocator_delete_class_name -
  *
@@ -1675,6 +1779,28 @@ slocator_delete_class_name (THREAD_ENTRY * thread_p, unsigned int rid, char *req
   (void) or_unpack_string_nocopy (request, &classname);
 
   deleted = xlocator_delete_class_name (thread_p, classname);
+  if (deleted == LC_CLASSNAME_ERROR)
+    {
+      (void) return_error_to_client (thread_p, rid);
+    }
+
+  (void) or_pack_int (reply, deleted);
+  css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
+}
+
+void
+slocator_delete_class_name_yj (THREAD_ENTRY * thread_p, unsigned int rid, char *request, int reqlen)
+{
+  char *class_name;
+  char *schema_name;
+  LC_FIND_CLASSNAME deleted;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+
+  (void) or_unpack_string_nocopy (request, &class_name);
+  (void) or_unpack_string_nocopy (request, &schema_name);
+
+  deleted = xlocator_delete_class_name_yj (thread_p, class_name,schema_name);
   if (deleted == LC_CLASSNAME_ERROR)
     {
       (void) return_error_to_client (thread_p, rid);
@@ -1748,6 +1874,37 @@ slocator_assign_oid (THREAD_ENTRY * thread_p, unsigned int rid, char *request, i
   ptr = or_unpack_string_nocopy (ptr, &classname);
 
   success = ((xlocator_assign_oid (thread_p, &hfid, &perm_oid, expected_length, &class_oid, classname) == NO_ERROR)
+	     ? NO_ERROR : ER_FAILED);
+  if (success != NO_ERROR)
+    {
+      (void) return_error_to_client (thread_p, rid);
+    }
+
+  ptr = or_pack_int (reply, success);
+  ptr = or_pack_oid (ptr, &perm_oid);
+  css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
+}
+
+void
+slocator_assign_oid_yj (THREAD_ENTRY * thread_p, unsigned int rid, char *request, int reqlen)
+{
+  HFID hfid;
+  int expected_length;
+  OID class_oid, perm_oid;
+  char *class_name;
+  char *schema_name;
+  int success;
+  char *ptr;
+  OR_ALIGNED_BUF (OR_INT_SIZE + OR_OID_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+
+  ptr = or_unpack_hfid (request, &hfid);
+  ptr = or_unpack_int (ptr, &expected_length);
+  ptr = or_unpack_oid (ptr, &class_oid);
+  ptr = or_unpack_string_nocopy (ptr, &class_name);
+  ptr = or_unpack_string_nocopy (ptr, &schema_name);
+
+  success = ((xlocator_assign_oid_yj (thread_p, &hfid, &perm_oid, expected_length, &class_oid, class_name, schema_name) == NO_ERROR)
 	     ? NO_ERROR : ER_FAILED);
   if (success != NO_ERROR)
     {

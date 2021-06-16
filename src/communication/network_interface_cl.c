@@ -1002,6 +1002,57 @@ locator_find_class_oid (const char *class_name, OID * class_oid, LOCK lock)
 #endif /* !CS_MODE */
 }
 
+LC_FIND_CLASSNAME
+locator_find_class_oid_yj (const char *class_name, const char *schema_name, OID * class_oid, LOCK lock)
+{
+#if defined(CS_MODE)
+  LC_FIND_CLASSNAME found = LC_CLASSNAME_ERROR;
+  int xfound;
+  int req_error;
+  char *ptr;
+  int request_size, class_name_len, schema_name_len;
+  char *request;
+  OR_ALIGNED_BUF (OR_INT_SIZE + OR_OID_SIZE) a_reply;
+  char *reply;
+
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  request_size = length_const_string (class_name, &class_name_len) + length_const_string (schema_name, &schema_name_len) + OR_OID_SIZE + OR_INT_SIZE;
+  request = (char *) malloc (request_size);
+  if (request == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) request_size);
+      return LC_CLASSNAME_ERROR;
+    }
+
+  ptr = pack_const_string_with_length (request, class_name, class_name_len);
+  ptr = pack_const_string_with_length (request, class_name, schema_name_len);
+  ptr = or_pack_lock (ptr, lock);
+
+  req_error = net_client_request (NET_SERVER_LC_FIND_CLASSOID, request, request_size, reply,
+				  OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0, NULL, 0);
+  if (!req_error)
+    {
+      ptr = or_unpack_int (reply, &xfound);
+      found = (LC_FIND_CLASSNAME) xfound;
+      ptr = or_unpack_oid (ptr, class_oid);
+    }
+  free_and_init (request);
+
+  return found;
+#else /* CS_MODE */
+  LC_FIND_CLASSNAME found = LC_CLASSNAME_ERROR;
+
+  THREAD_ENTRY *thread_p = enter_server ();
+
+  found = xlocator_find_class_oid_yj (thread_p, class_name, schema_name, class_oid, lock);
+
+  exit_server (*thread_p);
+
+  return found;
+#endif /* !CS_MODE */
+}
+
 /*
  * locator_reserve_class_names -
  *
@@ -1071,6 +1122,65 @@ locator_reserve_class_names (const int num_classes, const char **class_names, OI
 #endif /* !CS_MODE */
 }
 
+LC_FIND_CLASSNAME
+locator_reserve_class_names_yj (const int num_classes, const char **class_names, const char **user_names, OID * class_oids)
+{
+#if defined(CS_MODE)
+  LC_FIND_CLASSNAME reserved = LC_CLASSNAME_ERROR;
+  int xreserved;
+  int request_size;
+  int req_error;
+  char *request, *ptr;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply;
+  int i;
+
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  request_size = OR_INT_SIZE;
+  for (i = 0; i < num_classes; ++i)
+    {
+      request_size += length_const_string (class_names[i], NULL) + length_const_string (user_names[i], NULL) + OR_OID_SIZE;
+    }
+  request = (char *) malloc (request_size);
+  if (request == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) request_size);
+      return LC_CLASSNAME_ERROR;
+    }
+
+  ptr = or_pack_int (request, num_classes);
+  for (i = 0; i < num_classes; ++i)
+    {
+      ptr = pack_const_string (ptr, class_names[i]);
+      ptr = pack_const_string (ptr, user_names[i]);
+      ptr = or_pack_oid (ptr, &class_oids[i]);
+    }
+
+  req_error = net_client_request (NET_SERVER_LC_RESERVE_CLASSNAME, request, request_size, reply,
+				  OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0, NULL, 0);
+  if (!req_error)
+    {
+      (void) or_unpack_int (reply, &xreserved);
+      reserved = (LC_FIND_CLASSNAME) xreserved;
+    }
+
+  free_and_init (request);
+
+  return reserved;
+#else /* CS_MODE */
+  LC_FIND_CLASSNAME reserved = LC_CLASSNAME_ERROR;
+
+  THREAD_ENTRY *thread_p = enter_server ();
+
+  reserved = xlocator_reserve_class_names_yj (thread_p, num_classes, class_names, user_names, class_oids);
+
+  exit_server (*thread_p);
+
+  return reserved;
+#endif /* !CS_MODE */
+}
+
 /*
  * locator_get_reserved_class_name_oid () - Get OID of reserved class.
  *
@@ -1130,6 +1240,60 @@ locator_get_reserved_class_name_oid (const char *classname, OID * class_oid)
 #endif
 }
 
+int
+locator_get_reserved_class_name_oid_yj (const char *class_name, const char *schema_name, OID * class_oid)
+{
+#if defined(CS_MODE)
+  int request_size;
+  int class_name_len, schema_name_len;
+  int request_error = NO_ERROR;
+  char *request = NULL;
+  OR_ALIGNED_BUF (OR_OID_SIZE) a_reply;
+  char *reply = NULL;
+
+  assert (class_name != NULL);
+  assert (class_oid != NULL);
+
+  OID_SET_NULL (class_oid);
+
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  request_size = length_const_string (class_name, &class_name_len) + length_const_string (schema_name, &schema_name_len);
+  request = (char *) malloc (request_size);
+  if (request == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, request_size);
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+  (void) pack_const_string_with_length (request, class_name, class_name_len);
+  (void) pack_const_string_with_length (request, schema_name, schema_name_len);
+
+  request_error = net_client_request (NET_SERVER_LC_RESERVE_CLASSNAME_GET_OID, request, request_size, reply,
+				      OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0, NULL, 0);
+  free_and_init (request);
+
+  if (request_error != NO_ERROR)
+    {
+      return request_error;
+    }
+
+  (void) or_unpack_oid (reply, class_oid);
+
+  return NO_ERROR;
+#else
+  int is_reserved;
+
+  THREAD_ENTRY *thread_p = enter_server ();
+
+  is_reserved = xlocator_get_reserved_class_name_oid_yj (thread_p, class_name, schema_name, class_oid);
+
+  exit_server (*thread_p);
+
+  return is_reserved;
+#endif
+}
+
 /*
  * locator_delete_class_name -
  *
@@ -1178,6 +1342,53 @@ locator_delete_class_name (const char *class_name)
   THREAD_ENTRY *thread_p = enter_server ();
 
   deleted = xlocator_delete_class_name (thread_p, class_name);
+
+  exit_server (*thread_p);
+
+  return deleted;
+#endif /* !CS_MODE */
+}
+
+LC_FIND_CLASSNAME
+locator_delete_class_name_yj (const char *class_name, const char *schema_name)
+{
+#if defined(CS_MODE)
+  LC_FIND_CLASSNAME deleted = LC_CLASSNAME_ERROR;
+  int xdeleted;
+  int req_error, request_size, class_name_len, schema_name_len;
+  char *request;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply;
+
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  request_size = length_const_string (class_name, &class_name_len) + length_const_string (schema_name, &schema_name_len);
+  request = (char *) malloc (request_size);
+  if (request == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) request_size);
+      return LC_CLASSNAME_ERROR;
+    }
+
+  (void) pack_const_string_with_length (request, class_name, class_name_len);
+  (void) pack_const_string_with_length (request, schema_name, schema_name_len);
+  req_error = net_client_request (NET_SERVER_LC_DELETE_CLASSNAME, request, request_size, reply,
+				  OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0, NULL, 0);
+  if (!req_error)
+    {
+      or_unpack_int (reply, &xdeleted);
+      deleted = (LC_FIND_CLASSNAME) xdeleted;
+    }
+
+  free_and_init (request);
+
+  return deleted;
+#else /* CS_MODE */
+  LC_FIND_CLASSNAME deleted = LC_CLASSNAME_ERROR;
+
+  THREAD_ENTRY *thread_p = enter_server ();
+
+  deleted = xlocator_delete_class_name_yj (thread_p, class_name, schema_name);
 
   exit_server (*thread_p);
 
@@ -1300,6 +1511,56 @@ locator_assign_oid (const HFID * hfid, OID * perm_oid, int expected_length, OID 
   THREAD_ENTRY *thread_p = enter_server ();
 
   success = xlocator_assign_oid (thread_p, hfid, perm_oid, expected_length, class_oid, class_name);
+
+  exit_server (*thread_p);
+
+  return success;
+#endif /* !CS_MODE */
+}
+
+int
+locator_assign_oid_yj (const HFID * hfid, OID * perm_oid, int expected_length, OID * class_oid, const char *class_name, const char *schema_name)
+{
+#if defined(CS_MODE)
+  int success = ER_FAILED;
+  int request_size, class_name_len, schema_name_len;
+  int req_error;
+  char *request, *ptr;
+  OR_ALIGNED_BUF (OR_OID_SIZE + OR_INT_SIZE) a_reply;
+  char *reply;
+
+  reply = OR_ALIGNED_BUF_START (a_reply);
+
+  request_size = OR_HFID_SIZE + OR_INT_SIZE + OR_OID_SIZE + length_const_string (class_name, &class_name_len) + length_const_string (schema_name, &schema_name_len);
+  request = (char *) malloc (request_size);
+  if (request == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) request_size);
+      return ER_FAILED;
+    }
+
+  ptr = or_pack_hfid (request, hfid);
+  ptr = or_pack_int (ptr, expected_length);
+  ptr = or_pack_oid (ptr, class_oid);
+  ptr = pack_const_string_with_length (ptr, class_name, class_name_len);
+  ptr = pack_const_string_with_length (ptr, schema_name, schema_name_len);
+
+  req_error = net_client_request (NET_SERVER_LC_ASSIGN_OID, request, request_size, reply,
+				  OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0, NULL, 0);
+  if (!req_error)
+    {
+      ptr = or_unpack_int (reply, &success);
+      ptr = or_unpack_oid (ptr, perm_oid);
+    }
+  free_and_init (request);
+
+  return success;
+#else /* CS_MODE */
+  int success = ER_FAILED;
+
+  THREAD_ENTRY *thread_p = enter_server ();
+
+  success = xlocator_assign_oid_yj (thread_p, hfid, perm_oid, expected_length, class_oid, class_name, schema_name);
 
   exit_server (*thread_p);
 

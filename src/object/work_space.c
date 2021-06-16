@@ -2209,42 +2209,44 @@ ws_mark_instances_deleted (MOP class_op)
  *    It should be called by ws_cache when a class is given to the workspace.
  */
 void
-ws_add_classname (MOBJ classobj, MOP classmop, const char *cl_name)
+ws_add_classname (MOBJ class_obj, MOP class_mop, const char *class_name)
 {
-  MOP current;
-
-  if (classobj == NULL || classmop == NULL)
+  if (class_obj == NULL || class_mop == NULL)
     {
       return;
     }
 
-/* PoC - Proof of Concept */
-const char *classname = sm_ch_name (classobj);
-
-assert(strcmp(classname, cl_name) == 0); // Both names must be the same.
-
-const char *username = POC_USER1_NAME;
-int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-strcat(user_dot_class_name, username);
-strcat(user_dot_class_name, ".");
-strcat(user_dot_class_name, classname);
-
-  current = (MOP) mht_get (Classname_cache, user_dot_class_name);
-
-  if (current == NULL)
+  /* PoC - Proof of Concept */
+  char *obj_schema_name = sm_make_schema_name(POC_USER1_NAME, sm_ch_name (class_obj));
+  if (obj_schema_name == NULL)
     {
-      mht_put (Classname_cache, user_dot_class_name, classmop);
+      return;
     }
-  else
+
+  char *schema_name = sm_make_schema_name(POC_USER1_NAME, class_name);
+  if (schema_name == NULL)
     {
-      if (current != classmop)
-	{
-	  mht_rem (Classname_cache, user_dot_class_name, NULL, NULL);
-	  mht_put (Classname_cache, user_dot_class_name, classmop);
-	}
+      free_and_init (obj_schema_name);
+      return;
     }
-/**/
+
+  MOP obj_class_mop = (MOP) mht_get (Classname_cache, obj_schema_name);
+
+  if (obj_class_mop == NULL)
+    {
+      mht_put (Classname_cache, schema_name, class_mop);
+    }
+  else if (ws_mop_compare(obj_class_mop, class_mop) != MOP_EUQAL)
+    {
+      mht_rem (Classname_cache, obj_schema_name, ws_free_entry_key, NULL);
+      ws_decache_all_instances (obj_class_mop);
+      classobj_free_class ((SM_CLASS *) obj_class_mop->object);
+
+      mht_put (Classname_cache, schema_name, class_mop);
+    }
+
+  free_and_init (obj_schema_name);
+  /**/
 
   /* PoC - Proof of Concept *
   current = (MOP) mht_get (Classname_cache, sm_ch_name (classobj));
@@ -2276,29 +2278,22 @@ strcat(user_dot_class_name, classname);
 void
 ws_drop_classname (MOBJ classobj)
 {
-  const char *class_name = NULL;
-
   if (classobj == NULL)
     {
       return;
     }
 
-  class_name = sm_ch_name (classobj);
-  if (class_name == NULL)
+  /* PoC - Proof of Concept */
+  char *schema_name = sm_make_schema_name(POC_USER1_NAME, sm_ch_name (classobj));
+  if (schema_name == NULL)
     {
-      return;			// ignore
+      return;
     }
 
-/* PoC - Proof of Concept */
-const char *username = POC_USER1_NAME;
-int user_dot_class_name_len = strlen(username) + 1 + strlen(class_name) + 1;
-char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-strcat(user_dot_class_name, username);
-strcat(user_dot_class_name, ".");
-strcat(user_dot_class_name, class_name);
-mht_rem (Classname_cache, user_dot_class_name, NULL, NULL);
-free_and_init (user_dot_class_name);
-/**/
+  mht_rem (Classname_cache, schema_name, ws_free_entry_key, NULL);
+
+  free_and_init (schema_name);
+  /**/
 
   /* PoC - Proof of Concept *
   mht_rem (Classname_cache, class_name, NULL, NULL);
@@ -2318,21 +2313,49 @@ free_and_init (user_dot_class_name);
  *    check the schema before calling the server.
  */
 MOP
-ws_find_class (const char *name)
+ws_find_class (const char *class_name)
 {
+  if (class_name == NULL)
+    {
+      return NULL;
+    }
+
   /* PoC - Proof of Concept */
-  const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(name) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, name);
-  return (MOP) mht_get (Classname_cache, user_dot_class_name);
+  char *schema_name = sm_make_schema_name(POC_USER1_NAME, class_name);
+  if (schema_name == NULL)
+    {
+      return NULL;
+    }
+
+  MOP class_mop = (MOP) mht_get (Classname_cache, schema_name);
+
+  free_and_init (schema_name);
+
+  return class_mop;
   /**/
 
   /* PoC - Proof of Concept *
   return (MOP) mht_get (Classname_cache, name);
   /**/
+}
+
+MOP
+ws_find_class_by_schema_name (const char *schema_name)
+{
+  if (schema_name == NULL)
+    {
+      return NULL;
+    }
+
+  return (MOP) mht_get (Classname_cache, schema_name);
+}
+
+static int
+ws_free_entry_key (const void *key, void *data, void *args)
+{
+  free_and_init (key);
+
+  return NO_ERROR;
 }
 
 /*

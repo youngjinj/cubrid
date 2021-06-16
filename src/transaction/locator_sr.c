@@ -129,6 +129,7 @@ static const INT32 locator_Pseudo_pageid_last = -0x7FFF;
 static INT32 locator_Pseudo_pageid_crt = -2;
 
 static int locator_permoid_class_name (THREAD_ENTRY * thread_p, const char *classname, const OID * class_oid);
+static int locator_permoid_class_name_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name, const OID * class_oid);
 static int locator_defence_drop_class_name_entry (const void *name, void *ent, void *args);
 static int locator_force_drop_class_name_entry (const void *name, void *ent, void *args);
 static int locator_drop_class_name_entry (THREAD_ENTRY * thread_p, const char *classname, LOG_LSA * savep_lsa);
@@ -199,6 +200,8 @@ static int locator_eval_filter_predicate (THREAD_ENTRY * thread_p, BTID * btid, 
 					  OID ** inst_oids, int num_insts, RECDES ** recs, DB_LOGICAL * results);
 static bool locator_was_index_already_applied (HEAP_CACHE_ATTRINFO * index_attrinfo, BTID * btid, int pos);
 static LC_FIND_CLASSNAME xlocator_reserve_class_name (THREAD_ENTRY * thread_p, const char *classname, OID * class_oid);
+static LC_FIND_CLASSNAME xlocator_reserve_class_name_yj (THREAD_ENTRY * thread_p, const char *class_name,
+							 const char *user_names,OID * class_oid);
 
 static int locator_filter_errid (THREAD_ENTRY * thread_p, int num_ignore_error_count, int *ignore_error_list);
 static int locator_area_op_to_pruning_type (LC_COPYAREA_OPERATION op);
@@ -311,15 +314,13 @@ locator_initialize (THREAD_ENTRY * thread_p)
 	  goto error;
 	}
 
-/* PoC - Proof of Concept */
-const char *username = POC_USER1_NAME;
-int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-strcat(user_dot_class_name, username);
-strcat(user_dot_class_name, ".");
-strcat(user_dot_class_name, classname);
-entry->e_name = user_dot_class_name;
-/**/
+       /* PoC - Proof of Concept */
+       const char *username = POC_USER1_NAME;
+       int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+       char *schema_name = (char *) calloc(schema_name_len, sizeof(char));
+       snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+       entry->e_name = schema_name;
+       /**/
 
       /* PoC - Proof of Concept *
       entry->e_name = strdup ((char *) classname);
@@ -440,6 +441,29 @@ xlocator_reserve_class_names (THREAD_ENTRY * thread_p, const int num_classes, co
   return result;
 }
 
+LC_FIND_CLASSNAME
+xlocator_reserve_class_names_yj (THREAD_ENTRY * thread_p, const int num_classes, const char **class_names, const char **user_names, OID * class_oids)
+{
+  int i = 0;
+  LC_FIND_CLASSNAME result = LC_CLASSNAME_RESERVED;
+
+  for (i = 0; i < num_classes; ++i)
+    {
+      assert (class_names[i] != NULL);
+      assert (strlen (class_names[i]) < 255);
+
+      result = xlocator_reserve_class_name_yj (thread_p, class_names[i], user_names[i], &class_oids[i]);
+      if (result != LC_CLASSNAME_RESERVED)
+	{
+	  /* We could potentially revert the reservation but the transient entries should be properly cleaned up by the
+	   * rollback so we don't really need to do this here. */
+	  break;
+	}
+    }
+
+  return result;
+}
+
 /*
  * xlocator_reserve_class_name () - Reserve a classname
  *
@@ -493,12 +517,10 @@ start:
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, classname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   /**/
 
   /* Is there any entries on the classname hash table ? */
@@ -619,15 +641,13 @@ start:
 	  return LC_CLASSNAME_ERROR;
 	}
 
-/* PoC - Proof of Concept */
-const char *username = POC_USER1_NAME;
-int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-strcat(user_dot_class_name, username);
-strcat(user_dot_class_name, ".");
-strcat(user_dot_class_name, classname);
-entry->e_name = user_dot_class_name;
-/**/
+      /* PoC - Proof of Concept */
+      const char *username = POC_USER1_NAME;
+      int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+      char *schema_name = (char *) calloc(schema_name_len, sizeof(char));
+      snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+      entry->e_name = schema_name;
+      /**/
 
       /* PoC - Proof of Concept *
       entry->e_name = strdup ((char *) classname);
@@ -636,6 +656,252 @@ entry->e_name = user_dot_class_name;
 	{
 	  free_and_init (entry);
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) (strlen (classname) + 1));
+	  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+	  return LC_CLASSNAME_ERROR;
+	}
+
+      entry->e_tran_index = tran_index;
+
+      entry->e_current.action = LC_CLASSNAME_RESERVED;
+      if (OID_ISNULL (class_oid))
+	{
+	  locator_generate_class_pseudo_oid (thread_p, class_oid);
+	}
+      COPY_OID (&entry->e_current.oid, class_oid);
+      LSA_SET_NULL (&entry->e_current.savep_lsa);
+      entry->e_current.prev = NULL;
+
+      /* Add dummy log to make sure we can revert transient state change. See comment in xlocator_rename_class_name.
+       * Since reserve has been moved before any change (or flush) is done, same scenario can happen here. */
+      log_append_redo_data2 (thread_p, RVLOC_CLASSNAME_DUMMY, NULL, NULL, 0, 0, NULL);
+
+      assert (locator_is_exist_class_name_entry (thread_p, entry) == false);
+
+      (void) mht_put (locator_Mht_classnames, entry->e_name, entry);
+
+      locator_incr_num_transient_classnames (entry->e_tran_index);
+    }
+
+  /*
+   * Note that the index has not been made permanently into the database.
+   *      That is, it has not been inserted onto extendible hash.
+   */
+
+  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+  /*
+   * Get the lock on the class if we were able to reserve the name
+   */
+  if (reserve == LC_CLASSNAME_RESERVED && entry != NULL)
+    {
+      assert (entry->e_tran_index == tran_index);
+
+      if (lock_object (thread_p, class_oid, oid_Root_class_oid, SCH_M_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
+	{
+	  /*
+	   * Something wrong. Remove the entry from hash table.
+	   */
+	  if (csect_enter (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) != NO_ERROR)
+	    {
+	      assert (false);
+	      return LC_CLASSNAME_ERROR;
+	    }
+
+	  if (entry->e_current.prev == NULL)
+	    {
+	      locator_decr_num_transient_classnames (entry->e_tran_index);
+
+              (void) mht_rem (locator_Mht_classnames, entry->e_name, NULL, NULL);
+
+	      free_and_init (entry->e_name);
+	      free_and_init (entry);
+	    }
+	  else
+	    {
+	      old_action = entry->e_current.prev;
+	      entry->e_current = *old_action;
+	      free_and_init (old_action);
+	    }
+
+	  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+	  reserve = LC_CLASSNAME_ERROR;
+	}
+    }
+
+  return reserve;
+}
+
+static LC_FIND_CLASSNAME
+xlocator_reserve_class_name_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *user_names,OID * class_oid)
+{
+  LOCATOR_CLASSNAME_ENTRY *entry;
+  LOCATOR_CLASSNAME_ACTION *old_action;
+  LC_FIND_CLASSNAME reserve = LC_CLASSNAME_RESERVED;
+  OID tmp_classoid;
+  int tran_index;
+
+  if (class_name == NULL)
+    {
+      return LC_CLASSNAME_ERROR;
+    }
+
+  assert (class_name != NULL);
+  assert (strlen (class_name) < 255);
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+
+start:
+  reserve = LC_CLASSNAME_RESERVED;
+
+  if (csect_enter (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) != NO_ERROR)
+    {
+      /* Some kind of failure. We must notify the error to the caller. */
+      assert (false);
+      return LC_CLASSNAME_ERROR;
+    }
+
+  /* PoC - Proof of Concept */
+  const char *username = user_names;
+  int schema_name_len = strlen(username) + 1 + strlen(class_name) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, class_name);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
+  /**/
+
+  /* Is there any entries on the classname hash table ? */
+  /* PoC - Proof of Concept *
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  /**/
+
+  if (locator_is_exist_class_name_entry (thread_p, entry))
+    {
+      /* There is a class with such a name on the classname cache. */
+      reserve = LC_CLASSNAME_EXIST;
+    }
+  else if (entry != NULL)
+    {
+      assert (entry->e_current.action != LC_CLASSNAME_EXIST);
+
+      /*
+       * We can only proceed if the entry belongs to the current transaction,
+       * otherwise, we must lock the class associated with the classname and
+       * retry the operation once the lock is granted.
+       */
+      if (entry->e_tran_index == tran_index)
+	{
+	  /*
+	   * The name can be reserved only if it has been deleted or
+	   * previously reserved. We allow double reservations in order for
+	   * multiple table renaming to properly reserve all the names
+	   * involved.
+	   */
+	  if (entry->e_current.action == LC_CLASSNAME_DELETED || entry->e_current.action == LC_CLASSNAME_DELETED_RENAME
+	      || (entry->e_current.action == LC_CLASSNAME_RESERVED && LSA_ISNULL (&entry->e_current.savep_lsa)))
+	    {
+	      /*
+	       * The entry can be changed.
+	       * Do we need to save the old action...just in case we do a
+	       * partial rollback ?
+	       */
+	      if (!LSA_ISNULL (&entry->e_current.savep_lsa))
+		{
+		  /*
+		   * There is a possibility of returning to this top LSA
+		   * (savepoint). Save the action.. just in case
+		   */
+		  old_action = (LOCATOR_CLASSNAME_ACTION *) malloc (sizeof (*old_action));
+
+		  if (old_action == NULL)
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (*old_action));
+		      csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+		      return LC_CLASSNAME_ERROR;
+		    }
+
+		  *old_action = entry->e_current;
+		  LSA_SET_NULL (&entry->e_current.savep_lsa);
+		  entry->e_current.prev = old_action;
+		}
+
+	      entry->e_current.action = LC_CLASSNAME_RESERVED;
+	      if (OID_ISNULL (class_oid))
+		{
+		  locator_generate_class_pseudo_oid (thread_p, class_oid);
+		}
+	      COPY_OID (&entry->e_current.oid, class_oid);
+
+	      /* Add dummy log to make sure we can revert transient state change. See comment in
+	       * xlocator_rename_class_name. Since reserve has been moved before any change (or flush) is done, same
+	       * scenario can happen here. */
+	      log_append_redo_data2 (thread_p, RVLOC_CLASSNAME_DUMMY, NULL, NULL, 0, 0, NULL);
+	    }
+	  else
+	    {
+	      assert ((entry->e_current.action == LC_CLASSNAME_RESERVED && !LSA_ISNULL (&entry->e_current.savep_lsa))
+		      || entry->e_current.action == LC_CLASSNAME_RESERVED_RENAME);
+
+	      reserve = LC_CLASSNAME_EXIST;
+	    }
+	}
+      else
+	{
+	  COPY_OID (&tmp_classoid, &entry->e_current.oid);
+
+	  /*
+	   * The fate of this entry is known when the transaction holding
+	   * this entry either commits or aborts. Get the lock and try again.
+	   */
+
+	  /*
+	   * Exit from critical section since we are going to be suspended and
+	   * then retry again.
+	   */
+	  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+	  if (lock_object (thread_p, &tmp_classoid, oid_Root_class_oid, SCH_M_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
+	    {
+	      /*
+	       * Unable to acquired lock
+	       */
+	      return LC_CLASSNAME_ERROR;
+	    }
+	  else
+	    {
+	      /*
+	       * Try again
+	       * Remove the lock.. since the above was a dirty read
+	       */
+	      lock_unlock_object (thread_p, &tmp_classoid, oid_Root_class_oid, SCH_M_LOCK, true);
+	      goto start;
+	    }
+	}
+    }
+  else
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) malloc (sizeof (*entry));
+      if (entry == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (*entry));
+	  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+	  return LC_CLASSNAME_ERROR;
+	}
+
+      /* PoC - Proof of Concept */
+      const char *username = user_names;
+      int schema_name_len = strlen(username) + 1 + strlen(class_name) + 1;
+      char *schema_name = (char *) calloc(schema_name_len, sizeof(char));
+      snprintf(schema_name, schema_name_len, "%s.%s", username, class_name);
+      entry->e_name = schema_name;
+      /**/
+
+      /* PoC - Proof of Concept *
+      entry->e_name = strdup ((char *) classname);
+      /**/
+      if (entry->e_name == NULL)
+	{
+	  free_and_init (entry);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) (strlen (class_name) + 1));
 	  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
 	  return LC_CLASSNAME_ERROR;
 	}
@@ -737,17 +1003,61 @@ xlocator_get_reserved_class_name_oid (THREAD_ENTRY * thread_p, const char *class
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, classname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   /**/
 
   /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
   /**/
+  if (entry == NULL)
+    {
+      assert (false);
+      goto error;
+    }
+
+  if (entry->e_current.action != LC_CLASSNAME_RESERVED)
+    {
+      assert (false);
+      goto error;
+    }
+
+  if (entry->e_tran_index != tran_index)
+    {
+      assert (false);
+      goto error;
+    }
+
+  COPY_OID (class_oid, &entry->e_current.oid);
+
+  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+  return NO_ERROR;
+
+error:
+  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+  return ER_FAILED;
+}
+
+int
+xlocator_get_reserved_class_name_oid_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name, OID * class_oid)
+{
+  int tran_index;
+  LOCATOR_CLASSNAME_ENTRY *entry;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+
+  if (csect_enter_as_reader (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) != NO_ERROR)
+    {
+      assert (false);
+      return ER_FAILED;
+    }
+
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
+
   if (entry == NULL)
     {
       assert (false);
@@ -831,17 +1141,162 @@ start:
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, classname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   /**/
 
   /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
   /**/
+  if (entry != NULL)
+    {
+      assert (entry->e_tran_index == NULL_TRAN_INDEX || entry->e_tran_index == tran_index);
+
+      COPY_OID (&tmp_classoid, &entry->e_current.oid);
+    }
+
+  if (locator_is_exist_class_name_entry (thread_p, entry))
+    {
+      /* There is a class with such a name on the classname cache. We should convert it to transient one. */
+      entry->e_tran_index = tran_index;
+      entry->e_current.action = LC_CLASSNAME_DELETED;
+
+      locator_incr_num_transient_classnames (entry->e_tran_index);
+    }
+  else if (entry != NULL)
+    {
+      assert (entry->e_current.action != LC_CLASSNAME_EXIST);
+      assert (entry->e_tran_index == tran_index);
+
+      /*
+       * We can only proceed if the entry belongs to the current transaction,
+       * otherwise, we must lock the class associated with the classname and
+       * retry the operation once the lock is granted.
+       */
+      if (entry->e_tran_index == tran_index)
+	{
+	  /*
+	   * The name can be deleted only if it has been reserved by current
+	   * transaction
+	   */
+	  if (entry->e_current.action == LC_CLASSNAME_DELETED || entry->e_current.action == LC_CLASSNAME_DELETED_RENAME)
+	    {
+	      classname_delete = LC_CLASSNAME_ERROR;
+	      goto error;
+	    }
+
+	  assert (entry->e_current.action == LC_CLASSNAME_RESERVED
+		  || entry->e_current.action == LC_CLASSNAME_RESERVED_RENAME);
+
+	  /*
+	   * The entry can be changed.
+	   * Do we need to save the old action...just in case we do a partial
+	   * rollback ?
+	   */
+	  if (!LSA_ISNULL (&entry->e_current.savep_lsa))
+	    {
+	      /*
+	       * There is a possibility of returning to this top LSA (savepoint).
+	       * Save the action.. just in case
+	       */
+	      old_action = (LOCATOR_CLASSNAME_ACTION *) malloc (sizeof (*old_action));
+	      if (old_action == NULL)
+		{
+		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (*old_action));
+		  classname_delete = LC_CLASSNAME_ERROR;
+		  goto error;
+		}
+
+	      *old_action = entry->e_current;
+	      LSA_SET_NULL (&entry->e_current.savep_lsa);
+	      entry->e_current.prev = old_action;
+	    }
+
+	  entry->e_current.action = LC_CLASSNAME_DELETED;
+	}
+      else
+	{
+	  /*
+	   * Do not know the fate of this entry until the transaction holding
+	   * this entry either commits or aborts. Get the lock and try again.
+	   */
+
+	  /*
+	   * Exit from critical section since we are going to be suspended and
+	   * then retry again.
+	   */
+
+	  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+	  if (lock_object (thread_p, &tmp_classoid, oid_Root_class_oid, SCH_M_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
+	    {
+	      /*
+	       * Unable to acquired lock
+	       */
+	      return LC_CLASSNAME_ERROR;
+	    }
+	  else
+	    {
+	      /*
+	       * Try again
+	       * Remove the lock.. since the above was a dirty read
+	       */
+	      lock_unlock_object (thread_p, &tmp_classoid, oid_Root_class_oid, SCH_M_LOCK, true);
+	      goto start;
+	    }
+	}
+    }
+  else
+    {
+      /* Some kind of failure. We must notify the error to the caller. */
+      classname_delete = LC_CLASSNAME_ERROR;
+    }
+
+error:
+  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+  /*
+   * We do not need to lock the entry->oid since it has already been locked
+   * in exclusive mode when the class was deleted or renamed. Avoid duplicate
+   * calls.
+   */
+
+  /* Note that the index has not been dropped permanently from the database */
+  return classname_delete;
+}
+
+LC_FIND_CLASSNAME
+xlocator_delete_class_name_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name)
+{
+  LOCATOR_CLASSNAME_ENTRY *entry;
+  LOCATOR_CLASSNAME_ACTION *old_action;
+  LC_FIND_CLASSNAME classname_delete = LC_CLASSNAME_DELETED;
+  OID tmp_classoid;
+  int tran_index;
+
+  if (class_name == NULL)
+    {
+      return LC_CLASSNAME_ERROR;
+    }
+
+  assert (class_name != NULL);
+  assert (strlen (class_name) < 255);
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+
+start:
+  classname_delete = LC_CLASSNAME_DELETED;
+
+  if (csect_enter (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) != NO_ERROR)
+    {
+      /* Some kind of failure. We must notify the error to the caller. */
+      assert (false);
+      return LC_CLASSNAME_ERROR;
+    }
+
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   if (entry != NULL)
     {
       assert (entry->e_tran_index == NULL_TRAN_INDEX || entry->e_tran_index == tran_index);
@@ -1008,15 +1463,13 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  char old_user_dot_class_name[strlen(username) + 1 + strlen(oldname) + 1];
-  strcat(old_user_dot_class_name, username);
-  strcat(old_user_dot_class_name, ".");
-  strcat(old_user_dot_class_name, newname);
-  char new_user_dot_class_name[strlen(username) + 1 + strlen(newname) + 1];
-  strcat(new_user_dot_class_name, username);
-  strcat(new_user_dot_class_name, ".");
-  strcat(new_user_dot_class_name, newname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, new_user_dot_class_name);
+  int old_schema_name_len = strlen(username) + 1 + strlen(oldname) + 1;
+  int new_schema_name_len = strlen(username) + 1 + strlen(newname) + 1;
+  char old_schema_name[old_schema_name_len] = { 0, };
+  char new_schema_name[new_schema_name_len] = { 0, };
+  snprintf(old_schema_name, old_schema_name_len, "%s.%s", username, oldname);
+  snprintf(new_schema_name, new_schema_name_len, "%s.%s", username, newname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, new_schema_name);
   /**/
 
   /* PoC - Proof of Concept *
@@ -1028,7 +1481,7 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
 
       entry->e_current.action = LC_CLASSNAME_RESERVED_RENAME;
       renamed = xlocator_delete_class_name (thread_p, oldname);
-      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, old_user_dot_class_name);
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, old_schema_name);
       /* PoC - Proof of Concept *
       entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, oldname);
       /**/
@@ -1053,7 +1506,7 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
 	}
       else
 	{
-	  entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, new_user_dot_class_name));
+	  entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, new_schema_name));
           /* PoC - Proof of Concept *
           entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, newname));
           /**/
@@ -1132,18 +1585,143 @@ start:
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, classname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   /**/
 
   /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
   /**/
 
+  if (entry != NULL)
+    {
+      COPY_OID (class_oid, &entry->e_current.oid);
+      assert (find == LC_CLASSNAME_EXIST);
+    }
+
+  if (locator_is_exist_class_name_entry (thread_p, entry))
+    {
+      assert (find == LC_CLASSNAME_EXIST);	/* OK, go ahead */
+    }
+  else if (entry != NULL)
+    {
+      assert (entry->e_current.action != LC_CLASSNAME_EXIST);
+
+      /*
+       * We can only proceed if the entry belongs to the current transaction,
+       * otherwise, we must lock the class associated with the classname and
+       * retry the operation once the lock is granted.
+       */
+      assert (find == LC_CLASSNAME_EXIST);
+
+      if (entry->e_tran_index == tran_index)
+	{
+	  if (entry->e_current.action == LC_CLASSNAME_DELETED || entry->e_current.action == LC_CLASSNAME_DELETED_RENAME)
+	    {
+	      OID_SET_NULL (class_oid);	/* clear */
+	      find = LC_CLASSNAME_DELETED;
+	    }
+	  else
+	    {
+	      assert (find == LC_CLASSNAME_EXIST);	/* OK, go ahead */
+	    }
+	}
+      else
+	{
+	  /*
+	   * Do not know the fate of this entry until the transaction is
+	   * committed or aborted. Get the lock and try again.
+	   */
+	  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+	  if (lock != NULL_LOCK)
+	    {
+	      tmp_lock = lock;
+	    }
+	  else
+	    {
+	      tmp_lock = IS_LOCK;
+	    }
+
+	  if (lock_object (thread_p, class_oid, oid_Root_class_oid, tmp_lock, LK_UNCOND_LOCK) != LK_GRANTED)
+	    {
+	      /*
+	       * Unable to acquired lock
+	       */
+	      OID_SET_NULL (class_oid);	/* clear */
+	      return LC_CLASSNAME_ERROR;
+	    }
+	  else
+	    {
+	      /*
+	       * Try again
+	       * Remove the lock.. since the above was a dirty read
+	       */
+	      lock_unlock_object (thread_p, class_oid, oid_Root_class_oid, tmp_lock, true);
+	      goto start;
+	    }
+	}
+    }
+  else
+    {
+      find = LC_CLASSNAME_DELETED;
+    }
+
+  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+  if (lock != NULL_LOCK && find == LC_CLASSNAME_EXIST)
+    {
+      /* Now acquired the desired lock */
+      if (lock_object (thread_p, class_oid, oid_Root_class_oid, lock, LK_UNCOND_LOCK) != LK_GRANTED)
+	{
+	  /*
+	   * Unable to acquired lock
+	   */
+	  OID_SET_NULL (class_oid);	/* clear */
+	  find = LC_CLASSNAME_ERROR;
+	}
+      else
+	{
+	  lock_unlock_object (thread_p, class_oid, oid_Root_class_oid, lock, false);
+	}
+    }
+
+#if !defined(NDEBUG)
+  if (find == LC_CLASSNAME_EXIST)
+    {
+      assert (!OID_ISNULL (class_oid));
+    }
+  else if (find == LC_CLASSNAME_ERROR)
+    {
+      assert (OID_ISNULL (class_oid));
+    }
+#endif
+
+  return find;
+}
+
+LC_FIND_CLASSNAME
+xlocator_find_class_oid_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name, OID * class_oid, LOCK lock)
+{
+  int tran_index;
+  LOCATOR_CLASSNAME_ENTRY *entry;
+  LOCK tmp_lock;
+  LC_FIND_CLASSNAME find = LC_CLASSNAME_EXIST;
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
+
+start:
+  find = LC_CLASSNAME_EXIST;
+
+  if (csect_enter_as_reader (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) != NO_ERROR)
+    {
+      assert (false);
+      return LC_CLASSNAME_ERROR;
+    }
+
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   if (entry != NULL)
     {
       COPY_OID (class_oid, &entry->e_current.oid);
@@ -1279,17 +1857,90 @@ locator_permoid_class_name (THREAD_ENTRY * thread_p, const char *classname, cons
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, classname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   /**/
 
   /* PoC - Proof of Concept *
   entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
   /**/
+  if (entry == NULL || entry->e_tran_index != LOG_FIND_THREAD_TRAN_INDEX (thread_p))
+    {
+      assert (false);
+      error_code = ER_FAILED;
+      goto error;		/* should be impossible */
+    }
+
+  assert (locator_is_exist_class_name_entry (thread_p, entry) == false);
+  assert (entry->e_tran_index == LOG_FIND_THREAD_TRAN_INDEX (thread_p));
+
+  if (entry->e_current.action != LC_CLASSNAME_EXIST)
+    {
+      /*
+       * Remove the old lock entry. The new entry has already been acquired by
+       * the caller
+       */
+      lock_unlock_object (thread_p, &entry->e_current.oid, oid_Root_class_oid, X_LOCK, true);
+
+      /*
+       * Do we need to save the old action...just in case we do a partial
+       * rollback ?
+       */
+      if (!LSA_ISNULL (&entry->e_current.savep_lsa))
+	{
+	  /*
+	   * There is a possibility of returning to this top LSA (savepoint).
+	   * Save the action.. just in case
+	   */
+	  old_action = (LOCATOR_CLASSNAME_ACTION *) malloc (sizeof (*old_action));
+	  if (old_action == NULL)
+	    {
+	      error_code = ER_OUT_OF_VIRTUAL_MEMORY;
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 1, sizeof (*old_action));
+	      goto error;
+	    }
+
+	  *old_action = entry->e_current;
+	  LSA_SET_NULL (&entry->e_current.savep_lsa);
+	  entry->e_current.prev = old_action;
+	}
+
+      COPY_OID (&entry->e_current.oid, class_oid);
+    }
+
+  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+  assert (error_code == NO_ERROR);
+
+  return NO_ERROR;
+
+error:
+
+  csect_exit (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE);
+
+  assert (error_code != NO_ERROR);
+
+  return error_code;
+}
+
+static int
+locator_permoid_class_name_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name, const OID * class_oid)
+{
+  LOCATOR_CLASSNAME_ENTRY *entry;
+  LOCATOR_CLASSNAME_ACTION *old_action;
+  int error_code = NO_ERROR;
+
+  /* Is there any entries on the classname hash table ? */
+  if (csect_enter (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) != NO_ERROR)
+    {
+      assert (false);
+      return ER_FAILED;
+    }
+
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
+
   if (entry == NULL || entry->e_tran_index != LOG_FIND_THREAD_TRAN_INDEX (thread_p))
     {
       assert (false);
@@ -1464,12 +2115,10 @@ locator_drop_class_name_entry (THREAD_ENTRY * thread_p, const char *classname, L
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, classname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   /**/
 
   /* PoC - Proof of Concept *
@@ -1796,12 +2445,10 @@ locator_savepoint_class_name_entry (const char *classname, LOG_LSA * savep_lsa)
 
   /* PoC - Proof of Concept */
   const char *username = POC_USER1_NAME;
-  int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-  char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-  strcat(user_dot_class_name, username);
-  strcat(user_dot_class_name, ".");
-  strcat(user_dot_class_name, classname);
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+  int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+  char schema_name[schema_name_len] = { 0, };
+  snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
   /**/
 
   /* PoC - Proof of Concept *
@@ -2107,12 +2754,10 @@ locator_check_class_names (THREAD_ENTRY * thread_p)
 
       /* PoC - Proof of Concept */
       const char *username = POC_USER1_NAME;
-      int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-      char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-      strcat(user_dot_class_name, username);
-      strcat(user_dot_class_name, ".");
-      strcat(user_dot_class_name, classname);
-      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+      int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+      char schema_name[schema_name_len] = { 0, };
+      snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
       /**/
 
       /*
@@ -2196,6 +2841,26 @@ xlocator_assign_oid (THREAD_ENTRY * thread_p, const HFID * hfid, OID * perm_oid,
   if (classname != NULL)
     {
       error_code = locator_permoid_class_name (thread_p, classname, perm_oid);
+      assert (error_code == NO_ERROR);
+    }
+
+  return error_code;
+}
+
+int
+xlocator_assign_oid_yj (THREAD_ENTRY * thread_p, const HFID * hfid, OID * perm_oid, int expected_length, OID * class_oid,
+			const char *class_name, const char *schema_name)
+{
+  int error_code = NO_ERROR;
+
+  if (heap_assign_address (thread_p, hfid, class_oid, perm_oid, expected_length) != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
+
+  if (class_name != NULL)
+    {
+      error_code = locator_permoid_class_name_yj (thread_p, class_name, schema_name, perm_oid);
       assert (error_code == NO_ERROR);
     }
 
@@ -11231,12 +11896,10 @@ xlocator_find_lockhint_class_oids (THREAD_ENTRY * thread_p, int num_classes, con
 
           /* PoC - Proof of Concept */
           const char *username = POC_USER1_NAME;
-          int user_dot_class_name_len = strlen(username) + 1 + strlen(classname) + 1;
-          char *user_dot_class_name = (char *) calloc(user_dot_class_name_len, sizeof(char));
-          strcat(user_dot_class_name, username);
-          strcat(user_dot_class_name, ".");
-          strcat(user_dot_class_name, classname);
-          entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, user_dot_class_name);
+          int schema_name_len = strlen(username) + 1 + strlen(classname) + 1;
+          char schema_name[schema_name_len] = { 0, };
+          snprintf(schema_name, schema_name_len, "%s.%s", username, classname);
+          entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, schema_name);
           /**/
 
           /* PoC - Proof of Concept *

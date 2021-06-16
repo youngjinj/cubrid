@@ -397,6 +397,8 @@ struct ws_statistics
     } \
   while (0)
 
+#define MOP_EUQAL 0
+
 /*
  * WS_MAP constants
  *    These are returned as status codes by the workspace mapping functions.
@@ -502,9 +504,11 @@ extern void ws_decache (MOP mop);
 extern void ws_decache_all_instances (MOP classmop);
 
 /* Class name cache */
-extern MOP ws_find_class (const char *name);
-extern void ws_add_classname (MOBJ classobj, MOP classmop, const char *cl_name);
-extern void ws_drop_classname (MOBJ classobj);
+extern MOP ws_find_class (const char *class_name);
+extern MOP ws_find_class_by_schema_name (const char *schema_name);
+extern void ws_add_classname (MOBJ class_obj, MOP class_mop, const char *class_name);
+extern void ws_drop_classname (MOBJ class_obj);
+static int ws_free_entry_key (const void *key, void *data, void *args);
 
 /* MOP accessor functions */
 extern OID *ws_identifier (MOP mop);

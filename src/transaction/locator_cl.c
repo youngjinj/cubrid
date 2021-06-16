@@ -161,6 +161,8 @@ static void locator_keep_mops (MOP mop, MOBJ object, void *kmops);
 static int locator_instance_decache (MOP mop, void *ignore);
 static int locator_save_nested_mops (LC_LOCKSET * lockset, void *save_mops);
 static LC_FIND_CLASSNAME locator_find_class_by_oid (MOP * class_mop, const char *classname, OID * class_oid, LOCK lock);
+static LC_FIND_CLASSNAME locator_find_class_by_oid_yj (MOP * class_mop, const char *class_name, const char *schema_name,
+						       OID * class_oid, LOCK lock);
 static LIST_MOPS *locator_fun_get_all_mops (MOP class_mop, DB_FETCH_MODE purpose, int (*fun) (MOBJ class_obj),
 					    LC_FETCH_VERSION_TYPE * force_fetch_version_type);
 static int locator_internal_flush_instance (MOP inst_mop, bool decache);
@@ -179,6 +181,12 @@ LC_FIND_CLASSNAME
 locator_reserve_class_name (const char *class_name, OID * class_oid)
 {
   return locator_reserve_class_names (1, &class_name, class_oid);
+}
+
+LC_FIND_CLASSNAME
+locator_reserve_class_name_yj (const char *class_name, const char *user_name, OID * class_oid)
+{
+  return locator_reserve_class_names_yj (1, &class_name, &user_name, class_oid);
 }
 
 /*
@@ -3056,6 +3064,70 @@ locator_find_class_by_oid (MOP * class_mop, const char *classname, OID * class_o
   return found;
 }
 
+static LC_FIND_CLASSNAME
+locator_find_class_by_oid_yj (MOP * class_mop, const char *class_name, const char *schema_name, OID * class_oid, LOCK lock)
+{
+  LC_FIND_CLASSNAME found;
+  int error_code;
+
+  assert (class_name != NULL);
+  assert (schema_name != NULL);
+
+  /* Need to check the classname to oid in the server */
+  *class_mop = NULL;
+  found = locator_find_class_oid_yj (class_name, schema_name, class_oid, lock);
+  switch (found)
+    {
+    case LC_CLASSNAME_EXIST:
+      *class_mop = ws_mop (class_oid, sm_Root_class_mop);
+      if (*class_mop == NULL || WS_IS_DELETED (*class_mop))
+	{
+	  *class_mop = NULL;
+	  if (er_errid () == ER_OUT_OF_VIRTUAL_MEMORY)
+	    {
+	      found = LC_CLASSNAME_ERROR;
+	    }
+	  else
+	    {
+	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME, 1, class_name);
+	    }
+
+	  return found;
+	}
+
+      /* no need to get last version for class */
+      error_code = locator_lock (*class_mop, LC_CLASS, lock, LC_FETCH_CURRENT_VERSION);
+      if (error_code != NO_ERROR)
+	{
+	  /*
+	   * Fetch the class object so that it gets properly interned in
+	   * the workspace class table.  If we don't do that we can go
+	   * through here a zillion times until somebody actually *looks*
+	   * at the class object (not just its oid).
+	   */
+	  *class_mop = NULL;
+	  found = LC_CLASSNAME_ERROR;
+	}
+      break;
+
+    case LC_CLASSNAME_DELETED:
+      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME, 1, class_name);
+      break;
+
+    case LC_CLASSNAME_ERROR:
+      if (er_errid () == ER_LK_UNILATERALLY_ABORTED)
+	{
+	  (void) tran_abort_only_client (false);
+	}
+      break;
+
+    default:
+      break;
+    }
+
+  return found;
+}
+
 /*
  * locator_find_class_by_name () - Find mop of a class by the classname
  *
@@ -3128,6 +3200,58 @@ locator_find_class_by_name (const char *classname, LOCK lock, MOP * class_mop)
   return found;
 }
 
+static LC_FIND_CLASSNAME
+locator_find_class_by_name_yj (const char *class_name, const char *schema_name, LOCK lock, MOP * class_mop)
+{
+  OID class_oid;		/* Class object identifier */
+  LOCK current_lock;
+  LC_FIND_CLASSNAME found = LC_CLASSNAME_EXIST;
+
+  if (class_name == NULL)
+    {
+      *class_mop = NULL;
+      return LC_CLASSNAME_ERROR;
+    }
+
+  OID_SET_NULL (&class_oid);
+
+  /*
+   * Check if the classname to OID entry is cached. Trust the cache only if
+   * there is a lock on the class
+   */
+  *class_mop = ws_find_class_by_schema_name (schema_name);
+  if (*class_mop == NULL)
+    {
+      found = locator_find_class_by_oid_yj (class_mop, class_name, schema_name, &class_oid, lock);
+      return found;
+    }
+
+  current_lock = ws_get_lock (*class_mop);
+  if (current_lock == NULL_LOCK)
+    {
+      found = locator_find_class_by_oid_yj (class_mop, class_name, schema_name, &class_oid, lock);
+      return found;
+    }
+
+  if (WS_IS_DELETED (*class_mop))
+    {
+      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, ER_LC_UNKNOWN_CLASSNAME, 1, class_name);
+      *class_mop = NULL;
+      found = LC_CLASSNAME_DELETED;
+    }
+  else
+    {
+      /* no need to get last version for class */
+      if (locator_lock (*class_mop, LC_CLASS, lock, LC_FETCH_CURRENT_VERSION) != NO_ERROR)
+	{
+	  *class_mop = NULL;
+	  found = LC_CLASSNAME_ERROR;
+	}
+    }
+
+  return found;
+}
+
 /*
  * locator_find_class () - Find mop of a class
  *
@@ -3145,6 +3269,20 @@ locator_find_class (const char *classname)
   LOCK lock = SCH_S_LOCK;	/* This is done to avoid some deadlocks caused by our parsing */
 
   if (locator_find_class_by_name (classname, lock, &class_mop) != LC_CLASSNAME_EXIST)
+    {
+      class_mop = NULL;
+    }
+
+  return class_mop;
+}
+
+MOP
+locator_find_class_yj (const char *class_name, const char *schema_name, bool for_update)
+{
+  MOP class_mop;
+  LOCK lock = SCH_S_LOCK;	/* This is done to avoid some deadlocks caused by our parsing */
+
+  if (locator_find_class_by_name_yj (class_name, schema_name, lock, &class_mop) != LC_CLASSNAME_EXIST)
     {
       class_mop = NULL;
     }
@@ -5675,6 +5813,106 @@ locator_add_class (MOBJ class_obj, const char *classname)
   return class_mop;
 }
 
+MOP
+locator_add_class_yj (MOBJ class_obj, const char *class_name, const char *user_name)
+{
+  OID class_temp_oid;		/* A temporarily OID for the newly created class */
+  MOP class_mop;		/* The Mop of the newly created class */
+  LOCK lock;
+
+  if (class_name == NULL)
+    {
+      return NULL;
+    }
+
+  /* PoC - Proof of Concept */
+  char *schema_name = sm_make_schema_name(user_name, class_name);
+  if (schema_name == NULL)
+    {
+      return NULL;
+    }
+
+  class_mop = ws_find_class (schema_name);
+  /**/
+
+  /* PoC - Proof of Concept *
+  class_mop = ws_find_class (classname);
+  /**/
+  if (class_mop != NULL && ws_get_lock (class_mop) != NULL_LOCK)
+    {
+      if (!WS_IS_DELETED (class_mop))
+	{
+	  /* The class already exist.. since it is cached */
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_CLASSNAME_EXIST, 1, class_name);
+	  return NULL;
+	}
+
+      /*
+       * Flush the deleted class so we do not have problems with the
+       * classname to oid entry during commit
+       */
+      if (locator_flush_class (class_mop) != NO_ERROR)
+	{
+	  return NULL;
+	}
+    }
+
+  /*
+   * Class name should be already reserved, and server generated a pseudo-oid
+   * for it. Get the OID.
+   */
+
+  if (locator_get_reserved_class_name_oid_yj (class_name, schema_name, &class_temp_oid) != NO_ERROR)
+    {
+      return NULL;
+    }
+
+  /*
+   * SCH_M_LOCK and IX_LOCK locks were indirectly acquired on the newly
+   * created class and the root class using the locator_reserve_class_name
+   * function.
+   */
+
+  /*
+   * If there is any lock on the sm_Root_class_mop, its lock is converted to
+   * reflect the IX_LOCK. Otherwise, the root class is fetched to synchronize
+   * the root
+   */
+
+  lock = ws_get_lock (sm_Root_class_mop);
+  if (lock != NULL_LOCK)
+    {
+      assert (lock >= NULL_LOCK);
+      lock = lock_Conv[lock][IX_LOCK];
+      assert (lock != NA_LOCK);
+
+      ws_set_lock (sm_Root_class_mop, lock);
+    }
+  else
+    {
+      /* Fetch the rootclass object - no need to get last version for class */
+      if (locator_lock (sm_Root_class_mop, LC_CLASS, IX_LOCK, LC_FETCH_CURRENT_VERSION) != NO_ERROR)
+	{
+	  /* Unable to lock the Rootclass. Undo the reserve of classname */
+	  (void) locator_delete_class_name (class_name);
+	  return NULL;
+	}
+    }
+
+  class_mop = ws_cache_with_oid (class_obj, &class_temp_oid, sm_Root_class_mop);
+  if (class_mop != NULL)
+    {
+      ws_dirty (class_mop);
+      ws_set_lock (class_mop, SCH_M_LOCK);
+    }
+
+  /* PoC - Proof of Concept */
+  free_and_init (schema_name);
+  /**/
+
+  return class_mop;
+}
+
 /*
  * locator_create_heap_if_needed () - Make sure that a heap has been assigned
  *
@@ -6144,6 +6382,85 @@ locator_assign_permanent_oid (MOP mop)
   /* Assign an address */
 
   if (locator_assign_oid (hfid, &perm_oid, expected_length, ws_oid (class_mop), name) != NO_ERROR)
+    {
+      if (er_errid () == ER_LK_UNILATERALLY_ABORTED)
+	{
+	  (void) tran_abort_only_client (false);
+	}
+
+      return NULL;
+    }
+
+  /* Reset the OID of the mop */
+  ws_update_oid (mop, &perm_oid);
+
+  return ws_oid (mop);
+}
+
+OID *
+locator_assign_permanent_oid_yj (MOP mop, const char *schema_name)
+{
+  MOBJ object;			/* The object */
+  int expected_length;		/* Expected length of disk object */
+  OID perm_oid;			/* Permanent OID of object. Assigned as a side effect */
+  MOP class_mop;		/* The class mop */
+  MOBJ class_obj;		/* The class object */
+  const char *name;
+  HFID *hfid;			/* Heap where the object is going to be stored */
+
+  /* Find the expected length of the object */
+
+  class_mop = ws_class_mop (mop);
+  if (class_mop == NULL || (class_obj = locator_fetch_class (class_mop, DB_FETCH_CLREAD_INSTWRITE)) == NULL)
+    {
+      /* Could not assign a permanent OID */
+      return NULL;
+    }
+
+  /* Get the object */
+  if (ws_find (mop, &object) == WS_FIND_MOP_DELETED)
+    {
+      OID *oid;
+
+      oid = ws_oid (mop);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3, oid->volid, oid->pageid, oid->slotid);
+      return NULL;
+    }
+
+  /* Get an approximation for the expected size */
+  if (object != NULL && class_obj != NULL)
+    {
+      expected_length = tf_object_size (class_obj, object);
+      if (expected_length < (int) sizeof (OID))
+	{
+	  expected_length = (int) sizeof (OID);
+	}
+    }
+  else
+    {
+      expected_length = (int) sizeof (OID);
+    }
+
+  /* Find the heap where the object will be stored */
+
+  name = NULL;
+  if (locator_is_root (class_mop))
+    {
+      /* Object is a class */
+      hfid = sm_Root_class_hfid;
+      if (object != NULL)
+	{
+	  name = sm_ch_name (object);
+	}
+    }
+  else
+    {
+      hfid = sm_ch_heap (class_obj);
+    }
+
+  /* Assign an address */
+
+  if (locator_assign_oid_yj (hfid, &perm_oid, expected_length, ws_oid (class_mop), name, schema_name) != NO_ERROR)
     {
       if (er_errid () == ER_LK_UNILATERALLY_ABORTED)
 	{

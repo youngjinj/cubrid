@@ -1801,8 +1801,9 @@ boot_define_class (MOP class_mop)
   SM_TEMPLATE *def;
   char domain_string[32];
   int error_code = NO_ERROR;
-  const char *index_col_names[2] = { "class_name", NULL };
-  // const char *index_col_names[3] = { "class_name", "owner", NULL };
+  // const char *index_col_names[2] = { "class_name", NULL };
+  // const char *index_col_names[3] = { "class_name", "owner_name", NULL };
+  const char *index_col_names[3] = { "class_name", "owner", NULL };
 
   def = smt_edit_class_mop (class_mop, AU_ALTER);
 
@@ -1835,6 +1836,14 @@ boot_define_class (MOP class_mop)
     {
       return error_code;
     }
+
+  /**
+  error_code = smt_add_attribute (def, "owner_name", "varchar(255)", NULL);
+  if (error_code != NO_ERROR)
+    {
+      return error_code;
+    }
+  /**/
 
   error_code = smt_add_attribute (def, "inst_attr_count", "integer", NULL);
   if (error_code != NO_ERROR)

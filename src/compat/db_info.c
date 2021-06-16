@@ -142,6 +142,23 @@ db_find_class (const char *name)
   return retval;
 }
 
+DB_OBJECT *
+db_find_class_yj (const char *class_name, const char *user_name, bool for_update)
+{
+  DB_OBJECT *retval;
+
+  CHECK_CONNECT_NULL ();
+  CHECK_1ARG_NULL (class_name);
+
+  if (user_name == NULL) {
+    user_name = au_user_name ();
+  }
+  retval = sm_find_class_yj (class_name, user_name, for_update);
+
+
+  return retval;
+}
+
 /*
  * db_find_class_with_purpose()- This function search for a class in the database
  *     with a given name

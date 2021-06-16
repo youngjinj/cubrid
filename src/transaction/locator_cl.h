@@ -96,6 +96,7 @@ extern int locator_flush_for_multi_update (MOP class_mop);
 extern int locator_all_flush (void);
 extern int locator_repl_flush_all (void);
 extern MOP locator_add_class (MOBJ classobj, const char *classname);
+extern MOP locator_add_class_yj (MOBJ class_obj, const char *class_name, const char *user_name);
 extern MOP locator_add_instance (MOBJ instance, MOP class_mop);
 extern MOP locator_add_root (OID * root_oid, MOBJ class_root);
 extern int locator_remove_class (MOP class_mop);
@@ -105,7 +106,9 @@ extern MOBJ locator_update_class (MOP mop);
 extern int locator_update_tree_classes (MOP * classes_mop_set, int num_classes);
 extern MOBJ locator_prepare_rename_class (MOP class_mop, const char *old_classname, const char *new_classname);
 extern OID *locator_assign_permanent_oid (MOP mop);
+extern OID *locator_assign_permanent_oid_yj (MOP mop, const char *schema_name);
 extern MOP locator_find_class (const char *classname);
+extern MOP locator_find_class_yj (const char *class_name, const char *schema_name, bool for_update);
 extern MOP locator_find_class_with_purpose (const char *classname, bool for_update);
 
 #if defined (ENABLE_UNUSED_FUNCTION)
@@ -139,5 +142,6 @@ extern int locator_get_append_lsa (struct log_lsa *lsa);
 extern int locator_flush_replication_info (REPL_INFO * repl_info);
 
 extern LC_FIND_CLASSNAME locator_reserve_class_name (const char *class_name, OID * class_oid);
+extern LC_FIND_CLASSNAME locator_reserve_class_name_yj (const char *class_name, const char *user_name, OID * class_oid);
 
 #endif /* _LOCATOR_CL_H_ */

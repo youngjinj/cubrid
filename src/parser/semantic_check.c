@@ -212,6 +212,7 @@ static PT_NODE *pt_check_and_replace_hostvar (PARSER_CONTEXT * parser, PT_NODE *
 static PT_NODE *pt_check_with_clause (PARSER_CONTEXT * parser, PT_NODE * node);
 static PT_NODE *pt_check_with_info (PARSER_CONTEXT * parser, PT_NODE * node, SEMANTIC_CHK_INFO * info);
 static DB_OBJECT *pt_find_class (PARSER_CONTEXT * parser, PT_NODE * p, bool for_update);
+static DB_OBJECT *pt_find_class_yj (PARSER_CONTEXT * parser, PT_NODE * node, bool for_update);
 static void pt_check_unique_attr (PARSER_CONTEXT * parser, const char *entity_name, PT_NODE * att,
 				  PT_NODE_TYPE att_type);
 static void pt_check_function_index_expr (PARSER_CONTEXT * parser, PT_NODE * node);
@@ -8360,7 +8361,7 @@ pt_check_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
 
   /* check name doesn't already exist as a class */
   name = node->info.create_entity.entity_name;
-  existing_entity = pt_find_class (parser, name, false);
+  existing_entity = pt_find_class_yj (parser, name, false);
   if (existing_entity != NULL)
     {
       if (!(entity_type == PT_VCLASS && node->info.create_entity.or_replace == 1 && db_is_vclass (existing_entity) > 0)
@@ -11214,6 +11215,16 @@ pt_find_class (PARSER_CONTEXT * parser, PT_NODE * p, bool for_update)
   return db_find_class_with_purpose (p->info.name.original, for_update);
 }
 
+static DB_OBJECT *
+pt_find_class_yj (PARSER_CONTEXT * parser, PT_NODE * node, bool for_update)
+{
+  if (node == NULL || node->node_type != PT_NAME)
+    {
+      return NULL;
+    }
+
+  return db_find_class_yj (node->info.name.original, node->info.name.resolved, for_update);
+}
 
 /*
  * pt_check_unique_attr () - check that there are no duplicate attr

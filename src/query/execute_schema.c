@@ -8645,7 +8645,7 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
     {
     case PT_CLASS:
 
-      if (node->info.create_entity.if_not_exists == 1 && db_find_class (class_name))
+      if (node->info.create_entity.if_not_exists == 1 && db_find_self_class (class_name))
 	{
 	  goto error_exit;
 	}
@@ -8656,7 +8656,7 @@ do_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
 
       while (super_node)
 	{
-	  super_class = db_find_class (super_node->info.name.original);
+	  super_class = db_find_self_class (super_node->info.name.original);
 
 	  if (super_class == NULL)
 	    {

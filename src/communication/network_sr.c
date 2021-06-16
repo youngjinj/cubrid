@@ -313,7 +313,7 @@ net_server_init (void)
 
   req_p = &net_Requests[NET_SERVER_LC_FIND_CLASSOID];
   req_p->action_attribute = IN_TRANSACTION;
-  req_p->processing_function = slocator_find_class_oid;
+  req_p->processing_function = slocator_find_class_oid_yj;
   req_p->name = "NET_SERVER_LC_FIND_CLASSOID";
 
   req_p = &net_Requests[NET_SERVER_LC_DOESEXIST];
@@ -328,17 +328,18 @@ net_server_init (void)
 
   req_p = &net_Requests[NET_SERVER_LC_RESERVE_CLASSNAME];
   req_p->action_attribute = (CHECK_DB_MODIFICATION | IN_TRANSACTION);
-  req_p->processing_function = slocator_reserve_classnames;
+  // req_p->processing_function = slocator_reserve_classnames;
+  req_p->processing_function = slocator_reserve_classnames_yj;
   req_p->name = "NET_SERVER_LC_RESERVE_CLASSNAME";
 
   req_p = &net_Requests[NET_SERVER_LC_RESERVE_CLASSNAME_GET_OID];
   req_p->action_attribute = (CHECK_DB_MODIFICATION | IN_TRANSACTION);
-  req_p->processing_function = slocator_get_reserved_class_name_oid;
+  req_p->processing_function = slocator_get_reserved_class_name_oid_yj;
   req_p->name = "NET_SERVER_LC_RESERVE_CLASSNAME_GET_OID";
 
   req_p = &net_Requests[NET_SERVER_LC_DELETE_CLASSNAME];
   req_p->action_attribute = (CHECK_DB_MODIFICATION | IN_TRANSACTION);
-  req_p->processing_function = slocator_delete_class_name;
+  req_p->processing_function = slocator_delete_class_name_yj;
   req_p->name = "NET_SERVER_LC_DELETE_CLASSNAME";
 
   req_p = &net_Requests[NET_SERVER_LC_RENAME_CLASSNAME];
@@ -348,7 +349,7 @@ net_server_init (void)
 
   req_p = &net_Requests[NET_SERVER_LC_ASSIGN_OID];
   req_p->action_attribute = (CHECK_DB_MODIFICATION | IN_TRANSACTION);
-  req_p->processing_function = slocator_assign_oid;
+  req_p->processing_function = slocator_assign_oid_yj;
   req_p->name = "NET_SERVER_LC_ASSIGN_OID";
 
   req_p = &net_Requests[NET_SERVER_LC_NOTIFY_ISOLATION_INCONS];

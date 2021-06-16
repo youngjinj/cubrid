@@ -175,6 +175,8 @@ static int catcls_guess_record_length (OR_VALUE * value_p);
 static int catcls_find_class_oid_by_class_name (THREAD_ENTRY * thread_p, const char *name, OID * class_oid);
 static int catcls_find_btid_of_class_name (THREAD_ENTRY * thread_p, BTID * btid);
 static int catcls_find_oid_by_class_name (THREAD_ENTRY * thread_p, const char *name, OID * oid);
+static int catcls_find_oid_by_class_name_yj (THREAD_ENTRY * thread_p, const char *name_p, OID * oid_p);
+static char *catcls_make_schema_name (const char *class_name);
 static int catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p, DB_VALUE * oid_val);
 static int catcls_convert_attr_id_to_name (THREAD_ENTRY * thread_p, OR_BUF * orbuf_p, OR_VALUE * value_p);
 static void catcls_apply_component_type (OR_VALUE * value_p, int type);
@@ -708,6 +710,169 @@ catcls_find_oid_by_class_name (THREAD_ENTRY * thread_p, const char *name_p, OID 
   return NO_ERROR;
 }
 
+static int
+catcls_find_oid_by_class_name_yj (THREAD_ENTRY * thread_p, const char *name_p, OID * oid_p)
+{
+  /**/
+  int error = NO_ERROR;
+
+  PR_TYPE *class_val_pr_type = pr_type_from_id (DB_TYPE_VARCHAR);
+  assert (class_val_pr_type != NULL);
+
+  PR_TYPE *user_oid_val_pr_type = pr_type_from_id (DB_TYPE_OID);
+  assert (user_oid_val_pr_type != NULL);
+  
+  DB_VALUE class_val;
+  const char *class_name = name_p;
+  error = db_make_varchar (&class_val, DB_MAX_IDENTIFIER_LENGTH, class_name, (int) strlen (class_name), LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  OID catcls_user_oid;
+  const char *schema_name = catcls_make_schema_name (CT_USER_NAME);
+  OID_SET_NULL (&catcls_user_oid);
+  if (xlocator_find_class_oid_yj (thread_p, class_name, schema_name, &catcls_user_oid, (LOCK) SCH_S_LOCK) == LC_CLASSNAME_ERROR)
+    {
+      free_and_init (schema_name);
+      assert (er_errid () != NO_ERROR);
+      error = er_errid ();
+      return error;
+    }
+  free_and_init (schema_name);
+
+  BTID catcls_user_btid;
+  BTID_SET_NULL (&catcls_user_btid);
+  error = heap_get_btid_from_index_name (thread_p, &catcls_user_oid, "u_db_user_name", &catcls_user_btid);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  DB_VALUE user_str_val;
+  error = db_make_varchar (&user_str_val, DB_MAX_IDENTIFIER_LENGTH, "DBA", (int) strlen ("DBA"), LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  OID user_oid;
+  OID_SET_NULL (&user_oid);
+  error = xbtree_find_unique (thread_p, &catcls_user_btid, S_SELECT, &user_str_val, &catcls_user_oid, &user_oid, false);
+  if (error == BTREE_ERROR_OCCURRED)
+    {
+      pr_clear_value (&user_str_val);
+      assert (er_errid () != NO_ERROR);
+      error = er_errid ();
+      return ((error == NO_ERROR) ? ER_FAILED : error);
+    }
+
+  DB_VALUE user_oid_val;
+  db_value_domain_init (&user_oid_val, DB_TYPE_OID, DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
+  db_make_oid (&user_oid_val, &user_oid);
+
+  DB_MIDXKEY midxkey;
+  OR_BUF buf;
+  char *key_ptr;
+  char *nullmap_ptr;
+
+  midxkey.ncolumns = 2;
+  midxkey.buf = (char *) malloc (DB_MAX_IDENTIFIER_LENGTH + OR_OID_SIZE + MAX_ALIGNMENT);
+  or_init (&buf, midxkey.buf, -1);
+  nullmap_ptr = midxkey.buf;
+  or_advance (&buf, pr_midxkey_init_boundbits (nullmap_ptr, midxkey.ncolumns));
+
+  class_val_pr_type->index_writeval (&buf, &class_val);
+  OR_ENABLE_BOUND_BIT (nullmap_ptr, 0);
+
+  user_oid_val_pr_type->index_writeval (&buf, &user_oid_val);
+  OR_ENABLE_BOUND_BIT (nullmap_ptr, 1);
+
+  midxkey.size = CAST_BUFLEN (buf.ptr - buf.buffer);
+  midxkey.domain = NULL;
+
+  DB_VALUE key_val;
+
+  error = db_make_midxkey (&key_val, &midxkey);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  key_val.need_clear = true;
+  /**/
+
+  /**
+  DB_VALUE key_val;
+  int error = NO_ERROR;
+
+  error = db_make_varchar (&key_val, DB_MAX_IDENTIFIER_LENGTH, name_p, (int) strlen (name_p), LANG_SYS_CODESET,
+			   LANG_SYS_COLLATION);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+  /**/
+
+  error = xbtree_find_unique (thread_p, &catcls_Btid, S_SELECT, &key_val, &ct_Class.cc_classoid, oid_p, false);
+  if (error == BTREE_ERROR_OCCURRED)
+    {
+      pr_clear_value (&key_val);
+      assert (er_errid () != NO_ERROR);
+      error = er_errid ();
+      return ((error == NO_ERROR) ? ER_FAILED : error);
+    }
+  else if (error == BTREE_KEY_NOTFOUND)
+    {
+      OID_SET_NULL (oid_p);
+    }
+
+  pr_clear_value (&key_val);
+  return NO_ERROR;
+}
+
+static char *
+catcls_make_schema_name (const char *class_name)
+{
+  if (class_name == NULL)
+    {
+      return NULL;
+    }
+
+  const char *user_name = "DBA";
+
+  // int upper_user_name_len = intl_identifier_upper_string_size (user_name);
+  // int lower_class_name_len = intl_identifier_lower_string_size (class_name);
+  int upper_user_name_len = strlen (user_name);
+  int lower_class_name_len = strlen (class_name);
+
+  assert (upper_user_name_len < SM_MAX_IDENTIFIER_LENGTH);
+  assert (lower_class_name_len < SM_MAX_IDENTIFIER_LENGTH);
+
+  /* user name length + dot character length(1) + class name length + null character length(1) */
+  int schema_name_len = upper_user_name_len + 1 + lower_class_name_len + 1;
+
+  char upper_user_name[upper_user_name_len + 1] = { 0, };
+  char lower_class_name[lower_class_name_len + 1] = { 0, };
+
+  // intl_identifier_upper (user_name, upper_user_name);
+  // intl_identifier_lower (class_name, lower_class_name);
+
+  char *schema_name = (char *) calloc (schema_name_len, sizeof(char));
+  if (schema_name == NULL)
+    {
+      return NULL;
+    }
+
+  // snprintf(schema_name, schema_name_len, "%s.%s", upper_user_name, lower_class_name);
+  snprintf(schema_name, schema_name_len, "%s.%s", user_name, class_name);
+
+  return schema_name;
+}
+
 /*
  * catcls_convert_class_oid_to_oid () -
  *   return:
@@ -757,7 +922,7 @@ catcls_convert_class_oid_to_oid (THREAD_ENTRY * thread_p, DB_VALUE * oid_val_p)
 	  return NO_ERROR;
 	}
 
-      if (catcls_find_oid_by_class_name (thread_p, name_p, oid_p) != NO_ERROR)
+      if (catcls_find_oid_by_class_name_yj (thread_p, name_p, oid_p) != NO_ERROR)
 	{
 	  free_and_init (name_p);
 
@@ -4260,7 +4425,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p, RECD
   HEAP_SCANCACHE scan;
   bool is_scan_inited = false;
 
-  if (catcls_find_oid_by_class_name (thread_p, name_p, &oid) != NO_ERROR)
+  if (catcls_find_oid_by_class_name_yj (thread_p, name_p, &oid) != NO_ERROR)
     {
       goto error;
     }

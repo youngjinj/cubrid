@@ -97,13 +97,21 @@ extern int locator_fetch_all_reference_lockset (OID * oid, int chn, OID * class_
 						int quit_on_errors, int prune_level, LC_LOCKSET ** lockset,
 						LC_COPYAREA ** fetch_copyarea);
 extern LC_FIND_CLASSNAME locator_find_class_oid (const char *class_name, OID * class_oid, LOCK lock);
+extern LC_FIND_CLASSNAME locator_find_class_oid_yj (const char *class_name, const char *schema_name,
+						    OID * class_oid, LOCK lock);
 extern LC_FIND_CLASSNAME locator_reserve_class_names (const int num_classes, const char **class_names,
 						      OID * class_oids);
+extern LC_FIND_CLASSNAME locator_reserve_class_names_yj (const int num_classes, const char **class_names,
+							 const char **user_names, OID * class_oids);
 extern int locator_get_reserved_class_name_oid (const char *classname, OID * class_oid);
+extern int locator_get_reserved_class_name_oid_yj (const char *class_name, const char *schema_name, OID * class_oid);
 extern LC_FIND_CLASSNAME locator_delete_class_name (const char *class_name);
+extern LC_FIND_CLASSNAME locator_delete_class_name_yj (const char *class_name, const char *schema_name);
 extern LC_FIND_CLASSNAME locator_rename_class_name (const char *old_name, const char *new_name, OID * class_oid);
 extern int locator_assign_oid (const HFID * hfid, OID * perm_oid, int expected_length, OID * class_oid,
 			       const char *class_name);
+extern int locator_assign_oid_yj (const HFID * hfid, OID * perm_oid, int expected_length, OID * class_oid,
+				  const char *class_name, const char *schema_name);
 extern int locator_assign_oid_batch (LC_OIDSET * oidset);
 extern LC_FIND_CLASSNAME locator_find_lockhint_class_oids (int num_classes, const char **many_classnames,
 							   LOCK * many_locks, int *many_need_subclasses,

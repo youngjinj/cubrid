@@ -2176,6 +2176,46 @@ sm_downcase_name (const char *name, char *buf, int maxlen)
   intl_identifier_lower (name, buf);
 }
 
+char *
+sm_make_schema_name (const char *user_name, const char *class_name)
+{
+  if (class_name == NULL)
+    {
+      return NULL;
+    }
+
+  const char *use_user_name = user_name;
+  if (use_user_name == NULL)
+    {
+      use_user_name = au_user_name ();
+    }
+
+  int upper_user_name_len = intl_identifier_upper_string_size (use_user_name);
+  int lower_class_name_len = intl_identifier_lower_string_size (class_name);
+
+  assert (upper_user_name_len < SM_MAX_IDENTIFIER_LENGTH);
+  assert (lower_class_name_len < SM_MAX_IDENTIFIER_LENGTH);
+
+  /* user name length + dot character length(1) + class name length + null character length(1) */
+  int schema_name_len = upper_user_name_len + 1 + lower_class_name_len + 1;
+
+  char upper_user_name[upper_user_name_len + 1] = { 0, };
+  char lower_class_name[lower_class_name_len + 1] = { 0, };
+
+  intl_identifier_upper (use_user_name, upper_user_name);
+  intl_identifier_lower (class_name, lower_class_name);
+
+  char *schema_name = (char *) calloc (schema_name_len, sizeof(char));
+  if (schema_name == NULL)
+    {
+      return NULL;
+    }
+
+  snprintf(schema_name, schema_name_len, "%s.%s", upper_user_name, lower_class_name);
+
+  return schema_name;
+}
+
 /*
  * sm_resolution_space() -  This is used to convert a full component
  *    name_space to one of the more constrained resolution namespaces.
@@ -5044,6 +5084,41 @@ sm_find_class (const char *name)
   sm_downcase_name (name, realname, SM_MAX_IDENTIFIER_LENGTH);
 
   return (locator_find_class (realname));
+}
+
+MOP
+sm_find_class_yj (const char *class_name, const char *user_name, bool for_update)
+{
+  if (class_name == NULL)
+    {
+      return NULL;
+    }
+
+  const char *use_user_name = user_name;
+  if (use_user_name == NULL)
+    {
+      use_user_name = au_user_name ();
+    }
+
+  int upper_user_name_len = intl_identifier_upper_string_size (use_user_name);
+  int lower_class_name_len = intl_identifier_lower_string_size (class_name);
+
+  assert (upper_user_name_len < SM_MAX_IDENTIFIER_LENGTH);
+  assert (lower_class_name_len < SM_MAX_IDENTIFIER_LENGTH);
+
+  /* user name length + dot character length(1) + class name length */
+  int schema_name_len = upper_user_name_len + 1 + lower_class_name_len;
+
+  char upper_user_name[upper_user_name_len + 1] = { 0, };
+  char lower_class_name[lower_class_name_len + 1] = { 0, };
+  char schema_name[schema_name_len + 1] = { 0, };
+
+  intl_identifier_upper (use_user_name, upper_user_name);
+  intl_identifier_lower (class_name, lower_class_name);
+
+  snprintf(schema_name, schema_name_len, "%s.%s", upper_user_name, lower_class_name);
+
+  return locator_find_class_yj (lower_class_name, schema_name, false);
 }
 
 /*
@@ -10943,12 +11018,32 @@ allocate_disk_structures (MOP classop, SM_CLASS * class_, DB_OBJLIST * subclasse
 
   if (OID_ISTEMP (ws_oid (classop)))
     {
-      if (locator_assign_permanent_oid (classop) == NULL)
+      /* PoC - Proof of Concept */
+      char *schema_name = sm_make_schema_name(au_get_user_name (class_->owner), sm_get_ch_name (classop));
+      if (schema_name == NULL)
+        {
+	  if (er_errid () == NO_ERROR)
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OBJ_CANT_ASSIGN_OID, 0);
+	    }
+
+	  goto structure_error;
+        }
+      /**/
+
+      if (locator_assign_permanent_oid_yj (classop, schema_name) == NULL)
 	{
 	  if (er_errid () == NO_ERROR)
 	    {
 	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OBJ_CANT_ASSIGN_OID, 0);
 	    }
+
+	  /* PoC - Proof of Concept */
+          if (schema_name != NULL)
+            {
+              free_and_init (schema_name);
+            }
+          /**/
 
 	  goto structure_error;
 	}
@@ -11042,6 +11137,7 @@ structure_error:
   /* the workspace has already been damaged by this point, the caller will have to recognize the error and abort the
    * transaction. */
   ASSERT_ERROR_AND_SET (err);
+
   return err;
 }
 
@@ -12760,7 +12856,7 @@ update_class (SM_TEMPLATE * template_, MOP * classmop, int auto_res, DB_AUTH aut
 	   * have roots elsewhere.  Currently, this is the case since we are simply caching a newly created empty class
 	   * structure which will later be populated with install_new_representation.  The template that holds the new
 	   * class contents IS already a GC root. */
-	  template_->op = locator_add_class ((MOBJ) class_, (char *) sm_ch_name ((MOBJ) class_));
+	  template_->op = locator_add_class_yj ((MOBJ) class_, (char *) sm_ch_name ((MOBJ) class_), au_get_user_name(class_->owner));
 	  if (template_->op == NULL)
 	    {
 	      /* return locator error code */

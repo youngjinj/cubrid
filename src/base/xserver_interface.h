@@ -81,14 +81,22 @@ extern VOLID xboot_find_last_temp (THREAD_ENTRY * thread_p);
 
 extern LC_FIND_CLASSNAME xlocator_reserve_class_names (THREAD_ENTRY * thread_p, const int num_classes,
 						       const char **classname, OID * class_oid);
+extern LC_FIND_CLASSNAME xlocator_reserve_class_names_yj (THREAD_ENTRY * thread_p, const int num_classes,
+							  const char **class_names, const char **user_names, OID * class_oids);
 extern int xlocator_get_reserved_class_name_oid (THREAD_ENTRY * thread_p, const char *classname, OID * class_oid);
+extern int xlocator_get_reserved_class_name_oid_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name, OID * class_oid);
 extern LC_FIND_CLASSNAME xlocator_delete_class_name (THREAD_ENTRY * thread_p, const char *classname);
+extern LC_FIND_CLASSNAME xlocator_delete_class_name_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name);
 extern LC_FIND_CLASSNAME xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const char *newname,
 						     OID * class_oid);
 extern LC_FIND_CLASSNAME xlocator_find_class_oid (THREAD_ENTRY * thread_p, const char *classname, OID * class_oid,
 						  LOCK lock);
+extern LC_FIND_CLASSNAME xlocator_find_class_oid_yj (THREAD_ENTRY * thread_p, const char *class_name, const char *schema_name,
+						     OID * class_oid, LOCK lock);
 extern int xlocator_assign_oid (THREAD_ENTRY * thread_p, const HFID * hfid, OID * perm_oid, int expected_length,
 				OID * class_oid, const char *classname);
+extern int xlocator_assign_oid_yj (THREAD_ENTRY * thread_p, const HFID * hfid, OID * perm_oid, int expected_length,
+				   OID * class_oid, const char *class_name, const char *schema_name);
 extern int xlocator_fetch (THREAD_ENTRY * thrd, OID * oid, int chn, LOCK lock,
 			   LC_FETCH_VERSION_TYPE fetch_version_type, LC_FETCH_VERSION_TYPE initial_fetch_version_type,
 			   OID * class_oid, int class_chn, int prefetching, LC_COPYAREA ** fetch_area);

@@ -191,7 +191,7 @@ dbt_reserve_name (DB_CTMPL * def, const char *name)
   assert (def != NULL);
   assert (name != NULL);
 
-  reserved = locator_reserve_class_name (def->name, &class_oid);
+  reserved = locator_reserve_class_name_yj (def->name, au_user_name (), &class_oid);
   if (reserved != LC_CLASSNAME_RESERVED)
     {
       if (reserved == LC_CLASSNAME_EXIST)

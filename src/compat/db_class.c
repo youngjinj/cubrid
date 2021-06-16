@@ -82,7 +82,7 @@ db_create_class (const char *name)
   if (def != NULL)
     {
       /* Reserve class name. We don't expect failures. */
-      if (locator_reserve_class_name (def->name, &class_oid) != LC_CLASSNAME_RESERVED)
+      if (locator_reserve_class_name_yj (def->name, au_user_name (), &class_oid) != LC_CLASSNAME_RESERVED)
 	{
 	  assert_release (false);
 	  smt_quit (def);

@@ -68,6 +68,8 @@
 #include "optimizer.h"
 #include "network_interface_cl.h"
 #include "printer.hpp"
+#include "object_representation.h"
+#include "memory_alloc.h"
 
 #if defined (SUPPRESS_STRLEN_WARNING)
 #define strlen(s1)  ((int) strlen(s1))
@@ -500,6 +502,7 @@ static void flush_caches (void);
 
 static MOP au_make_user (const char *name);
 static int au_set_new_auth (MOP au_obj, MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type, bool grant_option);
+static int au_set_new_aut_yj (MOP au_obj, MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type, bool grant_option);
 static MOP au_get_new_auth (MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type);
 static int au_insert_new_auth (MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type, int grant_option);
 static int au_update_new_auth (MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type, int grant_option);
@@ -1570,6 +1573,121 @@ au_set_new_auth (MOP au_obj, MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_
   return NO_ERROR;
 }
 
+static int
+au_set_new_aut_yj (MOP au_obj, MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type, bool grant_option)
+{
+  int error = NO_ERROR;
+  MOP au_class, db_class = NULL, db_class_inst = NULL;
+  DB_VALUE value, class_name_val;
+  DB_AUTH type;
+  int i;
+  const char *type_set[] = { "SELECT", "INSERT", "UPDATE", "DELETE", "ALTER", "INDEX", "EXECUTE" };
+
+  if (au_obj == NULL)
+    {
+      au_class = sm_find_class (CT_CLASSAUTH_NAME);
+      if (au_class == NULL)
+	{
+	  error = ER_AU_MISSING_CLASS;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error, 1, CT_CLASSAUTH_NAME);
+	  return error;
+	}
+      au_obj = db_create_internal (au_class);
+      if (au_obj == NULL)
+	{
+	  assert (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+    }
+
+  db_make_object (&value, grantor);
+  obj_set (au_obj, "grantor", &value);
+
+  db_make_object (&value, user);
+  obj_set (au_obj, "grantee", &value);
+
+  db_class = sm_find_class (CT_CLASS_NAME);
+  if (db_class == NULL)
+    {
+      assert (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+
+  db_make_string (&class_name_val, sm_get_ch_name (class_mop));
+
+  /**/
+  PR_TYPE *class_val_pr_type = pr_type_from_id (DB_TYPE_VARCHAR);
+  assert (class_val_pr_type != NULL);
+
+  PR_TYPE *user_oid_val_pr_type = pr_type_from_id (DB_TYPE_OID);
+  assert (user_oid_val_pr_type != NULL);
+
+  OID *user_oid = ws_oid (au_get_dba_user ());
+
+  DB_VALUE user_oid_val;
+  db_value_domain_init (&user_oid_val, DB_TYPE_OID, DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
+  db_make_oid (&user_oid_val, user_oid);
+
+  DB_MIDXKEY midxkey;
+  OR_BUF buf;
+  char *key_ptr;
+  char *nullmap_ptr;
+
+  midxkey.ncolumns = 2;
+  midxkey.buf = (char *) malloc (DB_MAX_IDENTIFIER_LENGTH + OR_OID_SIZE + MAX_ALIGNMENT);
+  or_init (&buf, midxkey.buf, -1);
+  nullmap_ptr = midxkey.buf;
+  or_advance (&buf, pr_midxkey_init_boundbits (nullmap_ptr, midxkey.ncolumns));
+  
+  class_val_pr_type->index_writeval (&buf, &class_name_val);
+  OR_ENABLE_BOUND_BIT (nullmap_ptr, 0);
+
+  user_oid_val_pr_type->index_writeval (&buf, &user_oid_val);
+  OR_ENABLE_BOUND_BIT (nullmap_ptr, 1);
+
+  midxkey.size = CAST_BUFLEN (buf.ptr - buf.buffer);
+  midxkey.domain = NULL;
+
+  DB_VALUE key_val;
+
+  error = db_make_midxkey (&key_val, &midxkey);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  key_val.need_clear = true;
+  /**/
+
+  /**
+  db_class_inst = obj_find_unique (db_class, "class_name", &class_name_val, AU_FETCH_READ);
+  /**/
+  db_class_inst = obj_find_unique (db_class, "class_name", &key_val, AU_FETCH_READ);
+  if (db_class_inst == NULL)
+    {
+      assert (er_errid () != NO_ERROR);
+      pr_clear_value (&class_name_val);
+      return er_errid ();
+    }
+
+  db_make_object (&value, db_class_inst);
+  obj_set (au_obj, "class_of", &value);
+
+  for (type = DB_AUTH_SELECT, i = 0; type != auth_type; type = (DB_AUTH) (type << 1), i++)
+    {
+      ;
+    }
+
+  db_make_varchar (&value, 7, type_set[i], strlen (type_set[i]), LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  obj_set (au_obj, "auth_type", &value);
+
+  db_make_int (&value, (int) grant_option);
+  obj_set (au_obj, "is_grantable", &value);
+
+  pr_clear_value (&class_name_val);
+  return NO_ERROR;
+}
+
 /*
  * au_get_new_auth -
  *   return:
@@ -1755,7 +1873,7 @@ au_insert_new_auth (MOP grantor, MOP user, MOP class_mop, DB_AUTH auth_type, int
       if (auth_type & index)
 	{
 	  error =
-	    au_set_new_auth (NULL, grantor, user, class_mop, (DB_AUTH) index, ((grant_option & index) ? true : false));
+	    au_set_new_aut_yj (NULL, grantor, user, class_mop, (DB_AUTH) index, ((grant_option & index) ? true : false));
 	  if (error != NO_ERROR)
 	    {
 	      break;
