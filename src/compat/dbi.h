@@ -267,8 +267,15 @@ extern "C"
 
   extern DB_OBJECT *db_find_class_of_index (const char *const index, const DB_CONSTRAINT_TYPE type);
   extern DB_OBJECT *db_find_class (const char *name);
+
+  extern DB_OBJECT *db_find_system_class_youngjinj (const char *class_name);
+  extern DB_OBJECT *db_find_self_class_youngjinj (const char *class_name);
+  extern DB_OBJECT *db_find_user_class_youngjinj (const char *class_name, const char *user_name);
+  extern DB_OBJECT *db_find_system_class_for_update_youngjinj (const char *class_name);
+  extern DB_OBJECT *db_find_self_class_for_update_youngjinj (const char *class_name);
+  extern DB_OBJECT *db_find_user_class_for_update_youngjinj (const char *class_name, const char *user_name);
+
   extern DB_OBJECT *db_find_class_yj (const char *class_name, const char *user_name, bool for_update);
-  #define db_find_self_class(class_name) db_find_class_yj ((class_name), (NULL), (false))
   extern DB_OBJECT *db_find_class_with_purpose (const char *name, bool for_update);
   extern DB_OBJECT *db_get_class (DB_OBJECT * obj);
   extern DB_OBJLIST *db_get_all_objects (DB_OBJECT * classobj);

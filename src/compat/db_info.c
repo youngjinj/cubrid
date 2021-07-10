@@ -143,6 +143,72 @@ db_find_class (const char *name)
 }
 
 DB_OBJECT *
+db_find_system_class_youngjinj (const char *class_name)
+{
+  CHECK_CONNECT_NULL ();
+  CHECK_1ARG_NULL (class_name);
+
+  const char * _user_name = "DBA";
+
+  return sm_find_class(class_name);
+}
+
+DB_OBJECT *
+db_find_self_class_youngjinj (const char *class_name)
+{
+  CHECK_CONNECT_NULL ();
+  CHECK_1ARG_NULL (class_name);
+
+  const char * _user_name = au_user_name ();
+
+  return sm_find_class(class_name);;
+}
+
+DB_OBJECT *
+db_find_user_class_youngjinj (const char *class_name, const char *user_name)
+{
+  CHECK_CONNECT_NULL ();
+  CHECK_1ARG_NULL (class_name);
+
+  const char * _user_name = user_name;
+
+  return sm_find_class(class_name);
+}
+
+DB_OBJECT *
+db_find_system_class_for_update_youngjinj (const char *class_name)
+{
+  CHECK_CONNECT_NULL ();
+  CHECK_1ARG_NULL (class_name);
+
+  const char * _user_name = "DBA";
+
+  return sm_find_class(class_name);
+}
+
+DB_OBJECT *
+db_find_self_class_for_update_youngjinj (const char *class_name)
+{
+  CHECK_CONNECT_NULL ();
+  CHECK_1ARG_NULL (class_name);
+
+  const char * _user_name = au_user_name ();
+
+  return sm_find_class(class_name);;
+}
+
+DB_OBJECT *
+db_find_user_class_for_update_youngjinj (const char *class_name, const char *user_name)
+{
+  CHECK_CONNECT_NULL ();
+  CHECK_1ARG_NULL (class_name);
+
+  const char * _user_name = user_name;
+
+  return sm_find_class(class_name);
+}
+
+DB_OBJECT *
 db_find_class_yj (const char *class_name, const char *user_name, bool for_update)
 {
   DB_OBJECT *retval;

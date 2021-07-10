@@ -5087,6 +5087,30 @@ sm_find_class (const char *name)
 }
 
 MOP
+sm_find_class_youngjinj (const char *class_name, const char *user_name)
+{
+  char *schema_name = sm_make_schema_name(user_name, class_name);
+
+  char realname[SM_MAX_IDENTIFIER_LENGTH];
+
+  sm_downcase_name (class_name, realname, SM_MAX_IDENTIFIER_LENGTH);
+
+  return (locator_find_class (realname));
+}
+
+MOP
+sm_find_class_for_update_youngjinj (const char *class_name, const char *user_name)
+{
+  char *schema_name = sm_make_schema_name(user_name, class_name);
+
+  char realname[SM_MAX_IDENTIFIER_LENGTH];
+
+  sm_downcase_name (class_name, realname, SM_MAX_IDENTIFIER_LENGTH);
+
+  return (locator_find_class (realname));
+}
+
+MOP
 sm_find_class_yj (const char *class_name, const char *user_name, bool for_update)
 {
   if (class_name == NULL)
