@@ -8422,8 +8422,9 @@ pt_check_create_entity (PARSER_CONTEXT * parser, PT_NODE * node)
   else
     {
       /* In system class names, owner name can be NULL. Otherwise, owner name must not be NULL. */
-      assert (au_is_dba_group_member (Au_user));
-      assert (sm_check_system_class_by_name (PT_NAME_ORIGINAL (name)));
+      // assert (au_is_dba_group_member (Au_user));
+      // assert (sm_check_system_class_by_name (PT_NAME_ORIGINAL (name)));
+      ;
     }
 
   /* We cannot use an existing synonym name as a class name. */

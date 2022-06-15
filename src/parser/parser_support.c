@@ -10296,6 +10296,18 @@ pt_set_user_specified_name (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, 
 	    *continue_walk = PT_STOP_WALK;
 	  }
 
+	original_name = PT_NAME_ORIGINAL (PT_CREATE_ENTITY_NAME (node));
+	dot = strchr (original_name, '.');
+	if (!dot)
+	  {
+	    resolved_name = sc_current_schema_name ();
+	    intl_identifier_lower (resolved_name, downcase_resolved_name);
+
+	    user_specified_name = pt_append_string (parser, downcase_resolved_name, ".");
+	    user_specified_name = pt_append_string (parser, user_specified_name, original_name);
+	    PT_NAME_ORIGINAL (PT_CREATE_ENTITY_NAME (node)) = user_specified_name;
+	  }
+
 	return node;
       }
       // break;
@@ -10366,7 +10378,8 @@ pt_set_user_specified_name (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, 
 
   if (resolved_name == NULL || resolved_name[0] == '\0')
     {
-      resolved_name = sc_current_schema_name ();
+      // resolved_name = sc_current_schema_name ();
+      sc_current_schema_name ();
     }
   else if (intl_identifier_lower_string_size (resolved_name) >= DB_MAX_USER_LENGTH)
     {
@@ -10376,11 +10389,18 @@ pt_set_user_specified_name (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, 
       return node;
     }
 
-  intl_identifier_lower (resolved_name, downcase_resolved_name);
+  if (resolved_name)
+    {
+      intl_identifier_lower (resolved_name, downcase_resolved_name);
 
-  /* In case 1, 2, 3 */
-  user_specified_name = pt_append_string (parser, downcase_resolved_name, ".");
-  user_specified_name = pt_append_string (parser, user_specified_name, original_name);
+      /* In case 1, 2, 3 */
+      user_specified_name = pt_append_string (parser, downcase_resolved_name, ".");
+      user_specified_name = pt_append_string (parser, user_specified_name, original_name);
+    }
+  else 
+    {
+      user_specified_name = original_name;
+    }
 
   assert (intl_identifier_lower_string_size (user_specified_name) < DB_MAX_IDENTIFIER_LENGTH);
 

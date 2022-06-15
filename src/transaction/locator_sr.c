@@ -273,7 +273,7 @@ locator_initialize (THREAD_ENTRY * thread_p)
   else
     {
       locator_Mht_classnames =
-	mht_create ("Memory hash Classname to OID", CLASSNAME_CACHE_SIZE, mht_1strhash, mht_compare_strings_are_equal);
+	mht_create ("Memory hash Classname to OID", CLASSNAME_CACHE_SIZE, mht_1strhash_test, mht_compare_name_are_equal_without_schema);
     }
 
   if (locator_Mht_classnames == NULL)
@@ -328,7 +328,7 @@ locator_initialize (THREAD_ENTRY * thread_p)
 
       assert (locator_is_exist_class_name_entry (thread_p, entry));
 
-      (void) mht_put (locator_Mht_classnames, entry->e_name, entry);
+      (void) mht_put_new (locator_Mht_classnames, entry->e_name, entry);
     }
 
   /* End the scan cursor */
@@ -458,6 +458,11 @@ xlocator_reserve_class_name (THREAD_ENTRY * thread_p, const char *classname, OID
   LC_FIND_CLASSNAME reserve = LC_CLASSNAME_RESERVED;
   OID tmp_classoid;
   int tran_index;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   if (classname == NULL)
     {
@@ -480,7 +485,45 @@ start:
     }
 
   /* Is there any entries on the classname hash table ? */
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (classname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, classname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
 
   if (locator_is_exist_class_name_entry (thread_p, entry))
     {
@@ -621,7 +664,7 @@ start:
 
       assert (locator_is_exist_class_name_entry (thread_p, entry) == false);
 
-      (void) mht_put (locator_Mht_classnames, entry->e_name, entry);
+      (void) mht_put_new (locator_Mht_classnames, entry->e_name, entry);
 
       locator_incr_num_transient_classnames (entry->e_tran_index);
     }
@@ -655,7 +698,7 @@ start:
 	    {
 	      locator_decr_num_transient_classnames (entry->e_tran_index);
 
-	      (void) mht_rem (locator_Mht_classnames, entry->e_name, NULL, NULL);
+	      (void) mht_rem2 (locator_Mht_classnames, entry->e_name, entry, NULL, NULL);
 
 	      free_and_init (entry->e_name);
 	      free_and_init (entry);
@@ -690,6 +733,11 @@ xlocator_get_reserved_class_name_oid (THREAD_ENTRY * thread_p, const char *class
 {
   int tran_index;
   LOCATOR_CLASSNAME_ENTRY *entry;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 
@@ -698,7 +746,47 @@ xlocator_get_reserved_class_name_oid (THREAD_ENTRY * thread_p, const char *class
       assert (false);
       return ER_FAILED;
     }
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (classname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, classname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
+
   if (entry == NULL)
     {
       assert (false);
@@ -759,6 +847,11 @@ xlocator_delete_class_name (THREAD_ENTRY * thread_p, const char *classname)
   LC_FIND_CLASSNAME classname_delete = LC_CLASSNAME_DELETED;
   OID tmp_classoid;
   int tran_index;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   if (classname == NULL)
     {
@@ -780,7 +873,46 @@ start:
       return LC_CLASSNAME_ERROR;
     }
 
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (classname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, classname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
+
   if (entry != NULL)
     {
       assert (entry->e_tran_index == NULL_TRAN_INDEX || entry->e_tran_index == tran_index);
@@ -918,6 +1050,11 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
   LOCATOR_CLASSNAME_ENTRY *entry;
   LC_FIND_CLASSNAME renamed;
   int tran_index;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   if (oldname == NULL || newname == NULL)
     {
@@ -945,14 +1082,93 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
       return LC_CLASSNAME_ERROR;
     }
 
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, newname);
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (newname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, newname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, newname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, newname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
+
   if (entry != NULL)
     {
       assert (entry->e_current.action == LC_CLASSNAME_RESERVED);
 
       entry->e_current.action = LC_CLASSNAME_RESERVED_RENAME;
       renamed = xlocator_delete_class_name (thread_p, oldname);
-      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, oldname);
+
+      last = NULL;
+      tmp_entry = NULL;
+      count = 0;
+      dot = strchr (oldname, '.');
+      if (!dot)
+	{
+	  LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+	  const char *schema_name = tdes->client.get_db_user ();
+	  snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, oldname);
+	}
+      do
+	{
+	  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, oldname, &last);
+	  if (entry)
+	    {
+	      if (!dot)
+		{
+		  if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		    {
+		      break;
+		    }
+		  else
+		    {
+		      tmp_entry = entry;
+		      count++;
+		    }
+		}
+	      else if (strcmp (entry->e_name, oldname) == 0)
+		{
+		  break;
+		}
+	    }
+	}
+      while (entry);
+
+      if (!entry && (count == 1))
+	{
+	  entry = tmp_entry;
+	}
+
       if (renamed == LC_CLASSNAME_DELETED && entry != NULL)
 	{
 	  entry->e_current.action = LC_CLASSNAME_DELETED_RENAME;
@@ -974,7 +1190,46 @@ xlocator_rename_class_name (THREAD_ENTRY * thread_p, const char *oldname, const 
 	}
       else
 	{
-	  entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, newname));
+	  last = NULL;
+	  tmp_entry = NULL;
+	  count = 0;
+	  dot = strchr (newname, '.');
+	  if (!dot)
+	    {
+	      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+	      const char *schema_name = tdes->client.get_db_user ();
+	      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, newname);
+	    }
+	  do
+	    {
+	      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, newname, &last);
+	      if (entry)
+		{
+		  if (!dot)
+		    {
+		      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+			{
+			  break;
+			}
+		      else
+			{
+			  tmp_entry = entry;
+			  count++;
+			}
+		    }
+		  else if (strcmp (entry->e_name, newname) == 0)
+		    {
+		      break;
+		    }
+		}
+	    }
+	  while (entry);
+
+	  if (!entry && (count == 1))
+	    {
+	      entry = tmp_entry;
+	    }
+
 	  if (entry == NULL)
 	    {
 	      renamed = LC_CLASSNAME_ERROR;
@@ -1036,6 +1291,11 @@ xlocator_find_class_oid (THREAD_ENTRY * thread_p, const char *classname, OID * c
   LOCATOR_CLASSNAME_ENTRY *entry;
   LOCK tmp_lock;
   LC_FIND_CLASSNAME find = LC_CLASSNAME_EXIST;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 
@@ -1048,7 +1308,45 @@ start:
       return LC_CLASSNAME_ERROR;
     }
 
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (classname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, classname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
 
   if (entry != NULL)
     {
@@ -1172,9 +1470,17 @@ start:
 static int
 locator_permoid_class_name (THREAD_ENTRY * thread_p, const char *classname, const OID * class_oid)
 {
+  int tran_index;
   LOCATOR_CLASSNAME_ENTRY *entry;
   LOCATOR_CLASSNAME_ACTION *old_action;
   int error_code = NO_ERROR;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
+
+  tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 
   /* Is there any entries on the classname hash table ? */
   if (csect_enter (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE, INF_WAIT) != NO_ERROR)
@@ -1183,7 +1489,46 @@ locator_permoid_class_name (THREAD_ENTRY * thread_p, const char *classname, cons
       return ER_FAILED;
     }
 
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (classname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, classname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
+
   if (entry == NULL || entry->e_tran_index != LOG_FIND_THREAD_TRAN_INDEX (thread_p))
     {
       assert (false);
@@ -1348,6 +1693,11 @@ locator_drop_class_name_entry (THREAD_ENTRY * thread_p, const char *classname, L
   LOG_TDES *tdes;		/* Transaction descriptor */
   LOCATOR_CLASSNAME_ENTRY *entry;
   LOCATOR_CLASSNAME_ACTION *old_action;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   tran_index = LOG_FIND_THREAD_TRAN_INDEX (thread_p);
 
@@ -1356,7 +1706,46 @@ locator_drop_class_name_entry (THREAD_ENTRY * thread_p, const char *classname, L
   assert (csect_check_own (thread_p, CSECT_CT_OID_TABLE) == 1);
   assert (csect_check_own (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE) == 1);
 
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (classname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, classname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
+
   if (entry == NULL)
     {
       /* table is dropped by myself; not exist */
@@ -1578,7 +1967,7 @@ locator_force_drop_class_name_entry (const void *name, void *ent, void *args)
       free_and_init (old_action);
     }
 
-  (void) mht_rem (locator_Mht_classnames, name, NULL, NULL);
+  (void) mht_rem2 (locator_Mht_classnames, name, entry, NULL, NULL);
 
   free_and_init (entry->e_name);
   free_and_init (entry);
@@ -1669,6 +2058,11 @@ locator_savepoint_class_name_entry (const char *classname, LOG_LSA * savep_lsa)
   THREAD_ENTRY *thread_p;
   int tran_index;
   LOCATOR_CLASSNAME_ENTRY *entry;
+  void *last;
+  int count;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   thread_p = thread_get_thread_entry_info ();
 
@@ -1676,7 +2070,46 @@ locator_savepoint_class_name_entry (const char *classname, LOG_LSA * savep_lsa)
 
   assert (csect_check_own (thread_p, CSECT_LOCATOR_SR_CLASSNAME_TABLE) == 1);
 
-  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+  last = NULL;
+  tmp_entry = NULL;
+  count = 0;
+  dot = strchr (classname, '.');
+  if (!dot)
+    {
+      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+      const char *schema_name = tdes->client.get_db_user ();
+      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+    }
+  do
+    {
+      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+      if (entry)
+	{
+	  if (!dot)
+	    {
+	      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+		{
+		  break;
+		}
+	      else
+		{
+		  tmp_entry = entry;
+		  count++;
+		}
+	    }
+	  else if (strcmp (entry->e_name, classname) == 0)
+	    {
+	      break;
+	    }
+	}
+    }
+  while (entry);
+
+  if (!entry && (count == 1))
+    {
+      entry = tmp_entry;
+    }
+
   if (entry == NULL)
     {
       /* table is dropped by myself; not exist */
@@ -1930,6 +2363,7 @@ locator_check_class_names (THREAD_ENTRY * thread_p)
   HEAP_SCANCACHE scan_cache;
   MVCC_SNAPSHOT *mvcc_snapshot = NULL;
   LOCATOR_CLASSNAME_ENTRY *entry;
+  void *last;
 
   mvcc_snapshot = logtb_get_mvcc_snapshot (thread_p);
   if (mvcc_snapshot == NULL)
@@ -1979,7 +2413,20 @@ locator_check_class_names (THREAD_ENTRY * thread_p)
        * Make sure that this class exists in classname_to_OID table and that
        * the OIDS matches
        */
-      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname);
+      last = NULL;
+      do
+	{
+	  entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+	  if (entry)
+	    {
+	      if (strcmp (entry->e_name, classname) == 0)
+		{
+		  break;
+		}
+	    }
+	}
+      while (entry);
+
       if (entry == NULL)
 	{
 	  isvalid = DISK_INVALID;
@@ -11064,6 +11511,11 @@ xlocator_find_lockhint_class_oids (THREAD_ENTRY * thread_p, int num_classes, con
 #if !defined(NDEBUG)
   int check_own;
 #endif
+  void *last;
+  LOCATOR_CLASSNAME_ENTRY *tmp_entry;
+  int count;
+  const char *dot;
+  char user_specified_name[DB_MAX_IDENTIFIER_LENGTH] = { '\0' };
 
   *fetch_area = NULL;
 
@@ -11119,7 +11571,45 @@ xlocator_find_lockhint_class_oids (THREAD_ENTRY * thread_p, int num_classes, con
 	      return LC_CLASSNAME_ERROR;
 	    }
 
-	  entry = ((LOCATOR_CLASSNAME_ENTRY *) mht_get (locator_Mht_classnames, classname));
+	  last = NULL;
+	  tmp_entry = NULL;
+	  count = 0;
+	  dot = strchr (classname, '.');
+	  if (!dot)
+	    {
+	      LOG_TDES *tdes = LOG_FIND_TDES (tran_index);
+	      const char *schema_name = tdes->client.get_db_user ();
+	      snprintf (user_specified_name, SM_MAX_IDENTIFIER_LENGTH, "%s.%s", schema_name, classname);
+	    }
+	  do
+	    {
+	      entry = (LOCATOR_CLASSNAME_ENTRY *) mht_get2 (locator_Mht_classnames, classname, &last);
+	      if (entry)
+		{
+		  if (!dot)
+		    {
+		      if (strcasecmp (entry->e_name, user_specified_name) == 0)
+			{
+			  break;
+			}
+		      else
+			{
+			  tmp_entry = entry;
+			  count++;
+			}
+		    }
+		  else if (strcmp (entry->e_name, classname) == 0)
+		    {
+		      break;
+		    }
+		}
+	      }
+	  while (entry);
+
+	  if (!entry && (count == 1))
+	    {
+	      entry = tmp_entry;
+	    }
 
 	  if (entry != NULL)
 	    {

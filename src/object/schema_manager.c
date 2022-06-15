@@ -2298,6 +2298,8 @@ sm_user_specified_name (const char *name, char *buf, int buf_size)
        */
       return sm_downcase_name (name, buf, buf_size);
     }
+  return sm_downcase_name (name, buf, buf_size);
+
   assert (strlen (name) < SM_MAX_IDENTIFIER_LENGTH - SM_MAX_USER_LENGTH);
   if (sm_check_system_class_by_name (name))
     {

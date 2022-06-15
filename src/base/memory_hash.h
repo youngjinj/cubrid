@@ -77,6 +77,7 @@ struct mht_table
 extern unsigned int mht_2str_pseudo_key (const void *key, int key_size);
 extern unsigned int mht_1strlowerhash (const void *key, const unsigned int ht_size);
 extern unsigned int mht_1strhash (const void *key, const unsigned int ht_size);
+extern unsigned int mht_1strhash_test (const void *key, const unsigned int ht_size);
 extern unsigned int mht_2strhash (const void *key, const unsigned int ht_size);
 extern unsigned int mht_3strhash (const void *key, const unsigned int ht_size);
 extern unsigned int mht_4strhash (const void *key, const unsigned int ht_size);
@@ -88,6 +89,7 @@ extern unsigned int mht_ptrhash (const void *ptr, const unsigned int ht_size);
 extern unsigned int mht_valhash (const void *key, const unsigned int ht_size);
 extern int mht_compare_identifiers_equal (const void *key1, const void *key2);
 extern int mht_compare_strings_are_equal (const void *key1, const void *key2);
+extern int mht_compare_name_are_equal_without_schema (const void *key1, const void *key2);
 extern int mht_compare_ints_are_equal (const void *key1, const void *key2);
 extern int mht_compare_logpageids_are_equal (const void *key1, const void *key2);
 extern int mht_compare_ptrs_are_equal (const void *key1, const void *key2);

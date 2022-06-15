@@ -3943,11 +3943,13 @@ tr_create_trigger (const char *name, DB_TRIGGER_STATUS status, double priority, 
       return NULL;
     }
 
+  /*
   if (sm_qualifier_name (name, owner_name, DB_MAX_USER_LENGTH) == NULL)
     {
       ASSERT_ERROR ();
       return NULL;
     }
+  */
   owner = owner_name[0] == '\0' ? Au_user : db_find_user (owner_name);
 
   if (!ws_is_same_object (owner, Au_user) && !au_is_dba_group_member (Au_user))

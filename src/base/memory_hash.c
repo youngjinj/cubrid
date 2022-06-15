@@ -450,6 +450,26 @@ mht_1strhash (const void *key, const unsigned int ht_size)
   return mht_1str_pseudo_key (key, -1) % ht_size;
 }
 
+unsigned int
+mht_1strhash_test (const void *key, const unsigned int ht_size)
+{
+  assert (key != NULL);
+
+  const char *dot = NULL;
+  const char *name = NULL;
+  dot = strchr ((const char *) key, '.');
+  if (dot)
+    {
+      name = dot + 1;
+    }
+  else
+    {
+      name = ((const char *) key);
+    }
+
+  return mht_1str_pseudo_key (name, -1) % ht_size;
+}
+
 /*
  * mht_2strhash - hash a string key
  *   return: hash value
@@ -766,6 +786,29 @@ int
 mht_compare_strings_are_equal (const void *key1, const void *key2)
 {
   return ((strcmp ((const char *) key1, (const char *) key2)) == 0);
+}
+
+/*
+ * mht_compare_name_are_equal_without_schema - compare two unique_name (case sensitive)
+ *   return: 0 or 1 (key1 == key2)
+ *   key1(in): pointer to string key1
+ *   key2(in): pointer to string key2
+ */
+int
+mht_compare_name_are_equal_without_schema (const void *key1, const void *key2)
+{
+  const char *dot_p = NULL;
+  const char *dot_q = NULL;
+  const char *original_p = NULL;
+  const char *original_q = NULL;
+
+  dot_p = strchr ((const char *) key1, '.');
+  dot_q = strchr ((const char *) key2, '.');
+
+  original_p = dot_p ? (dot_p + 1) : (const char *) key1;
+  original_q = dot_q ? (dot_q + 1) : (const char *) key2;
+
+  return (strcmp (original_p, original_q) == 0);
 }
 
 /*
