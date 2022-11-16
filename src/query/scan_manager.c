@@ -1567,11 +1567,6 @@ scan_dbvals_to_midxkey (THREAD_ENTRY * thread_p, DB_VALUE * retval, bool * index
 	  goto err_exit;
 	}
 
-      if (ret != NO_ERROR)
-	{
-	  goto err_exit;
-	}
-
       if (DB_IS_NULL (val))
 	{
 	  if (is_iss && i == 0)
