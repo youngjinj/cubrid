@@ -6491,8 +6491,6 @@ qdata_get_dbval_from_constant_regu_variable (THREAD_ENTRY * thread_p, REGU_VARIA
       dom_type = TP_DOMAIN_TYPE (regu_var_p->domain);
       if (dom_type != DB_TYPE_NULL)
 	{
-	  assert (dom_type != DB_TYPE_NULL);
-
 	  if (val_type == DB_TYPE_OID)
 	    {
 	      assert ((dom_type == DB_TYPE_OID) || (dom_type == DB_TYPE_VOBJ));

@@ -24615,9 +24615,11 @@ pt_wrap_type_for_collation (const PT_NODE * arg1, const PT_NODE * arg2, const PT
 	  dom = arg_collection->expected_domain->setdomain;
 	  while (dom != NULL)
 	    {
-	      if (TP_IS_CHAR_TYPE (TP_DOMAIN_TYPE (dom)))
+	      DB_TYPE type = TP_DOMAIN_TYPE (dom);
+
+	      if (TP_IS_CHAR_TYPE (type))
 		{
-		  common_type = pt_db_to_type_enum (TP_DOMAIN_TYPE (dom));
+		  common_type = pt_db_to_type_enum (type);
 		  break;
 		}
 	    }
@@ -25015,6 +25017,7 @@ pt_update_host_var_data_type (PARSER_CONTEXT * parser, PT_NODE * hv_node)
 {
   PT_NODE *dt;
   TP_DOMAIN *dom;
+  DB_TYPE type = DB_TYPE_NULL;
 
   if (hv_node->node_type != PT_HOST_VAR || hv_node->data_type == NULL || hv_node->expected_domain == NULL)
     {
@@ -25023,14 +25026,15 @@ pt_update_host_var_data_type (PARSER_CONTEXT * parser, PT_NODE * hv_node)
 
   dt = hv_node->data_type;
   dom = hv_node->expected_domain;
+  type = TP_DOMAIN_TYPE (dom);
 
-  if (PT_IS_CHAR_STRING_TYPE (dt->type_enum) && TP_IS_CHAR_TYPE (TP_DOMAIN_TYPE (dom)))
+  if (PT_IS_CHAR_STRING_TYPE (dt->type_enum) && TP_IS_CHAR_TYPE (type))
     {
       dt->info.data_type.collation_id = dom->collation_id;
       dt->info.data_type.units = dom->codeset;
       dt->info.data_type.collation_flag = dom->collation_flag;
     }
-  else if (dt->type_enum != pt_db_to_type_enum (TP_DOMAIN_TYPE (dom))
+  else if (dt->type_enum != pt_db_to_type_enum (type)
 	   || (dt->type_enum == PT_TYPE_NUMERIC
 	       && (dt->info.data_type.precision != dom->precision || dt->info.data_type.dec_precision != dom->scale)))
     {

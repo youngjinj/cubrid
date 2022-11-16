@@ -4059,14 +4059,25 @@ db_domain_class (const DB_DOMAIN * domain)
 DB_DOMAIN *
 db_domain_set (const DB_DOMAIN * domain)
 {
-  DB_DOMAIN *setdomain = NULL;
-
-  if ((domain != NULL) && (pr_is_set_type (TP_DOMAIN_TYPE (domain)) || TP_DOMAIN_TYPE (domain) == DB_TYPE_MIDXKEY))
+  if (domain != NULL)
     {
-      setdomain = domain->setdomain;
-    }
+      switch (TP_DOMAIN_TYPE (domain))
+	{
+	case DB_TYPE_MIDXKEY:
+	  /* fallthrough */
+	case DB_TYPE_SET:
+	  /* fallthrough */
+	case DB_TYPE_MULTISET:
+	  /* fallthrough */
+	case DB_TYPE_SEQUENCE:
+	  /* fallthrough */
+	case DB_TYPE_VOBJ:
+	  return domain->setdomain;
 
-  return (setdomain);
+	default:
+	  return NULL;
+	}
+    }
 }
 
 /*

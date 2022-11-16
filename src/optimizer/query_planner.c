@@ -1497,14 +1497,15 @@ qo_sscan_cost (QO_PLAN * planp)
 static bool
 qo_index_has_bit_attr (QO_INDEX_ENTRY * index_entryp)
 {
-  TP_DOMAIN *domain;
   int col_num = index_entryp->col_num;
   int j;
 
   for (j = 0; j < col_num; j++)
     {
-      domain = index_entryp->constraints->attributes[j]->domain;
-      if (TP_DOMAIN_TYPE (domain) == DB_TYPE_BIT || TP_DOMAIN_TYPE (domain) == DB_TYPE_VARBIT)
+      TP_DOMAIN *domain = index_entryp->constraints->attributes[j]->domain;
+      DB_TYPE type = TP_DOMAIN_TYPE (domain);
+
+      if (type == DB_TYPE_BIT || type == DB_TYPE_VARBIT)
 	{
 	  return true;
 	}

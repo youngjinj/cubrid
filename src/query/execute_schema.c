@@ -7254,10 +7254,12 @@ do_add_attribute_from_select_column (PARSER_CONTEXT * parser, DB_CTMPL * ctempla
       TP_DOMAIN *elem;
       for (elem = column->domain->setdomain; elem != NULL; elem = elem->next)
 	{
-	  if (TP_DOMAIN_TYPE (elem) == DB_TYPE_BLOB || TP_DOMAIN_TYPE (elem) == DB_TYPE_CLOB)
+	  DB_TYPE type = TP_DOMAIN_TYPE (elem);
+
+	  if (type == DB_TYPE_BLOB || type == DB_TYPE_CLOB)
 	    {
 	      PT_TYPE_ENUM elem_type, set_type;
-	      elem_type = pt_db_to_type_enum (TP_DOMAIN_TYPE (elem));
+	      elem_type = pt_db_to_type_enum (type);
 	      set_type = pt_db_to_type_enum (column->domain->type->id);
 	      PT_ERRORmf2 (parser, NULL, MSGCAT_SET_PARSER_SEMANTIC, MSGCAT_SEMANTIC_INVALID_SET_ELEMENT,
 			   pt_show_type_enum (set_type), pt_show_type_enum (elem_type));

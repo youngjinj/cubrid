@@ -4764,6 +4764,7 @@ static int
 qexec_collection_has_null (DB_VALUE * colval)
 {
   DB_VALUE elem;
+  DB_TYPE type = DB_TYPE_NULL;
   DB_COLLECTION *col;
   long i;
   int result = 0;
@@ -4781,7 +4782,8 @@ qexec_collection_has_null (DB_VALUE * colval)
 	  return 1;		/* found a NULL, can stop looking, clear unecessary */
 	}
 
-      if (pr_is_set_type (DB_VALUE_DOMAIN_TYPE (&elem)) && qexec_collection_has_null (&elem))
+      type = DB_VALUE_DOMAIN_TYPE (&elem);
+      if ((TP_IS_SET_TYPE (type) || type == DB_TYPE_VOBJ) && qexec_collection_has_null (&elem))
 	{
 	  /* this is for nested set types, need to fall thru to clear */
 	  result = 1;

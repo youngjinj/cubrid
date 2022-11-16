@@ -1493,6 +1493,7 @@ tp_domain_match_ignore_order (const TP_DOMAIN * dom1, const TP_DOMAIN * dom2, TP
 static int
 tp_domain_match_internal (const TP_DOMAIN * dom1, const TP_DOMAIN * dom2, TP_MATCH exact, bool match_order)
 {
+  DB_TYPE dom1_type = DB_TYPE_NULL, dom2_type = DB_TYPE_NULL;
   int match = 0;
 
   if (dom1 == NULL || dom2 == NULL)
@@ -1506,8 +1507,11 @@ tp_domain_match_internal (const TP_DOMAIN * dom1, const TP_DOMAIN * dom2, TP_MAT
       return 1;
     }
 
-  if ((TP_DOMAIN_TYPE (dom1) != TP_DOMAIN_TYPE (dom2))
-      && (exact != TP_STR_MATCH || !TP_NEAR_MATCH (TP_DOMAIN_TYPE (dom1), TP_DOMAIN_TYPE (dom2))))
+  dom1_type = TP_DOMAIN_TYPE (dom1);
+  dom2_type = TP_DOMAIN_TYPE (dom2);
+
+  if ((dom1_type != dom2_type)
+      && (exact != TP_STR_MATCH || !TP_NEAR_MATCH (dom1_type, dom2_type)))
     {
       return 0;
     }
@@ -1519,7 +1523,7 @@ tp_domain_match_internal (const TP_DOMAIN * dom1, const TP_DOMAIN * dom2, TP_MAT
    */
 
   /* check for asc/desc */
-  if (TP_DOMAIN_TYPE (dom1) == TP_DOMAIN_TYPE (dom2) && tp_valid_indextype (TP_DOMAIN_TYPE (dom1))
+  if (dom1_type == dom2_type && tp_valid_indextype (dom1_type)
       && match_order == true && dom1->is_desc != dom2->is_desc)
     {
       return 0;
@@ -1527,7 +1531,7 @@ tp_domain_match_internal (const TP_DOMAIN * dom1, const TP_DOMAIN * dom2, TP_MAT
 
   /* could use the new is_parameterized flag to avoid the switch ? */
 
-  switch (TP_DOMAIN_TYPE (dom1))
+  switch (dom1_type)
     {
 
     case DB_TYPE_NULL:
@@ -1920,6 +1924,7 @@ static TP_DOMAIN *
 tp_is_domain_cached (TP_DOMAIN * dlist, TP_DOMAIN * transient, TP_MATCH exact, TP_DOMAIN ** ins_pos)
 {
   TP_DOMAIN *domain = dlist;
+  DB_TYPE domain_type = DB_TYPE_NULL, transient_type = DB_TYPE_NULL;
   int match = 0;
 
   /* in the case where their both cached */
@@ -1928,8 +1933,11 @@ tp_is_domain_cached (TP_DOMAIN * dlist, TP_DOMAIN * transient, TP_MATCH exact, T
       return domain;
     }
 
-  if ((TP_DOMAIN_TYPE (domain) != TP_DOMAIN_TYPE (transient))
-      && (exact != TP_STR_MATCH || !TP_NEAR_MATCH (TP_DOMAIN_TYPE (domain), TP_DOMAIN_TYPE (transient))))
+  domain_type = TP_DOMAIN_TYPE (domain);
+  transient_type = TP_DOMAIN_TYPE (transient);
+
+  if ((domain_type != transient_type)
+      && (exact != TP_STR_MATCH || !TP_NEAR_MATCH (domain_type, transient_type)))
     {
       return NULL;
     }
@@ -1943,7 +1951,7 @@ tp_is_domain_cached (TP_DOMAIN * dlist, TP_DOMAIN * transient, TP_MATCH exact, T
    */
 
   /* could use the new is_parameterized flag to avoid the switch ? */
-  switch (TP_DOMAIN_TYPE (domain))
+  switch (domain_type)
     {
 
     case DB_TYPE_NULL:
@@ -4004,18 +4012,21 @@ static const TP_DOMAIN *
 tp_domain_find_compatible (const TP_DOMAIN * src, const TP_DOMAIN * dest)
 {
   const TP_DOMAIN *d, *found;
+  DB_TYPE src_type = DB_TYPE_NULL;
 
   found = NULL;
+
+  src_type = TP_DOMAIN_TYPE (src);
 
   /*
    * If we have a hierarchical domain, perform a lenient "superset" comparison
    * rather than an exact match.
    */
-  if (TP_IS_SET_TYPE (TP_DOMAIN_TYPE (src)) || TP_DOMAIN_TYPE (src) == DB_TYPE_VARIABLE)
+  if (TP_IS_SET_TYPE (src_type) || src_type == DB_TYPE_VARIABLE)
     {
       for (d = dest; d != NULL && found == NULL; d = d->next)
 	{
-	  if (TP_DOMAIN_TYPE (src) == TP_DOMAIN_TYPE (d) && tp_domain_compatible (src->setdomain, dest->setdomain))
+	  if (src_type == TP_DOMAIN_TYPE (d) && tp_domain_compatible (src->setdomain, dest->setdomain))
 	    {
 	      found = d;
 	    }
@@ -11037,8 +11048,9 @@ tp_domain_disk_size (TP_DOMAIN * domain)
       return -1;
     }
 
-  if ((domain->type->get_id () == DB_TYPE_CHAR || domain->type->get_id () == DB_TYPE_NCHAR
-       || domain->type->get_id () == DB_TYPE_BIT) && domain->precision == TP_FLOATING_PRECISION_VALUE)
+  DB_TYPE domain_type = domain->type->get_id ();
+  if ((domain_type == DB_TYPE_CHAR || domain_type == DB_TYPE_NCHAR
+       || domain_type == DB_TYPE_BIT) && domain->precision == TP_FLOATING_PRECISION_VALUE)
     {
       return -1;
     }
@@ -11058,8 +11070,10 @@ tp_domain_disk_size (TP_DOMAIN * domain)
 int
 tp_domain_memory_size (TP_DOMAIN * domain)
 {
-  if ((domain->type->get_id () == DB_TYPE_CHAR || domain->type->get_id () == DB_TYPE_NCHAR
-       || domain->type->get_id () == DB_TYPE_BIT) && domain->precision == TP_FLOATING_PRECISION_VALUE)
+  DB_TYPE domain_type = domain->type->get_id ();
+
+  if ((domain_type == DB_TYPE_CHAR || domain_type == DB_TYPE_NCHAR
+       || domain_type == DB_TYPE_BIT) && domain->precision == TP_FLOATING_PRECISION_VALUE)
     {
       return -1;
     }

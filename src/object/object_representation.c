@@ -6348,18 +6348,20 @@ or_get_value (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, int expected, 
 
       if (is_null && value)
 	{
+	  DB_TYPE type = TP_DOMAIN_TYPE (domain);
+
 	  /* this was a tagged NULL value, restore the domain but set the null flag */
 	  db_value_put_null (value);
 
-	  if (TP_IS_CHAR_TYPE (TP_DOMAIN_TYPE (domain)))
+	  if (TP_IS_CHAR_TYPE (type))
 	    {
 	      db_string_put_cs_and_collation (value, TP_DOMAIN_CODESET (domain), TP_DOMAIN_COLLATION (domain));
 	    }
-	  else if (TP_DOMAIN_TYPE (domain) == DB_TYPE_ENUMERATION)
+	  else if (type == DB_TYPE_ENUMERATION)
 	    {
 	      db_enum_put_cs_and_collation (value, TP_DOMAIN_CODESET (domain), TP_DOMAIN_COLLATION (domain));
 	    }
-	  else if (TP_DOMAIN_TYPE (domain) == DB_TYPE_JSON)
+	  else if (type == DB_TYPE_JSON)
 	    {
 	      /* TODO find if schema_raw set here is ever used */
 	      value->data.json.schema_raw = NULL;
