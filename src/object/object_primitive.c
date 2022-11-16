@@ -8165,11 +8165,8 @@ mr_index_cmpdisk_midxkey (void *mem1, void *mem2, TP_DOMAIN * domain, int do_coe
   midxkey1.buf = (char *) mem1;
   midxkey2.buf = (char *) mem2;
 
-  n_atts = 0;
-  for (cmp_dom = domain->setdomain; cmp_dom; cmp_dom = cmp_dom->next)
-    {
-      n_atts++;
-    }
+  assert (domain->precision && domain->precision == tp_domain_size (domain->setdomain));
+  n_atts = domain->precision;
 
   midxkey1.size = midxkey2.size = -1;	/* is dummy */
   midxkey1.ncolumns = midxkey2.ncolumns = n_atts;

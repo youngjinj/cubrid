@@ -574,7 +574,7 @@ static DEL_LOB_INFO *qexec_change_delete_lob_info (THREAD_ENTRY * thread_p, XASL
 						   UPDDEL_CLASS_INFO_INTERNAL * class_info,
 						   DEL_LOB_INFO ** del_lob_info_list_ptr);
 static void qexec_free_delete_lob_info_list (THREAD_ENTRY * thread_p, DEL_LOB_INFO ** del_lob_info_list_ptr);
-static const char *qexec_schema_get_type_name_from_id (DB_TYPE id);
+STATIC_INLINE const char *qexec_schema_get_type_name_from_id (DB_TYPE id) __attribute__ ((ALWAYS_INLINE));
 static int qexec_schema_get_type_desc (DB_TYPE id, TP_DOMAIN * domain, DB_VALUE * result);
 static int qexec_execute_build_columns (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state);
 static int qexec_execute_cte (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state);
@@ -22408,10 +22408,7 @@ qexec_schema_get_type_desc (DB_TYPE id, TP_DOMAIN * domain, DB_VALUE * result)
       char **ordered_names = NULL, *min, *temp;
       int count_names = 0, i, j, idx_min;
 
-      for (setdomain = domain->setdomain; setdomain; setdomain = setdomain->next)
-	{
-	  count_names++;
-	}
+      count_names = tp_setdomain_size (domain);
 
       ordered_names = (char **) malloc (count_names * sizeof (char *));
       if (ordered_names == NULL)

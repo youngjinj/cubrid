@@ -1622,8 +1622,8 @@ tp_domain_match_internal (const TP_DOMAIN * dom1, const TP_DOMAIN * dom2, TP_MAT
 	  int dsize;
 
 	  /* don't bother comparing the lists unless the sizes are the same */
-	  dsize = tp_domain_size (dom1->setdomain);
-	  if (dsize == tp_domain_size (dom2->setdomain))
+	  dsize = tp_setdomain_size (dom1);
+	  if (dsize == tp_setdomain_size (dom2))
 	    {
 	      /* handle the simple single domain case quickly */
 	      if (dsize == 1)
@@ -1713,8 +1713,8 @@ tp_domain_match_internal (const TP_DOMAIN * dom1, const TP_DOMAIN * dom2, TP_MAT
 	  TP_DOMAIN *element_dom1;
 	  TP_DOMAIN *element_dom2;
 
-	  dsize1 = tp_domain_size (dom1->setdomain);
-	  dsize2 = tp_domain_size (dom2->setdomain);
+	  dsize1 = tp_setdomain_size (dom1);
+	  dsize2 = tp_setdomain_size (dom2);
 
 	  if (dsize1 == dsize2)
 	    {
@@ -2052,7 +2052,7 @@ tp_is_domain_cached (TP_DOMAIN * dlist, TP_DOMAIN * transient, TP_MATCH exact, T
       {
 	int dsize2;
 
-	dsize2 = tp_domain_size (transient->setdomain);
+	dsize2 = tp_setdomain_size (transient);
 	while (domain)
 	  {
 #if 1
@@ -2069,7 +2069,7 @@ tp_is_domain_cached (TP_DOMAIN * dlist, TP_DOMAIN * transient, TP_MATCH exact, T
 		 * don't bother comparing the lists unless the sizes are the
 		 * same
 		 */
-		dsize1 = tp_domain_size (domain->setdomain);
+		dsize1 = tp_setdomain_size (domain);
 		if (dsize1 > dsize2)
 		  {
 		    break;

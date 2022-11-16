@@ -24622,6 +24622,8 @@ pt_wrap_type_for_collation (const PT_NODE * arg1, const PT_NODE * arg2, const PT
 		  common_type = pt_db_to_type_enum (type);
 		  break;
 		}
+
+	      dom = dom->next;
 	    }
 	}
     }

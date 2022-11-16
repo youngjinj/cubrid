@@ -363,7 +363,9 @@ orc_diskrep_from_record (THREAD_ENTRY * thread_p, RECDES * record)
 	      bt_statsp->key_type = btid_int.key_type;
 	      if (TP_DOMAIN_TYPE (bt_statsp->key_type) == DB_TYPE_MIDXKEY)
 		{
-		  bt_statsp->pkeys_size = tp_domain_size (bt_statsp->key_type->setdomain);
+		  assert (bt_statsp->key_type->precision
+			  && bt_statsp->key_type->precision == tp_domain_size (bt_statsp->key_type->setdomain));
+		  bt_statsp->pkeys_size = bt_statsp->key_type->precision;
 		}
 	      else
 		{
