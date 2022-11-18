@@ -5160,7 +5160,7 @@ or_pack_domain (char *ptr, TP_DOMAIN * domain, int include_classoids, int is_nul
   OR_BUF buf;
   int rc = 0;
 
-  or_init (&buf, ptr, 0);
+  OR_BUF_INIT (buf, ptr, 0);
   rc = or_put_domain (&buf, domain, include_classoids, is_null);
   if (rc == NO_ERROR)
     {
@@ -5185,7 +5185,7 @@ or_unpack_domain (char *ptr, struct tp_domain **domain_ptr, int *is_null)
   OR_BUF buf;
   TP_DOMAIN *domain;
 
-  or_init (&buf, ptr, 0);
+  OR_BUF_INIT (buf, ptr, 0);
 
   domain = or_get_domain (&buf, NULL, is_null);
   if (domain_ptr != NULL)
@@ -6427,7 +6427,7 @@ or_pack_value (char *buf, DB_VALUE * value)
 
   aligned_buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
 
-  or_init (&orbuf, aligned_buf, 0);
+  OR_BUF_INIT (orbuf, aligned_buf, 0);
   /* don't collapse nulls, include the domain, and include domain class oids */
   or_put_value (&orbuf, value, 0, 1, 1);
 
@@ -6536,7 +6536,7 @@ or_unpack_value (const char *buf, DB_VALUE * value)
   OR_BUF orbuf;
 
   buf = PTR_ALIGN (buf, MAX_ALIGNMENT);
-  or_init (&orbuf, CONST_CAST (char *, buf) /* it is for read */ , 0);
+  OR_BUF_INIT (orbuf, CONST_CAST (char *, buf) /* it is for read */ , 0);
   or_get_value (&orbuf, value, NULL, -1, true);
 
   return orbuf.ptr;

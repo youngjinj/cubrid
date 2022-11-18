@@ -9306,7 +9306,7 @@ pr_midxkey_get_element_internal (const DB_MIDXKEY * midxkey, int index, DB_VALUE
       if (buf == NULL)
 	{
 	  buf = &buf_space;
-	  or_init (buf, midxkey->buf, midxkey->size);
+	  OR_BUF_INIT (*buf, midxkey->buf, midxkey->size);
 
 	  advance_size = OR_MULTI_BOUND_BIT_BYTES (idx_ncols);
 	  if (or_advance (buf, advance_size) != NO_ERROR)
@@ -9573,7 +9573,7 @@ pr_midxkey_add_elements (DB_VALUE * keyval, DB_VALUE * dbvals, int num_dbvals, s
       goto error;
     }
 
-  or_init (&buf, new_IDXbuf, -1);
+  OR_BUF_INIT (buf, new_IDXbuf, -1);
   bound_bits = buf.ptr;
 
   /* phase 4: copy new_IDXbuf from old */

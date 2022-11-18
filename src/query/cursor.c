@@ -439,7 +439,7 @@ cursor_get_tuple_value_from_list (CURSOR_ID * cursor_id_p, int index, DB_VALUE *
 
   assert (index >= 0 && index < type_list_p->type_cnt);
 
-  or_init (&buffer, tuple_p, QFILE_GET_TUPLE_LENGTH (tuple_p));
+  OR_BUF_INIT (buffer, tuple_p, QFILE_GET_TUPLE_LENGTH (tuple_p));
 
   /* check for saved tplvalue position info */
   if (cursor_id_p->current_tuple_value_index >= 0 && cursor_id_p->current_tuple_value_index <= index

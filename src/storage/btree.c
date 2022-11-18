@@ -4361,7 +4361,7 @@ btree_read_record_without_decompression (THREAD_ENTRY * thread_p, BTID_INT * bti
 
   assert (rec_header != NULL);
 
-  or_init (&buf, rec->data, rec->length);
+  OR_BUF_INIT (buf, rec->data, rec->length);
 
   /*
    * Find the beginning position of the key within the record and read
@@ -5810,7 +5810,7 @@ btree_glean_root_header_info (THREAD_ENTRY * thread_p, BTREE_ROOT_HEADER * root_
 
   if (is_key_type)
     {
-      or_init (&buf, root_header->packed_key_domain, -1);
+      OR_BUF_INIT (buf, root_header->packed_key_domain, -1);
       btid->key_type = or_get_domain (&buf, NULL, NULL);
     }
 

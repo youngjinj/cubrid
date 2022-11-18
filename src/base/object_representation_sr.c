@@ -4200,7 +4200,7 @@ or_mvcc_get_header (RECDES * record, MVCC_REC_HEADER * mvcc_header)
 
   assert (record != NULL && record->data != NULL && record->length >= OR_MVCC_REP_SIZE && mvcc_header != NULL);
 
-  or_init (&buf, record->data, record->length);
+  OR_BUF_INIT (buf, record->data, record->length);
 
   repid_and_flag_bits = or_mvcc_get_repid_and_flags (&buf, &rc);
   if (rc != NO_ERROR)
