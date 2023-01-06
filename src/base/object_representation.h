@@ -1250,12 +1250,12 @@ extern int or_packed_db_value_array_length (int count, DB_VALUE * val);
 extern void or_encode (char *buffer, const char *source, int size);
 extern void or_decode (const char *buffer, char *dest, int size);
 
-extern void or_init (OR_BUF * buf, char *data, int length);
+EXTERN_INLINE void or_init (OR_BUF * buf, char *data, int length) __attribute__ ((ALWAYS_INLINE));
 
 /* These are called when overflow/underflow are detected */
-extern int or_overflow (OR_BUF * buf);
-extern int or_underflow (OR_BUF * buf);
-extern void or_abort (OR_BUF * buf);
+EXTERN_INLINE int or_overflow (OR_BUF * buf) __attribute__ ((ALWAYS_INLINE));
+EXTERN_INLINE int or_underflow (OR_BUF * buf) __attribute__ ((ALWAYS_INLINE));
+EXTERN_INLINE void or_abort (OR_BUF * buf) __attribute__ ((ALWAYS_INLINE));
 
 /* Data packing functions */
 extern int or_put_byte (OR_BUF * buf, int num);
@@ -1313,9 +1313,9 @@ extern int or_skip_varbit (OR_BUF * buf, int align);
 extern int or_skip_varbit_remainder (OR_BUF * buf, int bitlen, int align);
 
 /* Pack/unpack support functions */
-extern int or_advance (OR_BUF * buf, int offset);
-extern int or_seek (OR_BUF * buf, int psn);
-extern int or_align (OR_BUF * buf, int alignment);
+EXTERN_INLINE int or_advance (OR_BUF * buf, int offset) __attribute__ ((ALWAYS_INLINE));
+EXTERN_INLINE int or_seek (OR_BUF * buf, int psn) __attribute__ ((ALWAYS_INLINE));
+EXTERN_INLINE int or_align (OR_BUF * buf, int alignment) __attribute__ ((ALWAYS_INLINE));
 extern int or_pad (OR_BUF * buf, int length);
 #if defined(ENABLE_UNUSED_FUNCTION)
 extern int or_length_string (char *string);
@@ -1414,6 +1414,167 @@ extern int or_put_json_schema (OR_BUF * buf, const char *schema);
 
 #define OR_IS_STRING_LENGTH_COMPRESSABLE(str_length) \
   ((str_length) >= OR_MINIMUM_STRING_LENGTH_FOR_COMPRESSION && (str_length) <= LZ4_MAX_INPUT_SIZE)
+
+/*
+ * or_overflow - called by the or_put_ functions when there is not enough
+ * room in the buffer to hold a particular value.
+ *    return: ER_TF_BUFFER_OVERFLOW or long jump to buf->error_abort
+ *    buf(in): translation state structure
+ *
+ * Note:
+ *    Because of the recursive nature of the translation functions, we may
+ *    be several levels deep so we can do a longjmp out to the top level
+ *    if the user has supplied a jmpbuf.
+ *    Because jmpbuf is not a pointer, we have to keep an additional flag
+ *    called "error_abort" in the OR_BUF structure to indicate the validity
+ *    of the jmpbuf.
+ *    This is a fairly common ocurrence because the locator regularly calls
+ *    the transformer with a buffer that is too small.  When overflow
+ *    is detected, it allocates a larger one and retries the operation.
+ *    Because of this, a system error is not signaled here.
+ */
+EXTERN_INLINE int
+or_overflow (OR_BUF * buf)
+{
+  /*
+   * since this is normal behavior, don't set an error condition, the
+   * main transformer functions will need to test the status value
+   * for ER_TF_BUFFER_OVERFLOW and know that this isn't an error condition.
+   */
+
+  if (buf->error_abort)
+    {
+      _longjmp (buf->env, ER_TF_BUFFER_OVERFLOW);
+    }
+
+  return ER_TF_BUFFER_OVERFLOW;
+}
+
+/*
+ * or_underflow - This is called by the or_get_ functions when there is
+ * not enough data in the buffer to extract a particular value.
+ *    return: ER_TF_BUFFER_UNDERFLOW or long jump to buf->env
+ *    buf(in): translation state structure
+ *
+ * Note:
+ * Unlike or_overflow this is NOT a common ocurrence and indicates a serious
+ * memory or disk corruption problem.
+ */
+EXTERN_INLINE int
+or_underflow (OR_BUF * buf)
+{
+  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_TF_BUFFER_UNDERFLOW, 0);
+
+  if (buf->error_abort)
+    {
+      _longjmp (buf->env, ER_TF_BUFFER_UNDERFLOW);
+    }
+  return ER_TF_BUFFER_UNDERFLOW;
+}
+
+/*
+ * or_abort - This is called if there was some fundemtal error
+ *    return: void
+ *    buf(in): translation state structure
+ *
+ * Note:
+ *    An appropriate error message should have already been set.
+ */
+EXTERN_INLINE void
+or_abort (OR_BUF * buf)
+{
+  /* assume an appropriate error has already been set */
+  if (buf->error_abort)
+    {
+      _longjmp (buf->env, er_errid ());
+    }
+}
+
+/*
+ * or_init - initialize the field of an OR_BUF
+ *    return: void
+ *    buf(in/out): or buffer to initialize
+ *    data(in): buffer data
+ *    length(in):  buffer data length
+ */
+EXTERN_INLINE void
+or_init (OR_BUF * buf, char *data, int length)
+{
+  buf->buffer = data;
+  buf->ptr = data;
+
+  if (length == 0 || length == -1 || length == DB_INT32_MAX)
+    {
+      buf->endptr = (char *) OR_INFINITE_POINTER;
+    }
+  else
+    {
+      buf->endptr = data + length;
+    }
+
+  buf->error_abort = 0;
+  buf->fixups = NULL;
+}
+
+/*
+ * or_advance - This advances the translation pointer
+ *    return: NO_ERROR or error code
+ *    buf(in/out): or buffer
+ *    offset(in): number of bytes to skip
+ */
+EXTERN_INLINE int
+or_advance (OR_BUF * buf, int offset)
+{
+  if ((buf->ptr + offset) > buf->endptr)
+    {
+      return (or_overflow (buf));
+    }
+  else
+    {
+      buf->ptr += offset;
+      return NO_ERROR;
+    }
+}
+
+/*
+ * or_seek - This sets the translation pointer directly to a certain byte in
+ * the buffer.
+ *    return: ERROR_SUCCESS or error code
+ *    buf(in/out): or buffer
+ *    psn(in): position within buffer
+ */
+EXTERN_INLINE int
+or_seek (OR_BUF * buf, int psn)
+{
+  if ((buf->buffer + psn) > buf->endptr)
+    {
+      return (or_overflow (buf));
+    }
+  else
+    {
+      buf->ptr = buf->buffer + psn;
+    }
+  return NO_ERROR;
+}
+
+/*
+ * or_align () - Align current buffer pointer to given alignment.
+ *
+ * return	 : Error code.
+ * buf (in/out)	 : Buffer.
+ * alignment (in) : Desired alignment.
+ */
+EXTERN_INLINE int
+or_align (OR_BUF * buf, int alignment)
+{
+  char *new_ptr = PTR_ALIGN (buf->ptr, alignment);
+  if (new_ptr > buf->endptr)
+    {
+      return (or_overflow (buf));
+    }
+  buf->ptr = new_ptr;
+  return NO_ERROR;
+}
 
 /*
  * or_get_string_size_byte - read string size byte value from or buffer
