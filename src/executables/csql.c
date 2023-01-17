@@ -1965,6 +1965,11 @@ csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *s
 	  goto error;
 	}
 
+      if (session->next != NULL && session->next->is_subsession_for_prepared && pt_node_to_cmd_type (session->next->statements[0]) == CUBRID_STMT_SELECT)
+	{
+	  attr_spec = db_cp_query_type (session->next->type_list[0], true);
+	}
+
       snprintf (stmt_msg, LINE_BUFFER_SIZE, "Execute OK.");
 
       csql_Row_count = 0;
