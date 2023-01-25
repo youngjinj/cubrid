@@ -89,6 +89,7 @@
 #include "thread_worker_pool.hpp"	// for cubthread::system_core_count
 #include "thread_manager.hpp"	// for thread_get_thread_entry_info
 #endif // SERVER_MODE
+#include "string_regex.hpp"
 
 #if defined (SUPPRESS_STRLEN_WARNING)
 #define strlen(s1)  ((int) strlen(s1))
@@ -708,6 +709,8 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_USE_USER_HOSTS "use_user_hosts"
 
 #define PRM_NAME_QMGR_MAX_QUERY_PER_TRAN "max_query_per_tran"
+
+#define PRM_NAME_REGEXP_ENGINE "regexp_engine"
 
 #define PRM_VALUE_DEFAULT "DEFAULT"
 #define PRM_VALUE_MAX "MAX"
@@ -2326,6 +2329,14 @@ static int prm_max_query_per_tran_default = 100;
 static int prm_max_query_per_tran_lower = 1;
 static int prm_max_query_per_tran_upper = SHRT_MAX;
 static unsigned int prm_max_query_per_tran_flag = 0;
+
+/* *INDENT-OFF* */
+int PRM_REGEXP_ENGINE = cubregex::engine_type::LIB_RE2;
+static int prm_regexp_engine_default = cubregex::engine_type::LIB_RE2;
+static int prm_regexp_engine_lower = cubregex::engine_type::LIB_CPPSTD;
+static int prm_regexp_engine_upper = cubregex::engine_type::LIB_RE2;
+static unsigned int prm_regexp_engine_flag = 0;
+/* *INDENT-ON* */
 
 typedef int (*DUP_PRM_FUNC) (void *, SYSPRM_DATATYPE, void *, SYSPRM_DATATYPE);
 
@@ -6132,7 +6143,19 @@ SYSPRM_PARAM prm_Def[] = {
    (void *) &prm_max_query_per_tran_lower,
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
-   (DUP_PRM_FUNC) NULL}
+   (DUP_PRM_FUNC) NULL},
+  {PRM_ID_REGEXP_ENGINE,
+   PRM_NAME_REGEXP_ENGINE,
+   (PRM_FOR_CLIENT | PRM_FOR_SERVER | PRM_FORCE_SERVER | PRM_USER_CHANGE | PRM_FOR_SESSION),
+   PRM_KEYWORD,
+   &prm_regexp_engine_flag,
+   (void *) &prm_regexp_engine_default,
+   (void *) &PRM_REGEXP_ENGINE,
+   (void *) &prm_regexp_engine_upper,
+   (void *) &prm_regexp_engine_lower,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
 };
 
 static int num_session_parameters = 0;
@@ -6286,6 +6309,14 @@ static KEYVAL tde_algorithm_words[] = {
   {"aes", TDE_ALGORITHM_AES},
   {"aria", TDE_ALGORITHM_ARIA}
 };
+
+/* *INDENT-OFF* */
+using namespace cubregex;
+static KEYVAL regexp_engine_words[] = {
+  {get_engine_name(engine_type::LIB_CPPSTD), engine_type::LIB_CPPSTD},
+  {get_engine_name(engine_type::LIB_RE2), engine_type::LIB_RE2}
+};
+/* *INDENT-ON* */
 
 static const char *compat_mode_values_PRM_ANSI_QUOTES[COMPAT_ORACLE + 2] = {
   NULL,				/* COMPAT_CUBRID */
@@ -8233,6 +8264,10 @@ prm_print (const SYSPRM_PARAM * prm, char *buf, size_t len, PRM_PRINT_MODE print
 	{
 	  keyvalp = prm_keyword (PRM_GET_INT (prm->value), NULL, tde_algorithm_words, DIM (tde_algorithm_words));
 	}
+      else if (intl_mbs_casecmp (prm->name, PRM_NAME_REGEXP_ENGINE) == 0)
+	{
+	  keyvalp = prm_keyword (PRM_GET_INT (prm->value), NULL, regexp_engine_words, DIM (regexp_engine_words));
+	}
       else
 	{
 	  assert (false);
@@ -8532,6 +8567,10 @@ sysprm_print_sysprm_value (PARAM_ID prm_id, SYSPRM_VALUE value, char *buf, size_
       else if (intl_mbs_casecmp (prm->name, PRM_NAME_TDE_DEFAULT_ALGORITHM) == 0)
 	{
 	  keyvalp = prm_keyword (value.i, NULL, tde_algorithm_words, DIM (tde_algorithm_words));
+	}
+      else if (intl_mbs_casecmp (prm->name, PRM_NAME_REGEXP_ENGINE) == 0)
+	{
+	  keyvalp = prm_keyword (value.i, NULL, regexp_engine_words, DIM (regexp_engine_words));
 	}
       else
 	{
@@ -9744,6 +9783,10 @@ sysprm_generate_new_value (SYSPRM_PARAM * prm, const char *value, bool check, SY
 	else if (intl_mbs_casecmp (prm->name, PRM_NAME_TDE_DEFAULT_ALGORITHM) == 0)
 	  {
 	    keyvalp = prm_keyword (-1, value, tde_algorithm_words, DIM (tde_algorithm_words));
+	  }
+	else if (intl_mbs_casecmp (prm->name, PRM_NAME_REGEXP_ENGINE) == 0)
+	  {
+	    keyvalp = prm_keyword (-1, value, regexp_engine_words, DIM (regexp_engine_words));
 	  }
 	else
 	  {
