@@ -101,6 +101,7 @@ static SESSION_CMD_TABLE csql_Session_cmd_table[] = {
   {"print_cmd", S_CMD_PRINT_CMD, CMD_EMPTY_FLAG},
   {"pager_cmd", S_CMD_PAGER_CMD, CMD_EMPTY_FLAG},
   {"nopager", S_CMD_NOPAGER_CMD, CMD_EMPTY_FLAG},
+  {"formatter_cmd", S_CMD_FORMATTER_CMD, CMD_EMPTY_FLAG},
   {"column-width", S_CMD_COLUMN_WIDTH, CMD_EMPTY_FLAG},
   {"string-width", S_CMD_STRING_WIDTH, CMD_EMPTY_FLAG},
   {"set", S_CMD_SET_PARAM, CMD_CHECK_CONNECT},
@@ -126,7 +127,13 @@ static SESSION_CMD_TABLE csql_Session_cmd_table[] = {
 
   {"trace", S_CMD_TRACE, CMD_CHECK_CONNECT},
 
-  {"singleline", S_CMD_SINGLELINE, CMD_EMPTY_FLAG}
+  {"singleline", S_CMD_SINGLELINE, CMD_EMPTY_FLAG},
+
+  {"connect", S_CMD_CONNECT, CMD_EMPTY_FLAG},
+
+  {"midxkey", S_CMD_MIDXKEY, CMD_EMPTY_FLAG},	/* This is NOT displayed as a result of the ";help" command. */
+
+  {"server-output", S_CMD_SERVER_OUTPUT, CMD_CHECK_CONNECT}
 };
 
 /*
@@ -672,7 +679,7 @@ csql_help_info (const char *command, int aucommit_flag)
       && (!strcasecmp (tok, "schema") || !strcasecmp (tok, "trigger") || !strcasecmp (tok, "deferred")
 	  || !strcasecmp (tok, "workspace") || !strcasecmp (tok, "lock") || !strcasecmp (tok, "stats")
 	  || !strcasecmp (tok, "logstat") || !strcasecmp (tok, "csstat") || !strcasecmp (tok, "plan")
-	  || !strcasecmp (tok, "qcache") || !strcasecmp (tok, "trantable")))
+	  || !strcasecmp (tok, "qcache") || !strcasecmp (tok, "trantable") || !strcasecmp (tok, "ndv")))
     {
       int result;
 

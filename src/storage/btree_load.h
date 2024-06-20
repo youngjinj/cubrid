@@ -29,6 +29,7 @@
 #include <assert.h>
 
 #include "btree.h"
+#include "dbtype.h"
 #include "object_representation_constants.h"
 #include "error_manager.h"
 #include "storage_common.h"
@@ -198,6 +199,7 @@ struct btree_node_header
   VPID next_vpid;		/* Leaf Page Next Node Pointer */
   short node_level;		/* btree depth; Leaf(= 1), Non_leaf(> 1) */
   short max_key_len;		/* Maximum key length for the subtree */
+  int common_prefix;
 };
 
 /* Root header information */
@@ -205,19 +207,21 @@ typedef struct btree_root_header BTREE_ROOT_HEADER;
 struct btree_root_header
 {
   BTREE_NODE_HEADER node;
-  int num_oids;			/* Number of OIDs stored in the Btree */
-  int num_nulls;		/* Number of NULLs (they aren't stored) */
-  int num_keys;			/* Number of unique keys in the Btree */
+  INT64 num_oids;		/* Number of OIDs stored in the Btree */
+  INT64 num_nulls;		/* Number of NULLs (they aren't stored) */
+  INT64 num_keys;		/* Number of unique keys in the Btree */
   OID topclass_oid;		/* topclass oid or NULL OID(non unique index) */
   int unique_pk;		/* unique or non-unique, is primary key */
+
+  /* support for SUPPORT_DEDUPLICATE_KEY_MODE */
   struct
   {
-    int over:2;			/* for checking to over 32 bit */
-    int num_oids:10;		/* extend 10 bit for num_oids */
-    int num_nulls:10;		/* extend 10 bit for num_nulls */
-    int num_keys:10;		/* extend 10 bit for num_keys */
-  } _64;
-  int rev_level;		/* Btree revision level */
+    int rev_level:16;		/* Btree revision level */
+    int deduplicate_key_idx:16;
+#define SET_DECOMPRESS_IDX_HEADER(hdr, idx)  ((hdr)->_32.deduplicate_key_idx = ((idx) + 1))
+#define GET_DECOMPRESS_IDX_HEADER(hdr)       ((hdr)->_32.deduplicate_key_idx - 1)
+  } _32;
+
   VFID ovfid;			/* Overflow file */
   MVCCID creator_mvccid;	/* MVCCID of creator transaction. */
 
@@ -261,8 +265,8 @@ extern void btree_rv_nodehdr_dump (FILE * fp, int length, void *data);
 extern void btree_rv_mvcc_save_increments (const BTID * btid, long long key_delta, long long oid_delta,
 					   long long null_delta, RECDES * recdes);
 
-extern bool btree_clear_key_value (bool * clear_flag, DB_VALUE * key_value);
-extern void btree_init_temp_key_value (bool * clear_flag, DB_VALUE * key_value);
+STATIC_INLINE bool btree_clear_key_value (bool * clear_flag, DB_VALUE * key_value) __attribute__ ((ALWAYS_INLINE));
+STATIC_INLINE void btree_init_temp_key_value (bool * clear_flag, DB_VALUE * key_value) __attribute__ ((ALWAYS_INLINE));
 extern int btree_create_overflow_key_file (THREAD_ENTRY * thread_p, BTID_INT * btid);
 extern int btree_init_overflow_header (THREAD_ENTRY * thread_p, PAGE_PTR page_ptr, BTREE_OVERFLOW_HEADER * ovf_header);
 extern int btree_init_node_header (THREAD_ENTRY * thread_p, const VFID * vfid, PAGE_PTR page_ptr,
@@ -287,5 +291,37 @@ extern int btree_get_prefix_separator (const DB_VALUE * key1, const DB_VALUE * k
 				       TP_DOMAIN * key_domain);
 
 extern int btree_get_asc_desc (THREAD_ENTRY * thread_p, BTID * btid, int col_idx, int *asc_desc);
+
+/*
+ * btree_clear_key_value () -
+ *   return: cleared flag
+ *   clear_flag (in/out):
+ *   key_value (in/out):
+ */
+STATIC_INLINE bool
+btree_clear_key_value (bool * clear_flag, DB_VALUE * key_value)
+{
+  if (*clear_flag == true || key_value->need_clear == true)
+    {
+      pr_clear_value (key_value);
+      *clear_flag = false;
+    }
+  // also set null
+  db_make_null (key_value);
+  return *clear_flag;
+}
+
+/*
+ * btree_init_temp_key_value () -
+ *   return: void
+ *   clear_flag (in/out):
+ *   key_value (in/out):
+ */
+STATIC_INLINE void
+btree_init_temp_key_value (bool * clear_flag, DB_VALUE * key_value)
+{
+  db_make_null (key_value);
+  *clear_flag = false;
+}
 
 #endif /* _BTREE_LOAD_H_ */

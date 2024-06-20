@@ -15,7 +15,6 @@
 #   limitations under the License.
 # 
 #
-
 set(EXECUTABLE_SOURCES
   ${EXECUTABLES_DIR}/csql.c
   ${EXECUTABLES_DIR}/csql_session.c
@@ -46,11 +45,13 @@ set(COMPAT_SOURCES
   ${COMPAT_DIR}/db_date.c
   ${COMPAT_DIR}/db_elo.c
   ${COMPAT_DIR}/db_info.c
+  ${COMPAT_DIR}/db_function.cpp
   ${COMPAT_DIR}/db_json.cpp
   ${COMPAT_DIR}/db_json_allocator.cpp
   ${COMPAT_DIR}/db_json_path.cpp
   ${COMPAT_DIR}/db_json_types_internal.cpp
   ${COMPAT_DIR}/db_macro.c
+  ${COMPAT_DIR}/db_method_static.cpp
   ${COMPAT_DIR}/db_obj.c
   ${COMPAT_DIR}/db_old.c
   ${COMPAT_DIR}/db_query.c
@@ -88,6 +89,7 @@ set(BASE_SOURCES
   ${BASE_DIR}/unicode_support.c
   ${BASE_DIR}/memory_hash.c
   ${BASE_DIR}/packer.cpp
+  ${BASE_DIR}/hide_password.cpp
   ${BASE_DIR}/get_clock_freq.c
   ${BASE_DIR}/perf.cpp
   ${BASE_DIR}/perf_monitor.c
@@ -159,7 +161,6 @@ set(BASE_HEADERS
   ${BASE_DIR}/printer.hpp
   ${BASE_DIR}/resource_tracker.hpp
   ${BASE_DIR}/semaphore.hpp
-  ${BASE_DIR}/ddl_log.h
 )
 
 set(HEAPLAYER_SOURCES
@@ -266,6 +267,7 @@ set(QUERY_SOURCES
   ${QUERY_DIR}/serial.c
   ${QUERY_DIR}/set_scan.c
   ${QUERY_DIR}/show_scan.c
+  ${QUERY_DIR}/subquery_cache.c
   ${QUERY_DIR}/stream_to_xasl.c
   ${QUERY_DIR}/string_opfunc.c
   ${QUERY_DIR}/string_regex.cpp
@@ -286,9 +288,12 @@ set(QUERY_HEADERS
 
 set(OBJECT_SOURCES
   ${OBJECT_DIR}/authenticate.c
+  ${OBJECT_DIR}/authenticate_cache.cpp
   ${OBJECT_DIR}/class_description.cpp
   ${OBJECT_DIR}/class_object.c
+  ${OBJECT_DIR}/deduplicate_key.c
   ${OBJECT_DIR}/elo.c
+  ${OBJECT_DIR}/identifier_store.cpp
   ${OBJECT_DIR}/lob_locator.cpp
   ${OBJECT_DIR}/object_description.cpp
   ${OBJECT_DIR}/object_domain.c
@@ -302,6 +307,11 @@ set(OBJECT_SOURCES
   ${OBJECT_DIR}/quick_fit.c
   ${OBJECT_DIR}/schema_class_truncator.cpp
   ${OBJECT_DIR}/schema_manager.c
+  ${OBJECT_DIR}/schema_system_catalog.cpp
+  ${OBJECT_DIR}/schema_system_catalog_builder.cpp
+  ${OBJECT_DIR}/schema_system_catalog_definition.cpp
+  ${OBJECT_DIR}/schema_system_catalog_install.cpp
+  ${OBJECT_DIR}/schema_system_catalog_install_query_spec.cpp
   ${OBJECT_DIR}/schema_template.c
   ${OBJECT_DIR}/set_object.c
   ${OBJECT_DIR}/transform.c
@@ -326,7 +336,10 @@ set(METHOD_SOURCES
   ${METHOD_DIR}/method_callback.cpp
   ${METHOD_DIR}/method_connection_cl.cpp
   ${METHOD_DIR}/method_connection_sr.cpp
+  ${METHOD_DIR}/method_connection_java.cpp
   ${METHOD_DIR}/method_connection_pool.cpp
+  ${METHOD_DIR}/method_compile_def.cpp
+  ${METHOD_DIR}/method_compile.cpp
   ${METHOD_DIR}/method_def.cpp
   ${METHOD_DIR}/method_error.cpp
   ${METHOD_DIR}/method_scan.cpp
@@ -620,7 +633,7 @@ add_library(cubridsa SHARED
   )
 set_target_properties(cubridsa PROPERTIES SOVERSION "${CUBRID_MAJOR_VERSION}.${CUBRID_MINOR_VERSION}")
 
-target_compile_definitions(cubridsa PRIVATE SA_MODE ${COMMON_DEFS})
+target_compile_definitions(cubridsa PRIVATE SA_MODE CUBRID_EXPORTING ${COMMON_DEFS})
 if(NOT USE_CUBRID_ENV)
   target_compile_definitions(cubridsa PRIVATE ${DIR_DEFS})
 endif(NOT USE_CUBRID_ENV)
@@ -641,9 +654,14 @@ if(WIN32)
   target_link_libraries(cubridsa LINK_PRIVATE ws2_32 ${JVM_LIBS})
   set_target_properties(cubridsa PROPERTIES LINK_FLAGS "/DEF:\"${CMAKE_SOURCE_DIR}/win/cubridsa/cubridsa.def\"" LINK_FLAGS_RELEASE "/NODEFAULTLIB:libcmt.lib" LINK_FLAGS_DEBUG "/NODEFAULTLIB:msvcrt.lib")
 endif(WIN32)
+
+# include target_external_dependencies function
+include (expand_dependency)
+
 if(UNIX)
 target_external_dependencies(cubridsa
   LIBNCURSES
+  LIBEDIT
   )
 endif(UNIX)
 target_external_dependencies(cubridsa
@@ -662,7 +680,7 @@ target_include_directories(cubridsa PRIVATE
 if(UNIX)
   # find out what this means:
   # target_link_libraries(cubridsa LINK_PRIVATE -Wl,-whole-archive cas ${EP_LIBS} -Wl,-no-whole-archive)
-  target_link_libraries(cubridsa LINK_PUBLIC ${CURSES_LIBRARIES} ${CMAKE_DL_LIBS})
+  target_link_libraries(cubridsa LINK_PUBLIC ${CMAKE_DL_LIBS})
   target_link_libraries(cubridsa PUBLIC stdc++fs)
 endif(UNIX)
 # for dblink

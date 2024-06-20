@@ -1992,6 +1992,7 @@ smt_add_constraint (SM_TEMPLATE * template_, DB_CONSTRAINT_TYPE constraint_type,
   SM_ATTRIBUTE_FLAG constraint;
   bool has_nulls = false;
   bool is_secondary_index = false;
+  int deduplicate_key_col_pos = -1;
 
   assert (template_ != NULL);
 
@@ -2010,11 +2011,15 @@ smt_add_constraint (SM_TEMPLATE * template_, DB_CONSTRAINT_TYPE constraint_type,
     {
       while (att_names[n_atts] != NULL)
 	{
+	  if (IS_DEDUPLICATE_KEY_ATTR_NAME (att_names[n_atts]))
+	    {
+	      deduplicate_key_col_pos = n_atts;
+	    }
 	  n_atts++;
 	}
     }
 
-  if (n_atts == 0)
+  if ((n_atts == 0) || ((n_atts == 1) && (deduplicate_key_col_pos != -1)))
     {
       ERROR0 (error, ER_OBJ_INVALID_ARGUMENTS);
       goto error_return;
@@ -2057,6 +2062,12 @@ smt_add_constraint (SM_TEMPLATE * template_, DB_CONSTRAINT_TYPE constraint_type,
 
   for (i = 0; i < n_atts && error == NO_ERROR; i++)
     {
+      if (deduplicate_key_col_pos == i)
+	{
+	  atts[i] = dk_find_sm_deduplicate_key_attribute (-1, att_names[i]);
+	  continue;
+	}
+
       error = smt_find_attribute (template_, att_names[i], class_attribute, &atts[i]);
       if (error == ER_SM_INHERITED_ATTRIBUTE)
 	{
@@ -2193,7 +2204,9 @@ smt_add_constraint (SM_TEMPLATE * template_, DB_CONSTRAINT_TYPE constraint_type,
 
       if (constraint == SM_ATTFLAG_FOREIGN_KEY)
 	{
-	  error = smt_check_foreign_key (template_, constraint_name, atts, n_atts, fk_info);
+	  error =
+	    smt_check_foreign_key (template_, constraint_name, atts,
+				   ((deduplicate_key_col_pos == -1) ? n_atts : (n_atts - 1)), fk_info);
 	  if (error != NO_ERROR)
 	    {
 	      goto error_return;
@@ -4442,6 +4455,8 @@ smt_change_attribute_w_dflt_w_order (DB_CTMPL * def, const char *name, const cha
   int is_class_attr;
   DB_VALUE *orig_value = NULL;
   DB_VALUE *new_orig_value = NULL;
+  DB_VALUE default_value;
+  DB_DEFAULT_EXPR default_expr;
   TP_DOMAIN_STATUS status;
 
   *found_att = NULL;
@@ -4458,12 +4473,34 @@ smt_change_attribute_w_dflt_w_order (DB_CTMPL * def, const char *name, const cha
       return error;
     }
 
+  /* 
+     The default value's domain should be checked even though the new default is not specified
+   */
+  db_make_null (&default_value);
+  if (new_default_value == NULL && new_default_expr->default_expr_type == DB_DEFAULT_NONE)
+    {
+      pr_clone_value (&(*found_att)->default_value.value, &default_value);
+      default_expr = (*found_att)->default_value.default_expr;
+
+      if (!DB_IS_NULL (&default_value))
+	{
+	  new_default_value = &default_value;
+	}
+
+      if (default_expr.default_expr_type != DB_DEFAULT_NONE)
+	{
+	  new_default_expr = &default_expr;
+	}
+    }
+
   is_class_attr = (name_space == ID_CLASS_ATTRIBUTE);
   if (new_default_value != NULL || (new_default_expr != NULL && new_default_expr->default_expr_type != DB_DEFAULT_NONE))
     {
       assert (((*found_att)->flags & SM_ATTFLAG_NEW) == 0);
       error = smt_set_attribute_default (def, ((new_name != NULL) ? new_name : name), is_class_attr, new_default_value,
 					 new_default_expr);
+
+      db_value_clear (&default_value);
       if (error != NO_ERROR)
 	{
 	  return error;

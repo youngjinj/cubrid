@@ -149,7 +149,7 @@ function ssh_cubrid()
 	if $verbose; then
 		echo "[$cubrid_user@$host]$ $command"
 	fi
-	ssh -p $ssh_port -t $cubrid_user@$host "export PATH=$PATH; export LD_LIBRARY_PATH=$LD_LIBRARY_PATH; export CUBRID=$CUBRID; export CUBRID_DATABASES=$CUBRID_DATABASES; $command"
+	ssh -p $ssh_port -t $cubrid_user@$host "export PATH=$PATH; export LD_LIBRARY_PATH=$LD_LIBRARY_PATH; export CUBRID=$CUBRID; export CUBRID_DATABASES=$CUBRID_DATABASES; export CUBRID_TMP=$CUBRID_TMP; export TMPDIR=$TMPDIR; $command"
 }
 
 function ssh_expect()
@@ -285,13 +285,8 @@ function check_args()
 function init_conf()
 {
 	# init path
-	mkdir -p $ha_temp_home
-	if [ -n $backup_dest_path ]; then 
-		backup_dest_path=$ha_temp_home/backup
-		if [ ! -d $backup_dest_path ]; then
-			mkdir $backup_dest_path
-		fi
-	fi
+	backup_dest_path=${backup_dest_path:-$ha_temp_home/backup}
+	mkdir -p $ha_temp_home $backup_dest_path
 	repl_log_home=${repl_log_home%%/}
 	backup_dest_path=${backup_dest_path%%/}
 	backup_dest_path=$(readlink -f $backup_dest_path)

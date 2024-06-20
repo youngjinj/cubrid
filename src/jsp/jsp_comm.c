@@ -132,12 +132,9 @@ jsp_disconnect_server (SOCKET & sockfd)
 int
 jsp_writen (SOCKET fd, const void *vptr, int n)
 {
-  int nleft;
   int nwritten;
-  const char *ptr;
-
-  ptr = (const char *) vptr;
-  nleft = n;
+  int nleft = n;
+  const char *ptr = (const char *) vptr;
 
   while (nleft > 0)
     {
@@ -186,6 +183,12 @@ jsp_readn (SOCKET fd, void *vptr, int n)
 {
   const static int PING_TIMEOUT = 5000;
   return css_readn (fd, (char *) vptr, n, PING_TIMEOUT);
+}
+
+int
+jsp_readn_with_timeout (SOCKET fd, void *vptr, int n, int timeout)
+{
+  return css_readn (fd, (char *) vptr, n, timeout);
 }
 
 int
@@ -318,7 +321,8 @@ jsp_connect_server_tcp (int server_port)
 
       if (hp == NULL)
 	{
-	  er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE, ERR_CSS_TCP_HOST_NAME_ERROR, 1, server_host);
+	  er_set_with_oserror (ER_ERROR_SEVERITY, ARG_FILE_LINE, ERR_CSS_TCP_HOST_NAME_ERROR, 2, server_host,
+			       HOSTS_FILE);
 	  return INVALID_SOCKET;
 	}
       memcpy ((void *) &tcp_srv_addr.sin_addr, (void *) hp->h_addr, hp->h_length);

@@ -56,6 +56,17 @@
     || (s)->next->info.spec.join_type == PT_JOIN_RIGHT_OUTER)) \
     )
 
+#define MQ_FIX_SPEC_ID(tmp_hint, hint, info)                               \
+     tmp_hint = hint;			\
+     while (tmp_hint)						\
+	{							\
+	  if (tmp_hint->info.name.spec_id == info->old_id)		\
+	    {							\
+	      tmp_hint->info.name.spec_id = info->new_id;		\
+	    }							\
+	  tmp_hint = tmp_hint->next;					\
+	}
+
 typedef enum
 { FIND_ID_INLINE_VIEW = 0, FIND_ID_VCLASS } FIND_ID_TYPE;
 
@@ -186,7 +197,8 @@ static PT_NODE *mq_rewrite_agg_names (PARSER_CONTEXT * parser, PT_NODE * node, v
 static PT_NODE *mq_rewrite_agg_names_post (PARSER_CONTEXT * parser, PT_NODE * node, void *void_arg, int *continue_walk);
 static bool mq_conditionally_add_objects (PARSER_CONTEXT * parser, PT_NODE * flat, DB_OBJECT *** classes, int *index,
 					  int *max);
-static PT_UPDATABILITY mq_updatable_local (PARSER_CONTEXT * parser, PT_NODE * statement, DB_OBJECT *** classes, int *i);
+static PT_UPDATABILITY mq_updatable_local (PARSER_CONTEXT * parser, PT_NODE * statement, DB_OBJECT *** classes, int *i,
+					   int *max);
 static PT_NODE *mq_substitute_select_in_statement (PARSER_CONTEXT * parser, PT_NODE * statement, PT_NODE * query_spec,
 						   PT_NODE * class_);
 static PT_NODE *mq_substitute_select_for_inline_view (PARSER_CONTEXT * parser, PT_NODE * statement,
@@ -195,8 +207,8 @@ static PT_NODE *mq_remove_select_list_for_inline_view (PARSER_CONTEXT * parser, 
 						       PT_NODE * derived_table, PT_NODE ** new_spec);
 static PT_NODE *mq_substitute_inline_view_in_statement (PARSER_CONTEXT * parser, PT_NODE * statement,
 							PT_NODE * subquery, PT_NODE * derived_spec, PT_NODE * order_by);
-static PT_NODE *mq_substitute_spec_in_method_names (PARSER_CONTEXT * parser, PT_NODE * node, void *void_arg,
-						    int *continue_walk);
+static PT_NODE *mq_substitute_spec_in_method_and_hints (PARSER_CONTEXT * parser, PT_NODE * node, void *void_arg,
+							int *continue_walk);
 static PT_NODE *mq_substitute_subquery_in_statement (PARSER_CONTEXT * parser, PT_NODE * statement, PT_NODE * query_spec,
 						     PT_NODE * class_, PT_NODE * order_by, int what_for);
 static PT_NODE *mq_substitute_subquery_list_in_statement (PARSER_CONTEXT * parser, PT_NODE * statement,
@@ -219,8 +231,6 @@ static PUSHABLE_TYPE mq_is_pushable_subquery (PARSER_CONTEXT * parser, PT_NODE *
 					      PT_NODE * class_spec, bool is_vclass, PT_NODE * order_by,
 					      PT_NODE * class_);
 static PUSHABLE_TYPE mq_is_removable_select_list (PARSER_CONTEXT * parser, PT_NODE * subquery, PT_NODE * mainquery);
-static PT_NODE *pt_remove_cast_wrap_for_dblink (PARSER_CONTEXT * parser, PT_NODE * old_node, void *arg,
-						int *continue_walk);
 static void pt_copypush_terms (PARSER_CONTEXT * parser, PT_NODE * spec, PT_NODE * query, PT_NODE * term_list,
 			       FIND_ID_TYPE type);
 static int mq_copypush_sargable_terms_dblink (PARSER_CONTEXT * parser, PT_NODE * statement, PT_NODE * spec,
@@ -1254,10 +1264,10 @@ mq_substitute_select_in_statement (PARSER_CONTEXT * parser, PT_NODE * statement,
       return NULL;
     }
 
-  /* fix up resolution of any method calls in the statement */
+  /* fix spec_id for method calls and sql hints in the statement */
   info.old_id = class_->info.name.spec_id;
   info.new_id = query_spec_from->info.spec.id;
-  (void) parser_walk_tree (parser, statement, mq_substitute_spec_in_method_names, &info, NULL, NULL);
+  (void) parser_walk_tree (parser, statement, mq_substitute_spec_in_method_and_hints, &info, NULL, NULL);
 
   /* get vclass spec attrs */
   attributes = mq_fetch_attributes (parser, class_);
@@ -1369,10 +1379,10 @@ mq_substitute_select_for_inline_view (PARSER_CONTEXT * parser, PT_NODE * stateme
       return NULL;
     }
 
-  /* fix up resolution of any method calls in the statement */
+  /* fix spec_id for method calls and sql hints in the statement */
   info.old_id = derived_spec->info.spec.id;
   info.new_id = query_spec_from->info.spec.id;
-  (void) parser_walk_tree (parser, statement, mq_substitute_spec_in_method_names, &info, NULL, NULL);
+  (void) parser_walk_tree (parser, statement, mq_substitute_spec_in_method_and_hints, &info, NULL, NULL);
 
   /* get vclass spec attrs */
   attributes = derived_spec->info.spec.as_attr_list;
@@ -1603,7 +1613,7 @@ exit_on_error:
 }
 
 /*
- * mq_substitute_spec_in_method_names() - substitue spec id in method names
+ * mq_substitute_spec_in_method_and_hints() - substitue spec id in method and hints
  *   return:
  *   parser(in):
  *   node(in):
@@ -1611,14 +1621,31 @@ exit_on_error:
  *   continue_walk(in):
  */
 static PT_NODE *
-mq_substitute_spec_in_method_names (PARSER_CONTEXT * parser, PT_NODE * node, void *void_arg, int *continue_walk)
+mq_substitute_spec_in_method_and_hints (PARSER_CONTEXT * parser, PT_NODE * node, void *void_arg, int *continue_walk)
 {
   PT_RESOLVE_METHOD_NAME_INFO *info = (PT_RESOLVE_METHOD_NAME_INFO *) void_arg;
+  PT_NODE *tmp_hint = NULL;
 
-  if ((node->node_type == PT_METHOD_CALL) && (node->info.method_call.method_name)
-      && (node->info.method_call.method_name->info.name.spec_id == info->old_id))
+  switch (node->node_type)
     {
-      node->info.method_call.method_name->info.name.spec_id = info->new_id;
+    case PT_METHOD_CALL:
+      if ((node->info.method_call.method_name)
+	  && (node->info.method_call.method_name->info.name.spec_id == info->old_id))
+	{
+	  node->info.method_call.method_name->info.name.spec_id = info->new_id;
+	}
+      break;
+    case PT_SELECT:
+      MQ_FIX_SPEC_ID (tmp_hint, node->info.query.q.select.leading, info);
+      MQ_FIX_SPEC_ID (tmp_hint, node->info.query.q.select.use_nl, info);
+      MQ_FIX_SPEC_ID (tmp_hint, node->info.query.q.select.use_idx, info);
+      MQ_FIX_SPEC_ID (tmp_hint, node->info.query.q.select.index_ss, info);
+      MQ_FIX_SPEC_ID (tmp_hint, node->info.query.q.select.index_ls, info);
+      MQ_FIX_SPEC_ID (tmp_hint, node->info.query.q.select.use_merge, info);
+      break;
+    default:
+      /* do nothing */
+      break;
     }
 
   return node;
@@ -1736,7 +1763,9 @@ mq_is_pushable_subquery (PARSER_CONTEXT * parser, PT_NODE * subquery, PT_NODE * 
 
   /* determine if class_spec is the only spec in the statement */
   is_rownum_only = mq_is_rownum_only_predicate (parser, statement_spec, mainquery, order_by, subquery, class_);
-  is_only_spec = ((statement_spec->next == NULL && (pred == NULL || is_rownum_only)) ? true : false);
+  is_only_spec =
+    ((statement_spec->next == NULL && (pred == NULL || is_rownum_only)
+      && (subquery->info.query.order_by == NULL || order_by == NULL)) ? true : false);
 
   /* check if orderby_for set to PT_EXPR_INFO_ROWNUM_ONLY */
   orderby_for = subquery->info.query.orderby_for;
@@ -1777,7 +1806,7 @@ mq_is_pushable_subquery (PARSER_CONTEXT * parser, PT_NODE * subquery, PT_NODE * 
       return NON_PUSHABLE;
     }
   /* determine if spec is outer joined */
-  if (!is_only_spec && mq_is_outer_join_spec (parser, class_spec))
+  if (!is_only_spec && (mq_is_outer_join_spec (parser, class_spec) || MQ_IS_OUTER_JOIN_SPEC (class_spec)))
     {
       /* not pushable */
       return NON_PUSHABLE;
@@ -2188,13 +2217,13 @@ mq_update_order_by (PARSER_CONTEXT * parser, PT_NODE * statement, PT_NODE * quer
 
   /* replace rownum of select-list to orderby_num */
   statement->info.query.q.select.list =
-    pt_lambda_with_arg (parser, statement->info.query.q.select.list, ins_num, ord_num, false, 0, false);
+    pt_lambda_with_arg (parser, statement->info.query.q.select.list, ins_num, ord_num, false, 2, false);
 
   /* replace rownum of where to orderby_num */
   where = statement->info.query.q.select.where;
   if (where != NULL && PT_EXPR_INFO_IS_FLAGED (where, PT_EXPR_INFO_ROWNUM_ONLY) && statement->info.query.order_by)
     {
-      where = pt_lambda_with_arg (parser, where, ins_num, ord_num, false, 0, false);
+      where = pt_lambda_with_arg (parser, where, ins_num, ord_num, false, 2, false);
 
       /* move prev orderby_for to orderby_for */
       prev_orderby_for = parser_copy_tree (parser, query_spec->info.query.orderby_for);
@@ -3382,6 +3411,14 @@ pt_check_pushable (PARSER_CONTEXT * parser, PT_NODE * tree, void *arg, int *cont
 	  cinfop->method_found = true;	/* not pushable */
 	}
       break;
+
+    case PT_EXPR:
+      if (PT_IS_EXPR_NODE_WITH_NON_PUSHABLE (tree))
+	{
+	  cinfop->method_found = true;
+	}
+      break;
+
     default:
       break;
     }				/* switch (tree->node_type) */
@@ -3501,6 +3538,13 @@ pt_check_pushable_subquery_select_list (PARSER_CONTEXT * parser, PT_NODE * query
 		cinfo.method_found = true;	/* not pushable */
 		break;
 
+	      case PT_EXPR:
+		if (PT_IS_EXPR_NODE_WITH_NON_PUSHABLE (list))
+		  {
+		    cinfo.method_found = true;
+		    break;
+		  }
+		[[fallthrough]];
 	      default:		/* do traverse */
 		parser_walk_leaves (parser, list, pt_check_pushable, &cinfo, NULL, NULL);
 		break;
@@ -3790,6 +3834,7 @@ pt_copypush_terms (PARSER_CONTEXT * parser, PT_NODE * spec, PT_NODE * query, PT_
   PARSER_VARCHAR *rewritten = NULL;
   PARSER_VARCHAR *pushed_pred, *query_str, *col_list;
   unsigned int save_custom;
+  int max_pred_order;
 
   if (query == NULL || term_list == NULL)
     {
@@ -3817,19 +3862,33 @@ pt_copypush_terms (PARSER_CONTEXT * parser, PT_NODE * spec, PT_NODE * query, PT_
 	}
       else
 	{
+	  /* Set predicates to be evaluated first */
+	  max_pred_order = pt_get_max_pred_order (parser, push_term_list);
+	  pt_set_pred_order (parser, query->info.query.q.select.where, max_pred_order + 1);
+
 	  /* push into WHERE clause */
 	  query->info.query.q.select.where = parser_append_node (push_term_list, query->info.query.q.select.where);
 	}
       break;
     case PT_DBLINK_TABLE:
+
+      if (pt_check_dblink_column_alias (parser, query) != NO_ERROR)
+	{
+	  return;
+	}
+
       /* copy terms */
       query->info.dblink_table.pushed_pred = parser_copy_tree_list (parser, term_list);
+
       /* remove the cast wrap from pushed predicate */
       query->info.dblink_table.pushed_pred =
 	parser_walk_tree (parser, query->info.dblink_table.pushed_pred, pt_remove_cast_wrap_for_dblink, NULL, NULL,
 			  NULL);
+
+      /* print the pushed predicates */
       save_custom = parser->custom_print;
-      parser->custom_print |= PT_CONVERT_RANGE | PT_SUPPRESS_RESOLVED | PT_PRINT_NO_HOST_VAR_INDEX;
+      parser->custom_print |=
+	PT_CONVERT_RANGE | PT_SUPPRESS_RESOLVED | PT_PRINT_NO_HOST_VAR_INDEX | PT_PRINT_SUPPRESS_FOR_DBLINK;
       pushed_pred = pt_print_and_list (parser, query->info.dblink_table.pushed_pred);
 
       /* wrapped query SELECT * FROM */
@@ -3839,7 +3898,7 @@ pt_copypush_terms (PARSER_CONTEXT * parser, PT_NODE * spec, PT_NODE * query, PT_
 
       /* alias name: cublink */
       rewritten = pt_append_bytes (parser, rewritten, ") cublink", 9);
-
+#if 0
       if (query->info.dblink_table.cols != NULL)
 	{
 	  /* aliased column list */
@@ -3848,7 +3907,7 @@ pt_copypush_terms (PARSER_CONTEXT * parser, PT_NODE * spec, PT_NODE * query, PT_
 	  rewritten = pt_append_varchar (parser, rewritten, col_list);
 	  rewritten = pt_append_bytes (parser, rewritten, ")", 1);
 	}
-
+#endif
       if (pushed_pred != NULL)
 	{
 	  /* where predicate */
@@ -4086,6 +4145,66 @@ mq_copypush_sargable_terms_dblink (PARSER_CONTEXT * parser, PT_NODE * statement,
 #endif
 
 /*
+ * mq_is_dblink_pushable_term () - check if the predicate is pushable for dblink
+ *   return: bool
+ *   parser(in):
+ *   term(in):
+ */
+static bool
+mq_is_dblink_pushable_term (PARSER_CONTEXT * parser, PT_NODE * term)
+{
+  if (term->node_type == PT_EXPR)
+    {
+      if (pt_is_operator_logical (term->info.expr.op) || pt_is_operator_arith (term->info.expr.op))
+	{
+	  if (mq_is_dblink_pushable_term (parser, term->info.expr.arg1))
+	    {
+	      if (term->info.expr.arg2)
+		{
+		  if (mq_is_dblink_pushable_term (parser, term->info.expr.arg2))
+		    {
+		      /* every argument is pushable */
+		      return true;
+		    }
+		  /* some argument is not pushable */
+		  return false;
+		}
+	      /* every argument is pushable */
+	      return true;
+	    }
+
+	  /* it's not pushable because the expression may have function-like */
+	  return false;
+	}
+      else
+	{
+	  /* wrapped cast should be pushed and it will be removed while rewriting the dblink query */
+	  if (term->info.expr.op == PT_CAST && PT_EXPR_INFO_IS_FLAGED (term, PT_EXPR_INFO_CAST_WRAP))
+	    {
+	      /* it needs to check if the argument is pushable */
+	      if (mq_is_dblink_pushable_term (parser, term->info.expr.arg1))
+		{
+		  return true;
+		}
+	    }
+
+	  /* other expression like built-in and stored function and etc. */
+	  return false;
+	}
+    }
+
+  switch (term->node_type)
+    {
+    case PT_NAME:
+    case PT_HOST_VAR:
+    case PT_VALUE:
+      return true;
+    default:
+      return false;
+    }
+}
+
+/*
  * mq_copypush_sargable_terms_helper() -
  *   return:
  *   parser(in):
@@ -4126,7 +4245,7 @@ mq_copypush_sargable_terms_helper (PARSER_CONTEXT * parser, PT_NODE * statement,
   int push_cnt, push_correlated_cnt, copy_cnt;
   PT_NODE *temp;
   int nullable_cnt;		/* nullable terms count */
-  PT_NODE *save_next;
+  PT_NODE *save_next, *in_spec;
   bool is_outer_joined;
 
   /* init */
@@ -4174,8 +4293,18 @@ mq_copypush_sargable_terms_helper (PARSER_CONTEXT * parser, PT_NODE * statement,
   is_outer_joined = mq_is_outer_join_spec (parser, spec);
 
   /* term(predicate) check */
+  in_spec = statement->info.query.q.select.from;
   for (term = statement->info.query.q.select.where; term; term = term->next)
     {
+      /* check for dblink's function term */
+      if (in_spec->info.spec.derived_table_type == PT_DERIVED_DBLINK_TABLE)
+	{
+	  if (!mq_is_dblink_pushable_term (parser, term))
+	    {
+	      continue;
+	    }
+	}
+
       /* check for on_cond term */
       assert (term->node_type == PT_EXPR || term->node_type == PT_VALUE);
       if ((term->node_type == PT_EXPR && term->info.expr.location > 0)
@@ -4713,8 +4842,8 @@ mq_rewrite_aggregate_as_derived (PARSER_CONTEXT * parser, PT_NODE * agg_sel)
   derived->info.query.q.select.hint = agg_sel->info.query.q.select.hint;
   agg_sel->info.query.q.select.hint = PT_HINT_NONE;
 
-  derived->info.query.q.select.ordered = agg_sel->info.query.q.select.ordered;
-  agg_sel->info.query.q.select.ordered = NULL;
+  derived->info.query.q.select.leading = agg_sel->info.query.q.select.leading;
+  agg_sel->info.query.q.select.leading = NULL;
 
   derived->info.query.q.select.use_nl = agg_sel->info.query.q.select.use_nl;
   agg_sel->info.query.q.select.use_nl = NULL;
@@ -5335,6 +5464,13 @@ mq_translate_insert (PARSER_CONTEXT * parser, PT_NODE * insert_statement)
 	  flat = from->info.spec.flat_entity_list;
 	  if (flat == NULL)
 	    {
+	      if (from_spec->remote_server_name)
+		{
+		  assert (from_spec->remote_server_name->node_type == PT_DBLINK_TABLE_DML);
+		  last = &temp->next;
+		  continue;
+		}
+
 	      assert (false);
 	      return NULL;
 	    }
@@ -9924,6 +10060,10 @@ mq_class_lambda (PARSER_CONTEXT * parser, PT_NODE * statement, PT_NODE * class_,
 	{
 	  (*where_part)->info.expr.paren_type = 1;
 	}
+
+      /* Set predicates to be evaluated first */
+      pt_set_pred_order (parser, class_where_part, 1);
+
       /* The "where clause" is in the form of a list of CNF "and" terms. In order to "and" together the view's "where
        * clause" with the statement's, we must maintain this list of terms. Using a 'PT_AND' node here will have the
        * effect of losing the "and" terms on the tail of either list. */
@@ -10586,6 +10726,9 @@ mq_inline_view_lambda (PARSER_CONTEXT * parser, PT_NODE * statement, PT_NODE * d
 	{
 	  (*where_part)->info.expr.paren_type = 1;
 	}
+      /* Set predicates to be evaluated first */
+      pt_set_pred_order (parser, class_where_part, 1);
+
       /* The "where clause" is in the form of a list of CNF "and" terms. In order to "and" together the view's "where
        * clause" with the statement's, we must maintain this list of terms. Using a 'PT_AND' node here will have the
        * effect of losing the "and" terms on the tail of either list. */
@@ -13626,9 +13769,9 @@ mq_copy_sql_hint (PARSER_CONTEXT * parser, PT_NODE * dest_query, PT_NODE * src_q
       dest_query->info.query.q.select.hint =
 	(PT_HINT_ENUM) (dest_query->info.query.q.select.hint | src_query->info.query.q.select.hint);
 
-      dest_query->info.query.q.select.ordered =
-	parser_append_node (parser_copy_tree_list (parser, src_query->info.query.q.select.ordered),
-			    dest_query->info.query.q.select.ordered);
+      dest_query->info.query.q.select.leading =
+	parser_append_node (parser_copy_tree_list (parser, src_query->info.query.q.select.leading),
+			    dest_query->info.query.q.select.leading);
 
       dest_query->info.query.q.select.use_nl =
 	parser_append_node (parser_copy_tree_list (parser, src_query->info.query.q.select.use_nl),

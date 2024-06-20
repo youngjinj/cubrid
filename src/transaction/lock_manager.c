@@ -475,7 +475,9 @@ static void lock_initialize_entry_as_granted (LK_ENTRY * entry_ptr, int tran_ind
 static void lock_initialize_entry_as_blocked (LK_ENTRY * entry_ptr, THREAD_ENTRY * thread_p, int tran_index,
 					      LK_RES * res, LOCK lock);
 static void lock_initialize_entry_as_non2pl (LK_ENTRY * entry_ptr, int tran_index, LK_RES * res, LOCK lock);
+#if defined(ENABLE_UNUSED_FUNCTION)
 static void lock_initialize_resource (LK_RES * res_ptr);
+#endif
 static void lock_initialize_resource_as_allocated (LK_RES * res_ptr, LOCK lock);
 static unsigned int lock_get_hash_value (const OID * oid, int htsize);
 static int lock_initialize_tran_lock_table (void);
@@ -581,6 +583,7 @@ LF_ENTRY_DESCRIPTOR obj_lock_entry_desc = {
   0,				/* does not have a key, not used in a hash table */
   0,				/* does not have a mutex, protected by resource mutex */
   LF_EM_NOT_USING_MUTEX,
+  LF_ENTRY_DESCRIPTOR_MAX_ALLOC,
   lock_alloc_entry,
   lock_dealloc_entry,
   lock_init_entry,
@@ -609,6 +612,7 @@ LF_ENTRY_DESCRIPTOR lk_Obj_lock_res_desc = {
   offsetof (LK_RES, key),
   offsetof (LK_RES, res_mutex),
   LF_EM_USING_MUTEX,
+  LF_ENTRY_DESCRIPTOR_MAX_ALLOC,
   lock_alloc_resource,
   lock_dealloc_resource,
   lock_init_resource,
@@ -815,10 +819,8 @@ lock_res_key_copy (void *src, void *dest)
       break;
 
     case LOCK_RESOURCE_OBJECT:
-      /* nothing, it's a free object */
-      break;
-
     default:
+      /* something is wrong */
       assert (false);
       return ER_FAILED;
     }
@@ -960,6 +962,7 @@ lock_initialize_entry_as_non2pl (LK_ENTRY * entry_ptr, int tran_index, LK_RES * 
   entry_ptr->instant_lock_count = 0;
 }
 
+#if defined(ENABLE_UNUSED_FUNCTION)
 /* initialize lock resource as free state */
 static void
 lock_initialize_resource (LK_RES * res_ptr)
@@ -975,6 +978,7 @@ lock_initialize_resource (LK_RES * res_ptr)
   res_ptr->non2pl = NULL;
   res_ptr->hash_next = NULL;
 }
+#endif
 
 /* initialize lock resource as allocated state */
 static void
@@ -1111,6 +1115,7 @@ lock_initialize_object_hash_table (void)
 
   const int block_count = 2;
   const int block_size = (int) MAX ((lk_Gl.max_obj_locks * LK_RES_RATIO) / block_count, 1);
+  lk_Obj_lock_res_desc.max_alloc_cnt = prm_get_integer_value (PRM_ID_LK_ESCALATION_AT);
 
   /* initialize object hash table */
   lk_Gl.m_obj_hash_table.init (obj_lock_res_Ts, THREAD_TS_OBJ_LOCK_RES, obj_hash_size, block_size, block_count,
@@ -1138,6 +1143,8 @@ lock_initialize_object_lock_entry_list (void)
   /* initialize the entry freelist */
   block_count = 1;
   block_size = (int) MAX ((lk_Gl.max_obj_locks * LK_ENTRY_RATIO), 1);
+  obj_lock_entry_desc.max_alloc_cnt = prm_get_integer_value (PRM_ID_LK_ESCALATION_AT);
+
   ret = lf_freelist_init (&lk_Gl.obj_free_entry_list, block_count, block_size, &obj_lock_entry_desc, &obj_lock_ent_Ts);
   if (ret != NO_ERROR)
     {
@@ -5248,7 +5255,7 @@ lock_dump_deadlock_victims (THREAD_ENTRY * thread_p, FILE * outfile)
 	}
     }
 
-  xlock_dump (thread_p, outfile);
+  xlock_dump (thread_p, outfile, 0 /* is_contention */ );
 }
 #endif /* SERVER_MODE */
 
@@ -6118,7 +6125,8 @@ end:
     {
       er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE, ER_MNT_WAITING_THREAD, 2, "lock object (lock_object)",
 	      prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD));
-      er_log_debug (ARG_FILE_LINE, "lock_object: %6d.%06d\n", elapsed_time.tv_sec, elapsed_time.tv_usec);
+      _er_log_debug (ARG_FILE_LINE, "[MONITOR_WAITING_THREAD] lock_object: %6d.%06d\n", elapsed_time.tv_sec,
+		     elapsed_time.tv_usec);
     }
 #endif
 
@@ -6238,7 +6246,8 @@ end:
     {
       er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE, ER_MNT_WAITING_THREAD, 2, "lock object (lock_object)",
 	      prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD));
-      er_log_debug (ARG_FILE_LINE, "lock_object: %6d.%06d\n", elapsed_time.tv_sec, elapsed_time.tv_usec);
+      _er_log_debug (ARG_FILE_LINE, "[MONITOR_WAITING_THREAD] lock_object: %6d.%06d\n", elapsed_time.tv_sec,
+		     elapsed_time.tv_usec);
     }
 #endif
 
@@ -6351,7 +6360,8 @@ lock_scan (THREAD_ENTRY * thread_p, const OID * class_oid, int cond_flag, LOCK c
     {
       er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE, ER_MNT_WAITING_THREAD, 2, "lock object (lock_scan)",
 	      prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD));
-      er_log_debug (ARG_FILE_LINE, "lock_scan: %6d.%06d\n", elapsed_time.tv_sec, elapsed_time.tv_usec);
+      _er_log_debug (ARG_FILE_LINE, "[MONITOR_WAITING_THREAD] lock_scan: %6d.%06d\n", elapsed_time.tv_sec,
+		     elapsed_time.tv_usec);
     }
 #endif
 
@@ -6560,7 +6570,8 @@ lock_classes_lock_hint (THREAD_ENTRY * thread_p, LC_LOCKHINT * lockhint)
     {
       er_set (ER_NOTIFICATION_SEVERITY, ARG_FILE_LINE, ER_MNT_WAITING_THREAD, 2, "lock object (lock_classes_lock_hint)",
 	      prm_get_integer_value (PRM_ID_MNT_WAITING_THREAD));
-      er_log_debug (ARG_FILE_LINE, "lock_classes_lock_hint: %6d.%06d\n", elapsed_time.tv_sec, elapsed_time.tv_usec);
+      _er_log_debug (ARG_FILE_LINE, "[MONITOR_WAITING_THREAD] lock_classes_lock_hint: %6d.%06d\n", elapsed_time.tv_sec,
+		     elapsed_time.tv_usec);
     }
 #endif
 
@@ -6612,21 +6623,6 @@ void
 lock_unlock_object_donot_move_to_non2pl (THREAD_ENTRY * thread_p, const OID * oid, const OID * class_oid, LOCK lock)
 {
   lock_unlock_object_lock_internal (thread_p, oid, class_oid, lock, false, false);
-}
-
-/*
- * lock_remove_object_lock - Removes a lock on the specified object
- *   return:
- *   thread_p(in):
- *   oid(in):  Identifier of instance to remove lock from
- *   class_oid(in): Identifier of the class of the instance
- *   lock(in): Lock to remove
- *
- */
-void
-lock_remove_object_lock (THREAD_ENTRY * thread_p, const OID * oid, const OID * class_oid, LOCK lock)
-{
-  lock_unlock_object_lock_internal (thread_p, oid, class_oid, lock, true, false);
 }
 
 /*
@@ -8454,7 +8450,7 @@ lock_dump_acquired (FILE * fp, LK_ACQUIRED_LOCKS * acqlocks)
  *              level or modify the design of the application.
  */
 void
-xlock_dump (THREAD_ENTRY * thread_p, FILE * outfp)
+xlock_dump (THREAD_ENTRY * thread_p, FILE * outfp, int is_contention)
 {
 #if !defined (SERVER_MODE)
   return;
@@ -8469,7 +8465,8 @@ xlock_dump (THREAD_ENTRY * thread_p, FILE * outfp)
   int old_wait_msecs = 0;	/* Old transaction lock wait */
   int tran_index;
   LK_RES *res_ptr;
-  int num_locked;
+  int num_locked, num_entry_alloc, num_resource_alloc;
+  UINT64 size_alloc;
   float lock_timeout_sec;
   char lock_timeout_string[64];
 
@@ -8531,18 +8528,37 @@ xlock_dump (THREAD_ENTRY * thread_p, FILE * outfp)
 
   /* compute number of lock res entries */
   num_locked = (int) lk_Gl.m_obj_hash_table.get_element_count ();
+  num_resource_alloc = (int) lk_Gl.m_obj_hash_table.get_alloc_element_count ();
+  num_entry_alloc = (int) lk_Gl.obj_free_entry_list.alloc_cnt;
+  size_alloc = ((UINT64) num_entry_alloc * sizeof (LK_ENTRY)) + ((UINT64) num_resource_alloc * sizeof (LK_RES));
 
   /* dump object lock table */
   fprintf (outfp, "Object Lock Table:\n");
   fprintf (outfp, "\tCurrent number of objects which are locked    = %d\n", num_locked);
-  fprintf (outfp, "\tMaximum number of objects which can be locked = %d\n\n", lk_Gl.max_obj_locks);
+  fprintf (outfp, "\tCurrent number of objects which are allocated = %d\n", num_resource_alloc);
+  if (size_alloc < ONE_K)
+    {
+      fprintf (outfp, "\tCurrent size of objects which are allocated = %llu\n\n", size_alloc);
+    }
+  else if (size_alloc >= ONE_K && size_alloc < ONE_M)
+    {
+      fprintf (outfp, "\tCurrent size of objects which are allocated = %lluK\n\n", size_alloc / ONE_K);
+    }
+  else
+    {
+      fprintf (outfp, "\tCurrent size of objects which are allocated = %lluM\n\n", size_alloc / ONE_M);
+    }
 
   // *INDENT-OFF*
   lk_hashmap_iterator iterator { thread_p, lk_Gl.m_obj_hash_table };
   // *INDENT-ON*
   for (res_ptr = iterator.iterate (); res_ptr != NULL; res_ptr = iterator.iterate ())
     {
-      lock_dump_resource (thread_p, outfp, res_ptr);
+      if (!is_contention || (res_ptr->holder != NULL && res_ptr->holder->blocked_mode != NULL_LOCK)
+	  || res_ptr->waiter != NULL)
+	{
+	  lock_dump_resource (thread_p, outfp, res_ptr);
+	}
     }
 
   /* Reset the wait back to the way it was */
