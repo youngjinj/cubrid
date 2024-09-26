@@ -174,16 +174,21 @@ public class ValueUtilities {
         return d.compareTo(MIN_DATE) >= 0 && d.compareTo(MAX_DATE) <= 0;
     }
 
-    public static boolean checkValidTimestamp(Timestamp ts) {
+    public static Timestamp checkValidTimestamp(Timestamp ts) {
         if (ts == null) {
-            return false;
+            return null;
         }
 
-        if (ts.equals(NULL_TIMESTAMP)) {
-            return true;
+        // '1970-01-01 00:00:00' (GMT) amounts to the Null Timestamp '0000-00-00 00:00:00' in CUBRID
+        if (ts.equals(NULL_TIMESTAMP) || ts.getTime() == 0L) {
+            return NULL_TIMESTAMP;
         }
 
-        return ts.compareTo(MIN_TIMESTAMP) >= 0 && ts.compareTo(MAX_TIMESTAMP) <= 0;
+        if (ts.compareTo(MIN_TIMESTAMP) >= 0 && ts.compareTo(MAX_TIMESTAMP) <= 0) {
+            return ts;
+        } else {
+            return null;
+        }
     }
 
     public static boolean checkValidDatetime(Timestamp dt) {
@@ -208,6 +213,7 @@ public class ValueUtilities {
     public static final Timestamp MAX_DATETIME = Timestamp.valueOf(DateTimeParser.maxDatetimeLocal);
 
     public static final Date NULL_DATE = new Date(0 - 1900, 0 - 1, 0);
-    public static final Timestamp NULL_TIMESTAMP = new Timestamp(0 - 1900, 0 - 1, 0, 0, 0, 0, 0);
+    public static final Timestamp NULL_TIMESTAMP =
+            new Timestamp(0 - 1900, 0 - 1, 0, 0, 0, 0, 0); // TODO: CBRD-25595
     public static final Timestamp NULL_DATETIME = new Timestamp(0 - 1900, 0 - 1, 0, 0, 0, 0, 0);
 }
