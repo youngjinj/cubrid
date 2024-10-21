@@ -1618,6 +1618,7 @@ $set 7 MSGCAT_SET_PARSER_SYNTAX
 136 Server의 DBNAME 최대 길이는 %1$d 바이트입니다.
 137 Server의 USER 최대 길이는 %1$d 바이트입니다.
 138 Invalid level. 유효값은 %1$d부터 %2$d까지 입니다.
+139 저장 프로시저/함수의 인수 타입과 결과 타입에는 정밀도를 지정할 수 없습니다.
 
 $set 8 MSGCAT_SET_PARSER_SEMANTIC
 1 메모리가 부족합니다
@@ -2126,22 +2127,22 @@ $set 15 MSGCAT_SET_IO
 2 백업 = %1$s 이(가) 필요합니다. \n 계속하려면 마운트/로드되어야 합니다.\n 마운트/로드 이후 계속하려면 1을 입력하세요.\n 종료하려면 0을 입력하세요.\n
 3 \n\n*** BACKUP HEADER INFORMATION ***\n\n
 4 Backup magic file identification %1$s,\n
-5           Release: %1$s\n\
-     Disk Version: %2$g\n
-6     Database Name: %1$s\n\
- DB Creation Time: %2$s\
-         Pagesize: %3$d\n
-7      Backup Level: %1$d (%2$s)\n\
-        Start_lsa: %3$lld|%4$d\n\
-         Last_lsa: %5$lld|%6$d\n
-8       Backup Time: %1$s\
-  Backup Unit Num: %2$d\n
-9  Database Volume name: %1$s\n\
+5 Release: %1$s\n\
+   Disk Version: %2$g\n
+6 Database Name: %1$s\n\
+   DB Creation Time: %2$s\
+   Pagesize: %3$d\n
+7 Backup Level: %1$d (%2$s)\n\
+   Start_lsa: %3$lld|%4$d\n\
+   Last_lsa: %5$lld|%6$d\n
+8 Backup Time: %1$s\
+   Backup Unit Num: %2$d\n
+9 Database Volume Name: %1$s\n\
    Volume Identifier: %2$d, Size: %3$lld bytes (%4$d pages)\n
-10    Database Name: %1$s\n\
-     Volume Name: %2$s\n\
-        Unit Num: %3$d\n\
-    Backup Level: %4$d (%5$s)\n\
+10 Database Name: %1$s\n\
+   Volume Name: %2$s\n\
+   Unit Num: %3$d\n\
+   Backup Level: %4$d (%5$s)\n\
 다음 옵션 중 하나를 선택하시오:\n
 11 입력\n \
   -  %1$d: 종료\n \
@@ -2157,14 +2158,16 @@ $set 15 MSGCAT_SET_IO
 19 백업 볼륨 %1$s의 timestamp가 올바르지 않습니다.\n   (Timestamp: %2$s, 예상: %3$s).\n\n
 20 백업 볼륨 정보 파일 에러, 라인 %1$d.\n
 21 백업 볼륨 라벨: Level: %1$d, Unit: %2$d, Database %3$s, Backup Time: %4$s\n
-22      이전 백업 Level: %1$d Time: %2$s (start_lsa was %3$lld|%4$d)\n
+22 이전 백업 Level: %1$d\n\
+   Time: %2$s\
+   (start_lsa was %3$lld|%4$d)\n
 23 데이터베이스 복구를 위해서 다음의 백업 볼륨이 필요합니다:\n\n
 24 백업 장치의 여유 공간이 없습니다. 계속 진행하기 위해서 새로운 백업 장치가 필요합니다:\n\n
 25 이전 백업 볼륨 이름: %1$s\n
-26      다음 백업 볼륨 이름: %1$s\n
-27   Backup Pagesize: %1$d\n
-28        Zip Method: %1$d (%2$s)\n\
-        Zip Level: %3$d (%4$s)\n
+26 다음 백업 볼륨 이름: %1$s\n
+27 Backup Pagesize: %1$d\n
+28 Zip Method: %1$d (%2$s)\n\
+   Zip Level: %3$d (%4$s)\n
 29 Include Active Log: %1$s\n
 
 $set 16 MSGCAT_SET_LOG
