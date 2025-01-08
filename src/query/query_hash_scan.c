@@ -461,6 +461,7 @@ qdata_print_hash_scan_entry (THREAD_ENTRY * thread_p, FILE * fp, const void *dat
 	  if (QFILE_GET_TUPLE_VALUE_FLAG (tuple_p) == V_BOUND)
 	    {
 	      or_init (&buf, tuple_p + QFILE_TUPLE_VALUE_HEADER_SIZE, QFILE_GET_TUPLE_VALUE_LENGTH (tuple_p));
+	      QFILE_CHECK_VALID_TUPLE_VALUE (data_p->tuple, tuple_p);
 
 	      pr_type_p = type_list_p->domp[i]->type;
 	      pr_type_p->data_readval (&buf, &dbval, type_list_p->domp[i], -1, false /* Don't copy */ , NULL, 0);

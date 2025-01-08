@@ -821,6 +821,8 @@ cursor_prefetch_first_hidden_oid (CURSOR_ID * cursor_id_p)
 	  continue;
 	}
 
+      QFILE_CHECK_VALID_TUPLE_VALUE (current_tuple, tuple_p);
+
       current_oid_p = cursor_get_oid_from_tuple (tuple_p, type);
 
       if (current_oid_p && oid_index < cursor_id_p->oid_ent_count)
@@ -871,6 +873,7 @@ cursor_prefetch_column_oids (CURSOR_ID * cursor_id_p)
 	  tuple_p = (char *) current_tuple + QFILE_TUPLE_LENGTH_SIZE;
 	  for (j = col_num - 1; j >= 0; --j)
 	    {
+	      QFILE_CHECK_VALID_TUPLE_VALUE (current_tuple, tuple_p);
 	      tuple_p += QFILE_TUPLE_VALUE_HEADER_SIZE + QFILE_GET_TUPLE_VALUE_LENGTH (tuple_p);
 	    }
 
@@ -883,6 +886,8 @@ cursor_prefetch_column_oids (CURSOR_ID * cursor_id_p)
 	    {
 	      continue;
 	    }
+
+	  QFILE_CHECK_VALID_TUPLE_VALUE (current_tuple, tuple_p);
 
 	  current_oid_p = cursor_get_oid_from_tuple (tuple_p, type);
 

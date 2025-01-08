@@ -263,6 +263,7 @@ typedef enum
   do \
     { \
       int _k; \
+      QFILE_CHECK_VALID_TUPLE_VALUE_POSITION ((tpl), (ind)); \
       (valp) = (char*) (tpl) + QFILE_TUPLE_LENGTH_SIZE; \
       for (_k = 0; _k < (ind); _k++) \
         { \
@@ -270,6 +271,40 @@ typedef enum
         } \
     } \
   while (0)
+
+#if !defined (NDEBUG)
+#define QFILE_CHECK_VALID_TUPLE_VALUE_POSITION(tpl,pos) \
+  do \
+    { \
+      int _len = QFILE_GET_TUPLE_LENGTH ((tpl)); \
+      assert (_len > 0); \
+      QFILE_TUPLE _end = (char *) (tpl) + _len; \
+      QFILE_TUPLE _curr = (char *) (tpl) + QFILE_TUPLE_LENGTH_SIZE; \
+      for (int _i = 0; _i < (pos); _i++) \
+        { \
+	  int _curr_len = QFILE_TUPLE_VALUE_HEADER_SIZE + QFILE_GET_TUPLE_VALUE_LENGTH (_curr); \
+	  _curr = (char *) _curr + _curr_len; \
+	  assert (_curr <= _end); \
+        } \
+    } \
+  while (0)
+
+#define QFILE_CHECK_VALID_TUPLE_VALUE(tpl,val) \
+  do \
+    { \
+      int _len = QFILE_GET_TUPLE_LENGTH ((tpl)); \
+      assert (_len > 0); \
+      QFILE_TUPLE _end = (char *) (tpl) + _len; \
+      assert ((val) < _end); \
+      int _val_len = QFILE_TUPLE_VALUE_HEADER_SIZE + QFILE_GET_TUPLE_VALUE_LENGTH ((val)); \
+      QFILE_TUPLE _curr_end = (char *) (val) + _val_len; \
+      assert (_curr_end <= _end); \
+    } \
+  while (0)
+#else
+#define QFILE_CHECK_VALID_TUPLE_VALUE_POSITION(tpl,pos)
+#define QFILE_CHECK_VALID_TUPLE_VALUE(tpl,val)
+#endif
 
 /* Special flag set in the TUPLE_CNT field to indicate an overflow page */
 #define QFILE_OVERFLOW_TUPLE_COUNT_FLAG -2

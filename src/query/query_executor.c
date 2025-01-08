@@ -19228,6 +19228,7 @@ qexec_compare_valptr_with_tuple (OUTPTR_LIST * outptr_list, QFILE_TUPLE tpl, QFI
       copy = pr_is_set_type (type);
       pr_type_p = domp->type;
 
+      QFILE_CHECK_VALID_TUPLE_VALUE (tpl, tuple);
       length1 = QFILE_GET_TUPLE_VALUE_LENGTH (tuple);
 
       /* zero length means NULL */
@@ -23679,6 +23680,7 @@ qexec_analytic_group_header_load (ANALYTIC_FUNCTION_STATE * func_state)
     {
       return ER_FAILED;
     }
+  QFILE_CHECK_VALID_TUPLE_VALUE (func_state->group_tplrec.tpl, tuple_p);
   tuple_p += QFILE_TUPLE_VALUE_HEADER_SIZE;
   func_state->curr_group_tuple_count = OR_GET_INT (tuple_p);
   tuple_p += DB_ALIGN (tp_Integer.disksize, MAX_ALIGNMENT);
@@ -23688,6 +23690,7 @@ qexec_analytic_group_header_load (ANALYTIC_FUNCTION_STATE * func_state)
     {
       return ER_FAILED;
     }
+  QFILE_CHECK_VALID_TUPLE_VALUE (func_state->group_tplrec.tpl, tuple_p);
   tuple_p += QFILE_TUPLE_VALUE_HEADER_SIZE;
   func_state->curr_group_tuple_count_nn = OR_GET_INT (tuple_p);
 
@@ -23721,6 +23724,7 @@ qexec_analytic_sort_key_header_load (ANALYTIC_FUNCTION_STATE * func_state, bool 
     {
       return ER_FAILED;
     }
+  QFILE_CHECK_VALID_TUPLE_VALUE (func_state->value_tplrec.tpl, tuple_p);
   tuple_p += QFILE_TUPLE_VALUE_HEADER_SIZE;
   func_state->curr_sort_key_tuple_count = OR_GET_INT (tuple_p);
   tuple_p += DB_ALIGN (tp_Integer.disksize, MAX_ALIGNMENT);
@@ -23737,6 +23741,7 @@ qexec_analytic_sort_key_header_load (ANALYTIC_FUNCTION_STATE * func_state, bool 
   /* deserialize value */
   if (QFILE_GET_TUPLE_VALUE_FLAG (tuple_p) == V_BOUND)
     {
+      QFILE_CHECK_VALID_TUPLE_VALUE (func_state->value_tplrec.tpl, tuple_p);
       length = QFILE_GET_TUPLE_VALUE_LENGTH (tuple_p);
       tuple_p += QFILE_TUPLE_VALUE_HEADER_SIZE;
       or_init (&buf, tuple_p, length);

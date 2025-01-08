@@ -863,6 +863,8 @@ qdata_finalize_analytic_func (cubthread::entry *thread_p, ANALYTIC_TYPE *func_p,
 
 		  or_init (&buf, (char *) tuple_p + QFILE_TUPLE_VALUE_HEADER_SIZE,
 			   QFILE_GET_TUPLE_VALUE_LENGTH (tuple_p));
+		  QFILE_CHECK_VALID_TUPLE_VALUE (tuple_record.tpl, tuple_p);
+
 		  if (pr_type_p->data_readval (&buf, &dbval, list_id_p->type_list.domp[0], -1, true, NULL, 0) !=
 		      NO_ERROR)
 		    {

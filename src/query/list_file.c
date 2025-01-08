@@ -930,6 +930,7 @@ qfile_unify_types (QFILE_LIST_ID * list_id1_p, const QFILE_LIST_ID * list_id2_p)
 QFILE_TUPLE_VALUE_FLAG
 qfile_locate_tuple_value (QFILE_TUPLE tuple, int index, char **tuple_value_p, int *value_size_p)
 {
+  QFILE_CHECK_VALID_TUPLE_VALUE_POSITION (tuple, index);
   tuple += QFILE_TUPLE_LENGTH_SIZE;
   return qfile_locate_tuple_value_r (tuple, index, tuple_value_p, value_size_p);
 }
@@ -1018,6 +1019,8 @@ qfile_print_tuple (QFILE_TUPLE_VALUE_TYPE_LIST * type_list_p, QFILE_TUPLE tuple)
 
   for (i = 0; i < type_list_p->type_cnt; i++)
     {
+      QFILE_CHECK_VALID_TUPLE_VALUE (tuple, tuple_p);
+
       if (QFILE_GET_TUPLE_VALUE_FLAG (tuple_p) == V_BOUND)
 	{
 	  pr_type_p = type_list_p->domp[i]->type;
@@ -2459,6 +2462,9 @@ qfile_compare_tuple_helper (QFILE_TUPLE lhs, QFILE_TUPLE rhs, QFILE_TUPLE_VALUE_
 
   for (i = 0; i < types->type_cnt; i++)
     {
+      QFILE_CHECK_VALID_TUPLE_VALUE (lhs, lhs_tuple_p);
+      QFILE_CHECK_VALID_TUPLE_VALUE (rhs, rhs_tuple_p);
+
       result = qfile_compare_tuple_values (lhs_tuple_p, rhs_tuple_p, types->domp[i], cmp);
       if (result != NO_ERROR)
 	{

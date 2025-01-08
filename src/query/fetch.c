@@ -4728,6 +4728,7 @@ fetch_val_list (THREAD_ENTRY * thread_p, regu_variable_list_node * regu_list, va
 	  if (regup->value.type == TYPE_POSITION)
 	    {
 	      pos = regup->value.value.pos_descr.pos_no;
+	      QFILE_CHECK_VALID_TUPLE_VALUE_POSITION (tpl, pos);
 	      if (pos >= next_pos)
 		{
 		  pos -= next_pos;
