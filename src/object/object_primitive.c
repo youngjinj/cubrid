@@ -11660,11 +11660,9 @@ mr_writeval_char_internal (OR_BUF * buf, DB_VALUE * value, int align)
 	  pad = packed_length - src_length;
 	  if (pad)
 	    {
-	      int i;
-	      for (i = src_length; i < packed_length; i++)
-		{
-		  rc = or_put_byte (buf, (int) ' ');
-		}
+	      assert (buf->ptr + pad <= buf->endptr);
+	      memset (buf->ptr, ' ', pad);
+	      buf->ptr += pad;
 	    }
 	}
       if (rc != NO_ERROR)

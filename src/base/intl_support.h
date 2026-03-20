@@ -107,7 +107,8 @@
 	} \
       else if ((codeset) == INTL_CODESET_UTF8) \
 	{ \
-	  (ptr) = intl_nextchar_utf8 ((s), (current_char_size)); \
+	  INTL_GET_NEXTCHAR_UTF8 ((s), (*(current_char_size))); \
+	  (ptr) = (s); \
 	} \
       else if ((codeset) == INTL_CODESET_KSC5601_EUC) \
 	{ \
