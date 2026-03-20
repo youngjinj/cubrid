@@ -572,6 +572,7 @@ fn_execute_internal (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf,
       *s = '\0';
     }
 
+  cas_log_flush_if_needed ();
   gettimeofday (&exec_begin, NULL);
 
   ret_code =
@@ -1617,6 +1618,7 @@ fn_execute_array (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf, T_
     }
 
 
+  cas_log_flush_if_needed ();
   gettimeofday (&exec_begin, NULL);
 
   ret_code = ux_execute_array (srv_handle, argc - arg_index, argv + arg_index, net_buf, req_info);
