@@ -65,7 +65,7 @@
 #include "tsc_timer.h"
 #include "dbtype.h"
 #include "jsp_cl.h"
-#include "api_compat.h"
+#include "db_session.h"
 #include "cas_log.h"
 #include "ddl_log.h"
 #include "network_histogram.hpp"
@@ -76,6 +76,12 @@
 #if defined(WINDOWS)
 #include "file_io.h"		/* needed for _wyield() */
 #endif /* WINDOWS */
+
+#if defined (SA_MODE)
+#include "boot_sr.h"
+#include "catalog_class.h"
+#endif
+
 
 #if defined (SUPPRESS_STRLEN_WARNING)
 #define strlen(s1)  ((int) strlen(s1))
@@ -102,7 +108,8 @@ enum
 {
   DO_CMD_SUCCESS = 0,
   DO_CMD_FAILURE = 1,
-  DO_CMD_EXIT = 2
+  DO_CMD_CONNECT = 2,
+  DO_CMD_EXIT = 3
 };
 
 #define CSQL_SESSION_COMMAND_PREFIX(C)	(((C) == ';') || ((C) == '!'))
@@ -161,9 +168,17 @@ char csql_Scratch_text[SCRATCH_TEXT_LEN];
 
 int csql_Error_code = NO_ERROR;
 
+typedef enum
+{
+  CSQL_PROMPT_DEFAULT,
+  CSQL_PROMPT_USER_DEFINED,
+  CSQL_PROMPT_USER_DEFINED_INCLUDE_USERNAME
+} CSQL_PROMPT_TYPE;
+static CSQL_PROMPT_TYPE csql_Prompt_user_defined = CSQL_PROMPT_DEFAULT;
+static char csql_Prompt_format[100];
+static char csql_Prompt_username[100];
 static char csql_Prompt[100];
-static char csql_Prompt_offline[100];
-static char csql_Name[100];
+static char csql_Prompt_offline[101];	//  for clear "-Wformat-truncation=" warning
 
 /*
  * Handles for the various files
@@ -228,7 +243,7 @@ static void csql_exit_init (void);
 static void csql_exit_cleanup (void);
 static void csql_print_buffer (void);
 static void csql_change_working_directory (const char *dirname);
-static void csql_exit_session (int error);
+static void csql_exit_session (int error, bool exit_flag);
 
 static int csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *stream, int line_no);
 
@@ -243,6 +258,9 @@ static int csql_connect (char *argument, CSQL_ARGUMENT * csql_arg);
 static void csql_set_server_output (CSQL_ARGUMENT * csql_arg, bool server_output);
 static void csql_print_server_output (const CSQL_ARGUMENT * csql_arg);
 static int csql_execute_query (const char *stmts);
+
+static inline void csql_apply_catalog_rebuild_mode (CSQL_ARGUMENT * csql_arg, int *client_type);
+static inline int csql_rebuild_catalog (const CSQL_ARGUMENT * csql_arg);
 
 #if defined (ENABLE_UNUSED_FUNCTION)
 #if !defined(WINDOWS)
@@ -419,7 +437,7 @@ csql_pipe_handler (int sig_no)
 static void
 display_buffer (void)
 {
-  int l = 1;
+  volatile int l = 1;
   FILE *pf;
 #if !defined(WINDOWS)
   void (*csql_pipe_save) (int);
@@ -462,7 +480,162 @@ display_buffer (void)
 #endif /* !WINDOWS */
 }
 
+/*
+ * change_prompt () - to change the csql prompt displayed to the user. 
+ *                    The prompt's appearance is customized using a set of user-defined characters specified in the environment variable CUBRID_CSQL_PROMPT.
+ *      
+ *   return: none
+ *   fmt (in)     : the format string containing the user-defined characters, typically sourced from CUBRID_CSQL_PROMPT.
+ *   prompt (out) : the buffer where the newly generated, changed prompt string will be stored.
+ *   prompt_size (in) : the maximum length (size) of the prompt buffer.
+ *   
+ *   Note : user-defined characters (escape sequence)
+ *     - \u or \U : replaced with the user name
+ *     - \d or \D : replaced with the database name
+ *     - \h or \H : replaced with the host name
+ */
+static void
+change_prompt (char *fmt, char *prompt, int prompt_size)
+{
+  char *user_name = NULL;
+  char *database_name = NULL;
+  char *host_name = NULL;
+  char *pos = prompt;
+  int remain = prompt_size - 3;	// for prompt delimeter + space + null character
+  int len;
 
+  if (remain <= 0)
+    {
+      return;
+    }
+
+  memset (prompt, 0x00, prompt_size);
+
+  for (int i = 0; fmt[i] != '\0' && remain > 0;)
+    {
+      if (fmt[i] == '\\' && fmt[i + 1] != '\0' && fmt[i + 1] >= 0)
+	{
+	  char next = fmt[i + 1];
+	  const char *src = NULL;
+
+	  if (next == 'u' || next == 'U')
+	    {
+	      src = user_name = db_get_user_name ();
+	      strcpy (csql_Prompt_username, user_name);
+	      csql_Prompt_user_defined = CSQL_PROMPT_USER_DEFINED_INCLUDE_USERNAME;
+	    }
+	  else if (next == 'd' || next == 'D')
+	    {
+	      src = database_name = db_get_database_name ();
+	    }
+	  else if (next == 'h' || next == 'H')
+	    {
+	      src = host_name = db_get_host_connected ();
+	    }
+
+	  if (src)
+	    {
+	      len = strlen (src);
+	    }
+	  else
+	    {
+	      src = &(fmt[i]);
+	      len = 2;
+	    }
+
+	  if (len > remain)
+	    {
+	      len = remain;
+	    }
+
+	  memcpy (pos, src, len);
+	  pos += len;
+	  remain -= len;
+	  i += 2;
+	}
+      else
+	{
+	  *pos++ = fmt[i];
+	  remain--;
+	  i++;
+	}
+    }
+
+  for (; prompt <= pos && (*pos == '\0' || *pos == ' '); --pos);
+
+  if (*pos != '>')
+    {
+      memcpy (pos + 1, "> \0", 3);
+    }
+  else
+    {
+      memcpy (pos + 1, " \0", 2);
+    }
+
+  if (user_name)
+    {
+      db_string_free (user_name);
+    }
+
+  if (database_name)
+    {
+      db_string_free (database_name);
+    }
+
+#if !defined (WINDOW)
+  /* check if the prompt contains multi-byte characters */
+  for (pos = prompt; *pos != '\0'; pos++)
+    {
+      if ((signed char) *pos < 0)
+	{
+	  char *locale = setlocale (LC_CTYPE, NULL);
+	  INTL_CODESET codeset = lang_charset ();
+	  const char *find1 = NULL, *find2 = NULL;
+
+	  /* check of DB codeset */
+	  if (codeset == INTL_CODESET_UTF8)
+	    {
+	      find1 = "utf8";
+	      find2 = "utf-8";
+	    }
+	  else if (codeset == INTL_CODESET_KSC5601_EUC)
+	    {
+	      find1 = "euckr";
+	      find2 = "euc-kr";
+	    }
+	  else
+	    {
+	      goto multibyte_warning;
+	    }
+
+	  /* veify if match LANG and DB codeset */
+	  if (strcasestr (locale, find1) != NULL || strcasestr (locale, find2) != NULL)
+	    {
+	      return;
+	    }
+	  else
+	    {
+	      goto multibyte_warning;
+	    }
+	}
+    }
+
+  return;
+
+multibyte_warning:
+
+  strcpy (prompt, csql_get_message (CSQL_PROMPT));
+  if ((prompt_size - strlen (prompt)) > 1)
+    {
+      strcat (prompt, " ");
+    }
+  fprintf (stderr, "Warning: %s\n", csql_get_message (CSQL_E_LANG_TEXT));
+
+  return;
+#else
+  return;
+#endif
+}
 
 /*
  * start_csql()
@@ -534,12 +707,12 @@ start_csql (CSQL_ARGUMENT * csql_arg)
   if (csql_arg->command)
     {
       /* command input */
-      csql_exit_session (csql_execute_statements (csql_arg, STRING_INPUT, csql_arg->command, -1));
+      csql_exit_session (csql_execute_statements (csql_arg, STRING_INPUT, csql_arg->command, -1), true);
     }
 
   if (!csql_Is_interactive && !csql_arg->single_line_execution)
     {
-      csql_exit_session (csql_execute_statements (csql_arg, FILE_INPUT, csql_Input_fp, -1));
+      csql_exit_session (csql_execute_statements (csql_arg, FILE_INPUT, csql_Input_fp, -1), true);
     }
 
   /* Start interactive conversation or single line execution */
@@ -560,11 +733,14 @@ start_csql (CSQL_ARGUMENT * csql_arg)
     }
 
   /* display product title */
-  snprintf (csql_Scratch_text, SCRATCH_TEXT_LEN, "\n\t%s\n\n", csql_get_message (CSQL_INITIAL_CSQL_TITLE));
-  csql_fputs_console_conv (csql_Scratch_text, csql_Tty_fp);
+  if (!csql_arg->noprint_entrymsg)
+    {
+      snprintf (csql_Scratch_text, SCRATCH_TEXT_LEN, csql_get_message (CSQL_INITIAL_CSQL_TITLE), rel_release_string ());
+      csql_fputs_console_conv (csql_Scratch_text, csql_Tty_fp);
 
-  snprintf (csql_Scratch_text, SCRATCH_TEXT_LEN, "\n%s\n\n", csql_get_message (CSQL_INITIAL_HELP_MSG));
-  csql_fputs_console_conv (csql_Scratch_text, csql_Tty_fp);
+      snprintf (csql_Scratch_text, SCRATCH_TEXT_LEN, "\n%s\n\n", csql_get_message (CSQL_INITIAL_HELP_MSG));
+      csql_fputs_console_conv (csql_Scratch_text, csql_Tty_fp);
+    }
 
 #if !defined(WINDOWS)
   if (csql_Is_interactive)
@@ -579,6 +755,11 @@ start_csql (CSQL_ARGUMENT * csql_arg)
 #endif /* ENABLE_UNUSED_FUNCTION */
     }
 #endif /* !WINDOWS */
+
+  if (csql_Is_interactive && csql_Prompt_user_defined != CSQL_PROMPT_DEFAULT)
+    {
+      change_prompt (csql_Prompt_format, csql_Prompt, sizeof (csql_Prompt));
+    }
 
   for (line_no = 1;; line_no++)
     {
@@ -599,8 +780,23 @@ start_csql (CSQL_ARGUMENT * csql_arg)
 
       if (csql_Is_interactive)
 	{
+	  if (csql_Database_connected && csql_Prompt_user_defined == CSQL_PROMPT_USER_DEFINED_INCLUDE_USERNAME)
+	    {
+	      char *username = db_get_user_name ();
+
+	      if (strcmp (csql_Prompt_username, username))
+		{
+		  change_prompt (csql_Prompt_format, csql_Prompt, sizeof (csql_Prompt));
+		}
+
+	      if (username)
+		{
+		  db_string_free (username);
+		}
+	    }
+
 #if defined(WINDOWS)
-	  fputs (csql_Prompt, csql_Output_fp);	/* display prompt */
+	  fputs (prompt, csql_Output_fp);	/* display prompt */
 	  line_read = fgets ((char *) line_buf, LINE_BUFFER_SIZE, csql_Input_fp);
 #else
 	  if ((line_read = readline (prompt)) != NULL)
@@ -643,7 +839,7 @@ start_csql (CSQL_ARGUMENT * csql_arg)
 	      line_read_alloced = NULL;
 	    }
 	  csql_edit_contents_finalize ();
-	  csql_exit_session (0);
+	  csql_exit_session (0, true);
 	}
 
       line_length = strlen (line_read);
@@ -700,7 +896,7 @@ start_csql (CSQL_ARGUMENT * csql_arg)
 	{
 	  int ret;
 	  ret = csql_do_session_cmd (line_read, csql_arg);
-	  if (ret == DO_CMD_EXIT)
+	  if (ret == DO_CMD_EXIT || ret == DO_CMD_CONNECT)
 	    {
 	      if (line_read_alloced != NULL)
 		{
@@ -708,7 +904,10 @@ start_csql (CSQL_ARGUMENT * csql_arg)
 		  line_read_alloced = NULL;
 		}
 	      csql_edit_contents_finalize ();
-	      csql_exit_session (0);
+	      if (ret == DO_CMD_EXIT)
+		{
+		  csql_exit_session (0, true);
+		}
 	    }
 	  else if (ret == DO_CMD_FAILURE)
 	    {
@@ -1488,14 +1687,26 @@ csql_do_session_cmd (char *line_read, CSQL_ARGUMENT * csql_arg)
 	  error_code = csql_connect ((argument[0] == '\0') ? NULL : argument, csql_arg);
 	  if (error_code != NO_ERROR)
 	    {
-	      return error_code;
+	      if (csql_Error_code == NO_ERROR)
+		{
+		  return DO_CMD_SUCCESS;
+		}
+	      else
+		{
+		  return DO_CMD_FAILURE;
+		}
+	    }
+
+	  if (csql_Prompt_user_defined != CSQL_PROMPT_DEFAULT)
+	    {
+	      change_prompt (csql_Prompt_format, csql_Prompt, sizeof (csql_Prompt));
 	    }
 	}
       else
 	{
 	  fprintf (csql_Output_fp, "CONNECT session command does not support --sysadm mode\n");
 	}
-      break;
+      return DO_CMD_CONNECT;
 
     case S_CMD_MIDXKEY:
       if (!strcasecmp (argument, "on"))
@@ -1834,8 +2045,8 @@ csql_print_server_output (const CSQL_ARGUMENT * csql_arg)
       return;
     }
 
-  int errors = csql_execute_query ("SELECT '' INTO :pl_output_str");
-  errors += csql_execute_query ("SELECT 1 INTO :pl_output_status");
+  int errors = csql_execute_query ("EVALUATE '' INTO :pl_output_str");
+  errors += csql_execute_query ("EVALUATE 1 INTO :pl_output_status");
   if (errors != 0)
     {
       return;
@@ -1910,7 +2121,6 @@ csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *s
   DB_QUERY_TYPE *attr_spec = NULL;	/* result attribute spec. */
   int total;			/* number of statements to execute */
   bool do_abort_transaction = false;	/* flag for transaction abort */
-  char sql_text[DDL_LOG_BUFFER_SIZE] = { 0 };
 
   csql_Num_failures = 0;
   er_clear ();
@@ -2005,7 +2215,6 @@ csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *s
       DB_QUERY_RESULT *result = NULL;	/* result pointer */
       int db_error;
       char stmt_msg[LINE_BUFFER_SIZE];
-      PT_NODE *statement = NULL;
 
       /* Start the execution of stms */
       stmt_msg[0] = '\0';
@@ -2110,8 +2319,13 @@ csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *s
 	  goto error;
 	}
 
-      snprintf (stmt_msg, LINE_BUFFER_SIZE, "Execute OK.");
+      if (csql_Is_time_on)
+	{
+	  tsc_getticks (&end_tick);
+	  tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
+	}
 
+      snprintf (stmt_msg, LINE_BUFFER_SIZE, "Execute OK.");
       csql_Row_count = 0;
       switch (stmt_type)
 	{
@@ -2193,9 +2407,6 @@ csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *s
       if (csql_Is_time_on)
 	{
 	  char time[100];
-
-	  tsc_getticks (&end_tick);
-	  tsc_elapsed_time_usec (&elapsed_time, end_tick, start_tick);
 
 	  sprintf (time, " (%ld.%06ld sec) ", elapsed_time.tv_sec, elapsed_time.tv_usec);
 	  strncat (stmt_msg, time, sizeof (stmt_msg) - strlen (stmt_msg) - 1);
@@ -2283,6 +2494,15 @@ csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *s
 	}
     }
 
+  if (csql_arg->sysadm_rebuild_catalog)
+    {
+      if (csql_rebuild_catalog (csql_arg) != NO_ERROR)
+	{
+	  csql_Error_code = CSQL_ERR_SYSTEM_CATALOG_COMPILE;
+	  goto error;
+	}
+    }
+
   snprintf (csql_Scratch_text, SCRATCH_TEXT_LEN, csql_get_message (CSQL_EXECUTE_END_MSG_FORMAT),
 	    num_stmts - csql_Num_failures);
   csql_display_msg (csql_Scratch_text);
@@ -2307,6 +2527,11 @@ csql_execute_statements (const CSQL_ARGUMENT * csql_arg, int type, const void *s
   return csql_Num_failures;
 
 error:
+  if (csql_arg->sysadm_rebuild_catalog)
+    {
+      do_abort_transaction = true;
+    }
+
   display_error (session, stmt_start_line_no);
   if (csql_arg->pl_server_output)
     {
@@ -2662,6 +2887,51 @@ signal_stop (int sig_no)
 #endif /* !WINDOWS */
 }
 
+#if !defined(WINDOWS)
+/*
+ * crash_handler(): kill the server and spawn the new server process
+ *
+ *   returns: none
+ *   signo(IN): signo to handle
+ *   siginfo(IN): siginfo struct
+ *   dummyp(IN): this argument will not be used,
+ *               but remains to cope with its function prototype.
+ *
+ */
+
+static void
+crash_handler (int signo, siginfo_t * siginfo, void *dummyp)
+{
+  if (os_set_signal_handler (signo, SIG_DFL) == SIG_ERR)
+    {
+      return;
+    }
+
+  er_print_crash_callstack (signo);
+}
+
+/*
+ * register_crash_signal_handler () : register of the signal for occuring crash
+ *
+ *   returns : none
+ *   signo(IN): signo to handle
+ *
+ */
+
+static void
+register_crash_signal_handler (int signo)
+{
+  struct sigaction act;
+
+  act.sa_handler = NULL;
+  act.sa_sigaction = crash_handler;
+  sigemptyset (&act.sa_mask);
+  act.sa_flags = 0;
+  act.sa_flags |= SA_SIGINFO;
+  sigaction (signo, &act, NULL);
+}
+#endif
+
 /*
  * csql_exit_session() - handling the default action of the last outstanding
  *                     transaction (i.e., commit or abort)
@@ -2671,7 +2941,7 @@ signal_stop (int sig_no)
  * Note: this function never return.
  */
 static void
-csql_exit_session (int error)
+csql_exit_session (int error, bool exit_flag)
 {
   char line_buf[LINE_BUFFER_SIZE];
   bool commit_on_shutdown = false;
@@ -2719,6 +2989,11 @@ csql_exit_session (int error)
 	  nonscr_display_error (csql_Scratch_text, SCRATCH_TEXT_LEN);
 	  error = 1;
 	}
+    }
+
+  if (!exit_flag)
+    {
+      return;
     }
 
   if (histo_is_supported ())
@@ -2841,6 +3116,42 @@ csql_exit (int exit_status)
   longjmp (csql_Exit_env, 1);
 }
 
+/* --sysadm-rebuild-catalog option is only supported in SA_MODE */
+static inline void
+csql_apply_catalog_rebuild_mode (CSQL_ARGUMENT * csql_arg, int *client_type)
+{
+#if defined (SA_MODE)
+  *client_type = DB_CLIENT_TYPE_ADMIN_CSQL_REBUILD_CATALOG;
+  csql_arg->sysadm = true;
+  csql_arg->auto_commit = false;
+  boot_set_skip_check_ct_classes (true);
+#endif /* SA_MODE */
+}
+
+static int
+csql_rebuild_catalog (const CSQL_ARGUMENT * csql_arg)
+{
+#if defined (SA_MODE)
+  assert (catcls_Enable == false);
+
+  if (catcls_compile_catalog_classes (NULL) != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
+  if (sm_force_write_all_classes () != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
+  if (sm_update_all_catalog_statistics (STATS_WITH_FULLSCAN) != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
+
+  db_commit_transaction ();
+#endif /* SA_MODE */
+  return NO_ERROR;
+}
+
 /*
  * csql() - "main" interface function for the csql interpreter
  *   return: EXIT_SUCCESS, EXIT_FAILURE
@@ -2888,7 +3199,6 @@ csql (const char *argv0, CSQL_ARGUMENT * csql_arg)
       strncat (csql_Prompt, " ", avail_size);
     }
   snprintf (csql_Prompt_offline, sizeof (csql_Prompt_offline), "!%s", csql_Prompt);
-  strncpy_bufsize (csql_Name, csql_get_message (CSQL_NAME));
 
   /* as we must use db_open_file_name() to open the input file, it is necessary to be opening csql_Input_fp at this
    * point */
@@ -2933,6 +3243,16 @@ csql (const char *argv0, CSQL_ARGUMENT * csql_arg)
       goto error;
     }
 
+#if !defined(WINDOWS)
+  /* set signal handler */
+  register_crash_signal_handler (SIGABRT);
+  register_crash_signal_handler (SIGILL);
+  register_crash_signal_handler (SIGFPE);
+  register_crash_signal_handler (SIGBUS);
+  register_crash_signal_handler (SIGSEGV);
+  register_crash_signal_handler (SIGSYS);
+#endif
+
   /*
    * login and restart database
    */
@@ -2964,8 +3284,7 @@ csql (const char *argv0, CSQL_ARGUMENT * csql_arg)
 
   if (csql_arg->sysadm_rebuild_catalog)
     {
-      client_type = DB_CLIENT_TYPE_ADMIN_CSQL_REBUILD_CATALOG;
-      csql_arg->sysadm = true;
+      csql_apply_catalog_rebuild_mode (csql_arg, &client_type);
     }
 
   if (db_restart_ex (argv0, csql_arg->db_name, csql_arg->user_name, csql_arg->passwd, NULL, client_type) != NO_ERROR)
@@ -3062,6 +3381,13 @@ csql (const char *argv0, CSQL_ARGUMENT * csql_arg)
       strncpy (csql_Formatter_cmd, env, PATH_MAX - 1);
     }
 
+  env = getenv ("CUBRID_CSQL_PROMPT");
+  if (!csql_arg->sysadm && env && *env != '\0')
+    {
+      csql_Prompt_user_defined = CSQL_PROMPT_USER_DEFINED;
+      strcpy (csql_Prompt_format, env);
+    }
+
   if (csql_arg->nopager)
     {
       csql_Pager_cmd[0] = '\0';
@@ -3099,8 +3425,8 @@ csql (const char *argv0, CSQL_ARGUMENT * csql_arg)
 
 error:
   nonscr_display_error (csql_Scratch_text, SCRATCH_TEXT_LEN);
-  er_final (ER_ALL_FINAL);
   csql_exit (EXIT_FAILURE);
+  er_final (ER_ALL_FINAL);
   return EXIT_FAILURE;		/* won't get here really */
 }
 
@@ -3511,11 +3837,13 @@ csql_connect (char *argument, CSQL_ARGUMENT * csql_arg)
   const char *err_msg;
   CSQL_ARGUMENT csql_new_arg;
 
+  csql_Error_code = NO_ERROR;
+
   if (argument == NULL)
     {
       err_msg = (*csql_get_message) (CSQL_MSG_TOO_FEW_ARGS);
       fprintf (csql_Output_fp, "%s\n", err_msg);
-      return DO_CMD_SUCCESS;
+      return ER_FAILED;
     }
 
   memset (&csql_new_arg, 0, sizeof csql_new_arg);
@@ -3525,7 +3853,7 @@ csql_connect (char *argument, CSQL_ARGUMENT * csql_arg)
   if ((user_name_ptr = strtok_r (buf, delim, &save_ptr_strtok)) == NULL)
     {
       csql_Error_code = CSQL_ERR_SQL_ERROR;
-      return DO_CMD_FAILURE;
+      return ER_FAILED;
     }
 
   /*find db name following the user name */
@@ -3539,7 +3867,7 @@ csql_connect (char *argument, CSQL_ARGUMENT * csql_arg)
       if (csql_arg->sa_mode == true)
 	{
 	  fprintf (csql_Output_fp, "Cannot connect to other DB in the --SA-mode.\n");
-	  return DO_CMD_SUCCESS;
+	  return ER_FAILED;
 	}
     }
 
@@ -3549,13 +3877,13 @@ csql_connect (char *argument, CSQL_ARGUMENT * csql_arg)
   memset (boot_Host_connected, 0, sizeof (boot_Host_connected));
 #endif /* CS_MODE */
 
-  /*Failed to access other host or db and then access formal db_name */
+  csql_exit_session (0, false);
 
+  /*Failed to access other host or db and then access formal db_name */
   if (csql_Database_connected)
     {
       csql_Database_connected = false;
       db_shutdown ();
-
     }
 
   er_init ("./csql.err", ER_NEVER_EXIT);
@@ -3574,7 +3902,7 @@ csql_connect (char *argument, CSQL_ARGUMENT * csql_arg)
 	      csql_check_server_down ();
 	      fprintf (csql_Output_fp, "Warning: current CSQL session is disconnected.\n");
 
-	      return DO_CMD_FAILURE;
+	      return ER_FAILED;
 	    }
 
 	  if (p[0] == '\0')
@@ -3592,7 +3920,7 @@ csql_connect (char *argument, CSQL_ARGUMENT * csql_arg)
 	  csql_check_server_down ();
 	  fprintf (csql_Output_fp, "Warning: current CSQL session is disconnected.\n");
 
-	  return DO_CMD_FAILURE;
+	  return ER_FAILED;
 
 	}
     }
@@ -3624,5 +3952,5 @@ csql_connect (char *argument, CSQL_ARGUMENT * csql_arg)
 
 /*If connect is success, copy csql_new_arg to csql_arg*/
 
-  return DO_CMD_SUCCESS;
+  return NO_ERROR;
 }

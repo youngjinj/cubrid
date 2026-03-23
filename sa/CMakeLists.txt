@@ -40,7 +40,6 @@ set(EXECUTABLE_HEADERS
 
 set(COMPAT_SOURCES
   ${COMPAT_DIR}/cnv.c
-  ${COMPAT_DIR}/cnvlex.c
   ${COMPAT_DIR}/db_admin.c
   ${COMPAT_DIR}/db_class.c
   ${COMPAT_DIR}/db_date.c
@@ -108,9 +107,7 @@ set(BASE_SOURCES
   ${BASE_DIR}/object_representation_sr.c
   ${BASE_DIR}/mprec.c
   ${BASE_DIR}/dtoa.c
-  ${BASE_DIR}/adjustable_array.c
   ${BASE_DIR}/chartype.c
-  ${BASE_DIR}/condition_handler.c
   ${BASE_DIR}/util_func.c
   ${BASE_DIR}/intl_support.c
   ${BASE_DIR}/environment_variable.c
@@ -132,8 +129,13 @@ set(BASE_SOURCES
   ${BASE_DIR}/tz_compile.c
   ${BASE_DIR}/tz_support.c
   ${BASE_DIR}/ddl_log.c
+  ${BASE_DIR}/ifsys.cpp
+  ${BASE_DIR}/filesys_parser.cpp
+  ${BASE_DIR}/cgroup.cpp
+  ${BASE_DIR}/resources.cpp
   )
 set(BASE_HEADERS
+  ${BASE_DIR}/compressor.hpp
   ${BASE_DIR}/error_code.h
   ${BASE_DIR}/error_context.hpp
   ${BASE_DIR}/error_manager.h
@@ -166,8 +168,12 @@ set(BASE_HEADERS
   ${BASE_DIR}/printer.hpp
   ${BASE_DIR}/resource_tracker.hpp
   ${BASE_DIR}/scope_exit.hpp
-  ${BASE_DIR}/semaphore.hpp
-)
+  ${BASE_DIR}/fixed_size_allocator.hpp
+  ${BASE_DIR}/ifsys.hpp
+  ${BASE_DIR}/filesys_parser.hpp
+  ${BASE_DIR}/cgroup.hpp
+  ${BASE_DIR}/resources.hpp
+  )
 
 set(HEAPLAYER_SOURCES
   ${HEAPLAYERS_DIR}/customheaps.cpp
@@ -180,8 +186,12 @@ set(CONNECTION_SOURCES
   ${CONNECTION_DIR}/connection_globals.c
   ${CONNECTION_DIR}/connection_list_cl.c
   ${CONNECTION_DIR}/client_support.c
-  ${CONNECTION_DIR}/connection_support.c
+  ${CONNECTION_DIR}/connection_support.cpp
   ${CONNECTION_DIR}/host_lookup.c
+  )
+
+set(CONNECTION_HEADERS
+  ${CONNECTION_DIR}/connection_support.hpp
   )
 
 set(COMMUNICATION_SOURCES
@@ -248,7 +258,15 @@ set(OPTIMIZER_SOURCES
   ${OPTIMIZER_DIR}/query_graph.c
   ${OPTIMIZER_DIR}/query_planner.c
   ${OPTIMIZER_DIR}/plan_generation.c
-  ${OPTIMIZER_DIR}/query_rewrite.c
+  )
+
+set(REWRITER_SOURCES
+  ${REWRITER_DIR}/query_rewrite_auto_parameterize.c
+  ${REWRITER_DIR}/query_rewrite_subquery.c
+  ${REWRITER_DIR}/query_rewrite_select.c
+  ${REWRITER_DIR}/query_rewrite_set.c
+  ${REWRITER_DIR}/query_rewrite_term.c
+  ${REWRITER_DIR}/query_rewrite.c
   )
 
 set(QUERY_SOURCES
@@ -261,10 +279,12 @@ set(QUERY_SOURCES
   ${QUERY_DIR}/filter_pred_cache.c
   ${QUERY_DIR}/list_file.c
   ${QUERY_DIR}/dblink_scan.c
+  ${QUERY_DIR}/dblink_2pc.c
   ${QUERY_DIR}/numeric_opfunc.c
   ${QUERY_DIR}/partition.c
   ${QUERY_DIR}/query_aggregate.cpp
   ${QUERY_DIR}/query_hash_scan.c
+  ${QUERY_DIR}/query_hash_join.c
   ${QUERY_DIR}/query_analytic.cpp
   ${QUERY_DIR}/query_cl.c
   ${QUERY_DIR}/query_dump.c
@@ -280,6 +300,7 @@ set(QUERY_SOURCES
   ${QUERY_DIR}/set_scan.c
   ${QUERY_DIR}/show_scan.c
   ${QUERY_DIR}/subquery_cache.c
+  ${QUERY_DIR}/memoize.cpp
   ${QUERY_DIR}/stream_to_xasl.c
   ${QUERY_DIR}/string_opfunc.c
   ${QUERY_DIR}/string_regex.cpp
@@ -292,10 +313,12 @@ set(QUERY_SOURCES
 set(QUERY_HEADERS
   ${QUERY_DIR}/query_aggregate.hpp
   ${QUERY_DIR}/query_hash_scan.h
+  ${QUERY_DIR}/query_hash_join.h
   ${QUERY_DIR}/query_analytic.hpp
   ${QUERY_DIR}/query_monitoring.hpp
   ${QUERY_DIR}/query_reevaluation.hpp
   ${QUERY_DIR}/scan_json_table.hpp
+  ${QUERY_DIR}/memoize.hpp
   )
 
 set(OBJECT_SOURCES
@@ -358,7 +381,6 @@ set(SP_SOURCES
   ${SP_DIR}/pl_comm.c
   ${SP_DIR}/pl_file.c
   ${SP_DIR}/pl_sr.cpp
-  ${SP_DIR}/pl_sr_jvm.cpp
   ${SP_DIR}/sp_catalog.cpp
   ${SP_DIR}/sp_code.cpp
   )
@@ -369,6 +391,22 @@ set(SP_HEADERS
   ${SP_DIR}/pl_signature.hpp
   ${SP_DIR}/pl_struct_compile.cpp
 )
+
+set(PARALLEL_HEAP_SCAN_SOURCES
+  ${PARALLEL_HEAP_SCAN_DIR}/px_heap_scan_checker.cpp
+  )
+
+set(PARALLEL_HEAP_SCAN_HEADERS
+  ${PARALLEL_HEAP_SCAN_DIR}/px_heap_scan_checker.hpp
+  )
+
+set(PARALLEL_QUERY_EXECUTE_SOURCES
+  ${PARALLEL_QUERY_EXECUTE_DIR}/px_query_checker.cpp
+  )
+
+set(PARALLEL_QUERY_EXECUTE_HEADERS
+  ${PARALLEL_QUERY_EXECUTE_DIR}/px_query_checker.hpp
+  )
 
 set(METHOD_SOURCES
   ${METHOD_DIR}/method_callback.cpp
@@ -467,7 +505,7 @@ set(STORAGE_SOURCES
   ${STORAGE_DIR}/catalog_class.c
   ${STORAGE_DIR}/compactdb_sr.c
   ${STORAGE_DIR}/disk_manager.c
-  ${STORAGE_DIR}/double_write_buffer.c
+  ${STORAGE_DIR}/double_write_buffer.cpp
   ${STORAGE_DIR}/es.c
   ${STORAGE_DIR}/es_common.c
   ${STORAGE_DIR}/es_owfs.c
@@ -504,6 +542,7 @@ set(XASL_SOURCES
   ${XASL_DIR}/xasl_predicate.cpp
   ${XASL_DIR}/xasl_stream.cpp
   ${XASL_DIR}/xasl_unpack_info.cpp
+  ${XASL_DIR}/xasl_iteration.cpp
   )
 set(XASL_HEADERS
   ${XASL_DIR}/access_json_table.hpp
@@ -514,6 +553,7 @@ set(XASL_HEADERS
   ${XASL_DIR}/xasl_unpack_info.hpp
   ${XASL_DIR}/xasl_predicate.hpp
   ${XASL_DIR}/xasl_stream.hpp
+  ${XASL_DIR}/xasl_iteration.hpp
   )
 
 set(LOADDB_SOURCES
@@ -603,9 +643,12 @@ SET_SOURCE_FILES_PROPERTIES(
   ${PARSER_DIR}/scanner_support.c
   ${PARSER_DIR}/view_transform.c
   ${OPTIMIZER_SOURCES}
+  ${REWRITER_SOURCES}
   ${QUERY_SOURCES}
   ${OBJECT_SOURCES}
   ${SP_SOURCES}
+  ${PARALLEL_HEAP_SCAN_SOURCES}
+  ${PARALLEL_QUERY_EXECUTE_SOURCES}
   ${METHOD_SOURCES}
   ${THREAD_SOURCES}
   ${TRANSACTION_SOURCES}
@@ -621,8 +664,6 @@ SET_SOURCE_FILES_PROPERTIES(
 SET_SOURCE_FILES_PROPERTIES(
   ${CSQL_GRAMMAR_OUTPUT}
   ${CSQL_LEXER_OUTPUT}
-  ${ESQL_GRAMMAR_OUTPUT}
-  ${ESQL_LEXER_OUTPUT}
   ${COMPAT_SOURCES_C}
   PROPERTIES LANGUAGE C
   )
@@ -637,6 +678,7 @@ add_library(cubridsa SHARED
   ${COMPAT_SOURCES}
   ${COMPAT_SOURCES_C}
   ${CONNECTION_SOURCES}
+  ${CONNECTION_HEADERS}
   ${CONNECTION_TCP_SOURCE}
   ${DEBUGGING_HEADERS}
   ${ES_SOURCES}
@@ -644,12 +686,17 @@ add_library(cubridsa SHARED
   ${HEAPLAYER_SOURCES}
   ${SP_SOURCES}
   ${SP_HEADERS}
+  ${PARALLEL_HEAP_SCAN_SOURCES}
+  ${PARALLEL_HEAP_SCAN_HEADERS}
+  ${PARALLEL_QUERY_EXECUTE_SOURCES}
+  ${PARALLEL_QUERY_EXECUTE_HEADERS}
   ${METHOD_SOURCES}
   ${MONITOR_HEADERS}
   ${MONITOR_SOURCES}
   ${OBJECT_HEADERS}
   ${OBJECT_SOURCES}
   ${OPTIMIZER_SOURCES}
+  ${REWRITER_SOURCES}
   ${QUERY_HEADERS}
   ${QUERY_SOURCES}
   ${PARSER_HEADERS}
@@ -669,9 +716,6 @@ add_library(cubridsa SHARED
 set_target_properties(cubridsa PROPERTIES SOVERSION "${CUBRID_MAJOR_VERSION}.${CUBRID_MINOR_VERSION}")
 
 target_compile_definitions(cubridsa PRIVATE SA_MODE CUBRID_EXPORTING ${COMMON_DEFS})
-if(NOT USE_CUBRID_ENV)
-  target_compile_definitions(cubridsa PRIVATE ${DIR_DEFS})
-endif(NOT USE_CUBRID_ENV)
 if(WIN32)
   set_source_files_properties(${BASE_DIR}/message_catalog.c PROPERTIES COMPILE_FLAGS -DNDEBUG)
   set_source_files_properties(${HEAPLAYERS_DIR}/customheaps.cpp PROPERTIES COMPILE_FLAGS -Od)
@@ -680,50 +724,40 @@ if(WIN32)
     ${LOADER_GRAMMAR_OUTPUT}
     ${CSQL_LEXER_OUTPUT}
     ${LOADER_LEXER_OUTPUT}
-    ${ESQL_GRAMMAR_OUTPUT}
-    ${ESQL_LEXER_OUTPUT}
     PROPERTIES COMPILE_FLAGS /WX-
   )
   set_source_files_properties(${BISON_csql_grammar_OUTPUTS} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Og-")
   target_compile_definitions(cubridsa PRIVATE YY_NO_UNISTD_H)
-  target_link_libraries(cubridsa LINK_PRIVATE ws2_32 ${JVM_LIBS})
+  target_link_libraries(cubridsa LINK_PRIVATE ws2_32)
   set_target_properties(cubridsa PROPERTIES LINK_FLAGS "/DEF:\"${CMAKE_SOURCE_DIR}/win/cubridsa/cubridsa.def\"" LINK_FLAGS_RELEASE "/NODEFAULTLIB:libcmt.lib" LINK_FLAGS_DEBUG "/NODEFAULTLIB:msvcrt.lib")
 endif(WIN32)
 
 # include target_external_dependencies function
-include (expand_dependency)
+include(expand_dependency)
 
-if(UNIX)
-target_external_dependencies(cubridsa
-  LIBNCURSES
-  LIBEDIT
+target_include_directories(cubridsa
+  PRIVATE
+    ${FLEX_INCLUDE_DIRS}
+    ${EP_INCLUDES}
   )
-endif(UNIX)
-target_external_dependencies(cubridsa
-  LIBEXPAT
-  LIBJANSSON
-  LIBEDIT
-  LIBOPENSSL
-  LZ4
-  RAPIDJSON
-  RE2
-  )
-target_include_directories(cubridsa PRIVATE
-  ${FLEX_INCLUDE_DIRS}
-  ${JAVA_INC}
-  )
-if(UNIX)
-  # find out what this means:
-  # target_link_libraries(cubridsa LINK_PRIVATE -Wl,-whole-archive cas ${EP_LIBS} -Wl,-no-whole-archive)
-  target_link_libraries(cubridsa LINK_PUBLIC ${CMAKE_DL_LIBS})
-  target_link_libraries(cubridsa PUBLIC stdc++fs)
-  target_link_libraries(cubridsa PUBLIC rt)
-endif(UNIX)
-# for dblink
-target_link_libraries(cubridsa PUBLIC cascci)
 
-add_dependencies(cubridsa gen_csql_grammar gen_csql_lexer gen_loader_grammar gen_loader_lexer)
-#add_dependencies(cubridsa ${EP_TARGETS})
+target_link_libraries(cubridsa
+  PRIVATE
+    ${EP_LIBS}
+  PUBLIC
+    ${CMAKE_DL_LIBS}
+    stdc++fs
+    rt
+    cascci
+  )
+
+add_dependencies(cubridsa
+  gen_csql_grammar
+  gen_csql_lexer
+  gen_loader_grammar
+  gen_loader_lexer
+  ${EP_TARGETS}
+  )
 
 if(ENABLE_SYSTEMTAP)
   target_include_directories(cubridsa PRIVATE ${CMAKE_BINARY_DIR})

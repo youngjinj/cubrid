@@ -58,6 +58,7 @@ regu_init (xasl_node &node)
   node.option = Q_ALL;
   node.iscan_oid_order = prm_get_bool_value (PRM_ID_BT_INDEX_SCAN_OID_ORDER);
   node.scan_op_type = S_SELECT;
+  node.parallelism = -1;	/* auto-compute */
 
   regu_alloc (node.list_id);
 }
@@ -152,6 +153,7 @@ regu_init (access_spec_node &spec)
   spec.s_dbval = NULL;
   spec.next = NULL;
   spec.flags = ACCESS_SPEC_FLAG_NONE;
+  spec.num_parallel_threads = -1;	/* auto-compute */
 }
 
 static void
@@ -291,8 +293,25 @@ regu_init (cubxasl::sp_node &sp)
   regu_alloc (sp.sig);
   if (sp.sig)
     {
-      new (sp.sig) PL_SIGNATURE_TYPE ();
+      new (sp.sig) cubpl::pl_signature();
+      regu_init (*sp.sig);
     }
+}
+
+void
+regu_init (cubpl::pl_signature &sig)
+{
+  sig.name = NULL;
+  sig.auth = NULL;
+  sig.type = PL_TYPE_NONE;
+  sig.result_type = 0;
+}
+
+void
+regu_init (cubpl::pl_signature_array &sig_array)
+{
+  sig_array.sigs = NULL;
+  sig_array.num_sigs = 0;
 }
 
 void
@@ -318,6 +337,7 @@ regu_init (cubxasl::aggregate_list_node &agg)
   agg.operands = NULL;
   agg.list_id = NULL;
   agg.sort_list = NULL;
+  agg.is_ended = false;
   std::memset (&agg.info, 0, sizeof (AGGREGATE_SPECIFIC_FUNCTION_INFO));
 
   regu_alloc (agg.accumulator.value);

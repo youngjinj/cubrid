@@ -36,7 +36,10 @@
 #define SP_ATTR_TARGET_METHOD           "target_method"
 #define SP_ATTR_DIRECTIVE               "directive"
 #define SP_ATTR_OWNER                   "owner"
+#define SP_ATTR_SQL_DATA_ACCESS         "sql_data_access"
 #define SP_ATTR_COMMENT                 "comment"
+#define SP_ATTR_CREATED_TIME            "created_time"
+#define SP_ATTR_UPDATED_TIME            "updated_time"
 
 #define SP_ATTR_SP_OF                   "sp_of"
 #define SP_ATTR_ARG_NAME                "arg_name"
@@ -54,8 +57,6 @@
 #define SP_ATTR_SOURCE_CODE             "scode"
 #define SP_ATTR_OBJECT_TYPE             "otype"
 #define SP_ATTR_OBJECT_CODE             "ocode"
-
-#define SP_MAX_DEFAULT_VALUE_LEN        255
 
 typedef enum
 {
@@ -75,6 +76,15 @@ typedef enum
   SP_LANG_PLCSQL = 0,
   SP_LANG_JAVA = 1
 } SP_LANG_ENUM;
+
+typedef enum
+{
+  SP_SQL_TYPE_UNKNOWN = -1,
+  SP_SQL_TYPE_NO_SQL,
+  SP_SQL_TYPE_CONTAINS_SQL,
+  SP_SQL_TYPE_READS_SQL_DATA,
+  SP_SQL_TYPE_MODIFIES_SQL_DATA
+} SP_SQL_DATA_ACCESS_TYPE;
 
 // refactor following
 
@@ -106,6 +116,7 @@ enum METHOD_REQUEST
 {
   METHOD_REQUEST_ARG_PREPARE = 0x40,
   METHOD_REQUEST_INVOKE = 0x01,
+  METHOD_REQUEST_ERROR = 0x04,
   METHOD_REQUEST_CALLBACK = 0x08,
   METHOD_REQUEST_END = 0x20,
 
@@ -153,6 +164,8 @@ enum METHOD_CALLBACK_RESPONSE
   METHOD_CALLBACK_LOB_READ = 37,
 
   METHOD_CALLBACK_CURSOR_CLOSE = 42,
+
+  METHOD_CALLBACK_SET_PL_SESSION_PARAM = 50,
 
   // COMPILE
   METHOD_CALLBACK_GET_SQL_SEMANTICS = 100,

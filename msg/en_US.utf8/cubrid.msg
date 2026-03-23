@@ -970,14 +970,14 @@ $ LOADDB
 897 Decompression failed.
 898 Replication error: "%1$s"
 899 Invalid partition requests.
-900 Java VM library is not found: %1$s.
-901 Java VM can not be started: %1$s.
-902 Java VM is not running.
-903 Can't connect Java VM: %1$s
+900 VM library is not found: %1$s.
+901 PL server can not be started: %1$s.
+902 PL server is not running.
+903 Can't connect PL server: %1$s
 904 Invalid stored procedure name.
-905 Networking with JVM failed: %1$d
+905 Networking with PL server failed: %1$d
 906 Invalid java method signature.
-907 The owner or a member of DBA group can drop stored procedure.
+907 The owner or a member of DBA group can %1$s stored procedure.
 908 Too many arguments of stored procedure '%1$s'.
 909 Missing or invalid catalog class/vclass is found.
 910 Not allowed access to partition.
@@ -1446,8 +1446,8 @@ Check the path of the key file (_keys) and make sure that it includes proper key
 1357 Converting SQL string to wide string failed.
 1358 Number of rows affected is unknown.
 
-1359 Java VM crashed: %1$s
-1360 In line %1$d, column %2$d\nStored procedure compile error: %3$s
+1359 PL server crashed: %1$s
+1360 Stored procedure compile error: %1$s
 
 1361 Invalid result cache for subquery.
 
@@ -1459,7 +1459,13 @@ Check the path of the key file (_keys) and make sure that it includes proper key
 
 1366 String representation of a default value of a Stored procedure/function parameter may not exceed 255 characters.
 
-1367 Last Error
+1367 DBLINK Transaction ABORTED: %1$s
+
+1368 Invalid cursor
+
+1369 Login is disabled for user "%1$s".
+
+1370 Last Error
 
 $set 6 MSGCAT_SET_INTERNAL
 1 Error in error subsystem (line %1$d):
@@ -1962,6 +1968,9 @@ $set 8 MSGCAT_SET_PARSER_SEMANTIC
 329 Grant option is not allowed for %1$s.
 
 330 String representation of a default value of a Stored procedure/function parameter may not exceed 255 characters.
+331 A host expression in a Static SQL must be a variable or record field: '%1$s'.
+332 Stored Procedures can be invoked only through CALL statements.
+333 CALL statements invoking a Stored Procedure may not have an INTO clause.
 
 
 
@@ -2113,18 +2122,18 @@ $set 14 MSGCAT_SET_LOCK
 16 Object type: Class = %1$s.\n
 17 Object type: Instance of class (%1$2d|%2$6d|%3$4d) = %4$s.\n
 18 Object type: Unknown.\n
-19 Total mode of holders = %1$8s, Total mode of waiters = %2$8s.\n
+19 Total mode of holders = %1$10s, Total mode of waiters = %2$10s.\n
 20 Num holders=%1$3d, Num blocked-holders=%2$3d, Num waiters=%3$3d\n
 21 LOCK HOLDERS:\n
 22 BLOCKED LOCK HOLDERS:\n
 23 LOCK WAITERS:\n
 24 NON_2PL_RELEASED:\n
-25 %1$4sTran_index = %2$3d, Granted_mode =%3$8s, Count = %4$3d\n
-26 %1$4sTran_index = %2$3d, Granted_mode =%3$8s, Count = %4$3d, Nsubgranules = %5$2d\n
-27 %1$4sTran_index = %2$3d, Granted_mode =%3$8s, Count = %4$3d\n\t%5$13s Blocked_mode = %6$8s\n\t%7$17s Start_waiting_at = %8$-30s\n\t%9$17s Wait_for_secs = %10$.2f\n
-28 %1$4sTran_index = %2$3d, Granted_mode =%3$8s, Count = %4$3d, Nsubgranules = %5$2d\n\t%6$13s Blocked_mode =%7$8s\n\t%8$13s Start_waiting_at = %9$-30s\n\t%10$13s Wait_for_secs = %11$.2f\n
-29 %1$4sTran_index = %2$3d, Blocked_mode =%3$8s \n\t%4$13s Start_waiting_at = %5$-30s \n\t%6$13s Wait_for_secs = %7$.2f\n
-30 %1$4sTran_index = %2$3d, Non_2_phase_lock =%3$8s\n
+25 %1$4sTran_index = %2$3d, Granted_mode = %3$10s, Count = %4$3d\n
+26 %1$4sTran_index = %2$3d, Granted_mode = %3$10s, Count = %4$3d, Nsubgranules = %5$2d\n
+27 %1$4sTran_index = %2$3d, Granted_mode = %3$10s, Count = %4$3d\n\t%5$13s Blocked_mode = %6$10s\n\t%7$17s Start_waiting_at = %8$-30s\n\t%9$17s Wait_for_secs = %10$.2f\n
+28 %1$4sTran_index = %2$3d, Granted_mode = %3$10s, Count = %4$3d, Nsubgranules = %5$2d\n\t%6$13s Blocked_mode = %7$10s\n\t%8$13s Start_waiting_at = %9$-30s\n\t%10$13s Wait_for_secs = %11$.2f\n
+29 %1$4sTran_index = %2$3d, Blocked_mode = %3$10s \n\t%4$13s Start_waiting_at = %5$-30s \n\t%6$13s Wait_for_secs = %7$.2f\n
+30 %1$4sTran_index = %2$3d, Non_2_phase_lock = %3$10s\n
 31 VPID (volid|pageid) = %1$3d|%2$6d.\n
 32 *** Lock Table Dump ***\n Lock Escalation at = %1$d, Run Deadlock interval = %2$5.2f\n
 33 Transaction (index %1$2d, %2$s, %3$s@%4$s|%5$d)\n

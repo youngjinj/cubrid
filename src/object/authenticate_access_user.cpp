@@ -113,7 +113,9 @@ au_find_user (const char *user_name)
     {
       user = user_cache->user;
       assert (user != NULL);
-      return user;
+
+      AU_SAVE_AND_ENABLE (save);
+      goto exit;
     }
 
   /* disable checking of internal authorization object access */
@@ -430,8 +432,16 @@ au_make_user (const char *name)
 		  db_make_object (&value, auth);
 		  obj_set (user, "authorization", &value);
 
+		  db_make_int (&value, true);
+		  obj_set (user, AU_USER_ATTR_IS_LOGINABLE, &value);
+
+		  db_make_int (&value, false);
+		  obj_set (user,AU_USER_ATTR_IS_SYSTEM_CREATED, &value);
+
 		  db_make_null (&value);
 		  obj_set (user, "comment", &value);
+
+		  au_set_user_timestamps (user);
 		}
 	    }
 	  else
@@ -702,6 +712,51 @@ au_set_user_comment (MOP user, const char *comment)
 	  error = obj_set (user, "comment", &value);
 	  pr_clear_value (&value);
 	}
+    }
+  AU_RESTORE (save);
+
+  return error;
+}
+
+int
+au_set_user_timestamps (MOP user)
+{
+  DB_VALUE current_datetime;
+  int save;
+  int error = NO_ERROR;
+
+  if (db_sys_datetime (&current_datetime) != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
+
+  AU_SAVE_AND_DISABLE (save);
+  if (obj_set (user, "created_time", &current_datetime) != NO_ERROR ||
+      obj_set (user, "updated_time", &current_datetime) != NO_ERROR)
+    {
+      error = ER_FAILED;
+    }
+  AU_RESTORE (save);
+
+  return error;
+}
+
+int
+au_update_user_timestamp (MOP user)
+{
+  DB_VALUE current_datetime;
+  int save;
+  int error = NO_ERROR;
+
+  if (db_sys_datetime (&current_datetime) != NO_ERROR)
+    {
+      return ER_FAILED;
+    }
+
+  AU_SAVE_AND_DISABLE (save);
+  if (obj_set (user, "updated_time", &current_datetime) != NO_ERROR)
+    {
+      error = ER_FAILED;
     }
   AU_RESTORE (save);
 
@@ -983,6 +1038,12 @@ au_add_member_internal (MOP group, MOP member, int new_user)
 	    }
 	}
     }
+
+  if (error == NO_ERROR)
+    {
+      error = au_update_user_timestamp (member);
+    }
+
   AU_ENABLE (save);
   return (error);
 }
@@ -1081,6 +1142,12 @@ au_drop_member (MOP group, MOP member)
 	}
       set_free (member_groups);
     }
+
+  if (error == NO_ERROR)
+    {
+      error = au_update_user_timestamp (member);
+    }
+
   AU_ENABLE (save);
   return (error);
 }
@@ -1096,7 +1163,7 @@ static const char *AU_OBJECT_CLASS_NAME[] =
   CT_CLASS_NAME,		/* AU_OBJECT_CLASS */
   CT_TRIGGER_NAME,		/* AU_OBJECT_TRIGGER */
   CT_SERIAL_NAME,		/* AU_OBJECT_SERIAL */
-  CT_DB_SERVER_NAME,		/* AU_OBJECT_SERVER */
+  CT_SERVER_NAME,		/* AU_OBJECT_SERVER */
   CT_SYNONYM_NAME,		/* AU_OBJECT_SYNONYM */
   CT_STORED_PROC_NAME,		/* AU_OBJECT_PROCEDURE */
   NULL
@@ -1329,6 +1396,7 @@ au_drop_user (MOP user)
 		    {
 		      db_make_set (&value, new_groups);
 		      obj_set (auser, "groups", &value);
+		      error = au_update_user_timestamp (auser);
 		    }
 
 		  if (new_groups)

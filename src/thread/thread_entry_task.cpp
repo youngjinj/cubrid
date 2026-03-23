@@ -24,6 +24,7 @@
 
 #include "error_manager.h"
 #include "log_impl.h"
+#include "perf_monitor.h"	/* pstat_Metadata, PSTAT_...*/
 #include "porting.h"
 #include "thread_entry.hpp"
 #include "thread_manager.hpp"
@@ -46,6 +47,9 @@ namespace cubthread
 #if defined (SERVER_MODE)
     context.m_status = entry::status::TS_RUN;
     context.shutdown = false;
+    context.m_px_orig_thread_entry = NULL;
+    context.m_uses_px_stats = false;
+    context.m_px_stats = NULL;
 #endif // SERVER_MODE
 
     context.get_error_context ().register_thread_local ();
@@ -69,9 +73,13 @@ namespace cubthread
     context.tran_index = NULL_TRAN_INDEX;
     context.check_interrupt = true;
     context.private_lru_index = -1;
+    context.m_is_private_lru_enabled = false;
 #if defined (SERVER_MODE)
     context.m_status = entry::status::TS_FREE;
     context.resume_status = THREAD_RESUME_NONE;
+    context.m_px_orig_thread_entry = NULL;
+    perfmon_destroy_parallel_stats (&context);
+    context.m_uses_px_stats = false;
 #endif // SERVER_MODE
 
     get_manager ()->retire_entry (context);
@@ -88,6 +96,9 @@ namespace cubthread
 #if defined (SERVER_MODE)
     context.resume_status = THREAD_RESUME_NONE;
     context.shutdown = false;
+    context.m_px_orig_thread_entry = NULL;
+    perfmon_destroy_parallel_stats (&context);
+    context.m_uses_px_stats = false;
 #endif // SERVER_MODE
 
     /* Set clearly for safety.

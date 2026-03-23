@@ -92,6 +92,8 @@
 
 #include "authenticate_context.hpp"
 
+#include <signal.h>
+
 #if defined(CS_MODE)
 #include "network.h"
 #include "connection_cl.h"
@@ -108,10 +110,8 @@
 #define strlen(s1)  ((int) strlen(s1))
 #endif /* defined (SUPPRESS_STRLEN_WARNING) */
 
-/* TODO : Move .h */
 #if defined(SA_MODE)
-extern bool catcls_Enable;
-extern int catcls_compile_catalog_classes (THREAD_ENTRY * thread_p);
+#include "catalog_class.h"
 #endif /* SA_MODE */
 
 #define BOOT_FORMAT_MAX_LENGTH 500
@@ -158,6 +158,7 @@ static bool boot_Set_client_at_exit = false;
 static int boot_Process_id = -1;
 
 static int boot_client (int tran_index, int lock_wait, TRAN_ISOLATION tran_isolation);
+static int install_system_metadata (void);
 static void boot_shutdown_client_at_exit (void);
 #if defined(CS_MODE)
 static int boot_client_initialize_css (DB_INFO * db, int client_type, bool check_capabilities, int opt_cap,
@@ -195,6 +196,36 @@ boot_client (int tran_index, int lock_wait, TRAN_ISOLATION tran_isolation)
   boot_Set_client_at_exit = true;
   boot_Process_id = getpid ();
   atexit (boot_shutdown_client_at_exit);
+
+  return NO_ERROR;
+}
+
+static int
+install_system_metadata (void)
+{
+  int error = NO_ERROR;
+
+  /* Create system classes such as the root and authorization classes */
+  au_init ();
+  error = au_install ();
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+  /* Create authorization classes and enable authorization */
+  error = au_start ();
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  tr_init ();
+  catcls_init ();
+  error = catcls_install ();
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
 
   return NO_ERROR;
 }
@@ -272,7 +303,7 @@ boot_initialize_client (BOOT_CLIENT_CREDENTIAL * client_credential, BOOT_DB_PATH
 
   if (!boot_Is_client_all_final)
     {
-      boot_client_all_finalize (true);
+      boot_client_all_finalize (ALL_FINALIZATION);
     }
 
 #if defined(WINDOWS)
@@ -536,43 +567,18 @@ boot_initialize_client (BOOT_CLIENT_CREDENTIAL * client_credential, BOOT_DB_PATH
   OID_INIT_TEMPID ();
 
   error_code = ws_init ();
-
   if (error_code == NO_ERROR)
     {
-      /* Create system classes such as the root and authorization classes */
-
       sm_create_root (&rootclass_oid, &rootclass_hfid);
-      au_init ();
-
-      /* Create authorization classes and enable authorization */
-      error_code = au_install ();
+      error_code = install_system_metadata ();
       if (error_code == NO_ERROR)
 	{
-	  error_code = au_start ();
+	  error_code = tran_commit (false);
 	}
+
       if (error_code == NO_ERROR)
 	{
-	  tr_init ();
-	  error_code = tr_install ();
-	  if (error_code == NO_ERROR)
-	    {
-	      catcls_init ();
-	      error_code = catcls_install ();
-	      if (error_code == NO_ERROR)
-		{
-		  /*
-		   * mark all classes created during the initialization as "system"
-		   * classes,
-		   */
-		  sm_mark_system_classes ();
-		  error_code = tran_commit (false);
-		}
-
-	      if (error_code == NO_ERROR)
-		{
-		  error_code = sp_builtin_install ();
-		}
-	    }
+	  error_code = sp_builtin_install ();
 	}
     }
 
@@ -715,7 +721,7 @@ boot_restart_client (BOOT_CLIENT_CREDENTIAL * client_credential)
 
   if (!boot_Is_client_all_final)
     {
-      boot_client_all_finalize (true);
+      boot_client_all_finalize (ALL_FINALIZATION);
     }
 
 #if defined(WINDOWS)
@@ -1387,7 +1393,7 @@ boot_shutdown_client (bool is_er_final)
 #endif /* !CS_MODE */
 	}
 
-      boot_client_all_finalize (is_er_final);
+      boot_client_all_finalize (is_er_final ? ALL_FINALIZATION : EXCEPT_ER_FINALIZATION);
     }
 
   return NO_ERROR;
@@ -1475,15 +1481,26 @@ boot_server_die_or_changed (void)
  *
  * return : nothing
  *
- *   is_er_final(in): Terminate the error module..
- *
+ *   final_level(in): finalizing objects level
+ *                    ALL_FINALIZATION       : all finalization
+ *                    EXCEPT_ER_FINALIZATION : except er_final()
+ *                    OPTIONAL_FINALIZATION  : finalize only objects that are not cleared while running
  *
  * Note: Terminate every single module of the client. This function is called
  *       during the shutdown of the client.
  */
 void
-boot_client_all_finalize (bool is_er_final)
+boot_client_all_finalize (int final_level)
 {
+  void (*sigterm_handler) (int);
+  void (*sigabrt_handler) (int);
+  void (*sigint_handler) (int);
+
+  /* to prevent duplicate calls by signal handlers during execution of the function. */
+  sigterm_handler = signal (SIGTERM, SIG_IGN);
+  sigabrt_handler = signal (SIGABRT, SIG_IGN);
+  sigint_handler = signal (SIGINT, SIG_IGN);
+
   if (BOOT_IS_CLIENT_RESTARTED () || boot_Is_client_all_final == false)
     {
       if (boot_Server_credential.db_full_name)
@@ -1508,12 +1525,16 @@ boot_client_all_finalize (bool is_er_final)
       sm_flush_static_methods ();
       set_final ();
       parser_final ();
-      tr_final ();
-      au_final ();
-      sm_final ();
-      ws_final ();
-      es_final ();
-      tp_final ();
+
+      if (final_level != OPTIONAL_FINALIZATION)
+	{
+	  tr_final ();
+	  au_final ();
+	  sm_final ();
+	  ws_final ();
+	  es_final ();
+	  tp_final ();
+	}
 
 #if !defined(WINDOWS)
       (void) dl_destroy_module ();
@@ -1525,31 +1546,28 @@ boot_client_all_finalize (bool is_er_final)
       area_final ();
 
       msgcat_final ();
-      if (is_er_final)
+      if (final_level != EXCEPT_ER_FINALIZATION)
 	{
 	  er_final (ER_ALL_FINAL);
 	}
       lang_final ();
       tz_unload ();
 
-      /* adj_arrays & lex buffers in the cnv formatting library. */
-      cnv_cleanup ();
-
 #if defined(WINDOWS)
       pc_final ();
 #endif /* WINDOWS */
-
-      /* Clean up stuff allocated by the utilities library too. Not really necessary but avoids warnings from memory
-       * tracking tools that customers might be using. */
-      co_final ();
 
       memset (&boot_Server_credential, 0, sizeof (boot_Server_credential));
       memset (boot_Server_credential.server_session_key, 0xFF, SERVER_SESSION_KEY_SIZE);
 
       boot_client (NULL_TRAN_INDEX, TRAN_LOCK_INFINITE_WAIT, TRAN_DEFAULT_ISOLATION_LEVEL ());
       boot_Is_client_all_final = true;
-    }
 
+      /* restore the signals that was blocked, when the function started. */
+      signal (SIGTERM, sigterm_handler);
+      signal (SIGABRT, sigabrt_handler);
+      signal (SIGINT, sigint_handler);
+    }
 }
 
 #if defined(CS_MODE)
@@ -1679,7 +1697,7 @@ boot_client_initialize_css (DB_INFO * db, int client_type, bool check_capabiliti
 	case ER_NET_SERVER_HAND_SHAKE:
 	case ER_NET_HS_UNKNOWN_SERVER_REL:
 	  cap_error = true;
-	  /* FALLTHRU */
+	  [[fallthrough]];
 	case ER_NET_DIFFERENT_RELEASE:
 	case ER_NET_NO_SERVER_HOST:
 	case ER_NET_CANT_CONNECT_SERVER:
@@ -1853,8 +1871,8 @@ boot_destroy_catalog_classes (void)
     CTV_STORED_PROC_NAME,
     CTV_STORED_PROC_ARGS_NAME,
     CT_COLLATION_NAME,
-    CT_DB_SERVER_NAME,
-    CTV_DB_SERVER_NAME,
+    CT_SERVER_NAME,
+    CTV_SERVER_NAME,
     CT_SYNONYM_NAME,
     CTV_SYNONYM_NAME,
     NULL

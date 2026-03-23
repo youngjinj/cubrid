@@ -42,13 +42,15 @@ namespace cubpl
   class query_cursor
   {
     public:
-      query_cursor (cubthread::entry *thread_p, QMGR_QUERY_ENTRY *query_entry_p, bool is_oid_included = false);
+      query_cursor (cubthread::entry *thread_p, QUERY_ID qid, bool is_oid_included = false);
       ~query_cursor ();
 
       int open ();
       void close ();
 
-      int reset (QMGR_QUERY_ENTRY *query_entry_p);
+      bool is_opened () const;
+
+      int reset ();
 
       void change_owner (cubthread::entry *thread_p);
 
@@ -57,7 +59,6 @@ namespace cubpl
 
       SCAN_CODE cursor (int peek);
 
-      SCAN_CODE prev_row ();
       SCAN_CODE next_row ();
 
       void clear ();
@@ -78,7 +79,7 @@ namespace cubpl
       cubthread::entry *m_thread; /* which thread owns this cursor */
 
       QUERY_ID m_query_id;		/* Query id for this cursor */
-      QFILE_LIST_ID *m_list_id;	/* List file identifier */
+      QMGR_QUERY_ENTRY *m_query_entry; /* Query entry for this cursor */
       QFILE_LIST_SCAN_ID m_scan_id;	/* scan on list_id */
 
       std::vector<DB_VALUE> m_current_tuple;
@@ -89,6 +90,8 @@ namespace cubpl
       bool m_is_opened;
 
       int m_fetch_count; /* # of rows to fetch */
+
+      unsigned int m_query_entry_no;
   };
 }		// namespace cubmethod
 

@@ -40,7 +40,6 @@ import com.cubrid.jsp.classloader.ClassLoaderManager;
 import com.cubrid.jsp.classloader.ContextClassLoader;
 import com.cubrid.jsp.classloader.SessionClassLoaderManager;
 import com.cubrid.jsp.jdbc.CUBRIDServerSideConnection;
-import com.cubrid.jsp.protocol.Header;
 import com.cubrid.plcsql.builtin.MessageBuffer;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
@@ -56,9 +55,6 @@ public class Context {
 
     // transaction Id
     private int tranactionId = -1;
-
-    // request Id (for future)
-    private int prevRequestId = 0;
 
     // charset
     private Charset sessionCharset = null;
@@ -111,7 +107,7 @@ public class Context {
         return connection;
     }
 
-    public void closeConnection(Connection conn) throws SQLException {
+    public void closeConnection() throws SQLException {
         if (connection != null) {
             connection.close();
         }
@@ -138,15 +134,6 @@ public class Context {
         return systemParameters;
     }
 
-    public void checkHeader(Header header) {
-        if (prevRequestId > header.requestId) {
-            // not incremented
-            // a new session is started with the same session Id or the trasaction is ended
-            clear();
-        }
-        prevRequestId = header.requestId;
-    }
-
     public void checkTranId(int tid) {
         if (tranactionId == -1) {
             tranactionId = tid;
@@ -166,7 +153,11 @@ public class Context {
                     methodCache.clear();
                 }
             }
-            clear();
+
+            if (connection != null) {
+                connection.invalidateStatements();
+            }
+
             tranactionId = tid;
 
             if (sessionClassLoaderManager != null) {
@@ -175,9 +166,9 @@ public class Context {
         }
     }
 
-    public void clear() {
+    private void clear() {
         try {
-            closeConnection(connection);
+            closeConnection();
         } catch (Exception e) {
             // ignore
         } finally {
@@ -295,7 +286,7 @@ public class Context {
     public static String getSystemParameterString(int id) {
         SysParam param = getSystemParam(id);
         if (param != null) {
-            return param.getParamValue();
+            return param.getParamValueString();
         }
 
         return null;
@@ -304,7 +295,7 @@ public class Context {
     public static Boolean getSystemParameterBool(int id) {
         SysParam param = getSystemParam(id);
         if (param != null) {
-            return Boolean.parseBoolean(param.getParamValue());
+            return param.getParamValueBoolean();
         }
 
         return null;

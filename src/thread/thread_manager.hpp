@@ -219,6 +219,18 @@ namespace cubthread
       template <typename Func, typename ... Args>
       void map_entries (Func &&func, Args &&... args);
 
+      void clear_all_holder_anchor (void)
+      {
+	for (std::size_t it = 0; it < m_max_threads; it++)
+	  {
+	    m_all_entries[it].m_holder_anchor = NULL;
+	  }
+      }
+
+      // claim/retire entries
+      entry *claim_entry (void);
+      void retire_entry (entry &entry_p);
+
     private:
 
       // define friend classes/functions to access claim_entry/retire_entry functions
@@ -228,10 +240,6 @@ namespace cubthread
 
       // private type aliases
       using entry_dispatcher = resource_shared_pool<entry>;
-
-      // claim/retire entries
-      entry *claim_entry (void);
-      void retire_entry (entry &entry_p);
 
       // generic implementation to create and destroy resources (specialize through daemon and entry_workpool)
       template <typename Res, typename ... CtArgs>
@@ -443,6 +451,13 @@ thread_sleep (double millisec)
   // try to avoid this and use thread_sleep_for instead
   std::chrono::duration<double, std::milli> duration_millis (millisec);
   thread_sleep_for (duration_millis);
+}
+
+inline void
+thread_clear_all_holder_anchor (void)
+{
+  cubthread::get_entry ().m_holder_anchor = NULL;
+  return cubthread::get_manager ()->clear_all_holder_anchor ();
 }
 
 #endif  // _THREAD_MANAGER_HPP_

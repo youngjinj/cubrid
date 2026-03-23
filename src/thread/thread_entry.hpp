@@ -38,10 +38,11 @@
 #include <cassert>
 
 // forward definitions
-// from adjustable_array.h
-struct adj_array;
+
 // from connection_defs.h
 struct css_conn_entry;
+// from connection_defs.h
+struct dblink_conn_entry;
 // from fault_injection.h
 struct fi_test_item;
 // from log_system_tran.hpp
@@ -52,6 +53,8 @@ struct log_zip;
 struct vacuum_worker;
 // from xasl_unpack_info.hpp
 struct xasl_unpack_info;
+// from page_buffer.h
+struct pgbuf_holder_anchor;
 
 // forward resource trackers
 namespace cubbase
@@ -104,9 +107,9 @@ struct event_stat
   struct timeval lock_waits;
   struct timeval latch_waits;
 
-  /* temp volume expand stats */
-  struct timeval temp_expand_time;
-  int temp_expand_pages;
+  /* volume expand stats */
+  struct timeval extend_time;
+  int extend_pages;
 
   /* save PRM_ID_SQL_TRACE_SLOW_MSECS for performance */
   bool trace_slow_query;
@@ -225,7 +228,6 @@ namespace cubthread
       pthread_cond_t wakeup_cond;	/* wakeup condition */
 
       HL_HEAPID private_heap_id;	/* id of thread private memory allocator */
-      adj_array *cnv_adj_buffer[3];	/* conversion buffer */
 
       css_conn_entry *conn_entry;	/* conn entry ptr */
 
@@ -295,10 +297,19 @@ namespace cubthread
 
       int count_private_allocators;
 #endif
-      int m_qlist_count;
+      std::atomic_int m_qlist_count;
       int read_ovfl_pages_count; // For Vacuum only.
 
       cubload::driver *m_loaddb_driver;
+
+      pthread_mutex_t m_px_lock_mutex;
+      pthread_mutex_t m_px_stats_mutex;
+      UINT64 *m_px_stats;
+      entry *m_px_orig_thread_entry;
+      bool m_uses_px_stats;
+
+      bool m_is_private_lru_enabled;
+      struct pgbuf_holder_anchor *m_holder_anchor;
 
       thread_id_t get_id ();
       pthread_t get_posix_id ();
@@ -307,6 +318,8 @@ namespace cubthread
       bool is_on_current_thread () const;
 
       void return_lock_free_transaction_entries (void);
+
+      void release_packet (void *buffer);
 
       void lock (void);
       void unlock (void);
@@ -458,6 +471,42 @@ thread_set_sort_stats_active (cubthread::entry *thread_p, bool new_flag)
   bool old_flag = thread_p->sort_stats_active;
   thread_p->sort_stats_active = new_flag;
   return old_flag;
+}
+
+inline cubthread::entry *
+thread_get_main_thread (cubthread::entry *thread_p)
+{
+  assert (thread_p != nullptr);
+
+  cubthread::entry *current = thread_p;
+
+  // Safety limit to prevent infinite traversal in case of corrupted hierarchy
+  constexpr int MAX_DEPTH = 8;
+
+  for (int i = 0; i < MAX_DEPTH; ++i)
+    {
+      cubthread::entry *parent = current->m_px_orig_thread_entry;
+
+      // Found root (nullptr) or a self-referencing main thread
+      if (parent == nullptr || parent == current)
+	{
+
+	  return current;
+	}
+
+      // Detect logical cycles (looping back to the starting thread)
+      if ( unlikely (parent == thread_p))
+	{
+	  assert (false && "Cycle detected in thread hierarchy");
+	  return thread_p;
+	}
+
+      current = parent;
+    }
+
+  // Fallback for unexpectedly deep chains or undetected complex cycles
+  assert (false && "Thread hierarchy depth exceeded limit");
+  return thread_p;
 }
 
 inline void

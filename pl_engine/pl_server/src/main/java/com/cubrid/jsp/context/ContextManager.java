@@ -48,26 +48,24 @@ public class ContextManager {
         return contextMap.containsKey(id);
     }
 
-    public static Context getContext(long id) {
+    public static synchronized Context getContext(long id) {
         if (hasContext(id)) {
             return contextMap.get(id);
         } else {
-            synchronized (ContextManager.class) {
-                Context newCtx = new Context(id);
-                contextMap.put(id, newCtx);
-                // System.out.println ("new session =" + id); // for debug
-                return newCtx;
-            }
+            Context newCtx = new Context(id);
+            contextMap.put(id, newCtx);
+            // System.out.println ("new session =" + id); // for debug
+            return newCtx;
         }
     }
 
-    public static void destroyContext(long id) {
+    public static synchronized void destroyContext(long id) {
         if (hasContext(id)) {
             Context ctx = contextMap.get(id);
+            contextMap.remove(id);
             if (ctx != null) {
                 ctx.destroy();
             }
-            contextMap.remove(id);
             // System.out.println ("deleted session =" + id); // for debug
         }
     }
@@ -87,16 +85,9 @@ public class ContextManager {
         }
     }
 
-    public static Long getContextIdByThreadId(long threadId) {
-        if (contextThreadMap.containsKey(threadId)) {
-            return contextThreadMap.get(threadId);
-        }
-        return null;
-    }
-
     public static Context getContextofCurrentThread() {
         Thread t = Thread.currentThread();
-        Long ctxId = ContextManager.getContextIdByThreadId(t.getId());
+        Long ctxId = contextThreadMap.get(t.getId());
         return ContextManager.getContext(ctxId);
     }
 }

@@ -18,7 +18,7 @@
 
 
 /*
- * pl_file.c - Functions to manage files related to Java Stored Procedure Server
+ * pl_file.c - Functions to manage files related to Procedural Language Server
  *
  * Note:
  */
@@ -104,36 +104,6 @@ pl_get_info_file (char *buf, size_t len, const char *db_name)
   envvar_vardir_file (pl_vardir, PATH_MAX, "pl");
 
   if (snprintf (buf, len, "%s/pl_%s.info", pl_vardir, db_name) < 0)
-    {
-      assert (false);
-      buf[0] = '\0';
-      return false;
-    }
-  return true;
-}
-
-bool
-pl_get_error_file (char *buf, size_t len, const char *db_name)
-{
-  char pl_logdir[PATH_MAX];
-  envvar_logdir_file (pl_logdir, sizeof (pl_logdir), "");
-
-  if (snprintf (buf, len, "%s/%s_java.err", pl_logdir, db_name) < 0)
-    {
-      assert (false);
-      buf[0] = '\0';
-      return false;
-    }
-  return true;
-}
-
-bool
-pl_get_log_file (char *buf, size_t len, const char *db_name)
-{
-  char pl_logdir[PATH_MAX];
-  envvar_logdir_file (pl_logdir, sizeof (pl_logdir), "");
-
-  if (snprintf (buf, len, "%s/%s_java.log", pl_logdir, db_name) < 0)
     {
       assert (false);
       buf[0] = '\0';

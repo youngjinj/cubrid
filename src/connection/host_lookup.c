@@ -136,7 +136,7 @@ static bool handle_uhost_conf (int action_type);
 static struct hostent *
 hostent_alloc (const char *ipaddr, const char *hostname)
 {
-  struct hostent *hp;
+  struct hostent *hp = NULL;
   char addr_trans_bi_buf[sizeof (struct in_addr)];
 
   if ((hp = (struct hostent *) MALLOC (sizeof (struct hostent))) == NULL)
@@ -266,6 +266,7 @@ gethostbyname_uhost (const char *name)
 
   if (prm_get_bool_value (PRM_ID_USE_USER_HOSTS) == USE_GLIBC_HOSTS)
     {
+      // TODO : Not thread-safe function
       hp = gethostbyname (name);
     }
   else
@@ -430,7 +431,7 @@ getaddrinfo_uhost (char *node, char *service, struct addrinfo *hints, struct add
 {
   int ret = 0;
   struct hostent *hp = NULL;
-  struct addrinfo *addrp;
+  struct addrinfo *addrp = NULL;
 
   if (prm_get_bool_value (PRM_ID_USE_USER_HOSTS) == USE_GLIBC_HOSTS)
     {
@@ -499,7 +500,7 @@ freeaddrinfo_uhost (struct addrinfo *res)
 static void
 strcpy_ucase (char *dst, size_t len, const char *src)
 {
-  int i;
+  size_t i;
 
   if (dst == NULL || src == NULL || len == 0)
     {

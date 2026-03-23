@@ -37,7 +37,6 @@
 
 #include "optimizer.h"
 #include "parser.h"
-#include "query_bitset.h"
 
 typedef struct qo_class_info_entry QO_CLASS_INFO_ENTRY;
 
@@ -742,7 +741,6 @@ struct qo_term
 #define QO_TERM_MULTI_COL_SEGS(t)  (t)->multi_col_segs
 #define QO_TERM_MULTI_COL_CNT(t)   (t)->multi_col_cnt
 #define QO_TERM_PRED_ORDER(t)   (t)->pred_order
-
 
 #define QO_TERM_EQUAL_OP             1	/* is equal op ? */
 #define QO_TERM_RANGELIST            2	/* is RANGE (r1, r2, ...) ? */

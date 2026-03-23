@@ -233,6 +233,22 @@ css_master_cleanup (int sig)
 }
 
 /*
+ * crash_handler() - print call stack for occurring crash
+ *    return: none
+ *    sig_no(in)
+ */
+static void
+crash_handler (int sig)
+{
+  if (os_set_signal_handler (sig, SIG_DFL) == SIG_ERR)
+    {
+      return;
+    }
+
+  er_print_crash_callstack (sig);
+}
+
+/*
  * css_master_init() - setup the signal handling routines and attempt to
  *                     bind the socket address
  *   return: 1 if success, otherwise 0
@@ -259,6 +275,13 @@ css_master_init (int cport, SOCKET * clientfd)
       MASTER_ER_SET (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
       return (0);
     }
+
+  os_set_signal_handler (SIGABRT, crash_handler);
+  os_set_signal_handler (SIGILL, crash_handler);
+  os_set_signal_handler (SIGFPE, crash_handler);
+  os_set_signal_handler (SIGBUS, crash_handler);
+  os_set_signal_handler (SIGSEGV, crash_handler);
+  os_set_signal_handler (SIGSYS, crash_handler);
 #endif /* ! WINDOWS */
 
 #if !defined(WINDOWS)
@@ -336,8 +359,8 @@ css_accept_new_request (CSS_CONN_ENTRY * conn, unsigned short rid, char *buffer,
   int length;
   int server_name_length;
   CSS_CONN_ENTRY *datagram_conn;
-  SOCKET_QUEUE_ENTRY *entry;
-  CSS_SERVER_PROC_REGISTER *proc_register;
+  SOCKET_QUEUE_ENTRY *entry = NULL;
+  CSS_SERVER_PROC_REGISTER *proc_register = NULL;
 
   datagram = NULL;
   datagram_length = 0;
@@ -403,22 +426,21 @@ css_accept_new_request (CSS_CONN_ENTRY * conn, unsigned short rid, char *buffer,
 		    {
 		      entry->env_var = NULL;
 		    }
-		}
-	    }
 
-	  if (!entry->ha_mode)
-	    {
+		  if (!entry->ha_mode)
+		    {
 #if !defined(WINDOWS)
-	      if (auto_Restart_server)
-		{
-		  assert (!is_client);
-
-		  /* *INDENT-OFF* */
-		  master_Server_monitor->produce_job (server_monitor::job_type::REGISTER_SERVER, proc_register->pid,
-						      proc_register->exec_path, proc_register->args, proc_register->server_name);
-		  /* *INDENT-ON* */
-		}
+		      if (auto_Restart_server && !is_client)
+			{
+			  /* *INDENT-OFF* */
+			  master_Server_monitor->produce_job (server_monitor::job_type::REGISTER_SERVER,
+							      proc_register->pid, proc_register->exec_path,
+							      proc_register->args, proc_register->server_name);
+			  /* *INDENT-ON* */
+			}
 #endif
+		    }
+		}
 	    }
 	}
     }

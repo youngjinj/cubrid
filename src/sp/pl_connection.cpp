@@ -121,7 +121,7 @@ namespace cubpl
     er_log_debug (ARG_FILE_LINE, "pl_connection_pool extended: %lld to %lld\n", currentSize, newSize);
 
     // Create the new connection
-    for (int i = currentSize; i < newSize; ++i)
+    for (size_t i = currentSize; i < newSize; ++i)
       {
 	m_queue.push (i);
       }
@@ -244,6 +244,7 @@ namespace cubpl
     , m_index (index)
     , m_socket (INVALID_SOCKET)
     , m_epoch (pool->get_epoch ())
+    , m_error (NO_ERROR)
   {
     //
     do_reconnect ();
@@ -275,6 +276,12 @@ namespace cubpl
     return m_index;
   }
 
+  int
+  connection::get_epoch () const
+  {
+    return m_epoch;
+  }
+
   SOCKET
   connection::get_socket () const
   {
@@ -282,8 +289,16 @@ namespace cubpl
   }
 
   int
+  connection::get_last_error () const
+  {
+    return m_error;
+  }
+
+  int
   connection::send_buffer (const cubmem::block &blk)
   {
+    m_error = NO_ERROR;
+
     if (!is_valid () || m_pool->is_system_pool ())
       {
 	do_reconnect ();
@@ -298,13 +313,13 @@ namespace cubpl
     int nbytes = pl_writen (m_socket, request, OR_INT_SIZE);
     if (nbytes != OR_INT_SIZE)
       {
-	return do_handle_network_error (nbytes);
+	return do_handle_network_error (ARG_FILE_LINE, nbytes);
       }
 
     nbytes = pl_writen (m_socket, blk.ptr, blk.dim);
     if (nbytes != static_cast<int> (blk.dim))
       {
-	return do_handle_network_error (nbytes);
+	return do_handle_network_error (ARG_FILE_LINE, nbytes);
       }
 
     return NO_ERROR;
@@ -319,9 +334,11 @@ namespace cubpl
   int
   connection::receive_buffer (cubmem::block &b, const pl_callback_func *interrupt_func, int timeout_ms)
   {
+    m_error = NO_ERROR;
+
     if (!is_valid ())
       {
-	return do_handle_network_error (-1);
+	return do_handle_network_error (ARG_FILE_LINE, -1);
       }
 
     int res_size = 0;
@@ -338,15 +355,16 @@ namespace cubpl
 	      {
 		if (interrupt_func && (*interrupt_func)() != NO_ERROR)
 		  {
-		    return er_errid ();
+		    m_error = er_errid ();
+		    return m_error;
 		  }
 		continue;
 	      }
-	    return do_handle_network_error (-1);
+	    return do_handle_network_error (ARG_FILE_LINE, -1);
 	  }
 	if (nbytes != sizeof (int))
 	  {
-	    return do_handle_network_error (nbytes);
+	    return do_handle_network_error (ARG_FILE_LINE, nbytes);
 	  }
 	else
 	  {
@@ -360,7 +378,7 @@ namespace cubpl
     constexpr int MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB max size
     if (res_size > MAX_BUFFER_SIZE || res_size < 0)
       {
-	return do_handle_network_error (nbytes);
+	return do_handle_network_error (ARG_FILE_LINE, res_size);
       }
 
     if (res_size == 0)
@@ -384,7 +402,7 @@ namespace cubpl
 	  }
 	if (nbytes < 0)
 	  {
-	    return do_handle_network_error (nbytes);
+	    return do_handle_network_error (ARG_FILE_LINE, nbytes);
 	  }
 
 	total_read += nbytes;
@@ -415,7 +433,7 @@ namespace cubpl
     int error = pl_connect_server (m_pool->get_db_name (), m_pool->get_db_port (), m_socket);
     if (error != NO_ERROR && !m_pool->is_system_pool ())
       {
-	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_CANNOT_CONNECT_JVM, 1, "connect()");
+	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_CANNOT_CONNECT_PL_SERVER, 1, "connect()");
       }
 
     if (m_socket != INVALID_SOCKET)
@@ -425,7 +443,7 @@ namespace cubpl
   }
 
   int
-  connection::do_handle_network_error (int nbytes)
+  connection::do_handle_network_error (const char *file_name, const int line_no, int nbytes)
   {
     (void) invalidate ();
 
@@ -433,13 +451,15 @@ namespace cubpl
       {
 	// Do not set error message for system pool
 	// To avoid noise in the error log
-	return ER_SP_NETWORK_ERROR;
+	m_error = ER_SP_NETWORK_ERROR;
       }
     else
       {
-	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_SP_NETWORK_ERROR, 1, nbytes);
-	return er_errid ();
+	er_set (ER_ERROR_SEVERITY, file_name, line_no, ER_SP_NETWORK_ERROR, 1, nbytes);
+	m_error = er_errid ();
       }
+
+    return m_error;
   }
 
 } // namespace cubpl

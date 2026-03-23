@@ -31,6 +31,7 @@
 #include "access_spec.hpp"
 #include "memory_hash.h"
 
+#include "query_hash_join.h"
 #include "query_hash_scan.h"
 #include "query_list.h"
 #include "regu_var.hpp"
@@ -55,6 +56,8 @@
 struct binary_heap;
 #endif // SERVER_MODE || SA_MODE
 
+#define UNPACK_SCALE 3		// Assumed memory ratio when unpacking stream to XASL
+
 struct xasl_node;
 typedef struct xasl_node XASL_NODE;
 struct xasl_unpack_info;
@@ -71,9 +74,10 @@ typedef struct xasl_node_header XASL_NODE_HEADER;
 struct xasl_node_header
 {
   int xasl_flag;		/* query flags (e.g, multi range optimization) */
+  int id;			/* id of the xasl */
 };
 
-#define XASL_NODE_HEADER_SIZE OR_INT_SIZE	/* xasl_flag */
+#define XASL_NODE_HEADER_SIZE OR_INT_SIZE + OR_INT_SIZE	/* xasl_flag + id */
 
 #define OR_PACK_XASL_NODE_HEADER(PTR, X) \
   do \
@@ -84,6 +88,7 @@ struct xasl_node_header
         } \
       ASSERT_ALIGN ((PTR), INT_ALIGNMENT); \
       (PTR) = or_pack_int ((PTR), (X)->xasl_flag); \
+      (PTR) = or_pack_int ((PTR), (X)->id); \
     } \
   while (0)
 
@@ -96,6 +101,7 @@ struct xasl_node_header
         } \
       ASSERT_ALIGN ((PTR), INT_ALIGNMENT); \
       (PTR) = or_unpack_int ((PTR), &(X)->xasl_flag); \
+      (PTR) = or_unpack_int ((PTR), &(X)->id); \
     } \
   while (0)
 
@@ -117,11 +123,14 @@ struct xasl_node_header
 #if defined (SERVER_MODE) || defined (SA_MODE)
 typedef enum
 {
+  XASL_BUILD,
+  XASL_INITIALIZED,
   XASL_CLEARED,
   XASL_SUCCESS,
-  XASL_FAILURE,
-  XASL_INITIALIZED
+  XASL_FAILURE
 } XASL_STATUS;
+//#define IS_XASL_INITIAL_STATUS(s) ((s) == XASL_CLEARED || (s) == XASL_INITIALIZED || (s) == XASL_BUILD)
+#define IS_XASL_INITIAL_STATUS(s) ((s) <= XASL_CLEARED)
 #endif /* defined (SERVER_MODE) || defined (SA_MODE) */
 
 /************************************************************************/
@@ -152,9 +161,11 @@ using PRED_EXPR = cubxasl::pred_expr;
 // *INDENT-ON*
 
 #if defined (SERVER_MODE) || defined (SA_MODE)
+typedef struct analytic_stat ANALYTIC_STATS;
 typedef struct groupby_stat GROUPBY_STATS;
 typedef struct orderby_stat ORDERBY_STATS;
 typedef struct xasl_stat XASL_STATS;
+typedef struct func_stat FUNC_STATS;
 
 typedef struct topn_tuple TOPN_TUPLE;
 typedef struct topn_tuples TOPN_TUPLES;
@@ -201,10 +212,6 @@ struct qproc_db_value_list
   QPROC_DB_VALUE_LIST next;
   DB_VALUE *val;
   TP_DOMAIN *dom;
-
-  // *INDENT-OFF*
-  qproc_db_value_list () = default;
-  // *INDENT-ON*
 };
 
 typedef struct val_list_node VAL_LIST;	/* value list */
@@ -212,10 +219,6 @@ struct val_list_node
 {
   QPROC_DB_VALUE_LIST valp;	/* first value node */
   int val_cnt;			/* value count */
-
-  // *INDENT-OFF*
-  val_list_node () = default;
-  // *INDENT-ON*
 };
 
 /* To handle selected update list, click counter related */
@@ -327,6 +330,7 @@ struct buildlist_proc_node
   REGU_VARIABLE_LIST g_scan_regu_list;	/* group_by regulist during scan */
   ANALYTIC_EVAL_TYPE *a_eval_list;	/* analytic functions evaluation groups */
   REGU_VARIABLE_LIST a_regu_list;	/* analytic regu list */
+  REGU_VARIABLE_LIST a_scan_regu_list;	/* analytic regulist during scan */
   OUTPTR_LIST *a_outptr_list;	/* analytic output ptr list */
   OUTPTR_LIST *a_outptr_list_ex;	/* ext output ptr list */
   OUTPTR_LIST *a_outptr_list_interm;	/* intermediate output list */
@@ -369,91 +373,16 @@ struct mergelist_proc_node
   QFILE_LIST_MERGE_INFO ls_merge;	/* list file merge info */
 };
 
-typedef struct hashjoin_input HASHJOIN_INPUT;
-struct hashjoin_input
-{
-  XASL_NODE *xasl;
-  ACCESS_SPEC_TYPE *spec_list;
-  VAL_LIST *val_list;
-
-#if defined (SERVER_MODE) || defined (SA_MODE)
-  TP_DOMAIN **domains;
-  int *value_indexes;
-#endif
-};
-
-#if defined (SERVER_MODE) || defined (SA_MODE)
-typedef struct hashjoin_stats HASHJOIN_STATS;
-struct hashjoin_stats
-{
-  HASH_METHOD hash_method;
-
-  struct
-  {
-    struct timeval elapsed_time;
-    struct timeval build_time;
-    UINT64 fetches;
-    UINT64 fetch_time;
-    UINT64 ioreads;
-
-#if defined(TEST_HASH_JOIN_PROFILE_TIME)
-    struct
-    {
-      struct timeval fetch;	/* qexec_hash_join_fetch_key */
-      struct timeval hash;	/* qdata_hash_scan_key */
-      struct timeval insert;	/* qexec_hash_join_build_key */
-    } profile;
-#endif
-  } build;
-
-  struct
-  {
-    struct timeval elapsed_time;
-    struct timeval probe_time;
-    UINT64 fetches;
-    UINT64 fetch_time;
-    UINT64 ioreads;
-    UINT64 readkeys;
-    UINT64 rows;
-    UINT32 max_collisions;
-
-#if defined(TEST_HASH_JOIN_PROFILE_TIME)
-    struct
-    {
-      struct timeval fetch;	/* qexec_hash_join_fetch_key */
-      struct timeval hash;	/* qdata_hash_scan_key */
-      struct timeval search;	/* qexec_hash_join_probe_key */
-      struct timeval match;	/* qexec_hash_join_fetch_key */
-      struct timeval add;	/* qexec_merge_tuple_add_list */
-    } profile;
-#endif
-  } probe;
-};
-#endif
-
-typedef struct hashjoin_proc_node HASHJOIN_PROC_NODE;
-struct hashjoin_proc_node
+typedef struct hashjoin_proc_node
 {
   HASHJOIN_INPUT outer;
   HASHJOIN_INPUT inner;
-
   QFILE_LIST_MERGE_INFO merge_info;
-
 #if defined (SERVER_MODE) || defined (SA_MODE)
-  HASHJOIN_STATS stats;
-
-  HASH_LIST_SCAN hash_scan;
-
-  HASHJOIN_INPUT *build;
-  HASHJOIN_INPUT *probe;
-
-  /* The common domains between the domains of values used in the build and probe inputs. */
-  TP_DOMAIN **coerce_domains;
-
-  /* Whether there is a need to use the coerce domain. */
-  bool need_coerce_domains;
-#endif
-};
+  HASHJOIN_DOMAIN_INFO domain_info;
+  HASHJOIN_STATS_GROUP stats_group;
+#endif				/* defined (SERVER_MODE) || defined (SA_MODE) */
+} HASHJOIN_PROC_NODE;
 
 typedef struct update_proc_node UPDATE_PROC_NODE;
 struct update_proc_node
@@ -568,25 +497,28 @@ struct cte_proc_node
 #define XASL_G_GRBYNUM_FLAG_LIMIT_LT	    0x08
 #define XASL_G_GRBYNUM_FLAG_LIMIT_GT_LT	    0x10
 
-#define XASL_LINK_TO_REGU_VARIABLE	0x01	/* is linked to regu variable ? */
-#define XASL_SKIP_ORDERBY_LIST		0x02	/* skip sorting for orderby_list ? */
-#define XASL_ZERO_CORR_LEVEL		0x04	/* is zero-level uncorrelated subquery ? */
-#define XASL_TOP_MOST_XASL		0x08	/* this is a top most XASL */
-#define XASL_TO_BE_CACHED		0x10	/* the result will be cached */
-#define	XASL_HAS_NOCYCLE		0x20	/* NOCYCLE is specified */
-#define	XASL_HAS_CONNECT_BY		0x40	/* has CONNECT BY clause */
-#define XASL_MULTI_UPDATE_AGG		0x80	/* is for multi-update with aggregate */
-#define XASL_IGNORE_CYCLES	       0x100	/* is for LEVEL usage in connect by clause... sometimes cycles may be ignored */
-#define	XASL_OBJFETCH_IGNORE_CLASSOID  0x200	/* fetch proc should ignore class oid */
-#define XASL_IS_MERGE_QUERY	       0x400	/* query belongs to a merge statement */
-#define XASL_USES_MRO		       0x800	/* query uses multi range optimization */
-#define XASL_DECACHE_CLONE	      0x1000	/* decache clone */
-#define XASL_RETURN_GENERATED_KEYS    0x2000	/* return generated keys */
-#define XASL_NO_FIXED_SCAN	      0x4000	/* disable fixed scan for this proc */
-#define XASL_NEED_SINGLE_TUPLE_SCAN   0x8000	/* for exists operation */
-#define XASL_INCLUDES_TDE_CLASS	      0x10000	/* is any tde class related */
-#define XASL_SAMPLING_SCAN	      0x20000	/* is sampling scan */
-#define XASL_USES_SQ_CACHE	      0x40000	/* subquery uses result cache */
+#define XASL_LINK_TO_REGU_VARIABLE	0x1	/* is linked to regu variable ? */
+#define XASL_SKIP_ORDERBY_LIST		(0x1 << 1)	/* skip sorting for orderby_list ? */
+#define XASL_ZERO_CORR_LEVEL		(0x1 << 2)	/* is zero-level uncorrelated subquery ? */
+#define XASL_TOP_MOST_XASL		(0x1 << 3)	/* this is a top most XASL */
+#define XASL_TO_BE_CACHED		(0x1 << 4)	/* the result will be cached */
+#define	XASL_HAS_NOCYCLE		(0x1 << 5)	/* NOCYCLE is specified */
+#define	XASL_HAS_CONNECT_BY		(0x1 << 6)	/* has CONNECT BY clause */
+#define XASL_MULTI_UPDATE_AGG		(0x1 << 7)	/* is for multi-update with aggregate */
+#define XASL_IGNORE_CYCLES	        (0x1 << 8)	/* is for LEVEL usage in connect by clause... sometimes cycles may be ignored */
+#define	XASL_OBJFETCH_IGNORE_CLASSOID   (0x1 << 9)	/* fetch proc should ignore class oid */
+#define XASL_IS_MERGE_QUERY	        (0x1 << 10)	/* query belongs to a merge statement */
+#define XASL_USES_MRO		        (0x1 << 11)	/* query uses multi range optimization */
+#define XASL_DECACHE_CLONE	       (0x1 << 12)	/* decache clone */
+#define XASL_RETURN_GENERATED_KEYS     (0x1 << 13)	/* return generated keys */
+#define XASL_NO_FIXED_SCAN	       (0x1 << 14)	/* disable fixed scan for this proc */
+#define XASL_NEED_SINGLE_TUPLE_SCAN    (0x1 << 15)	/* for exists operation */
+#define XASL_INCLUDES_TDE_CLASS	       (0x1 << 16)	/* is any tde class related */
+#define XASL_SAMPLING_SCAN	       (0x1 << 17)	/* is sampling scan */
+#define XASL_USES_SQ_CACHE	       (0x1 << 18)	/* subquery uses result cache */
+#define XASL_NO_PARALLEL_SUBQUERY       (0x1 << 19)	/* disable parallel subquery */
+#define XASL_ANALYTIC_USES_LIMIT_OPT (0x1 << 20)	/* analytic uses limit optimization */
+#define XASL_ANALYTIC_SKIP_SORT (0x1 << 21)	/* analytic skip sort optimization */
 
 #define XASL_IS_FLAGED(x, f)        (((x)->flag & (int) (f)) != 0)
 #define XASL_SET_FLAG(x, f)         (x)->flag |= (int) (f)
@@ -603,7 +535,7 @@ struct cte_proc_node
 	  if (XASL_IS_FLAGED (_x, XASL_LINK_TO_REGU_VARIABLE)) \
 	    { \
 	      /* clear correlated subquery list files */ \
-	      if ((_x)->status == XASL_CLEARED || (_x)->status == XASL_INITIALIZED) \
+	      if (IS_XASL_INITIAL_STATUS((_x)->status)) \
 		{ \
 		  /* execute xasl query */ \
 		  if (_x->sub_xasl_id) \
@@ -832,8 +764,18 @@ typedef enum
 typedef enum
 {
   ACCESS_SPEC_FLAG_NONE = 0,
-  ACCESS_SPEC_FLAG_FOR_UPDATE = 0x01	/* used with FOR UPDATE clause. The spec that will be locked. */
+  ACCESS_SPEC_FLAG_FOR_UPDATE = 0x1,	/* used with FOR UPDATE clause. The spec that will be locked. */
+  ACCESS_SPEC_FLAG_NO_PARALLEL_HEAP_SCAN = 0x1 << 1,	/* used with parallel heap scan. */
+  ACCESS_SPEC_FLAG_NUM_PARALLEL_THREADS = 0x1 << 2,	/* used with parallel heap scan. */
+  ACCESS_SPEC_FLAG_MERGEABLE_LIST = 0x1 << 3,	/* used with parallel heap scan. */
+  ACCESS_SPEC_FLAG_COUNT_DISTINCT = 0x1 << 4,	/* used with parallel heap scan count distinct aggregate. */
+  ACCESS_SPEC_FLAG_ONLY_MIN_MAX_SCAN = 0x1 << 5,	/* used with min/max aggregate. */
+  ACCESS_SPEC_FLAG_FORCE_FIXED_SCAN = 0x1 << 6	/* used with keep page hint. */
 } ACCESS_SPEC_FLAG;
+
+#define ACCESS_SPEC_IS_FLAGED(spec, f)		((ACCESS_SPEC_FLAGS(spec) & (int) (f)) != 0)
+#define ACCESS_SPEC_SET_FLAG(spec, f)		(ACCESS_SPEC_FLAGS(spec) |= (int) (f))
+#define ACCESS_SPEC_UNSET_FLAG(spec, f)		(ACCESS_SPEC_FLAGS(spec) &= (int) ~(f))
 
 struct cls_spec_node
 {
@@ -1009,6 +951,9 @@ union hybrid_node
 #define ACCESS_SPEC_DBLINK_LIST_ID(ptr) \
 	(ACCESS_SPEC_DBLINK_XASL_NODE(ptr)->list_id)
 
+#define ACCESS_SPEC_FLAGS(ptr) \
+	((ptr)->flags)
+
 #if defined (SERVER_MODE) || defined (SA_MODE)
 struct orderby_stat
 {
@@ -1017,6 +962,13 @@ struct orderby_stat
   bool orderby_topnsort;
   UINT64 orderby_pages;
   UINT64 orderby_ioreads;
+  int parallel_num;
+  UINT64 px_min_orderby_time;
+  UINT64 px_max_orderby_time;
+  UINT64 px_min_orderby_pages;
+  UINT64 px_max_orderby_pages;
+  UINT64 px_min_orderby_ioreads;
+  UINT64 px_max_orderby_ioreads;
 };
 
 struct groupby_stat
@@ -1030,12 +982,31 @@ struct groupby_stat
   bool groupby_sort;
 };
 
+struct analytic_stat
+{
+  struct timeval analytic_time;
+  UINT64 analytic_pages;
+  UINT64 analytic_ioreads;
+  int rows;
+  bool run_analytic;
+  bool analytic_sort;
+  struct analytic_stat *next;
+};
+
 struct xasl_stat
 {
   struct timeval elapsed_time;
   UINT64 fetches;
   UINT64 ioreads;
   UINT64 fetch_time;
+};
+
+struct func_stat
+{
+  UINT64 time;
+  UINT64 fetches;
+  UINT64 ioreads;
+  UINT64 calls;
 };
 
 /* top-n sorting object */
@@ -1061,6 +1032,7 @@ struct partition_spec_node
   HFID hfid;			/* class hfid */
   BTID btid;			/* index id */
   PARTITION_SPEC_TYPE *next;	/* next partition */
+  SCAN_STATS scan_stats;
 };
 #endif /* defined (SERVER_MODE) || defined (SA_MODE) */
 
@@ -1078,7 +1050,8 @@ struct access_spec_node
   DB_VALUE *s_dbval;		/* single fetch mode db_value */
   ACCESS_SPEC_TYPE *next;	/* next access specification */
   int pruning_type;		/* how pruning should be performed on this access spec performed */
-  ACCESS_SPEC_FLAG flags;	/* flags from ACCESS_SPEC_FLAG enum */
+  int flags;			/* flags from ACCESS_SPEC_FLAG enum */
+  int num_parallel_threads;	/* number of parallel threads for this spec */
 #if defined (SERVER_MODE) || defined (SA_MODE)
   SCAN_ID s_id;			/* scan identifier */
   PARTITION_SPEC_TYPE *parts;	/* partitions of the current spec */
@@ -1089,7 +1062,16 @@ struct access_spec_node
   bool clear_value_at_clone_decache;	/* true, if need to clear s_dbval at clone decache */
 #endif				/* #if defined (SERVER_MODE) || defined (SA_MODE) */
 };
-
+// *INDENT-OFF*
+namespace parallel_query_execute
+{
+  class query_executor;
+}
+namespace memoize
+{
+  class storage;
+}
+// *INDENT-ON*
 struct xasl_node
 {
   XASL_NODE_HEADER header;	/* XASL header */
@@ -1183,6 +1165,7 @@ struct xasl_node
   bool iscan_oid_order;
 
   SQ_CACHE *sq_cache;
+  int parallelism;		/* parallelism of the query */
 
 #if defined (CS_MODE) || defined (SA_MODE)
   int projected_size;		/* # of bytes per result tuple */
@@ -1192,7 +1175,9 @@ struct xasl_node
 #if defined (SERVER_MODE) || defined (SA_MODE)
   ORDERBY_STATS orderby_stats;
   GROUPBY_STATS groupby_stats;
+  ANALYTIC_STATS *analytic_stats;
   XASL_STATS xasl_stats;
+  FUNC_STATS func_stats;
 
   TOPN_TUPLES *topn_items;	/* top-n tuples for orderby limit */
 
@@ -1203,6 +1188,11 @@ struct xasl_node
   int next_scan_on;		/* next scan is initiated ? */
   int next_scan_block_on;	/* next scan block is initiated ? */
   int max_iterations;		/* Number of maximum iterations (used during run-time for recursive CTE) */
+  // *INDENT-OFF*
+  parallel_query_execute::query_executor *px_executor;
+  int executed_parallelism;	/* parallelism of the query */
+  memoize::storage *memoize_storage;
+  // *INDENT-ON*
 #endif				/* defined (SERVER_MODE) || defined (SA_MODE) */
 };
 
