@@ -572,14 +572,30 @@ fn_execute_internal (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf,
       *s = '\0';
     }
 
+  /*
+   * Pre-execute flush:
+   * ensures every log line describing what is about to be executed
+   * (handle / query string / bind values / execute header)
+   * is durably written to the SQL log file before ux_exec_func() begins.
+   *
+   * Example lines flushed here (each line: "<timestamp> (<seq>) <body>"):
+   *
+   *   <timestamp> (<seq>) execute srv_h_id <id> <sql text>
+   *   <timestamp> (<seq>) bind 1 : <type> <value>
+   *   <timestamp> (<seq>) bind 2 : <type> <value>
+   *   ...
+   */
   cas_log_flush_if_needed ();
+
   gettimeofday (&exec_begin, NULL);
 
   ret_code =
     (*ux_exec_func) (srv_handle, flag, max_col_size, max_row, argc - bind_value_index, argv + bind_value_index, net_buf,
 		     req_info, clt_cache_time_ptr, &client_cache_reusable);
+
   gettimeofday (&exec_end, NULL);
   ut_timeval_diff (&exec_begin, &exec_end, &elapsed_sec, &elapsed_msec);
+
   eid_string = get_error_log_eids (err_info.err_number);
   err_number_execute = err_info.err_number;
   logddl_set_err_code (err_info.err_number);
@@ -1618,7 +1634,27 @@ fn_execute_array (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf, T_
     }
 
 
+  /*
+   * Pre-execute flush:
+   * ensures every log line describing what is about to be executed
+   * (handle / query string / bind values / execute header)
+   * is durably written to the SQL log file before ux_execute_array() begins.
+   *
+   * Example lines flushed here (each line: "<timestamp> (<seq>) <body>"):
+   *
+   *   <timestamp> (<seq>) execute_array srv_h_id <id> <total_binds> <sql text>
+   *   <timestamp> (<seq>) bind 1 : <type> <value>
+   *   <timestamp> (<seq>) bind 2 : <type> <value>
+   *   ...
+   *   <timestamp> (<seq>) bind N : <type> <value>
+   *
+   * Note:
+   * bind indices run 1..N continuously across all array rows,
+   * where N = #rows * #placeholders.
+   * Row boundaries are implicit.
+   */
   cas_log_flush_if_needed ();
+
   gettimeofday (&exec_begin, NULL);
 
   ret_code = ux_execute_array (srv_handle, argc - arg_index, argv + arg_index, net_buf, req_info);
@@ -1630,7 +1666,6 @@ fn_execute_array (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf, T_
   cas_log_write (SRV_HANDLE_QUERY_SEQ_NUM (srv_handle), false, "execute_array %s%d tuple %d time %d.%03d%s%s%s",
 		 (ret_code < 0) ? "error:" : "", err_info.err_number, get_tuple_count (srv_handle), elapsed_sec,
 		 elapsed_msec, "", (srv_handle->use_query_cache == true) ? " (QC)" : "", eid_string);
-
 
   query_timeout =
     ut_check_timeout (&query_start_time, &exec_end, shm_appl->long_query_time, &elapsed_sec, &elapsed_msec);

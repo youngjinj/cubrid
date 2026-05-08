@@ -400,14 +400,24 @@ cas_log_end (int mode, int run_time_sec, int run_time_msec)
 	    }
 	}
 
-      if (as_info->cur_sql_log_mode == SQL_LOG_MODE_ALL)
-	{
-	  cas_fflush (log_fp);
-	}
+      cas_log_flush_if_needed ();
     }
 
 }
 
+/*
+ * Force the SQL log to flush its stdio buffer when SQL_LOG_MODE_ALL is on.
+ * No-op for other log modes or when no log file is open.
+ *
+ * Used as a synchronization point so that every log line accumulated so far is durably written to the SQL log file
+ * before a potentially long-running or abnormally terminating operation.
+ *
+ * Call sites:
+ *   cas_log_end()            -- end of a query unit (PROCESS / ... / RESULT closes here).
+ *   fn_execute_internal()    -- immediately before ux_exec_func() begins query execution.
+ *   fn_execute_array()       -- immediately before ux_execute_array() begins array execution.
+ *   cas_log_query_cancel()   -- right after recording a cancel event (timeout, signal, ...).
+ */
 void
 cas_log_flush_if_needed (void)
 {
@@ -507,6 +517,13 @@ cas_log_query_cancel (int dummy, ...)
   cas_log_write_internal (log_fp, &tv, 0, buf, ap);
   va_end (ap);
   cas_fputc ('\n', log_fp);
+
+  /*
+   * Cancel events accompany abnormal conditions (timeout, signal, ...).
+   * Flush immediately so the cancel line survives if the process dies
+   * before the unit reaches cas_log_end().
+   */
+  cas_log_flush_if_needed ();
 
   query_cancel_flag = 0;
 
@@ -795,6 +812,17 @@ cas_log_write_query_string_internal (char *query, int size, bool newline, HIDE_P
 	}
       else
 	{
+	  /*
+	   * Replace embedded newlines with spaces so the SQL stays on one log line.
+	   * Non-newline runs are batched into a single cas_fwrite(),
+	   * reducing stdio calls from N (per char) to K + 1 (K = number of newlines).
+	   *
+	   * Limitation:
+	   * this is a byte-level scan, not a SQL parse.
+	   * Newlines inside string literals (e.g. 'a\nb') are also replaced with spaces,
+	   * so the original SQL is not exactly recoverable from the log.
+	   * Pre-existing policy keeps the SQL log line-oriented for grep/awk processing.
+	   */
 	  const char *s, *seg_start;
 
 	  seg_start = query;
@@ -927,8 +955,8 @@ cas_access_log (struct timeval *start_time, int as_index, int client_ip_addr, ch
   FILE *fp;
   char *access_log_file = shm_appl->access_log_file;
   char clt_ip_str[16];
-  struct tm ct1, ct2;
-  time_t t1, t2;
+  struct tm start_tm;
+  time_t start_sec;
   struct timeval end_time;
   char log_file_buf[PATH_MAX];
   const char *print_format = "%d %s %04d/%02d/%02d %02d:%02d:%02d %s %s %s %s\n";
@@ -936,14 +964,12 @@ cas_access_log (struct timeval *start_time, int as_index, int client_ip_addr, ch
 
   gettimeofday (&end_time, NULL);
 
-  t1 = start_time->tv_sec;
-  t2 = end_time.tv_sec;
-  if (localtime_r (&t1, &ct1) == NULL || localtime_r (&t2, &ct2) == NULL)
+  start_sec = start_time->tv_sec;
+  if (localtime_r (&start_sec, &start_tm) == NULL)
     {
       return -1;
     }
-  ct1.tm_year += 1900;
-  ct2.tm_year += 1900;
+  start_tm.tm_year += 1900;
 
   if (ACCESS_LOG_IS_DENIED_TYPE (log_type))
     {
@@ -966,16 +992,16 @@ cas_access_log (struct timeval *start_time, int as_index, int client_ip_addr, ch
   fseek (fp, 0, SEEK_END);
   if ((ftell (fp) / ONE_K) > shm_appl->access_log_max_size)
     {
-      time_t cur_time = time (NULL);
-      struct tm ct;
+      time_t backup_sec = time (NULL);
+      struct tm backup_tm;
 
-      if (localtime_r (&cur_time, &ct) != NULL)
+      if (localtime_r (&backup_sec, &backup_tm) != NULL)
 	{
-	  ct.tm_year += 1900;
+	  backup_tm.tm_year += 1900;
 
 	  cas_fclose (fp);
 
-	  access_log_backup (access_log_file, &ct);
+	  access_log_backup (access_log_file, &backup_tm);
 
 	  fp = access_log_open (access_log_file);
 	  if (fp == NULL)
@@ -994,8 +1020,9 @@ cas_access_log (struct timeval *start_time, int as_index, int client_ip_addr, ch
       sprintf (session_id_buf, "%u", db_get_session_id ());
     }
 
-  cas_fprintf (fp, print_format, as_index + 1, clt_ip_str, ct1.tm_year, ct1.tm_mon + 1, ct1.tm_mday, ct1.tm_hour,
-	       ct1.tm_min, ct1.tm_sec, dbname, dbuser, get_access_log_type_string (log_type), session_id_buf);
+  cas_fprintf (fp, print_format, as_index + 1, clt_ip_str, start_tm.tm_year, start_tm.tm_mon + 1, start_tm.tm_mday,
+	       start_tm.tm_hour, start_tm.tm_min, start_tm.tm_sec, dbname, dbuser,
+	       get_access_log_type_string (log_type), session_id_buf);
 
   cas_fclose (fp);
   return (end_time.tv_sec - start_time->tv_sec);

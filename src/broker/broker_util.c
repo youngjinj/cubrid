@@ -420,10 +420,9 @@ as_db_err_log_set (char *br_name, int proxy_index, int shard_id, int shard_cas_i
 int
 ut_time_string (char *buf, struct timeval *time_val)
 {
-  static time_t s_cached_sec = (time_t) (-1);
-  static int s_cached_msec = -1;
-  static struct tm s_cached_tm;
-  static char s_cached_buf[22];
+  static thread_local time_t cached_sec = (time_t) (-1);
+  static thread_local int cached_msec = -1;
+  static thread_local char cached_buf[22];
 
   time_t sec;
   int millisec;
@@ -443,47 +442,67 @@ ut_time_string (char *buf, struct timeval *time_val)
       millisec = time_val->tv_usec / 1000;
     }
 
-  if (sec == s_cached_sec && millisec == s_cached_msec)
+  /* full hit: same sec and msec — the cached buffer is the answer */
+  if (sec == cached_sec && millisec == cached_msec)
     {
-      memcpy (buf, s_cached_buf, 21);
-      buf[21] = '\0';
+      memcpy (buf, cached_buf, 22);
+      assert (buf[21] == '\0');
       return 21;
     }
 
-  if (sec != s_cached_sec)
+  cached_msec = millisec;
+
+  if (sec == cached_sec)
     {
-      localtime_r (&sec, &s_cached_tm);
-      s_cached_tm.tm_mon++;
-      s_cached_sec = sec;
+      /*
+       * partial hit:
+       * sec is an epoch second (seconds since 1970-01-01 UTC).
+       * sec == cached_sec means the same one-second window as the previous call,
+       * so the year/month/day/hour/min/sec breakdown is identical
+       * and the date/time portion of cached_buf is still valid.
+       * Only the msec digits need rewriting.
+       */
+      memcpy (buf, cached_buf, 22);
+    }
+  else
+    {
+      /* full miss: derive a fresh date/time breakdown */
+      struct tm tm;
+
+      localtime_r (&sec, &tm);
+      tm.tm_mon++;
+      cached_sec = sec;
+
+      buf[0] = ((tm.tm_year % 100) / 10) + '0';
+      buf[1] = (tm.tm_year % 10) + '0';
+      buf[2] = '-';
+      buf[3] = (tm.tm_mon / 10) + '0';
+      buf[4] = (tm.tm_mon % 10) + '0';
+      buf[5] = '-';
+      buf[6] = (tm.tm_mday / 10) + '0';
+      buf[7] = (tm.tm_mday % 10) + '0';
+      buf[8] = ' ';
+      buf[9] = (tm.tm_hour / 10) + '0';
+      buf[10] = (tm.tm_hour % 10) + '0';
+      buf[11] = ':';
+      buf[12] = (tm.tm_min / 10) + '0';
+      buf[13] = (tm.tm_min % 10) + '0';
+      buf[14] = ':';
+      buf[15] = (tm.tm_sec / 10) + '0';
+      buf[16] = (tm.tm_sec % 10) + '0';
+      buf[17] = '.';
+      buf[21] = '\0';
     }
 
-  buf[0] = ((s_cached_tm.tm_year % 100) / 10) + '0';
-  buf[1] = (s_cached_tm.tm_year % 10) + '0';
-  buf[2] = '-';
-  buf[3] = (s_cached_tm.tm_mon / 10) + '0';
-  buf[4] = (s_cached_tm.tm_mon % 10) + '0';
-  buf[5] = '-';
-  buf[6] = (s_cached_tm.tm_mday / 10) + '0';
-  buf[7] = (s_cached_tm.tm_mday % 10) + '0';
-  buf[8] = ' ';
-  buf[9] = (s_cached_tm.tm_hour / 10) + '0';
-  buf[10] = (s_cached_tm.tm_hour % 10) + '0';
-  buf[11] = ':';
-  buf[12] = (s_cached_tm.tm_min / 10) + '0';
-  buf[13] = (s_cached_tm.tm_min % 10) + '0';
-  buf[14] = ':';
-  buf[15] = (s_cached_tm.tm_sec / 10) + '0';
-  buf[16] = (s_cached_tm.tm_sec % 10) + '0';
-  buf[17] = '.';
-  s_cached_msec = millisec;
   buf[20] = (millisec % 10) + '0';
   millisec /= 10;
   buf[19] = (millisec % 10) + '0';
   millisec /= 10;
   buf[18] = (millisec % 10) + '0';
-  buf[21] = '\0';
+  assert (buf[21] == '\0');
 
-  memcpy (s_cached_buf, buf, 21);
+  /* save the formatted result (including the trailing '\0') for future cache hits */
+  memcpy (cached_buf, buf, 22);
 
   return 21;
 }
