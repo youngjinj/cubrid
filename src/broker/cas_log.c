@@ -196,7 +196,13 @@ cas_log_open (char *br_name)
 
       if (log_fp)
 	{
-	  setvbuf (log_fp, sql_log_buffer, _IOFBF, SQL_LOG_BUFFER_SIZE);
+	  /*
+	   * Benchmark variant: line buffering.
+	   * stdio auto-flushes the user-space buffer on each '\n',
+	   * so every completed SQL log line is written out via write(2) immediately.
+	   * Explicit cas_log_flush_if_needed() call sites are removed in this branch.
+	   */
+	  setvbuf (log_fp, sql_log_buffer, _IOLBF, SQL_LOG_BUFFER_SIZE);
 	}
       cas_log_fd_status = CAS_LOG_FD_OPENED;
     }
@@ -400,7 +406,10 @@ cas_log_end (int mode, int run_time_sec, int run_time_msec)
 	    }
 	}
 
-      cas_log_flush_if_needed ();
+      /*
+       * Benchmark variant: no explicit unit-boundary fflush.
+       * The trailing '\n' of the last log line triggers stdio line-buffer flush.
+       */
     }
 
 }
@@ -519,11 +528,9 @@ cas_log_query_cancel (int dummy, ...)
   cas_fputc ('\n', log_fp);
 
   /*
-   * Cancel events accompany abnormal conditions (timeout, signal, ...).
-   * Flush immediately so the cancel line survives if the process dies
-   * before the unit reaches cas_log_end().
+   * Benchmark variant: no explicit fflush after cancel.
+   * The '\n' written above triggers stdio line-buffer flush automatically.
    */
-  cas_log_flush_if_needed ();
 
   query_cancel_flag = 0;
 

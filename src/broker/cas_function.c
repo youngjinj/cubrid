@@ -573,20 +573,10 @@ fn_execute_internal (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf,
     }
 
   /*
-   * Pre-execute flush:
-   * ensures every log line describing what is about to be executed
-   * (handle / query string / bind values / execute header)
-   * is durably written to the SQL log file before ux_exec_func() begins.
-   *
-   * Example lines flushed here (each line: "<timestamp> (<seq>) <body>"):
-   *
-   *   <timestamp> (<seq>) execute srv_h_id <id> <sql text>
-   *   <timestamp> (<seq>) bind 1 : <type> <value>
-   *   <timestamp> (<seq>) bind 2 : <type> <value>
-   *   ...
+   * Benchmark variant: pre-execute flush removed.
+   * Under _IOLBF the SQL log buffer is already flushed line-by-line,
+   * so the bind/execute lines emitted above are on disk before ux_exec_func() begins.
    */
-  cas_log_flush_if_needed ();
-
   gettimeofday (&exec_begin, NULL);
 
   ret_code =
@@ -1635,26 +1625,10 @@ fn_execute_array (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf, T_
 
 
   /*
-   * Pre-execute flush:
-   * ensures every log line describing what is about to be executed
-   * (handle / query string / bind values / execute header)
-   * is durably written to the SQL log file before ux_execute_array() begins.
-   *
-   * Example lines flushed here (each line: "<timestamp> (<seq>) <body>"):
-   *
-   *   <timestamp> (<seq>) execute_array srv_h_id <id> <total_binds> <sql text>
-   *   <timestamp> (<seq>) bind 1 : <type> <value>
-   *   <timestamp> (<seq>) bind 2 : <type> <value>
-   *   ...
-   *   <timestamp> (<seq>) bind N : <type> <value>
-   *
-   * Note:
-   * bind indices run 1..N continuously across all array rows,
-   * where N = #rows * #placeholders.
-   * Row boundaries are implicit.
+   * Benchmark variant: pre-execute flush removed.
+   * Under _IOLBF the SQL log buffer is already flushed line-by-line,
+   * so the bind/execute_array lines emitted above are on disk before ux_execute_array() begins.
    */
-  cas_log_flush_if_needed ();
-
   gettimeofday (&exec_begin, NULL);
 
   ret_code = ux_execute_array (srv_handle, argc - arg_index, argv + arg_index, net_buf, req_info);
