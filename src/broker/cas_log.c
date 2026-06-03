@@ -252,6 +252,15 @@ cas_log_close (bool flag)
 
 }
 
+void
+cas_log_flush (void)
+{
+  if (log_fp != NULL && as_info->cur_sql_log_mode == SQL_LOG_MODE_ALL)
+    {
+      cas_fflush (log_fp);
+    }
+}
+
 static void
 cas_log_backup (T_CUBRID_FILE_ID fid)
 {
@@ -466,12 +475,6 @@ cas_log_write_nonl (unsigned int seq_num, bool unit_start, const char *fmt, ...)
 
 }
 
-/*
- * No-flush variant of cas_log_write_nonl(): writes the formatted line to the
- * SQL log stdio buffer but never calls fflush(), regardless of cur_sql_log_mode.
- * Intended for callers that emit many consecutive log lines and want to defer
- * the flush to a single point at the end of the block (e.g. bind value logging).
- */
 void
 cas_log_write_nonl_noflush (unsigned int seq_num, bool unit_start, const char *fmt, ...)
 {
@@ -494,20 +497,6 @@ cas_log_write_nonl_noflush (unsigned int seq_num, bool unit_start, const char *f
       va_end (ap);
     }
 
-}
-
-/*
- * Flush the SQL log stdio buffer when cur_sql_log_mode == SQL_LOG_MODE_ALL.
- * Used by callers that batched multiple no-flush writes and need to ensure the
- * accumulated lines reach disk at a well-defined boundary.
- */
-void
-cas_log_flush_if_needed (void)
-{
-  if (log_fp != NULL && as_info->cur_sql_log_mode == SQL_LOG_MODE_ALL)
-    {
-      cas_fflush (log_fp);
-    }
 }
 
 static void
@@ -694,7 +683,6 @@ cas_log_write2_nonl (const char *fmt, ...)
 
 }
 
-/* No-flush variant of cas_log_write2_nonl(): see cas_log_write_nonl_noflush(). */
 void
 cas_log_write2_nonl_noflush (const char *fmt, ...)
 {
