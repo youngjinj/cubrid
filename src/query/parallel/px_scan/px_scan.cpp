@@ -2364,6 +2364,20 @@ cleanup:
 	db_private_free (thread_p, vd);
       }
 
+    if (error != NO_ERROR)
+      {
+	/* a failing task swaps its error OUT of the executing thread into err_messages
+	 * (move_top_error_message_to_this), so even the W=1 synchronous path leaves this
+	 * thread with no current error.  Restore the first captured message so the caller
+	 * reports the real error (e.g. a coercion failure) instead of the generic fallback
+	 * below.  Mirrors manager<>::read () interrupt handling. */
+	std::lock_guard<std::mutex> lock (err_messages.m_mutex);
+	if (!err_messages.m_error_messages.empty ())
+	  {
+	    cuberr::context::get_thread_local_error ().swap (*err_messages.m_error_messages[0]);
+	  }
+      }
+
     if (error != NO_ERROR && er_errid () == NO_ERROR)
       {
 	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
