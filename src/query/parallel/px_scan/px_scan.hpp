@@ -131,6 +131,17 @@ namespace parallel_scan
 extern "C"
 {
   extern SCAN_CODE scan_next_parallel_heap_scan (THREAD_ENTRY *thread_p, SCAN_ID *scan_id);
+  /* Hash join streaming probe (stage 2): run W producer tasks over the outer proc's heap
+   * slices, diverting every produced row into the caller's sink (no SCAN_ID, no manager;
+   * completion is awaited through the result handler's normal accounting). worker_mgr may
+   * be NULL to run a single producer synchronously on the calling thread. sink_args has
+   * one entry per producer. */
+  extern int scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xasl_node *outer_xasl,
+      val_descr *orig_vd, HFID hfid, OID cls_oid, int parallelism,
+      parallel_query::worker_manager *worker_mgr,
+      int (*sink) (THREAD_ENTRY *, OUTPTR_LIST *, val_descr *, void *),
+      void (*sink_end) (THREAD_ENTRY *, void *), void **sink_args);
+
   extern int scan_reset_scan_block_parallel_heap_scan (THREAD_ENTRY *thread_p, SCAN_ID *scan_id);
   extern void scan_end_parallel_heap_scan (THREAD_ENTRY *thread_p, SCAN_ID *scan_id);
   extern void scan_close_parallel_heap_scan (THREAD_ENTRY *thread_p, SCAN_ID *scan_id);

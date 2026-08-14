@@ -2168,3 +2168,197 @@ namespace parallel_scan
   template class manager<RESULT_TYPE::MERGEABLE_LIST, SCAN_TYPE::INDEX>;
   template class manager<RESULT_TYPE::BUILDVALUE_OPT, SCAN_TYPE::INDEX>;
 }
+
+/* scan_run_hashjoin_probe_producers - see px_scan.hpp. Mirrors the minimal subset of
+   * manager<MERGEABLE_LIST, HEAP>::open/start_tasks/read for a caller that owns the probe:
+   * rows never reach the writer lists (the row sink diverts them), so read () only waits
+   * for worker completion and merges empty lists into the (empty, preopened) outer list. */
+int
+scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xasl_node *outer_xasl,
+				   val_descr *orig_vd, HFID hfid, OID cls_oid, int parallelism,
+				   parallel_query::worker_manager *worker_mgr,
+				   int (*sink) (THREAD_ENTRY *, OUTPTR_LIST *, val_descr *, void *),
+				   void (*sink_end) (THREAD_ENTRY *, void *), void **sink_args)
+{
+  {
+    using namespace parallel_scan;
+    /* the global ::SCAN_TYPE (scan_manager.h) shadows the enum here; qualify explicitly */
+    using task_t = parallel_scan::task<parallel_scan::RESULT_TYPE::MERGEABLE_LIST, parallel_scan::SCAN_TYPE::HEAP>;
+    using handler_t = parallel_scan::result_handler<parallel_scan::RESULT_TYPE::MERGEABLE_LIST>;
+    using input_t = parallel_scan::input_handler_heap;
+
+    QMGR_QUERY_ENTRY *query_entry;
+    bool uses_xasl_clone;
+    parallel_query::interrupt interrupt;
+    parallel_query::err_messages_with_lock err_messages;
+    trace_handler trace;
+    pre_execution_info pre_exec_info;
+    input_t *input_p = nullptr;
+    handler_t *handler_p = nullptr;
+    val_descr *vd = nullptr;
+    SCAN_CODE scan_code;
+    int error = NO_ERROR;
+    int h, i;
+
+    assert (thread_p != nullptr && outer_xasl != nullptr && orig_vd != nullptr);
+    assert (parallelism >= 1 && sink != nullptr && sink_end != nullptr && sink_args != nullptr);
+
+    query_entry = qmgr_get_query_entry (thread_p, query_id, thread_p->tran_index);
+    if (query_entry == nullptr)
+      {
+	return ER_FAILED;
+      }
+    h = query_entry->xasl_id.sha1.h[0] | query_entry->xasl_id.sha1.h[1] | query_entry->xasl_id.sha1.h[2]
+	| query_entry->xasl_id.sha1.h[3] | query_entry->xasl_id.sha1.h[4];
+    if (h == 0)
+      {
+	uses_xasl_clone = false;
+	if (thread_p->xasl_unpack_info_ptr == nullptr)
+	  {
+	    assert (false);
+	    return ER_FAILED;
+	  }
+      }
+    else
+      {
+	uses_xasl_clone = true;
+      }
+
+    /* main-level vd copy, exactly like manager::open (task clones per worker from this) */
+    vd = (val_descr *) db_private_alloc (thread_p, sizeof (val_descr));
+    if (vd == nullptr)
+      {
+	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (val_descr));
+	return ER_FAILED;
+      }
+    memcpy (vd, orig_vd, sizeof (val_descr));
+    if (orig_vd->dbval_cnt > 0)
+      {
+	vd->dbval_ptr = (DB_VALUE *) db_private_alloc (thread_p, sizeof (DB_VALUE) * orig_vd->dbval_cnt);
+	if (vd->dbval_ptr == nullptr)
+	  {
+	    db_private_free_and_init (thread_p, vd);
+	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+		    sizeof (DB_VALUE) * orig_vd->dbval_cnt);
+	    return ER_FAILED;
+	  }
+	for (i = 0; i < orig_vd->dbval_cnt; i++)
+	  {
+	    pr_clone_value (&orig_vd->dbval_ptr[i], &vd->dbval_ptr[i]);
+	  }
+      }
+
+    pre_exec_info.capture_precomp_vals (outer_xasl);
+
+    input_p = (input_t *) db_private_alloc (thread_p, sizeof (input_t));
+    if (input_p == nullptr)
+      {
+	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (input_t));
+	error = ER_FAILED;
+	goto cleanup;
+      }
+    input_p = placement_new (input_p, &interrupt, &err_messages);
+    error = input_p->init_on_main (thread_p, hfid, parallelism);
+    if (error != NO_ERROR)
+      {
+	goto cleanup;
+      }
+
+    handler_p = (handler_t *) db_private_alloc (thread_p, sizeof (handler_t));
+    if (handler_p == nullptr)
+      {
+	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (handler_t));
+	error = ER_FAILED;
+	goto cleanup;
+      }
+    handler_p = placement_new (handler_p, query_id, &interrupt, &err_messages, parallelism,
+			       false /* g_agg_domain_resolve_need */, outer_xasl);
+    handler_p->set_trace_handler (&trace);
+    if (thread_p->on_trace)
+      {
+	/* task finalize merges worker stats into the main tree; without this the merge
+	 * dereferences a null main tree (crash observed at px_scan_trace_handler.cpp:482) */
+	trace.m_trace_storage_for_sibling_xasl.set_main_xasl_tree (outer_xasl);
+      }
+
+    for (i = 0; i < parallelism; i++)
+      {
+	task_t *task_p = (task_t *) malloc (sizeof (task_t));
+	if (task_p == nullptr)
+	  {
+	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (task_t));
+	    interrupt.set_code (parallel_query::interrupt::interrupt_code::ERROR_INTERRUPTED_FROM_MAIN_THREAD);
+	    error = ER_FAILED;
+	    break;
+	  }
+	trace_handler *trace_p = thread_p->on_trace ? &trace : nullptr;
+	task_p = placement_new (task_p, thread_p, query_entry, handler_p, input_p, &interrupt, &err_messages,
+				vd, trace_p, worker_mgr, outer_xasl->header.id, hfid, cls_oid,
+				false /* is_fixed */, false /* is_grouped */, false /* is_cached_scan */,
+				uses_xasl_clone, outer_xasl, &pre_exec_info);
+	task_p->set_row_sink (sink, sink_end, sink_args[i]);
+
+	if (worker_mgr != nullptr)
+	  {
+	    worker_mgr->push_task (task_p);
+	  }
+	else
+	  {
+	    /* synchronous single producer on this thread; no pool retire */
+	    assert (parallelism == 1);
+	    task_p->execute (*thread_p);
+	    task_p->~task_t ();
+	    free (task_p);
+	  }
+      }
+
+    if (error == NO_ERROR || worker_mgr != nullptr)
+      {
+	/* waits until every pushed task ran write_finalize (active_results reaches zero);
+	 * writer lists are all empty (rows were diverted), so the merge is a no-op append
+	 * into the preopened empty outer list. */
+	handler_p->read_initialize (thread_p);
+	scan_code = handler_p->read (thread_p, outer_xasl->list_id);
+	handler_p->read_finalize (thread_p);
+	if (scan_code == S_ERROR)
+	  {
+	    error = ER_FAILED;
+	  }
+      }
+
+    if (interrupt.get_code () != parallel_query::interrupt::interrupt_code::NO_INTERRUPT)
+      {
+	error = ER_FAILED;
+      }
+
+cleanup:
+    if (handler_p != nullptr)
+      {
+	handler_p->~handler_t ();
+	db_private_free_and_init (thread_p, handler_p);
+      }
+    if (input_p != nullptr)
+      {
+	input_p->~input_t ();
+	db_private_free_and_init (thread_p, input_p);
+      }
+    if (vd != nullptr)
+      {
+	if (vd->dbval_cnt > 0 && vd->dbval_ptr != nullptr)
+	  {
+	    for (i = 0; i < vd->dbval_cnt; i++)
+	      {
+		pr_clear_value (&vd->dbval_ptr[i]);
+	      }
+	    db_private_free (thread_p, vd->dbval_ptr);
+	  }
+	db_private_free (thread_p, vd);
+      }
+
+    if (error != NO_ERROR && er_errid () == NO_ERROR)
+      {
+	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
+      }
+    return error;
+  }
+}

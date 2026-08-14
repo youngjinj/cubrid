@@ -86,9 +86,11 @@ namespace parallel_scan
        * common. px_scan never sets it; the hash join streaming probe task does. A sink
        * failure must stop the worker, mirroring the write () error contract. */
       using row_sink_fn = int (*) (THREAD_ENTRY *thread_p, OUTPTR_LIST *outptr_list, val_descr *vd, void *arg);
-      void set_row_sink (row_sink_fn sink, void *arg)
+      using row_sink_end_fn = void (*) (THREAD_ENTRY *thread_p, void *arg);
+      void set_row_sink (row_sink_fn sink, row_sink_end_fn sink_end, void *arg)
       {
 	m_row_sink = sink;
+	m_row_sink_end = sink_end;
 	m_row_sink_arg = arg;
       }
 
@@ -105,6 +107,7 @@ namespace parallel_scan
       slot_iterator_t m_slot_iterator;
       result_handler<result_type> *m_result_handler;
       row_sink_fn m_row_sink = nullptr;
+      row_sink_end_fn m_row_sink_end = nullptr;
       void *m_row_sink_arg = nullptr;
       input_handler_t *m_input_handler;
       interrupt *m_interrupt;

@@ -30,7 +30,10 @@
 #include "object_representation.h"	/* TP_DOMAIN */
 #include "perf_monitor.h"	/* perfmon_get_from_statistic, PSTAT_... */
 #include "px_hash_join.hpp"	/* parallel_query::hash_join::... */
+#include "file_manager.h"	/* file_get_num_user_pages */
+#include "log_impl.h"		/* logtb_get_mvcc_snapshot */
 #include "px_parallel.hpp"	/* parallel_query::compute_parallel_degree */
+#include "px_scan.hpp"		/* scan_run_hashjoin_probe_producers */
 #include "px_worker_manager.hpp"	/* parallel_query::worker_manager */
 #include "query_executor.h"	/* XASL_STATE, qexec_execute_mainblock */
 #include "query_list.h"		/* JOIN_TYPE */
@@ -86,7 +89,9 @@ typedef struct hashjoin_stream_worker
   HASHJOIN_STREAM_STATE stream_state;
   HASHJOIN_CONTEXT context;
   HASHJOIN_STATS stats;
-  HASHJOIN_STREAM_HOOK *hook;
+
+  /* worker-private projection buffer (distinct from stream_state.overflow_record) */
+  QFILE_TUPLE_RECORD tuple_buf;
 } HASHJOIN_STREAM_WORKER;
 
 /* Hash Join Execution */
@@ -96,8 +101,16 @@ static int hjoin_outer_fill_null_values (THREAD_ENTRY * thread_p, HASHJOIN_MANAG
 static int hjoin_execute_internal (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context);
 
 /* Hash Join Streaming Probe */
-static void hjoin_stream_clear_parallel (THREAD_ENTRY * thread_p, HASHJOIN_PARALLEL_STREAM * parallel_stream);
+static int hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot);
+static void hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot);
 static bool hjoin_stream_outer_scans_serial (XASL_NODE * outer_xasl);
+static bool hjoin_stream_parallel_shape (XASL_NODE * xasl);
+static bool hjoin_stream_parallel_outer_shape (XASL_NODE * outer_xasl);
+#if defined (SERVER_MODE)
+static int hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+					  HASHJOIN_CONTEXT * context, XASL_STATE * xasl_state,
+					  QFILE_LIST_ID ** result_list_id);
+#endif /* defined (SERVER_MODE) */
 static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming);
 static bool hjoin_stream_check_single (QFILE_LIST_ID * build_list_id);
 static int hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
@@ -473,9 +486,66 @@ qexec_hjoin_can_stream_probe (XASL_NODE * xasl)
       return false;
     }
 
-  if (!hjoin_stream_outer_scans_serial (outer_xasl))
+  if (!hjoin_stream_outer_scans_serial (outer_xasl) && !hjoin_stream_parallel_shape (xasl))
     {
-      /* a scan could open as a parallel scan and bypass the emit hook; keep the legacy path */
+      /* a scan could open as a parallel scan and bypass the emit hook, and the shape does
+       * not qualify for the parallel streaming probe either; keep the legacy path */
+      return false;
+    }
+
+  return true;
+}
+
+/*
+ * hjoin_stream_parallel_shape() -
+ *   return: True if the join qualifies for the parallel streaming probe (I-min shape).
+ *   xasl(in): HASHJOIN_PROC node (plain-outer checks already passed in the caller).
+ *
+ * Note: Static shape only; runtime conditions (in-memory hash method, worker
+ *       reservation) are decided in hjoin_stream_execute. The shape is deliberately
+ *       narrow (single non-partitioned sequential heap spec, no chain, no subqueries,
+ *       no instnum/limit) so the producer task trivially covers executor semantics.
+ */
+static bool
+hjoin_stream_parallel_shape (XASL_NODE * xasl)
+{
+  if (xasl->proc.hashjoin.merge_info.join_type != JOIN_INNER
+      || xasl->during_join_pred != NULL || xasl->after_join_pred != NULL)
+    {
+      return false;
+    }
+
+  return hjoin_stream_parallel_outer_shape (xasl->proc.hashjoin.outer.xasl);
+}
+
+/*
+ * hjoin_stream_parallel_outer_shape() -
+ *   return: True if the outer proc matches the I-min producer shape.
+ *   outer_xasl(in): Probe-side BUILDLIST proc.
+ */
+static bool
+hjoin_stream_parallel_outer_shape (XASL_NODE * outer_xasl)
+{
+  ACCESS_SPEC_TYPE *spec = outer_xasl->spec_list;
+
+  if (outer_xasl->scan_ptr != NULL || outer_xasl->merge_spec != NULL
+      || outer_xasl->aptr_list != NULL || outer_xasl->dptr_list != NULL
+      || outer_xasl->bptr_list != NULL || outer_xasl->fptr_list != NULL
+      || outer_xasl->instnum_pred != NULL || outer_xasl->instnum_val != NULL
+      || outer_xasl->ordbynum_pred != NULL || outer_xasl->limit_row_count != NULL)
+    {
+      return false;
+    }
+
+  if (spec == NULL || spec->next != NULL || spec->type != TARGET_CLASS
+      || spec->access != ACCESS_METHOD_SEQUENTIAL || spec->pruning_type != DB_NOT_PARTITIONED_CLASS)
+    {
+      return false;
+    }
+
+  if (ACCESS_SPEC_IS_FLAGED (spec, ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN))
+    {
+      /* the user pinned this scan to serial; honor it (the serial hook path applies) */
       return false;
     }
 
@@ -614,6 +684,202 @@ hjoin_stream_check_single (QFILE_LIST_ID * build_list_id)
   return (part_cnt <= 1);
 }
 
+#if defined (SERVER_MODE)
+/*
+ * hjoin_stream_execute_parallel() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry (main).
+ *   manager(in): Hash join manager; the shared hash table is already built.
+ *   context(in): Single context whose hash_scan holds the shared table.
+ *   xasl_state(in): XASL state of the query.
+ *   result_list_id(out): The merged join result (closed).
+ *
+ * Note: Lifecycle adapter of the parallel streaming probe (design §4). Runs W producer
+ *       tasks over the outer heap via scan_run_hashjoin_probe_producers; each worker
+ *       probes the shared table through hjoin_stream_row_sink into a main-created join
+ *       list. Reservation failure degrades to one synchronous producer on this thread.
+ *       Returns ER_FAILED without a fallback once producers may have consumed rows.
+ */
+static int
+hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+			       XASL_STATE * xasl_state, QFILE_LIST_ID ** result_list_id)
+{
+  XASL_NODE *outer_xasl = manager->outer->xasl;
+  ACCESS_SPEC_TYPE *spec = outer_xasl->spec_list;
+  HASHJOIN_STREAM_SLOT *slots = NULL;
+  void **slot_args = NULL;
+  parallel_query::worker_manager *worker_mgr = NULL;
+  QFILE_LIST_ID *base = NULL;
+  int num_pages = -1;
+  int degree, w, i;
+  int error = NO_ERROR;
+
+  assert (result_list_id != NULL);
+  *result_list_id = NULL;
+
+  /* establish this statement's MVCC snapshot before any worker opens a scan (L4) */
+  if (logtb_get_mvcc_snapshot (thread_p) == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error);
+      return error;
+    }
+
+  /* degree from the outer heap size, like scan_open_parallel_heap_scan */
+  error = file_get_num_user_pages (thread_p, &spec->s.cls_node.hfid.vfid, &num_pages);
+  if (error != NO_ERROR)
+    {
+      ASSERT_ERROR ();
+      return error;
+    }
+  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::SCAN, num_pages,
+						    -1 /* auto */);
+  if (degree >= 2)
+    {
+      worker_mgr = parallel_query::worker_manager::try_reserve_workers (degree);
+    }
+  w = (worker_mgr != NULL) ? worker_mgr->get_reserved_workers () : 1;
+
+  slots = (HASHJOIN_STREAM_SLOT *) db_private_alloc (thread_p, w * sizeof (HASHJOIN_STREAM_SLOT));
+  slot_args = (void **) db_private_alloc (thread_p, w * sizeof (void *));
+  if (slots == NULL || slot_args == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error);
+      goto cleanup;
+    }
+  memset (slots, 0, w * sizeof (HASHJOIN_STREAM_SLOT));
+
+  for (i = 0; i < w; i++)
+    {
+      slots[i].manager = manager;
+      slots[i].join_list =
+	qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id, manager->qlist_flag, NULL);
+      if (slots[i].join_list == NULL)
+	{
+	  ASSERT_ERROR_AND_SET (error);
+	  goto cleanup;
+	}
+      slot_args[i] = &slots[i];
+    }
+
+  error = scan_run_hashjoin_probe_producers (thread_p, manager->query_id, outer_xasl,
+							    context->val_descr, spec->s.cls_node.hfid,
+							    spec->s.cls_node.cls_oid, w, worker_mgr,
+							    hjoin_stream_row_sink, hjoin_stream_row_sink_end,
+							    slot_args);
+
+  for (i = 0; i < w; i++)
+    {
+      if (slots[i].error != NO_ERROR && error == NO_ERROR)
+	{
+	  error = slots[i].error;
+	}
+    }
+
+  if (error == NO_ERROR)
+    {
+      /* merge the per-worker join lists; empty ones cannot be connected (qfile_connect_list
+       * asserts tuple_cnt > 0 on both sides), so destroy them and adopt the first non-empty
+       * list as the base (merge_list_ids semantics) */
+      for (i = 0; i < w; i++)
+	{
+	  QFILE_LIST_ID *wl = slots[i].join_list;
+
+	  slots[i].join_list = NULL;
+	  if (wl == NULL)
+	    {
+	      continue;
+	    }
+	  /* an unclaimed (empty-slice) slot's list was never closed by a worker */
+	  qfile_close_list (thread_p, wl);
+
+	  if (wl->tuple_cnt == 0)
+	    {
+	      qfile_destroy_list (thread_p, wl);
+	      QFILE_FREE_AND_INIT_LIST_ID (wl);
+	    }
+	  else if (base == NULL)
+	    {
+	      base = wl;
+	    }
+	  else
+	    {
+	      error = qfile_connect_list (thread_p, base, wl);
+	      if (error != NO_ERROR)
+		{
+		  qfile_destroy_list (thread_p, wl);
+		  QFILE_FREE_AND_INIT_LIST_ID (wl);
+		  break;
+		}
+	      /* descriptor ownership moved into base (as in hjoin_merge_qlist CONNECT) */
+	    }
+	}
+
+      if (error == NO_ERROR && base == NULL)
+	{
+	  /* all slices empty or no match at all: an empty result list */
+	  base = qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id, manager->qlist_flag, NULL);
+	  if (base == NULL)
+	    {
+	      ASSERT_ERROR_AND_SET (error);
+	    }
+	  else
+	    {
+	      qfile_close_list (thread_p, base);
+	    }
+	}
+    }
+
+  /* the outer proc never ran through the executor; account for it here */
+  perfmon_inc_stat (thread_p, PSTAT_QM_NUM_SELECTS);
+  if (thread_is_on_trace (thread_p))
+    {
+      outer_xasl->executed_parallelism = w;
+    }
+  outer_xasl->status = (error == NO_ERROR) ? XASL_SUCCESS : XASL_FAILURE;
+
+cleanup:
+  if (worker_mgr != NULL)
+    {
+      worker_mgr->release_workers ();
+    }
+  if (slots != NULL)
+    {
+      for (i = 0; i < w; i++)
+	{
+	  if (slots[i].join_list != NULL)
+	    {
+	      qfile_close_list (thread_p, slots[i].join_list);
+	      qfile_destroy_list (thread_p, slots[i].join_list);
+	      QFILE_FREE_AND_INIT_LIST_ID (slots[i].join_list);
+	    }
+	}
+      db_private_free (thread_p, slots);
+    }
+  if (slot_args != NULL)
+    {
+      db_private_free (thread_p, slot_args);
+    }
+
+  if (error != NO_ERROR)
+    {
+      if (base != NULL)
+	{
+	  qfile_destroy_list (thread_p, base);
+	  QFILE_FREE_AND_INIT_LIST_ID (base);
+	}
+      if (er_errid () == NO_ERROR)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
+	  error = ER_QPROC_INVALID_XASLNODE;
+	}
+      return error;
+    }
+
+  *result_list_id = base;
+  return NO_ERROR;
+}
+#endif /* defined (SERVER_MODE) */
+
 /*
  * hjoin_stream_execute() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
@@ -637,8 +903,7 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   QFILE_LIST_ID *list_id = NULL;
   // *INDENT-OFF*
   HASHJOIN_STREAM_STATE stream_state = { NULL, NULL, NULL, { NULL, 0 }, 0 };
-  HASHJOIN_PARALLEL_STREAM parallel_stream;
-  HASHJOIN_STREAM_HOOK stream_hook = { NULL, NULL, NULL, NULL };
+  HASHJOIN_STREAM_HOOK stream_hook = { NULL, NULL };
   // *INDENT-ON*
 
   int error = NO_ERROR;
@@ -697,6 +962,27 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
       goto error_exit;
     }
 
+  outer_xasl = manager->outer->xasl;
+
+#if defined (SERVER_MODE)
+  /* Parallel streaming probe (stage 2, I-min): W producer tasks scan outer slices and
+   * probe the shared table in-worker. Runtime-gated here; any producer failure aborts the
+   * join (rows may already be consumed, so there is no fallback past this point). */
+  if (manager->join_type == JOIN_INNER
+      && context->during_join_pred == NULL && context->after_join_pred == NULL
+      && context->hash_scan.hash_list_scan_type == HASH_METH_IN_MEM
+      && thread_p->private_heap_id != 0 && hjoin_stream_parallel_outer_shape (outer_xasl))
+    {
+      error = hjoin_stream_execute_parallel (thread_p, manager, context, xasl_state, &context->list_id);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+
+      goto parallel_done;
+    }
+#endif /* defined (SERVER_MODE) */
+
   list_id = qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id, manager->qlist_flag, NULL);
   if (list_id == NULL)
     {
@@ -716,29 +1002,6 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   stream_hook.func = hjoin_stream_probe_tuple;
   stream_hook.arg = &stream_state;
 
-  /* Parallel streaming probe (Stage 2, I1) — DISABLED.
-   *
-   * The probe-side proc runs here, inside qexec_end_mainblock_iterations, and its driving scan
-   * does open a parallel scan: start_tasks () pushes m_parallelism tasks and the handler's
-   * active_results is armed. But the pushed tasks are never picked up — every px worker thread
-   * stays parked in cubthread::waiter::wait_inf — so read () waits forever
-   * (observed: active_results = 4, writer_results empty, no worker frame in any stack).
-   *
-   * The same proc materializes fine with a parallel scan when it runs in the normal aptr phase,
-   * so the suspect is the worker-dispatch state during the end-iterations phase rather than the
-   * probe handler. Re-enable once that is understood; see ../stage2_parallel_probe/README.md.
-   *
-   * Leaving the hook without a manager keeps hjoin_stream_hook_is_parallel () false, so the
-   * result handler takes its normal path and this join streams serially (Stage 1 behaviour).
-   */
-  if (false && manager->join_type == JOIN_INNER
-      && context->during_join_pred == NULL && context->after_join_pred == NULL)
-    {
-      stream_hook.manager = manager;
-      stream_hook.parallel_stream = &parallel_stream;
-    }
-
-  outer_xasl = manager->outer->xasl;
   assert (outer_xasl->emit_tuple_hook == NULL);
   outer_xasl->emit_tuple_hook = &stream_hook;
 
@@ -751,27 +1014,6 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   error = qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
 
   outer_xasl->emit_tuple_hook = NULL;
-
-  if (error == NO_ERROR)
-    {
-      /* Parallel streaming probe ran: chain the per-worker join lists onto this join's result.
-       * The serial list_id stays empty in that case (the scan yields no rows to the proc). */
-      // *INDENT-OFF*
-      for (QFILE_LIST_ID *worker_list : parallel_stream.lists)
-	{
-	  error = qfile_connect_list (thread_p, list_id, worker_list);
-	  if (error != NO_ERROR)
-	    {
-	      break;
-	    }
-	  /* Ownership moved into list_id. As in hjoin_merge_qlist, the connected descriptor must
-	   * not be freed here; it is released through list_id. */
-	}
-      // *INDENT-ON*
-      parallel_stream.lists.clear ();
-    }
-
-  hjoin_stream_clear_parallel (thread_p, &parallel_stream);
 
   if (thread_is_on_trace (thread_p))
     {
@@ -788,6 +1030,9 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   qfile_close_list (thread_p, list_id);
   context->list_id = list_id;
 
+#if defined (SERVER_MODE)
+parallel_done:
+#endif /* defined (SERVER_MODE) */
   ASSERT_NO_ERROR_OR_INTERRUPTED ();
 
 cleanup:
@@ -1055,62 +1300,20 @@ hjoin_stream_probe_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD
 }
 
 /*
- * hjoin_stream_clear_parallel() -
- *   return: None.
- *   thread_p(in): Thread entry.
- *   parallel_stream(in): Collection of per-worker join lists.
- *
- * Note: Only reached with a non-empty collection on the error path; the success path
- *       has already chained the lists onto the join result.
- */
-static void
-hjoin_stream_clear_parallel (THREAD_ENTRY * thread_p, HASHJOIN_PARALLEL_STREAM * parallel_stream)
-{
-  assert (thread_p != NULL);
-  assert (parallel_stream != NULL);
-
-  // *INDENT-OFF*
-  for (QFILE_LIST_ID *worker_list : parallel_stream->lists)
-    {
-      if (worker_list != NULL)
-	{
-	  qfile_close_list (thread_p, worker_list);
-	  qfile_destroy_list (thread_p, worker_list);
-	  QFILE_FREE_AND_INIT_LIST_ID (worker_list);
-	}
-    }
-  parallel_stream->lists.clear ();
-  // *INDENT-ON*
-}
-
-/*
- * hjoin_stream_hook_is_parallel() -
- *   return: True if the hook carries parallel streaming probe state.
- *   hook(in): HASHJOIN_STREAM_HOOK installed on the probe-side proc (can be NULL).
- */
-bool
-hjoin_stream_hook_is_parallel (const void *hook)
-{
-  const HASHJOIN_STREAM_HOOK *stream_hook = (const HASHJOIN_STREAM_HOOK *) hook;
-
-  return (stream_hook != NULL && stream_hook->manager != NULL && stream_hook->parallel_stream != NULL);
-}
-
-/*
  * hjoin_stream_worker_init() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
  *   thread_p(in): Thread entry of the worker.
- *   hook(in): HASHJOIN_STREAM_HOOK installed on the probe-side proc.
- *   worker_state(out): Opaque per-worker state, released by hjoin_stream_worker_finalize.
+ *   slot(in/out): Slot with the main-created join list; worker_state is filled here.
  *
- * Note: The hash table and the build list are shared read-only with the main thread;
- *       the cursor into the table, the scan of the build list, the temporary keys and
- *       the join result list are private to this worker.
+ * Note: Runs on the worker (lazily, on its first produced row). The hash table and the
+ *       build list are shared read-only with the main thread; the cursor into the table,
+ *       the scan of the build list and the temporary keys are private to this worker and
+ *       are released by hjoin_stream_worker_finalize on this same worker. The join list
+ *       is created and owned by the main thread (L5); the worker only writes and closes it.
  */
-int
-hjoin_stream_worker_init (THREAD_ENTRY * thread_p, void *hook, void **worker_state)
+static int
+hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
 {
-  HASHJOIN_STREAM_HOOK *stream_hook = (HASHJOIN_STREAM_HOOK *) hook;
   HASHJOIN_STREAM_WORKER *worker = NULL;
   HASHJOIN_MANAGER *manager;
   HASHJOIN_CONTEXT *single_context, *context;
@@ -1118,12 +1321,10 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, void *hook, void **worker_sta
   int error = NO_ERROR;
 
   assert (thread_p != NULL);
-  assert (hjoin_stream_hook_is_parallel (hook));
-  assert (worker_state != NULL);
+  assert (slot != NULL && slot->manager != NULL && slot->join_list != NULL);
+  assert (slot->worker_state == NULL);
 
-  *worker_state = NULL;
-
-  manager = stream_hook->manager;
+  manager = slot->manager;
   single_context = &manager->single_context;
 
   /* the parallel path is gated to a shape the worker can run without cloned predicates */
@@ -1138,7 +1339,6 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, void *hook, void **worker_sta
     }
   memset (worker, 0, sizeof (HASHJOIN_STREAM_WORKER));
 
-  worker->hook = stream_hook;
   context = &worker->context;
 
   /* Probe side is streamed by this worker, so it has no list. */
@@ -1204,17 +1404,20 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, void *hook, void **worker_sta
     }
   context->build->list_scan_id.is_read_only = true;
 
-  context->list_id = qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id, manager->qlist_flag, NULL);
-  if (context->list_id == NULL)
+  worker->tuple_buf.tpl = (QFILE_TUPLE) db_private_alloc (thread_p, DB_PAGESIZE);
+  if (worker->tuple_buf.tpl == NULL)
     {
       goto error_exit;
     }
+  worker->tuple_buf.size = DB_PAGESIZE;
 
+  /* the join list is created and owned by the main thread (L5) */
+  context->list_id = NULL;
   worker->stream_state.manager = manager;
   worker->stream_state.context = context;
-  worker->stream_state.list_id = context->list_id;
+  worker->stream_state.list_id = slot->join_list;
 
-  *worker_state = worker;
+  slot->worker_state = worker;
 
   ASSERT_NO_ERROR_OR_INTERRUPTED ();
   return NO_ERROR;
@@ -1222,7 +1425,8 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, void *hook, void **worker_sta
 error_exit:
   if (worker != NULL)
     {
-      hjoin_stream_worker_finalize (thread_p, worker, false /* publish */ );
+      slot->worker_state = worker;
+      hjoin_stream_worker_finalize (thread_p, slot);
     }
 
   if (error == NO_ERROR || er_errid () == NO_ERROR)
@@ -1234,36 +1438,25 @@ error_exit:
   return error;
 }
 
-/*
- * hjoin_stream_worker_probe() -
- *   return: Error code (NO_ERROR if successful, error code otherwise).
- *   thread_p(in): Thread entry of the worker.
- *   worker_state(in): State from hjoin_stream_worker_init.
- *   tuple_record(in): One probe-side tuple produced by this worker's slice.
- */
-int
-hjoin_stream_worker_probe (THREAD_ENTRY * thread_p, void *worker_state, QFILE_TUPLE_RECORD * tuple_record)
-{
-  HASHJOIN_STREAM_WORKER *worker = (HASHJOIN_STREAM_WORKER *) worker_state;
 
-  assert (worker != NULL);
-
-  return hjoin_stream_probe_tuple (thread_p, &worker->stream_state, tuple_record);
-}
 
 /*
  * hjoin_stream_worker_finalize() -
  *   return: None.
  *   thread_p(in): Thread entry of the worker.
- *   worker_state(in): State from hjoin_stream_worker_init.
- *   publish(in): True to hand the join result list to the manager, false to discard it.
+ *   slot(in): Slot whose worker_state is released. Runs on the worker thread so every
+ *             worker-private allocation is freed on its own private heap. The join list
+ *             is only closed here; the main thread owns and releases the descriptor.
  */
-void
-hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, void *worker_state, bool publish)
+static void
+hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
 {
-  HASHJOIN_STREAM_WORKER *worker = (HASHJOIN_STREAM_WORKER *) worker_state;
+  HASHJOIN_STREAM_WORKER *worker;
   HASHJOIN_CONTEXT *context;
 
+  assert (slot != NULL);
+
+  worker = (HASHJOIN_STREAM_WORKER *) slot->worker_state;
   if (worker == NULL)
     {
       return;
@@ -1271,26 +1464,9 @@ hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, void *worker_state, bool 
 
   context = &worker->context;
 
-  if (context->list_id != NULL)
+  if (slot->join_list != NULL)
     {
-      qfile_close_list (thread_p, context->list_id);
-
-      if (publish)
-	{
-	  // *INDENT-OFF*
-	  {
-	    std::lock_guard<std::mutex> lock (worker->hook->parallel_stream->mutex);
-	    worker->hook->parallel_stream->lists.push_back (context->list_id);
-	  }
-	  // *INDENT-ON*
-	}
-      else
-	{
-	  qfile_destroy_list (thread_p, context->list_id);
-	  QFILE_FREE_AND_INIT_LIST_ID (context->list_id);
-	}
-
-      context->list_id = NULL;
+      qfile_close_list (thread_p, slot->join_list);
     }
 
   qfile_close_scan (thread_p, &context->build->list_scan_id);
@@ -1317,7 +1493,82 @@ hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, void *worker_state, bool 
       db_private_free_and_init (thread_p, worker->stream_state.overflow_record.tpl);
     }
 
+  if (worker->tuple_buf.tpl != NULL)
+    {
+      db_private_free_and_init (thread_p, worker->tuple_buf.tpl);
+    }
+
   db_private_free (thread_p, worker);
+  slot->worker_state = NULL;
+}
+
+/*
+ * hjoin_stream_row_sink() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Worker thread entry.
+ *   outptr_list(in): Projected row produced by the worker's slice scan.
+ *   vd(in): Worker-private value descriptor (clone).
+ *   arg(in): HASHJOIN_STREAM_SLOT of this worker.
+ *
+ * Note: Installed on the px scan task via set_row_sink; diverts each produced row into
+ *       the shared hash table probe instead of the scan's writer list. Worker state is
+ *       created lazily on the first row so all private resources live on this worker.
+ */
+int
+hjoin_stream_row_sink (THREAD_ENTRY * thread_p, OUTPTR_LIST * outptr_list, struct val_descr *vd, void *arg)
+{
+  HASHJOIN_STREAM_SLOT *slot = (HASHJOIN_STREAM_SLOT *) arg;
+  HASHJOIN_STREAM_WORKER *worker;
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (slot != NULL);
+
+  if (slot->worker_state == NULL)
+    {
+      error = hjoin_stream_worker_init (thread_p, slot);
+      if (error != NO_ERROR)
+	{
+	  slot->error = error;
+	  return error;
+	}
+    }
+  worker = (HASHJOIN_STREAM_WORKER *) slot->worker_state;
+
+  /* materialize the projected row into the worker's private buffer, then probe */
+  if (qdata_copy_valptr_list_to_tuple (thread_p, outptr_list, vd, &worker->tuple_buf) != NO_ERROR)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      slot->error = er_errid ();
+      return slot->error;
+    }
+
+  error = hjoin_stream_probe_tuple (thread_p, &worker->stream_state, &worker->tuple_buf);
+  if (error != NO_ERROR)
+    {
+      slot->error = error;
+    }
+  return error;
+}
+
+/*
+ * hjoin_stream_row_sink_end() -
+ *   return: None.
+ *   thread_p(in): Worker thread entry.
+ *   arg(in): HASHJOIN_STREAM_SLOT of this worker.
+ *
+ * Note: Installed via set_row_sink_end; runs once on the worker thread when its task
+ *       finishes (success or error), releasing the worker-private probe state.
+ */
+void
+hjoin_stream_row_sink_end (THREAD_ENTRY * thread_p, void *arg)
+{
+  HASHJOIN_STREAM_SLOT *slot = (HASHJOIN_STREAM_SLOT *) arg;
+
+  assert (thread_p != NULL);
+  assert (slot != NULL);
+
+  hjoin_stream_worker_finalize (thread_p, slot);
 }
 
 /*

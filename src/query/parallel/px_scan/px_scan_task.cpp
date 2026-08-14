@@ -433,6 +433,12 @@ namespace parallel_scan
   template <RESULT_TYPE result_type, SCAN_TYPE ST>
   int task<result_type, ST>::finalize (cubthread::entry &thread_ref)
   {
+    if (m_row_sink_end != nullptr)
+      {
+	/* release the sink's worker-private state on this worker thread; runs on success and
+	 * on loop error alike (finalize is reached whenever initialize succeeded). */
+	m_row_sink_end (&thread_ref, m_row_sink_arg);
+      }
     THREAD_ENTRY *main_thread_p = thread_get_main_thread (m_parent_thread_p);
     xasl_node *xptr;
     if constexpr (result_type == RESULT_TYPE::MERGEABLE_LIST || result_type == RESULT_TYPE::BUILDVALUE_OPT)
