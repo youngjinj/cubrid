@@ -492,30 +492,10 @@ namespace parallel_scan
 	scan_close_scan (&thread_ref, m_scan_id);
       }
 
-    for (int i = 0; i < m_vd->dbval_cnt; i++)
-      {
-	pr_clear_value (&m_vd->dbval_ptr[i]);
-      }
-
-    db_private_free (&thread_ref, m_vd->dbval_ptr);
-    db_private_free (&thread_ref, m_xasl_state);
-    qexec_clear_xasl (&thread_ref, m_xasl, true, false);
-
-    pthread_mutex_lock (&main_thread_p->m_px_lock_mutex);
-    if (m_uses_xasl_clone)
-      {
-	xcache_retire_clone (&thread_ref, m_xasl_cache_entry, &m_xasl_clone);
-	xcache_unfix (&thread_ref, m_xasl_cache_entry);
-      }
-    else
-      {
-	if (m_xasl_unpack_info)
-	  {
-	    /* free the XASL tree */
-	    free_xasl_unpack_info (&thread_ref, m_xasl_unpack_info);
-	  }
-      }
-    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
+    m_clone.release (&thread_ref, main_thread_p, m_xasl, m_xasl_state, m_vd);
+    m_xasl = nullptr;
+    m_xasl_state = nullptr;
+    m_vd = nullptr;
 
     return NO_ERROR;
   }
@@ -571,73 +551,19 @@ namespace parallel_scan
   {
     THREAD_ENTRY *main_thread_p = thread_get_main_thread (m_parent_thread_p);
     int err_code = NO_ERROR;
-    int i;
 
-    if (m_uses_xasl_clone)
+    err_code = m_clone.acquire (&thread_ref, main_thread_p, m_uses_xasl_clone, m_query_entry, m_xasl_id, m_xasl);
+    if (err_code != NO_ERROR)
       {
-	pthread_mutex_lock (&main_thread_p->m_px_lock_mutex);
-	err_code = xcache_find_xasl_id_for_execute (&thread_ref, &m_query_entry->xasl_id, &m_xasl_cache_entry, &m_xasl_clone);
-	if (err_code != NO_ERROR)
-	  {
-	    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
-	    return err_code;
-	  }
-	m_xasl = xasl_find_by_id (m_xasl_clone.xasl, m_xasl_id);
-	if (m_xasl == nullptr)
-	  {
-	    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
-	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
-	    return ER_FAILED;
-	  }
-	pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
-      }
-    else
-      {
-	pthread_mutex_lock (&main_thread_p->m_px_lock_mutex);
-	err_code = stx_map_stream_to_xasl (&thread_ref, &m_xasl_tree, false, main_thread_p->xasl_unpack_info_ptr->packed_xasl,
-					   main_thread_p->xasl_unpack_info_ptr->packed_size, &m_xasl_unpack_info);
-	if (err_code != NO_ERROR)
-	  {
-	    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
-	    return err_code;
-	  }
-	m_xasl = xasl_find_by_id (m_xasl_tree, m_xasl_id);
-	if (m_xasl == nullptr)
-	  {
-	    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
-	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
-	    return ER_FAILED;
-	  }
-	pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
+	return err_code;
       }
 
     m_scan_id = &m_xasl->spec_list->s_id;
 
-    m_xasl_state = (xasl_state *) db_private_alloc (&thread_ref, sizeof (xasl_state));
-    if (m_xasl_state == nullptr)
+    err_code = m_clone.clone_val_descr (&thread_ref, m_orig_vd, m_xasl_state, m_vd);
+    if (err_code != NO_ERROR)
       {
-	er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);
-	return ER_FAILED;
-      }
-    m_xasl_state->qp_xasl_line = m_orig_vd->xasl_state->qp_xasl_line;
-    m_xasl_state->query_id = m_orig_vd->xasl_state->query_id;
-    m_vd = &m_xasl_state->vd;
-    memcpy (m_vd, m_orig_vd, sizeof (val_descr));
-    m_vd->xasl_state = m_xasl_state;
-    if (m_orig_vd->dbval_cnt > 0)
-      {
-	m_vd->dbval_ptr = (DB_VALUE *) db_private_alloc (&thread_ref, sizeof (DB_VALUE) * m_orig_vd->dbval_cnt);
-	if (m_vd->dbval_ptr == nullptr)
-	  {
-	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 0);
-	    db_private_free_and_init (&thread_ref, m_xasl_state);
-	    m_vd = nullptr;
-	    return ER_FAILED;
-	  }
-	for (i = 0; i < m_orig_vd->dbval_cnt; i++)
-	  {
-	    pr_clone_value (&m_orig_vd->dbval_ptr[i], &m_vd->dbval_ptr[i]);
-	  }
+	return err_code;
       }
     return NO_ERROR;
   }
@@ -730,7 +656,24 @@ namespace parallel_scan
 		  {
 		    if constexpr (result_type == RESULT_TYPE::MERGEABLE_LIST)
 		      {
-			result_handler_p->write (&thread_ref, m_xasl->outptr_list);
+			if (unlikely (m_row_sink != nullptr))
+			  {
+			    if (m_row_sink (&thread_ref, m_xasl->outptr_list, m_vd, m_row_sink_arg) != NO_ERROR)
+			      {
+				/* a sink failure must stop the worker, like the write () error contract */
+				if (m_interrupt->get_code () == parallel_query::interrupt::interrupt_code::NO_INTERRUPT)
+				  {
+				    m_err_messages->move_top_error_message_to_this ();
+				    m_interrupt->set_code (parallel_query::interrupt::interrupt_code::ERROR_INTERRUPTED_FROM_WORKER_THREAD);
+				  }
+				stop = true;
+				return S_ERROR;
+			      }
+			  }
+			else
+			  {
+			    result_handler_p->write (&thread_ref, m_xasl->outptr_list);
+			  }
 		      }
 		    else if constexpr (result_type == RESULT_TYPE::BUILDVALUE_OPT)
 		      {
@@ -762,7 +705,24 @@ namespace parallel_scan
 	      {
 		if constexpr (result_type == RESULT_TYPE::MERGEABLE_LIST)
 		  {
-		    result_handler_p->write (&thread_ref, m_xasl->outptr_list);
+		    if (unlikely (m_row_sink != nullptr))
+		      {
+			if (m_row_sink (&thread_ref, m_xasl->outptr_list, m_vd, m_row_sink_arg) != NO_ERROR)
+			  {
+			    /* a sink failure must stop the worker, like the write () error contract */
+			    if (m_interrupt->get_code () == parallel_query::interrupt::interrupt_code::NO_INTERRUPT)
+			      {
+				m_err_messages->move_top_error_message_to_this ();
+				m_interrupt->set_code (parallel_query::interrupt::interrupt_code::ERROR_INTERRUPTED_FROM_WORKER_THREAD);
+			      }
+			    stop = true;
+			    return S_ERROR;
+			  }
+		      }
+		    else
+		      {
+			result_handler_p->write (&thread_ref, m_xasl->outptr_list);
+		      }
 		  }
 		else if constexpr (result_type == RESULT_TYPE::BUILDVALUE_OPT)
 		  {

@@ -30,6 +30,7 @@
 #include "px_scan_trace_handler.hpp"
 #include "px_interrupt.hpp"
 #include "px_worker_manager.hpp"
+#include "px_worker_xasl_clone.hpp"
 #include "px_scan_pre_execution_info.hpp"
 #include "px_scan_type.hpp"
 
@@ -51,11 +52,8 @@ namespace parallel_scan
 	    bool is_cached_scan, bool uses_xasl_clone, XASL_NODE *orig_xasl, pre_execution_info *pre_exec_info)
 	: m_parent_thread_p (parent_thread_p),
 	  m_query_entry (query_entry),
-	  m_xasl_cache_entry (nullptr),
-	  m_xasl_clone ({nullptr, nullptr}),
+	  m_clone (),
       m_orig_xasl (orig_xasl),
-      m_xasl_tree (nullptr),
-      m_xasl_unpack_info (nullptr),
       m_xasl_id (xasl_id),
       m_hfid (hfid),
       m_cls_oid (cls_oid),
@@ -83,14 +81,22 @@ namespace parallel_scan
       virtual void execute (cubthread::entry &thread_ref) override;
       virtual void retire () override;
 
+      /* Row sink: when set, MERGEABLE_LIST row emission is diverted to this callback instead
+       * of result_handler->write (), leaving the drive loop (chain, dptr, interrupt, trace)
+       * common. px_scan never sets it; the hash join streaming probe task does. A sink
+       * failure must stop the worker, mirroring the write () error contract. */
+      using row_sink_fn = int (*) (THREAD_ENTRY *thread_p, OUTPTR_LIST *outptr_list, val_descr *vd, void *arg);
+      void set_row_sink (row_sink_fn sink, void *arg)
+      {
+	m_row_sink = sink;
+	m_row_sink_arg = arg;
+      }
+
     private:
       THREAD_ENTRY *m_parent_thread_p;
       QMGR_QUERY_ENTRY *m_query_entry;
-      XASL_CACHE_ENTRY *m_xasl_cache_entry;
-      XASL_CLONE m_xasl_clone;
+      parallel_query::worker_xasl_clone m_clone;
       XASL_NODE *m_orig_xasl;		/* for dptr trace. */
-      XASL_NODE *m_xasl_tree;
-      XASL_UNPACK_INFO *m_xasl_unpack_info;
       int m_xasl_id;
       HFID m_hfid;
       OID m_cls_oid;
@@ -98,6 +104,8 @@ namespace parallel_scan
       SCAN_ID *m_scan_id;
       slot_iterator_t m_slot_iterator;
       result_handler<result_type> *m_result_handler;
+      row_sink_fn m_row_sink = nullptr;
+      void *m_row_sink_arg = nullptr;
       input_handler_t *m_input_handler;
       interrupt *m_interrupt;
       err_messages_with_lock *m_err_messages;
