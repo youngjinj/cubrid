@@ -58,6 +58,11 @@ namespace parallel_query
 	found_xasl = xasl_find_by_id (m_xasl_clone.xasl, xasl_id);
 	if (found_xasl == nullptr)
 	  {
+	    /* the clone was already acquired; retire it here or it is leaked for good */
+	    xcache_retire_clone (thread_ref, m_xasl_cache_entry, &m_xasl_clone);
+	    xcache_unfix (thread_ref, m_xasl_cache_entry);
+	    m_xasl_cache_entry = nullptr;
+	    m_xasl_clone = {nullptr, nullptr};
 	    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
 	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
 	    return ER_FAILED;
@@ -78,6 +83,10 @@ namespace parallel_query
 	found_xasl = xasl_find_by_id (m_xasl_tree, xasl_id);
 	if (found_xasl == nullptr)
 	  {
+	    /* the unpacked tree was already allocated; free it here or it is leaked for good */
+	    free_xasl_unpack_info (thread_ref, m_xasl_unpack_info);
+	    m_xasl_tree = nullptr;
+	    m_xasl_unpack_info = nullptr;
 	    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);
 	    er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
 	    return ER_FAILED;
@@ -136,13 +145,13 @@ namespace parallel_query
   worker_xasl_clone::release (THREAD_ENTRY *thread_ref, THREAD_ENTRY *main_thread_p,
 			      xasl_node *found_xasl, xasl_state *state, val_descr *vd)
   {
-    if (vd != nullptr)
+    if (vd != nullptr && vd->dbval_ptr != nullptr)
       {
 	for (int i = 0; i < vd->dbval_cnt; i++)
 	  {
 	    pr_clear_value (&vd->dbval_ptr[i]);
 	  }
-	if (vd->dbval_cnt > 0 && vd->dbval_ptr != nullptr)
+	if (vd->dbval_cnt > 0)
 	  {
 	    db_private_free (thread_ref, vd->dbval_ptr);
 	  }

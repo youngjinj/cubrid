@@ -2332,6 +2332,15 @@ scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xa
       }
 
 cleanup:
+    if (worker_mgr != nullptr)
+      {
+	/* read () returns early on interrupt while workers may still be running, and a
+	 * mid-loop task allocation failure leaves fewer than `parallelism` tasks pushed;
+	 * either way the pushed tasks still reference handler/input/vd/interrupt, so wait
+	 * for every one of them to retire before tearing anything down.  Releasing the
+	 * reservation itself stays with the caller (release_workers). */
+	worker_mgr->wait_workers ();
+      }
     if (handler_p != nullptr)
       {
 	handler_p->~handler_t ();

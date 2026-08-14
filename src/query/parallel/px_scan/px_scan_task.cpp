@@ -58,6 +58,13 @@ namespace parallel_scan
       {
 	m_err_messages->move_top_error_message_to_this();
 	m_interrupt->set_code (parallel_query::interrupt::interrupt_code::ERROR_INTERRUPTED_FROM_WORKER_THREAD);
+	/* initialize can fail after the clone (and possibly scans) were partially set up;
+	 * finalize is not reached on this path, so release the acquired pieces here.
+	 * release () tolerates partial initialization (null vd/state, unopened scans). */
+	m_clone.release (&thread_ref, thread_get_main_thread (m_parent_thread_p), m_xasl, m_xasl_state, m_vd);
+	m_xasl = nullptr;
+	m_xasl_state = nullptr;
+	m_vd = nullptr;
 	return;
       }
     loop (thread_ref);

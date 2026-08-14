@@ -532,7 +532,7 @@ hjoin_stream_parallel_outer_shape (XASL_NODE * outer_xasl)
       || outer_xasl->aptr_list != NULL || outer_xasl->dptr_list != NULL
       || outer_xasl->bptr_list != NULL || outer_xasl->fptr_list != NULL
       || outer_xasl->instnum_pred != NULL || outer_xasl->instnum_val != NULL
-      || outer_xasl->ordbynum_pred != NULL || outer_xasl->limit_row_count != NULL)
+      || outer_xasl->ordbynum_pred != NULL || outer_xasl->limit_row_count != NULL || outer_xasl->limit_offset != NULL)
     {
       return false;
     }
@@ -853,11 +853,11 @@ cleanup:
 	      QFILE_FREE_AND_INIT_LIST_ID (slots[i].join_list);
 	    }
 	}
-      db_private_free (thread_p, slots);
+      db_private_free_and_init (thread_p, slots);
     }
   if (slot_args != NULL)
     {
-      db_private_free (thread_p, slot_args);
+      db_private_free_and_init (thread_p, slot_args);
     }
 
   if (error != NO_ERROR)
@@ -1498,7 +1498,7 @@ hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * sl
       db_private_free_and_init (thread_p, worker->tuple_buf.tpl);
     }
 
-  db_private_free (thread_p, worker);
+  db_private_free_and_init (thread_p, worker);
   slot->worker_state = NULL;
 }
 
