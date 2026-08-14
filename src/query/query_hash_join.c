@@ -30,6 +30,7 @@
 #include "object_representation.h"	/* TP_DOMAIN */
 #include "perf_monitor.h"	/* perfmon_get_from_statistic, PSTAT_... */
 #include "px_hash_join.hpp"	/* parallel_query::hash_join::... */
+#include "px_hash_join_spawn_manager.hpp"	/* parallel_query::hash_join::spawn_manager */
 #include "file_manager.h"	/* file_get_num_user_pages */
 #include "log_impl.h"		/* logtb_get_mvcc_snapshot */
 #include "px_parallel.hpp"	/* parallel_query::compute_parallel_degree */
@@ -514,8 +515,11 @@ qexec_hjoin_can_stream_probe (XASL_NODE * xasl)
 static bool
 hjoin_stream_parallel_shape (XASL_NODE * xasl)
 {
-  if (xasl->proc.hashjoin.merge_info.join_type != JOIN_INNER
-      || xasl->during_join_pred != NULL || xasl->after_join_pred != NULL)
+  /* during/after join predicates are admitted: each producer worker evaluates them on
+   * its own spawn_manager deep clones (I2b).  This condition must stay in sync with the
+   * runtime branch in hjoin_stream_execute; a shape admitted here but rejected there
+   * would run the serial hook under a scan that may open parallel and lose rows. */
+  if (xasl->proc.hashjoin.merge_info.join_type != JOIN_INNER)
     {
       return false;
     }
@@ -1015,7 +1019,6 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
    * probe the shared table in-worker. Runtime-gated here; any producer failure aborts the
    * join (rows may already be consumed, so there is no fallback past this point). */
   if (manager->join_type == JOIN_INNER
-      && context->during_join_pred == NULL && context->after_join_pred == NULL
       && context->hash_scan.hash_list_scan_type == HASH_METH_IN_MEM
       && thread_p->private_heap_id != 0 && hjoin_stream_parallel_outer_shape (outer_xasl))
     {
@@ -1373,9 +1376,7 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
   manager = slot->manager;
   single_context = &manager->single_context;
 
-  /* the parallel path is gated to a shape the worker can run without cloned predicates */
   assert (manager->join_type == JOIN_INNER);
-  assert (single_context->during_join_pred == NULL && single_context->after_join_pred == NULL);
 
   worker = (HASHJOIN_STREAM_WORKER *) db_private_alloc (thread_p, sizeof (HASHJOIN_STREAM_WORKER));
   if (worker == NULL)
@@ -1392,24 +1393,53 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
   context->outer.input = single_context->outer.input;
   context->outer.coerce_domains = single_context->outer.coerce_domains;
   context->outer.need_coerce_domains = single_context->outer.need_coerce_domains;
-  context->outer.regu_list_pred = NULL;
   context->outer.fill_record = NULL;
 
   context->inner.list_id = single_context->inner.list_id;
   context->inner.input = single_context->inner.input;
   context->inner.coerce_domains = single_context->inner.coerce_domains;
   context->inner.need_coerce_domains = single_context->inner.need_coerce_domains;
-  context->inner.regu_list_pred = NULL;
   context->inner.fill_record = NULL;
 
   context->build = &context->inner;
   context->probe = &context->outer;
 
+  context->status = HASHJOIN_STATUS_SINGLE;
+  context->stats = &worker->stats;
+
+#if defined (SERVER_MODE)
+  {
+    /* Join-level predicates and the value descriptor belong to the shared XASL plan and
+     * their evaluation writes into DB_VALUEs reachable from them, so each worker probes
+     * against its own deep clones.  Same mechanism and call order as the full parallel
+     * probe (px_hash_join_task_manager probe_task::execute): get_val_descr first — it
+     * creates DB_VALUEs the other spawned structures alias.  The TLS instance is
+     * destroyed in hjoin_stream_worker_finalize on this same thread. */
+    parallel_query::hash_join::spawn_manager *spawner =
+	    parallel_query::hash_join::spawn_manager::get_instance (*thread_p);
+    if (spawner == NULL)
+      {
+	assert_release_error (er_errid () != NO_ERROR);
+	goto error_exit;
+      }
+    context->val_descr = spawner->get_val_descr (manager->val_descr);
+    context->during_join_pred = spawner->get_during_join_pred (manager->during_join_pred);
+    context->after_join_pred = spawner->get_after_join_pred (manager->after_join_pred);
+    context->outer.regu_list_pred = spawner->get_outer_regu_list_pred (manager->outer->regu_list_pred);
+    context->inner.regu_list_pred = spawner->get_inner_regu_list_pred (manager->inner->regu_list_pred);
+    if (er_errid () != NO_ERROR)
+      {
+	goto error_exit;
+      }
+  }
+#else /* !defined (SERVER_MODE) */
+  /* the parallel streaming probe never runs in the SA build; keep the sink linkable */
+  context->outer.regu_list_pred = NULL;
+  context->inner.regu_list_pred = NULL;
   context->during_join_pred = NULL;
   context->after_join_pred = NULL;
   context->val_descr = single_context->val_descr;
-  context->status = HASHJOIN_STATUS_SINGLE;
-  context->stats = &worker->stats;
+#endif /* !defined (SERVER_MODE) */
 
   /* Prevent faults when qfile_close_scan is called */
   context->outer.list_scan_id.status = S_CLOSED;
@@ -1566,6 +1596,12 @@ hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * sl
     {
       db_private_free_and_init (thread_p, worker->tuple_buf.tpl);
     }
+
+#if defined (SERVER_MODE)
+  /* release the spawned predicate/val_descr clones on this same worker thread; the TLS
+   * instance must not outlive the scan task (the pool thread is reused across queries) */
+  parallel_query::hash_join::spawn_manager::destroy_instance ();
+#endif /* defined (SERVER_MODE) */
 
   db_private_free_and_init (thread_p, worker);
   slot->worker_state = NULL;
