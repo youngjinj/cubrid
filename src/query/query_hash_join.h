@@ -313,6 +313,12 @@ typedef struct hashjoin_stream_slot
   QFILE_LIST_ID *join_list;
   void *worker_state;
   int error;
+
+  /* trace: copied out of the worker just before its private state is freed.
+   * stats_valid stays false for a slot whose slice never produced a row
+   * (lazy worker init), so it must not feed the min/max ranges. */
+  HASHJOIN_STATS stats;
+  bool stats_valid;
 } HASHJOIN_STREAM_SLOT;
 
 /* HASHJOIN_INPUT_SPLIT_INFO */

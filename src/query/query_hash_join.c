@@ -90,6 +90,11 @@ typedef struct hashjoin_stream_worker
   HASHJOIN_CONTEXT context;
   HASHJOIN_STATS stats;
 
+  /* trace: wall-clock origin of this worker's probe (first row to finalize);
+   * feeds only the per-worker min/max range, never the summed elapsed time */
+  HASHJOIN_START_STATS start_stats;
+  bool trace_started;
+
   /* worker-private projection buffer (distinct from stream_state.overflow_record) */
   QFILE_TUPLE_RECORD tuple_buf;
 } HASHJOIN_STREAM_WORKER;
@@ -710,6 +715,10 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
   void **slot_args = NULL;
   parallel_query::worker_manager *worker_mgr = NULL;
   QFILE_LIST_ID *base = NULL;
+  HASHJOIN_STATS *stats = context->stats;
+  HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
+  HASHJOIN_RANGE_STATS init_range = HASHJOIN_RANGE_STATS_INITIALIZER;
+  bool on_trace = thread_is_on_trace (thread_p);
   int num_pages = -1;
   int degree, w, i;
   int error = NO_ERROR;
@@ -761,6 +770,11 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
       slot_args[i] = &slots[i];
     }
 
+  if (on_trace)
+    {
+      hjoin_trace_start (thread_p, &start_stats);
+    }
+
   error = scan_run_hashjoin_probe_producers (thread_p, manager->query_id, outer_xasl,
 							    context->val_descr, spec->s.cls_node.hfid,
 							    spec->s.cls_node.cls_oid, w, worker_mgr,
@@ -773,6 +787,38 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
 	{
 	  error = slots[i].error;
 	}
+    }
+
+  if (on_trace && error == NO_ERROR)
+    {
+      /* The aggregate probe elapsed time is this thread's dispatch-to-completion wall
+       * clock; worker elapsed times feed only the min/max range. Passing PARALLEL_PROBE
+       * as the merge policy keeps worker times out of the sum (same convention as the
+       * full parallel probe path); the context status itself stays SINGLE. */
+      hjoin_trace_end (thread_p, &stats->probe, &start_stats);
+
+      stats->probe.range = init_range;
+      for (i = 0; i < w; i++)
+	{
+	  if (!slots[i].stats_valid)
+	    {
+	      /* lazy worker init: an empty slice never measured anything */
+	      continue;
+	    }
+	  hjoin_trace_merge_stats (stats, &slots[i].stats, HASHJOIN_STATUS_PARALLEL_PROBE);
+
+	  perfmon_update_min_timeval (&stats->probe.range.elapsed_time.min, &slots[i].stats.probe.elapsed_time);
+	  perfmon_update_max_timeval (&stats->probe.range.elapsed_time.max, &slots[i].stats.probe.elapsed_time);
+	  stats->probe.range.read_rows.min = MIN (stats->probe.range.read_rows.min, slots[i].stats.probe.read_rows);
+	  stats->probe.range.read_rows.max = MAX (stats->probe.range.read_rows.max, slots[i].stats.probe.read_rows);
+	  stats->probe.range.read_keys.min = MIN (stats->probe.range.read_keys.min, slots[i].stats.probe.read_keys);
+	  stats->probe.range.read_keys.max = MAX (stats->probe.range.read_keys.max, slots[i].stats.probe.read_keys);
+	  stats->probe.range.qualified_rows.min =
+	    MIN (stats->probe.range.qualified_rows.min, slots[i].stats.probe.qualified_rows);
+	  stats->probe.range.qualified_rows.max =
+	    MAX (stats->probe.range.qualified_rows.max, slots[i].stats.probe.qualified_rows);
+	}
+      stats->num_parallel_threads = (UINT32) w;
     }
 
   if (error == NO_ERROR)
@@ -1417,6 +1463,15 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
   worker->stream_state.context = context;
   worker->stream_state.list_id = slot->join_list;
 
+  /* hash_method must be valid before hjoin_trace_merge_stats classifies these stats
+   * (a zeroed value would be miscounted as HASH_METH_NOT_USE) */
+  worker->stats.hash_method = context->hash_scan.hash_list_scan_type;
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_start (thread_p, &worker->start_stats);
+      worker->trace_started = true;
+    }
+
   slot->worker_state = worker;
 
   ASSERT_NO_ERROR_OR_INTERRUPTED ();
@@ -1487,6 +1542,20 @@ hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * sl
       break;
     }
   hjoin_scan_clear (thread_p, &context->hash_scan);
+
+  if (worker->trace_started)
+    {
+      /* publish this worker's probe stats into the main-owned slot before the private
+       * struct is freed; read_keys was counted during probing, the rest is settled here */
+      hjoin_trace_end (thread_p, &worker->stats.probe, &worker->start_stats);
+      worker->stats.probe.read_rows = (UINT64) worker->stream_state.probe_rows;
+      if (slot->join_list != NULL)
+	{
+	  worker->stats.probe.qualified_rows = (UINT64) slot->join_list->tuple_cnt;
+	}
+      slot->stats = worker->stats;
+      slot->stats_valid = true;
+    }
 
   if (worker->stream_state.overflow_record.tpl != NULL)
     {

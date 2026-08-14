@@ -4192,7 +4192,9 @@ qdump_print_hashjoin_stats_text (FILE * fp, xasl_node * xasl_p, int indent)
 
       if (stats->num_parallel_threads > 1)
 	{
-	  assert (status == HASHJOIN_STATUS_PARALLEL_PROBE);
+	  /* SINGLE + num_parallel_threads > 1 is the parallel streaming probe: it keeps the
+	   * single-context executor status and reports its producer workers here */
+	  assert (status == HASHJOIN_STATUS_PARALLEL_PROBE || status == HASHJOIN_STATUS_SINGLE);
 	  fprintf (fp,
 		   "%*cPROBE (time: %d, fetch: %ld, ioread: %ld, readrows: %ld, readkeys: %ld, rows: %ld)\n",
 		   indent, ' ',
