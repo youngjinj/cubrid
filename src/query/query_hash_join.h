@@ -31,6 +31,10 @@
 #include "thread_entry.hpp"	/* THREAD_ENTRY */
 #include "tsc_timer.h"		/* TSC_TICKS, TSCTIMEVAL, TSC_ADD_TIMEVAL */
 #include "xasl_predicate.hpp"	/* PRED_EXPR */
+// *INDENT-OFF*
+#include <mutex>
+#include <vector>
+// *INDENT-ON*
 #endif /* defined (SERVER_MODE) || defined (SA_MODE) */
 
 /*
@@ -285,6 +289,45 @@ typedef struct hashjoin_fetch_info
   REGU_VARIABLE_LIST regu_list_pred;
 } HASHJOIN_FETCH_INFO;
 
+struct hashjoin_manager;
+typedef struct hashjoin_manager HASHJOIN_MANAGER;
+
+/* HASHJOIN_PARALLEL_STREAM
+ * Collects the per-worker join result lists produced by the parallel streaming probe.
+ * Lives in the hash join manager, which outlives the parallel scan that fills it. */
+typedef struct hashjoin_parallel_stream
+{
+  // *INDENT-OFF*
+  std::mutex mutex;
+  std::vector<QFILE_LIST_ID *> lists;
+
+  hashjoin_parallel_stream ()
+    : mutex ()
+    , lists ()
+  {
+    //
+  }
+  // *INDENT-ON*
+} HASHJOIN_PARALLEL_STREAM;
+
+/* HASHJOIN_STREAM_HOOK
+ * Installed on the probe-side BUILDLIST proc (xasl_node.emit_tuple_hook) while it executes.
+ *
+ * Serial (W=1): qexec_end_one_iteration hands each produced tuple to func instead of
+ *   appending it to list_id.
+ * Parallel (W>1): the proc's driving scan runs as a parallel scan whose result handler
+ *   probes inside each worker (see hjoin_stream_worker_*), so func is never called and
+ *   the scan yields no rows to the proc. */
+typedef struct hashjoin_stream_hook
+{
+  int (*func) (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record);
+  void *arg;
+
+  /* Parallel streaming probe. NULL manager disables it (serial only). */
+  HASHJOIN_MANAGER *manager;
+  HASHJOIN_PARALLEL_STREAM *parallel_stream;
+} HASHJOIN_STREAM_HOOK;
+
 /* HASHJOIN_INPUT_SPLIT_INFO */
 typedef struct hashjoin_input_split_info
 {
@@ -464,7 +507,18 @@ typedef struct hashjoin_manager
  * Function Declarations
  */
 
-int qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, QUERY_ID query_id, VAL_DESCR * val_descr);
+struct xasl_state;
+
+int qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, struct xasl_state *xasl_state);
+bool qexec_hjoin_can_stream_probe (XASL_NODE * xasl);
+
+/* Parallel streaming probe — called from the parallel scan result handler, one set per worker.
+ * hjoin_stream_worker_init returns an opaque per-worker state; probe consumes one probe-side
+ * tuple; finalize closes the worker's join list and publishes it to hook->parallel_stream. */
+bool hjoin_stream_hook_is_parallel (const void *hook);
+int hjoin_stream_worker_init (THREAD_ENTRY * thread_p, void *hook, void **worker_state);
+int hjoin_stream_worker_probe (THREAD_ENTRY * thread_p, void *worker_state, QFILE_TUPLE_RECORD * tuple_record);
+void hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, void *worker_state, bool publish);
 
 /* Hash Join Execution */
 int hjoin_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context);

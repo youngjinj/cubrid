@@ -1130,6 +1130,25 @@ qexec_end_one_iteration (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE *
   int ret = NO_ERROR;
   bool output_tuple = true;
 
+  if (xasl->type == BUILDLIST_PROC && xasl->emit_tuple_hook != NULL)
+    {
+      /* Streaming hash join probe: hand the produced tuple to the hash join instead of appending it to list_id. */
+      HASHJOIN_STREAM_HOOK *hook = (HASHJOIN_STREAM_HOOK *) xasl->emit_tuple_hook;
+
+      if (qdata_copy_valptr_list_to_tuple (thread_p, xasl->outptr_list, &xasl_state->vd, tplrec) != NO_ERROR)
+	{
+	  GOTO_EXIT_ON_ERROR;
+	}
+
+      ret = hook->func (thread_p, hook->arg, tplrec);
+      if (ret != NO_ERROR)
+	{
+	  GOTO_EXIT_ON_ERROR;
+	}
+
+      return NO_ERROR;
+    }
+
   if ((COMPOSITE_LOCK (xasl->scan_op_type) || QEXEC_IS_MULTI_TABLE_UPDATE_DELETE (xasl))
       && !XASL_IS_FLAGED (xasl, XASL_MULTI_UPDATE_AGG))
     {
@@ -15274,7 +15293,7 @@ qexec_end_mainblock_iterations (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_
       break;
 
     case HASHJOIN_PROC:
-      if (qexec_hash_join (thread_p, xasl, xasl_state->query_id, &xasl_state->vd) != NO_ERROR)
+      if (qexec_hash_join (thread_p, xasl, xasl_state) != NO_ERROR)
 	{
 	  GOTO_EXIT_ON_ERROR;
 	}
@@ -15634,6 +15653,7 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
   XASL_SCAN_FNC_PTR func_vector = (XASL_SCAN_FNC_PTR) NULL;
   int multi_upddel = false;
   QFILE_LIST_MERGE_INFO *merge_infop;
+  XASL_NODE *hjoin_stream_outer_xasl;
   XASL_NODE *outer_xasl = NULL, *inner_xasl = NULL;
   XASL_NODE *fixed_scan_xasl = NULL;
   bool iscan_oid_order, force_select_lock = false;
@@ -15975,6 +15995,7 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
 	{
 
 	  merge_infop = NULL;	/* init */
+	  hjoin_stream_outer_xasl = NULL;	/* init */
 
 	  if (xptr->type == MERGELIST_PROC)
 	    {
@@ -15989,6 +16010,12 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
 
 	      outer_xasl = xptr->proc.hashjoin.outer.xasl;
 	      inner_xasl = xptr->proc.hashjoin.inner.xasl;
+
+	      if (!xasl->px_executor && qexec_hjoin_can_stream_probe (xptr))
+		{
+		  /* The probe input is not materialized here; qexec_hash_join streams it. */
+		  hjoin_stream_outer_xasl = outer_xasl;
+		}
 	    }
 	  else
 	    {
@@ -15997,6 +16024,11 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
 
 	  for (xptr2 = xptr->aptr_list; xptr2; xptr2 = xptr2->next)
 	    {
+	      if (xptr2 == hjoin_stream_outer_xasl)
+		{
+		  continue;
+		}
+
 	      if (merge_infop && !xasl->px_executor)
 		{
 		  if (merge_infop->join_type == JOIN_INNER || merge_infop->join_type == JOIN_LEFT)

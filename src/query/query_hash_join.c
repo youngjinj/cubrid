@@ -32,8 +32,10 @@
 #include "px_hash_join.hpp"	/* parallel_query::hash_join::... */
 #include "px_parallel.hpp"	/* parallel_query::compute_parallel_degree */
 #include "px_worker_manager.hpp"	/* parallel_query::worker_manager */
+#include "query_executor.h"	/* XASL_STATE, qexec_execute_mainblock */
 #include "query_list.h"		/* JOIN_TYPE */
 #include "query_manager.h"	/* QMGR_TEMP_FILE */
+#include "query_opfunc.h"	/* qdata_get_valptr_type_list */
 #include "system_parameter.h"	/* prm_get_bigint_value, PRM_ID_... */
 #include "thread_entry.hpp"	/* THREAD_ENTRY */
 #include "xasl.h"		/* XASL_NODE, HASHJOIN_PROC_NODE */
@@ -66,11 +68,41 @@
  * Function Declarations
  */
 
+/* HASHJOIN_STREAM_STATE: per-join state shared with the streaming probe hook. */
+typedef struct hashjoin_stream_state
+{
+  HASHJOIN_MANAGER *manager;
+  HASHJOIN_CONTEXT *context;
+  QFILE_LIST_ID *list_id;
+  QFILE_TUPLE_RECORD overflow_record;
+  INT64 probe_rows;
+} HASHJOIN_STREAM_STATE;
+
+/* HASHJOIN_STREAM_WORKER: one parallel streaming probe worker.
+ * Owns its join result list, its cursor over the shared read-only hash table, and its
+ * own scan of the build list; only the hash table and the build list are shared. */
+typedef struct hashjoin_stream_worker
+{
+  HASHJOIN_STREAM_STATE stream_state;
+  HASHJOIN_CONTEXT context;
+  HASHJOIN_STATS stats;
+  HASHJOIN_STREAM_HOOK *hook;
+} HASHJOIN_STREAM_WORKER;
+
 /* Hash Join Execution */
 static int hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager);
 static int hjoin_outer_fill_null_values (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
 					 HASHJOIN_CONTEXT * context);
 static int hjoin_execute_internal (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context);
+
+/* Hash Join Streaming Probe */
+static void hjoin_stream_clear_parallel (THREAD_ENTRY * thread_p, HASHJOIN_PARALLEL_STREAM * parallel_stream);
+static bool hjoin_stream_outer_scans_serial (XASL_NODE * outer_xasl);
+static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming);
+static bool hjoin_stream_check_single (QFILE_LIST_ID * build_list_id);
+static int hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+				 XASL_STATE * xasl_state);
+static int hjoin_stream_probe_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record);
 
 /* Hash Join Manager */
 static int hjoin_init_manager (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, XASL_NODE * xasl,
@@ -153,25 +185,58 @@ static void hjoin_print_tuple (QFILE_LIST_ID * list_id, QFILE_TUPLE tuple, HASHJ
  *   val_descr(in): Value descriptor for query evaluation.
  */
 int
-qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, QUERY_ID query_id, VAL_DESCR * val_descr)
+qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state)
 {
   HASHJOIN_MANAGER manager;
   HASHJOIN_CONTEXT *single_context;
   HASHJOIN_STATUS status, part_status;
+  bool streaming = false;
 
   int error = NO_ERROR;
 
   assert (thread_p != NULL);
   assert (xasl != NULL);
-  assert (query_id != NULL_QUERY_ID);
+  assert (xasl_state != NULL);
+  assert (xasl_state->query_id != NULL_QUERY_ID);
 
-  error = hjoin_init_manager (thread_p, &manager, xasl, query_id, val_descr);
+  error = hjoin_stream_check (thread_p, xasl, xasl_state, &streaming);
+  if (error != NO_ERROR)
+    {
+      /* the manager is not initialized yet */
+      assert_release_error (er_errid () != NO_ERROR);
+      return (er_errid () != NO_ERROR) ? er_errid () : error;
+    }
+
+  error = hjoin_init_manager (thread_p, &manager, xasl, xasl_state->query_id, &xasl_state->vd);
   if (error != NO_ERROR)
     {
       goto error_exit;
     }
 
   single_context = &manager.single_context;
+
+  if (streaming)
+    {
+      single_context->status = HASHJOIN_STATUS_SINGLE;
+      status = HASHJOIN_STATUS_SINGLE;
+
+      /* monitor */
+      perfmon_inc_stat (thread_p, PSTAT_QM_NUM_HASHJOINS);
+
+      error = hjoin_stream_execute (thread_p, &manager, single_context, xasl_state);
+
+      if (thread_is_on_trace (thread_p))
+	{
+	  xasl->executed_parallelism = manager.num_parallel_threads;
+	}
+
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+
+      goto finalize;
+    }
 
   status = hjoin_check_empty_inputs (&manager, single_context);
   single_context->status = status;
@@ -259,6 +324,7 @@ qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, QUERY_ID query_id, V
       goto error_exit;
     }
 
+finalize:
   if (single_context->list_id != NULL)
     {
       /* Check if qfile_close_list was called */
@@ -300,6 +366,958 @@ error_exit:
     }
 
   goto cleanup;
+}
+
+/*
+ * hjoin_stream_outer_scans_serial() -
+ *   return: True if every access spec in the probe proc's chain is pinned to serial scan.
+ *   outer_xasl(in): Probe-side BUILDLIST proc.
+ *
+ * Note: Streaming relies on every produced row passing through qexec_end_one_iteration.
+ *       A scan that opens as a parallel scan bypasses that path: its workers materialize
+ *       the slices and the manager merges them straight into the proc's list_id, so the
+ *       emit hook never fires and the join would silently produce nothing.
+ *
+ *       Whether a scan opens parallel is decided at open time (page count, worker
+ *       reservation, per-partition reopen), so it cannot be predicted here. Instead of
+ *       predicting, require ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN on every spec: the flag is
+ *       set at plan time from the NO_PARALLEL_SCAN hint and is honored on every open,
+ *       including per-partition reopens (partitions share the parent spec's flags).
+ *       Over-strict for spec types that could never open parallel, which only narrows
+ *       streaming applicability, never correctness.
+ */
+static bool
+hjoin_stream_outer_scans_serial (XASL_NODE * outer_xasl)
+{
+  XASL_NODE *xptr;
+  ACCESS_SPEC_TYPE *spec;
+
+  for (xptr = outer_xasl; xptr != NULL; xptr = xptr->scan_ptr)
+    {
+      for (spec = xptr->spec_list; spec != NULL; spec = spec->next)
+	{
+	  if (!ACCESS_SPEC_IS_FLAGED (spec, ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN))
+	    {
+	      return false;
+	    }
+	}
+
+      for (spec = xptr->merge_spec; spec != NULL; spec = spec->next)
+	{
+	  if (!ACCESS_SPEC_IS_FLAGED (spec, ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN))
+	    {
+	      return false;
+	    }
+	}
+    }
+
+  return true;
+}
+
+/*
+ * qexec_hjoin_can_stream_probe() -
+ *   return: True if the probe (outer) input can be streamed instead of materialized.
+ *   xasl(in): HASHJOIN_PROC node.
+ *
+ * Note: Plan-shape conditions only; runtime conditions (build input size, empty inputs)
+ *       are checked in hjoin_stream_check.
+ */
+bool
+qexec_hjoin_can_stream_probe (XASL_NODE * xasl)
+{
+  HASHJOIN_PROC_NODE *proc;
+  XASL_NODE *outer_xasl;
+  JOIN_TYPE join_type;
+
+  assert (xasl != NULL);
+  assert (xasl->type == HASHJOIN_PROC);
+
+  proc = &xasl->proc.hashjoin;
+
+  /* Streaming probes serially; keep the materializing path when parallelism is possible. */
+  if (xasl->parallelism != 0)
+    {
+      return false;
+    }
+
+  if (xasl->px_executor != NULL)
+    {
+      return false;
+    }
+
+  join_type = proc->merge_info.join_type;
+  if (join_type != JOIN_INNER && join_type != JOIN_LEFT)
+    {
+      /* JOIN_RIGHT builds from the outer input; its probe input is the inner. */
+      return false;
+    }
+
+  outer_xasl = proc->outer.xasl;
+  if (outer_xasl == NULL || outer_xasl->type != BUILDLIST_PROC)
+    {
+      return false;
+    }
+
+  if (outer_xasl->parallelism != 0)
+    {
+      return false;
+    }
+
+  /* The probe input must be a plain projection whose only side effect is producing tuples. */
+  if (outer_xasl->outptr_list == NULL || outer_xasl->orderby_list != NULL || outer_xasl->option == Q_DISTINCT
+      || outer_xasl->proc.buildlist.groupby_list != NULL || outer_xasl->proc.buildlist.g_agg_list != NULL
+      || outer_xasl->proc.buildlist.a_eval_list != NULL || outer_xasl->selected_upd_list != NULL
+      || outer_xasl->upd_del_class_cnt > 0 || outer_xasl->connect_by_ptr != NULL || outer_xasl->single_tuple != NULL
+      || XASL_IS_FLAGED (outer_xasl, XASL_LINK_TO_REGU_VARIABLE))
+    {
+      return false;
+    }
+
+  if (!hjoin_stream_outer_scans_serial (outer_xasl))
+    {
+      /* a scan could open as a parallel scan and bypass the emit hook; keep the legacy path */
+      return false;
+    }
+
+  return true;
+}
+
+/*
+ * hjoin_stream_check() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   xasl(in): HASHJOIN_PROC node.
+ *   xasl_state(in): XASL state of the query.
+ *   streaming(out): Set to true if the probe input will be streamed.
+ *
+ * Note: Called before hjoin_init_manager. When streaming is not possible, the deferred
+ *       probe input is materialized here so the legacy path sees its usual inputs.
+ */
+static int
+hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming)
+{
+  XASL_NODE *outer_xasl, *inner_xasl;
+  JOIN_TYPE join_type;
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (xasl != NULL);
+  assert (xasl_state != NULL);
+  assert (streaming != NULL);
+
+  *streaming = false;
+
+  if (!qexec_hjoin_can_stream_probe (xasl))
+    {
+      return NO_ERROR;
+    }
+
+  outer_xasl = xasl->proc.hashjoin.outer.xasl;
+  inner_xasl = xasl->proc.hashjoin.inner.xasl;
+  join_type = xasl->proc.hashjoin.merge_info.join_type;
+
+  if (!IS_XASL_INITIAL_STATUS (outer_xasl->status))
+    {
+      /* The probe input was already materialized. */
+      return NO_ERROR;
+    }
+
+  if (inner_xasl->list_id == NULL || inner_xasl->list_id->type_list.type_cnt == 0
+      || inner_xasl->list_id->tuple_cnt == 0)
+    {
+      if (join_type == JOIN_INNER)
+	{
+	  /* Empty build input: the join result is empty without running the probe input.
+	   * The legacy path handles this as HASHJOIN_STATUS_END. */
+	  return NO_ERROR;
+	}
+
+      /* JOIN_LEFT null-filling reads the materialized probe input. */
+      return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+    }
+
+  if (!hjoin_stream_check_single (inner_xasl->list_id))
+    {
+      /* The build input needs partitioning; fall back to the materializing path. */
+      return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+    }
+
+  /* Pre-open the (empty) probe list so domain setup can read its type list.
+   * The probe proc itself runs later with the emit hook installed; see hjoin_stream_execute. */
+  if (outer_xasl->list_id->type_list.type_cnt == 0)
+    {
+      QFILE_TUPLE_VALUE_TYPE_LIST type_list;
+      int ls_flag = 0;
+
+      error = qdata_get_valptr_type_list (thread_p, outer_xasl->outptr_list, &type_list);
+      if (error != NO_ERROR)
+	{
+	  if (type_list.domp != NULL)
+	    {
+	      db_private_free_and_init (thread_p, type_list.domp);
+	    }
+	  return error;
+	}
+
+      QFILE_SET_FLAG (ls_flag, QFILE_FLAG_ALL);
+      outer_xasl->list_id =
+	qfile_open_list (thread_p, &type_list, outer_xasl->after_iscan_list, xasl_state->query_id, ls_flag,
+			 outer_xasl->list_id);
+
+      if (type_list.domp != NULL)
+	{
+	  db_private_free_and_init (thread_p, type_list.domp);
+	}
+
+      if (outer_xasl->list_id == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+    }
+
+  *streaming = true;
+
+  ASSERT_NO_ERROR_OR_INTERRUPTED ();
+  return NO_ERROR;
+}
+
+/*
+ * hjoin_stream_check_single() -
+ *   return: True if the build input fits a single in-memory hash table.
+ *   build_list_id(in): List identifier of the materialized build input.
+ *
+ * Note: Mirrors hjoin_check_partition, gated on the build input alone:
+ *       the probe input is streamed, so its size is unknown and irrelevant here.
+ */
+static bool
+hjoin_stream_check_single (QFILE_LIST_ID * build_list_id)
+{
+  UINT64 mem_limit;
+  UINT64 per_entry_size;
+  UINT32 part_cnt;
+
+  assert (build_list_id != NULL);
+  assert (build_list_id->tuple_cnt > 0);
+
+  mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+  if (mem_limit == 0)
+    {
+      return false;
+    }
+
+  per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS);
+
+  part_cnt = CEIL_PTVDIV (per_entry_size * build_list_id->tuple_cnt, mem_limit * PARTITION_FILL_FACTOR);
+
+  return (part_cnt <= 1);
+}
+
+/*
+ * hjoin_stream_execute() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager containing shared state.
+ *   context(in): Hash join context (single context).
+ *   xasl_state(in): XASL state of the query.
+ *
+ * Note: Builds the hash table from the materialized build (inner) input, then executes
+ *       the probe (outer) proc with the emit hook installed. Each tuple the probe proc
+ *       produces is probed immediately by hjoin_stream_probe_tuple; the probe input is
+ *       never materialized.
+ */
+static int
+hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+		      XASL_STATE * xasl_state)
+{
+  HASHJOIN_FETCH_INFO *outer, *inner;
+  HASHJOIN_FETCH_INFO *build = NULL;
+  XASL_NODE *outer_xasl;
+  QFILE_LIST_ID *list_id = NULL;
+  // *INDENT-OFF*
+  HASHJOIN_STREAM_STATE stream_state = { NULL, NULL, NULL, { NULL, 0 }, 0 };
+  HASHJOIN_PARALLEL_STREAM parallel_stream;
+  HASHJOIN_STREAM_HOOK stream_hook = { NULL, NULL, NULL, NULL };
+  // *INDENT-ON*
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (manager != NULL);
+  assert (context != NULL);
+  assert (context == &manager->single_context);
+  assert (context->list_id == NULL);
+  assert (manager->join_type == JOIN_INNER || manager->join_type == JOIN_LEFT);
+  assert (manager->context_cnt == 0);
+
+  HASHJOIN_STATS *stats = context->stats;
+  HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
+  assert (!thread_is_on_trace (thread_p) || stats != NULL);
+
+  outer = &context->outer;
+  inner = &context->inner;
+
+  /* Prevent faults when qfile_close_scan is called */
+  outer->list_scan_id.status = S_CLOSED;
+  inner->list_scan_id.status = S_CLOSED;
+
+  /* The streamed probe side is always the outer input; there is no runtime input swap. */
+  context->build = inner;
+  context->probe = outer;
+  build = context->build;
+
+  if (manager->join_type == JOIN_LEFT)
+    {
+      outer->fill_record = &outer->tuple_record;
+      inner->fill_record = NULL;
+    }
+
+  error = hjoin_scan_init (thread_p, &context->hash_scan, manager->key_cnt, build->list_id);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  if (thread_is_on_trace (thread_p))
+    {
+      stats->hash_method = context->hash_scan.hash_list_scan_type;
+      stats->swap_join_inputs = false;
+    }
+
+  error = qfile_open_list_scan (build->list_id, &build->list_scan_id);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  error = hjoin_build (thread_p, manager, context);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  list_id = qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id, manager->qlist_flag, NULL);
+  if (list_id == NULL)
+    {
+      goto error_exit;
+    }
+
+  /* hjoin_probe_key distinguishes the first probe from chain continuation by tuple_record.tpl */
+  // *INDENT-OFF*
+  outer->tuple_record = { NULL, 0 };
+  inner->tuple_record = { NULL, 0 };
+  // *INDENT-ON*
+
+  stream_state.manager = manager;
+  stream_state.context = context;
+  stream_state.list_id = list_id;
+
+  stream_hook.func = hjoin_stream_probe_tuple;
+  stream_hook.arg = &stream_state;
+
+  /* Parallel streaming probe (Stage 2, I1) — DISABLED.
+   *
+   * The probe-side proc runs here, inside qexec_end_mainblock_iterations, and its driving scan
+   * does open a parallel scan: start_tasks () pushes m_parallelism tasks and the handler's
+   * active_results is armed. But the pushed tasks are never picked up — every px worker thread
+   * stays parked in cubthread::waiter::wait_inf — so read () waits forever
+   * (observed: active_results = 4, writer_results empty, no worker frame in any stack).
+   *
+   * The same proc materializes fine with a parallel scan when it runs in the normal aptr phase,
+   * so the suspect is the worker-dispatch state during the end-iterations phase rather than the
+   * probe handler. Re-enable once that is understood; see ../stage2_parallel_probe/README.md.
+   *
+   * Leaving the hook without a manager keeps hjoin_stream_hook_is_parallel () false, so the
+   * result handler takes its normal path and this join streams serially (Stage 1 behaviour).
+   */
+  if (false && manager->join_type == JOIN_INNER
+      && context->during_join_pred == NULL && context->after_join_pred == NULL)
+    {
+      stream_hook.manager = manager;
+      stream_hook.parallel_stream = &parallel_stream;
+    }
+
+  outer_xasl = manager->outer->xasl;
+  assert (outer_xasl->emit_tuple_hook == NULL);
+  outer_xasl->emit_tuple_hook = &stream_hook;
+
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_start (thread_p, &start_stats);
+    }
+
+  /* Run the probe input; each produced tuple is probed via hjoin_stream_probe_tuple. */
+  error = qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+
+  outer_xasl->emit_tuple_hook = NULL;
+
+  if (error == NO_ERROR)
+    {
+      /* Parallel streaming probe ran: chain the per-worker join lists onto this join's result.
+       * The serial list_id stays empty in that case (the scan yields no rows to the proc). */
+      // *INDENT-OFF*
+      for (QFILE_LIST_ID *worker_list : parallel_stream.lists)
+	{
+	  error = qfile_connect_list (thread_p, list_id, worker_list);
+	  if (error != NO_ERROR)
+	    {
+	      break;
+	    }
+	  /* Ownership moved into list_id. As in hjoin_merge_qlist, the connected descriptor must
+	   * not be freed here; it is released through list_id. */
+	}
+      // *INDENT-ON*
+      parallel_stream.lists.clear ();
+    }
+
+  hjoin_stream_clear_parallel (thread_p, &parallel_stream);
+
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_end (thread_p, &stats->probe, &start_stats);
+      stats->probe.read_rows = stream_state.probe_rows;
+      stats->probe.qualified_rows = list_id->tuple_cnt;
+    }
+
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  qfile_close_list (thread_p, list_id);
+  context->list_id = list_id;
+
+  ASSERT_NO_ERROR_OR_INTERRUPTED ();
+
+cleanup:
+  if (stream_state.overflow_record.tpl != NULL)
+    {
+      db_private_free_and_init (thread_p, stream_state.overflow_record.tpl);
+    }
+
+  qfile_close_scan (thread_p, &build->list_scan_id);
+
+  hjoin_destroy_qlist (thread_p, context);
+
+  hjoin_scan_clear (thread_p, &context->hash_scan);
+
+  /* Check if qfile_close_list was called */
+  assert (context->list_id == NULL || context->list_id->last_pgptr == NULL);
+
+  return error;
+
+error_exit:
+  if (list_id != NULL)
+    {
+      qfile_close_list (thread_p, list_id);
+      qfile_destroy_list (thread_p, list_id);
+      QFILE_FREE_AND_INIT_LIST_ID (list_id);
+    }
+
+  if (error == NO_ERROR || er_errid () == NO_ERROR)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      error = er_errid ();
+    }
+
+  goto cleanup;
+}
+
+/*
+ * hjoin_stream_probe_tuple() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   arg(in): HASHJOIN_STREAM_STATE.
+ *   tuple_record(in): Tuple produced by the probe proc.
+ *
+ * Note: Single-probe-tuple body of hjoin_inner_probe/hjoin_outer_probe in
+ *       HASHJOIN_STATUS_SINGLE mode, fed by the emit hook instead of a list scan.
+ */
+static int
+hjoin_stream_probe_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record)
+{
+  HASHJOIN_STREAM_STATE *stream_state;
+  HASHJOIN_MANAGER *manager;
+  HASHJOIN_CONTEXT *context;
+  QFILE_LIST_ID *list_id;
+
+  bool need_skip_next = false;
+  bool any_key_matched = false;
+
+  HASHJOIN_FETCH_INFO *outer, *inner;
+  HASHJOIN_FETCH_INFO *build, *probe;
+
+  HASH_LIST_SCAN *hash_scan;
+  HASH_SCAN_KEY *key, *found_key;
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (arg != NULL);
+  assert (tuple_record != NULL && tuple_record->tpl != NULL);
+
+  stream_state = (HASHJOIN_STREAM_STATE *) arg;
+  manager = stream_state->manager;
+  context = stream_state->context;
+  list_id = stream_state->list_id;
+
+  HASHJOIN_STATS *stats = context->stats;
+  assert (!thread_is_on_trace (thread_p) || stats != NULL);
+
+  outer = &context->outer;
+  inner = &context->inner;
+  build = context->build;
+  probe = context->probe;
+  assert (build == inner && probe == outer);
+
+  hash_scan = &context->hash_scan;
+  assert (hash_scan->hash_list_scan_type != HASH_METH_NOT_USE);
+
+  key = hash_scan->temp_key;
+  found_key = hash_scan->temp_new_key;
+  assert (key != NULL);
+  assert (found_key != NULL);
+
+  stream_state->probe_rows++;
+
+  probe->tuple_record = *tuple_record;
+  probe->is_ready = false;
+
+  HJOIN_PRINT_TUPLE (probe->list_id, probe->tuple_record.tpl, HASHJOIN_PRINT_READ_KEY);
+
+  error = hjoin_fetch_key (thread_p, probe, &probe->tuple_record, key, NULL /* compare_key */ , &need_skip_next);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  if (need_skip_next)
+    {
+      if (manager->join_type != JOIN_LEFT)
+	{
+	  return NO_ERROR;	/* NULL join key never matches */
+	}
+
+      if (context->after_join_pred != NULL)
+	{
+	  DB_LOGICAL ev_res;
+
+	  /* No build match: null-pad the build side, then evaluate the after-join predicate. */
+	  for (REGU_VARIABLE_LIST regu_var_p = build->regu_list_pred; regu_var_p != NULL; regu_var_p = regu_var_p->next)
+	    {
+	      pr_clear_value (regu_var_p->value.vfetch_to);
+	    }
+	  build->is_ready = true;
+
+	  ev_res = hjoin_eval_pred (thread_p, probe, build, context->after_join_pred, context->val_descr);
+	  if (ev_res == V_ERROR)
+	    {
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+
+	  if (ev_res != V_TRUE)
+	    {
+	      HJOIN_PRINT_TUPLE (probe->list_id, probe->tuple_record.tpl, HASHJOIN_PRINT_NOT_QUALIFIED_KEY);
+	      return NO_ERROR;
+	    }
+	}
+
+      HJOIN_PRINT_TUPLE (probe->list_id, probe->tuple_record.tpl, HASHJOIN_PRINT_FILL_EMPTY_KEY);
+
+      /* NULL key on preserved side — emit fill_record (null on null-supplying side) */
+      return hjoin_merge_tuple_to_list_id (thread_p, list_id, outer->fill_record, inner->fill_record,
+					   manager->merge_info, &stream_state->overflow_record);
+    }
+
+  hash_scan->curr_hash_key = qdata_hash_scan_key (key, UINT_MAX, hash_scan->hash_list_scan_type);
+
+  do
+    {
+      build->is_ready = false;
+
+      error = hjoin_probe_key (thread_p, hash_scan, &build->list_scan_id, &build->tuple_record);
+      if (error != NO_ERROR)
+	{
+	  return error;
+	}
+
+      if (build->tuple_record.tpl == NULL)
+	{
+	  break;		/* not found */
+	}
+
+      if (thread_is_on_trace (thread_p))
+	{
+	  stats->probe.read_keys++;	/* found */
+	}
+
+      error = hjoin_fetch_key (thread_p, build, &build->tuple_record, found_key, key /* compare_key */ ,
+			       &need_skip_next);
+      if (error != NO_ERROR)
+	{
+	  return error;
+	}
+
+      if (need_skip_next)
+	{
+	  HJOIN_PRINT_TUPLE (build->list_id, build->tuple_record.tpl, HASHJOIN_PRINT_NOT_MATCHED_KEY);
+
+	  need_skip_next = false;	/* init */
+	  continue;
+	}
+
+      if (context->during_join_pred != NULL)
+	{
+	  DB_LOGICAL ev_res = hjoin_eval_pred (thread_p, probe, build, context->during_join_pred, context->val_descr);
+
+	  if (ev_res == V_ERROR)
+	    {
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+
+	  /* Search the next hash entry if additional conditions are not satisfied */
+	  if (ev_res != V_TRUE)
+	    {
+	      HJOIN_PRINT_TUPLE (build->list_id, build->tuple_record.tpl, HASHJOIN_PRINT_NOT_QUALIFIED_KEY);
+	      continue;
+	    }
+	}
+
+      any_key_matched = true;
+
+      if (context->after_join_pred != NULL)
+	{
+	  DB_LOGICAL ev_res = hjoin_eval_pred (thread_p, probe, build, context->after_join_pred, context->val_descr);
+
+	  if (ev_res == V_ERROR)
+	    {
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+
+	  /* Search the next hash entry if additional conditions are not satisfied */
+	  if (ev_res != V_TRUE)
+	    {
+	      HJOIN_PRINT_TUPLE (build->list_id, build->tuple_record.tpl, HASHJOIN_PRINT_NOT_QUALIFIED_KEY);
+	      continue;
+	    }
+	}
+
+      HJOIN_PRINT_TUPLE (build->list_id, build->tuple_record.tpl, HASHJOIN_PRINT_QUALIFIED_KEY);
+
+      error = hjoin_merge_tuple_to_list_id (thread_p, list_id, &outer->tuple_record, &inner->tuple_record,
+					    manager->merge_info, &stream_state->overflow_record);
+      if (error != NO_ERROR)
+	{
+	  return error;
+	}
+    }
+  while (true);
+
+  if (manager->join_type == JOIN_LEFT && !any_key_matched)
+    {
+      if (context->after_join_pred != NULL)
+	{
+	  DB_LOGICAL ev_res;
+
+	  /* No build match: null-pad the build side, then evaluate the after-join predicate. */
+	  for (REGU_VARIABLE_LIST regu_var_p = build->regu_list_pred; regu_var_p != NULL; regu_var_p = regu_var_p->next)
+	    {
+	      pr_clear_value (regu_var_p->value.vfetch_to);
+	    }
+	  build->is_ready = true;
+
+	  ev_res = hjoin_eval_pred (thread_p, probe, build, context->after_join_pred, context->val_descr);
+	  if (ev_res == V_ERROR)
+	    {
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+
+	  if (ev_res != V_TRUE)
+	    {
+	      HJOIN_PRINT_TUPLE (probe->list_id, probe->tuple_record.tpl, HASHJOIN_PRINT_NOT_QUALIFIED_KEY);
+	      return NO_ERROR;
+	    }
+	}
+
+      HJOIN_PRINT_TUPLE (probe->list_id, probe->tuple_record.tpl, HASHJOIN_PRINT_FILL_EMPTY_KEY);
+
+      /* no match — emit fill_record (null on null-supplying side) */
+      error = hjoin_merge_tuple_to_list_id (thread_p, list_id, outer->fill_record, inner->fill_record,
+					    manager->merge_info, &stream_state->overflow_record);
+    }
+
+  return error;
+}
+
+/*
+ * hjoin_stream_clear_parallel() -
+ *   return: None.
+ *   thread_p(in): Thread entry.
+ *   parallel_stream(in): Collection of per-worker join lists.
+ *
+ * Note: Only reached with a non-empty collection on the error path; the success path
+ *       has already chained the lists onto the join result.
+ */
+static void
+hjoin_stream_clear_parallel (THREAD_ENTRY * thread_p, HASHJOIN_PARALLEL_STREAM * parallel_stream)
+{
+  assert (thread_p != NULL);
+  assert (parallel_stream != NULL);
+
+  // *INDENT-OFF*
+  for (QFILE_LIST_ID *worker_list : parallel_stream->lists)
+    {
+      if (worker_list != NULL)
+	{
+	  qfile_close_list (thread_p, worker_list);
+	  qfile_destroy_list (thread_p, worker_list);
+	  QFILE_FREE_AND_INIT_LIST_ID (worker_list);
+	}
+    }
+  parallel_stream->lists.clear ();
+  // *INDENT-ON*
+}
+
+/*
+ * hjoin_stream_hook_is_parallel() -
+ *   return: True if the hook carries parallel streaming probe state.
+ *   hook(in): HASHJOIN_STREAM_HOOK installed on the probe-side proc (can be NULL).
+ */
+bool
+hjoin_stream_hook_is_parallel (const void *hook)
+{
+  const HASHJOIN_STREAM_HOOK *stream_hook = (const HASHJOIN_STREAM_HOOK *) hook;
+
+  return (stream_hook != NULL && stream_hook->manager != NULL && stream_hook->parallel_stream != NULL);
+}
+
+/*
+ * hjoin_stream_worker_init() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry of the worker.
+ *   hook(in): HASHJOIN_STREAM_HOOK installed on the probe-side proc.
+ *   worker_state(out): Opaque per-worker state, released by hjoin_stream_worker_finalize.
+ *
+ * Note: The hash table and the build list are shared read-only with the main thread;
+ *       the cursor into the table, the scan of the build list, the temporary keys and
+ *       the join result list are private to this worker.
+ */
+int
+hjoin_stream_worker_init (THREAD_ENTRY * thread_p, void *hook, void **worker_state)
+{
+  HASHJOIN_STREAM_HOOK *stream_hook = (HASHJOIN_STREAM_HOOK *) hook;
+  HASHJOIN_STREAM_WORKER *worker = NULL;
+  HASHJOIN_MANAGER *manager;
+  HASHJOIN_CONTEXT *single_context, *context;
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (hjoin_stream_hook_is_parallel (hook));
+  assert (worker_state != NULL);
+
+  *worker_state = NULL;
+
+  manager = stream_hook->manager;
+  single_context = &manager->single_context;
+
+  /* the parallel path is gated to a shape the worker can run without cloned predicates */
+  assert (manager->join_type == JOIN_INNER);
+  assert (single_context->during_join_pred == NULL && single_context->after_join_pred == NULL);
+
+  worker = (HASHJOIN_STREAM_WORKER *) db_private_alloc (thread_p, sizeof (HASHJOIN_STREAM_WORKER));
+  if (worker == NULL)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+  memset (worker, 0, sizeof (HASHJOIN_STREAM_WORKER));
+
+  worker->hook = stream_hook;
+  context = &worker->context;
+
+  /* Probe side is streamed by this worker, so it has no list. */
+  context->outer.list_id = NULL;
+  context->outer.input = single_context->outer.input;
+  context->outer.coerce_domains = single_context->outer.coerce_domains;
+  context->outer.need_coerce_domains = single_context->outer.need_coerce_domains;
+  context->outer.regu_list_pred = NULL;
+  context->outer.fill_record = NULL;
+
+  context->inner.list_id = single_context->inner.list_id;
+  context->inner.input = single_context->inner.input;
+  context->inner.coerce_domains = single_context->inner.coerce_domains;
+  context->inner.need_coerce_domains = single_context->inner.need_coerce_domains;
+  context->inner.regu_list_pred = NULL;
+  context->inner.fill_record = NULL;
+
+  context->build = &context->inner;
+  context->probe = &context->outer;
+
+  context->during_join_pred = NULL;
+  context->after_join_pred = NULL;
+  context->val_descr = single_context->val_descr;
+  context->status = HASHJOIN_STATUS_SINGLE;
+  context->stats = &worker->stats;
+
+  /* Prevent faults when qfile_close_scan is called */
+  context->outer.list_scan_id.status = S_CLOSED;
+  context->inner.list_scan_id.status = S_CLOSED;
+
+  /* private temporary keys; the hash table itself is attached below */
+  error = hjoin_scan_init (thread_p, &context->hash_scan, manager->key_cnt, NULL /* skip hash table */ );
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  switch (single_context->hash_scan.hash_list_scan_type)
+    {
+    case HASH_METH_IN_MEM:
+    case HASH_METH_HYBRID:
+      context->hash_scan.memory.hash_table = single_context->hash_scan.memory.hash_table;
+      context->hash_scan.memory.curr_hash_entry = NULL;
+      break;
+
+    case HASH_METH_HASH_FILE:
+      context->hash_scan.file.hash_table = single_context->hash_scan.file.hash_table;
+      context->hash_scan.file.curr_oid = OID_INITIALIZER;
+      context->hash_scan.file.is_dk_bucket = false;
+      break;
+
+    default:
+      /* impossible case */
+      assert_release_error (false);
+      goto error_exit;
+    }
+  context->hash_scan.hash_list_scan_type = single_context->hash_scan.hash_list_scan_type;
+
+  error = qfile_open_list_scan (context->build->list_id, &context->build->list_scan_id);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+  context->build->list_scan_id.is_read_only = true;
+
+  context->list_id = qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id, manager->qlist_flag, NULL);
+  if (context->list_id == NULL)
+    {
+      goto error_exit;
+    }
+
+  worker->stream_state.manager = manager;
+  worker->stream_state.context = context;
+  worker->stream_state.list_id = context->list_id;
+
+  *worker_state = worker;
+
+  ASSERT_NO_ERROR_OR_INTERRUPTED ();
+  return NO_ERROR;
+
+error_exit:
+  if (worker != NULL)
+    {
+      hjoin_stream_worker_finalize (thread_p, worker, false /* publish */ );
+    }
+
+  if (error == NO_ERROR || er_errid () == NO_ERROR)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      error = er_errid ();
+    }
+
+  return error;
+}
+
+/*
+ * hjoin_stream_worker_probe() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry of the worker.
+ *   worker_state(in): State from hjoin_stream_worker_init.
+ *   tuple_record(in): One probe-side tuple produced by this worker's slice.
+ */
+int
+hjoin_stream_worker_probe (THREAD_ENTRY * thread_p, void *worker_state, QFILE_TUPLE_RECORD * tuple_record)
+{
+  HASHJOIN_STREAM_WORKER *worker = (HASHJOIN_STREAM_WORKER *) worker_state;
+
+  assert (worker != NULL);
+
+  return hjoin_stream_probe_tuple (thread_p, &worker->stream_state, tuple_record);
+}
+
+/*
+ * hjoin_stream_worker_finalize() -
+ *   return: None.
+ *   thread_p(in): Thread entry of the worker.
+ *   worker_state(in): State from hjoin_stream_worker_init.
+ *   publish(in): True to hand the join result list to the manager, false to discard it.
+ */
+void
+hjoin_stream_worker_finalize (THREAD_ENTRY * thread_p, void *worker_state, bool publish)
+{
+  HASHJOIN_STREAM_WORKER *worker = (HASHJOIN_STREAM_WORKER *) worker_state;
+  HASHJOIN_CONTEXT *context;
+
+  if (worker == NULL)
+    {
+      return;
+    }
+
+  context = &worker->context;
+
+  if (context->list_id != NULL)
+    {
+      qfile_close_list (thread_p, context->list_id);
+
+      if (publish)
+	{
+	  // *INDENT-OFF*
+	  {
+	    std::lock_guard<std::mutex> lock (worker->hook->parallel_stream->mutex);
+	    worker->hook->parallel_stream->lists.push_back (context->list_id);
+	  }
+	  // *INDENT-ON*
+	}
+      else
+	{
+	  qfile_destroy_list (thread_p, context->list_id);
+	  QFILE_FREE_AND_INIT_LIST_ID (context->list_id);
+	}
+
+      context->list_id = NULL;
+    }
+
+  qfile_close_scan (thread_p, &context->build->list_scan_id);
+
+  /* the hash table is owned by the main thread's context; detach before clearing */
+  switch (context->hash_scan.hash_list_scan_type)
+    {
+    case HASH_METH_IN_MEM:
+    case HASH_METH_HYBRID:
+      context->hash_scan.memory.hash_table = NULL;
+      break;
+
+    case HASH_METH_HASH_FILE:
+      context->hash_scan.file.hash_table = NULL;
+      break;
+
+    default:
+      break;
+    }
+  hjoin_scan_clear (thread_p, &context->hash_scan);
+
+  if (worker->stream_state.overflow_record.tpl != NULL)
+    {
+      db_private_free_and_init (thread_p, worker->stream_state.overflow_record.tpl);
+    }
+
+  db_private_free (thread_p, worker);
 }
 
 /*

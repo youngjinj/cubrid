@@ -1213,6 +1213,10 @@ struct xasl_node
 
   TOPN_TUPLES *topn_items;	/* top-n tuples for orderby limit */
 
+  /* Runtime only (never serialized): when set on a BUILDLIST proc, produced tuples are handed to this consumer
+   * (HASHJOIN_STREAM_HOOK) instead of being appended to list_id. Used by the streaming hash join probe. */
+  void *emit_tuple_hook;
+
   XASL_STATUS status;		/* current status */
 
   int query_in_progress;	/* flag which tells if the query is currently executing.  Used by

@@ -1850,6 +1850,8 @@ stx_build_xasl_node (THREAD_ENTRY * thread_p, char *ptr, XASL_NODE * xasl)
 
   xasl->topn_items = NULL;
 
+  xasl->emit_tuple_hook = NULL;
+
   ptr = or_unpack_int (ptr, &offset);
   if (offset == 0)
     {
