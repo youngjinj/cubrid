@@ -515,11 +515,15 @@ qexec_hjoin_can_stream_probe (XASL_NODE * xasl)
 static bool
 hjoin_stream_parallel_shape (XASL_NODE * xasl)
 {
-  /* during/after join predicates are admitted: each producer worker evaluates them on
-   * its own spawn_manager deep clones (I2b).  This condition must stay in sync with the
-   * runtime branch in hjoin_stream_execute; a shape admitted here but rejected there
-   * would run the serial hook under a scan that may open parallel and lose rows. */
-  if (xasl->proc.hashjoin.merge_info.join_type != JOIN_INNER)
+  JOIN_TYPE join_type = xasl->proc.hashjoin.merge_info.join_type;
+
+  /* during/after join predicates and LEFT OUTER are admitted: each producer worker
+   * evaluates predicates on its own spawn_manager deep clones (I2b) and null-pads
+   * unmatched rows through its private fill_record (I2c).  This condition must stay in
+   * sync with the runtime branch in hjoin_stream_execute; a shape admitted here but
+   * rejected there would run the serial hook under a scan that may open parallel and
+   * lose rows. */
+  if (join_type != JOIN_INNER && join_type != JOIN_LEFT)
     {
       return false;
     }
@@ -1018,7 +1022,7 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   /* Parallel streaming probe (stage 2, I-min): W producer tasks scan outer slices and
    * probe the shared table in-worker. Runtime-gated here; any producer failure aborts the
    * join (rows may already be consumed, so there is no fallback past this point). */
-  if (manager->join_type == JOIN_INNER
+  if ((manager->join_type == JOIN_INNER || manager->join_type == JOIN_LEFT)
       && context->hash_scan.hash_list_scan_type == HASH_METH_IN_MEM
       && thread_p->private_heap_id != 0 && hjoin_stream_parallel_outer_shape (outer_xasl))
     {
@@ -1376,7 +1380,7 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
   manager = slot->manager;
   single_context = &manager->single_context;
 
-  assert (manager->join_type == JOIN_INNER);
+  assert (manager->join_type == JOIN_INNER || manager->join_type == JOIN_LEFT);
 
   worker = (HASHJOIN_STREAM_WORKER *) db_private_alloc (thread_p, sizeof (HASHJOIN_STREAM_WORKER));
   if (worker == NULL)
@@ -1403,6 +1407,14 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
 
   context->build = &context->inner;
   context->probe = &context->outer;
+
+  if (manager->join_type == JOIN_LEFT)
+    {
+      /* preserved side emits its own current row, null-supplying side emits unbound
+       * columns; both records are private to this worker's context */
+      context->outer.fill_record = &context->outer.tuple_record;
+      context->inner.fill_record = NULL;
+    }
 
   context->status = HASHJOIN_STATUS_SINGLE;
   context->stats = &worker->stats;
