@@ -116,6 +116,7 @@ static bool hjoin_stream_parallel_outer_shape (XASL_NODE * outer_xasl);
 static int hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
 					  HASHJOIN_CONTEXT * context, XASL_STATE * xasl_state,
 					  QFILE_LIST_ID ** result_list_id);
+static bool hjoin_stream_check_parallel_in_mem (QFILE_LIST_ID * build_list_id);
 #endif /* defined (SERVER_MODE) */
 static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming);
 static bool hjoin_stream_check_single (QFILE_LIST_ID * build_list_id);
@@ -626,6 +627,21 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
       return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
     }
 
+#if defined (SERVER_MODE)
+  if (!hjoin_stream_outer_scans_serial (outer_xasl))
+    {
+      /* Admitted through the parallel shape only: this probe must run through the
+       * producer path, because the serial-hook fallback could open a parallel scan
+       * that bypasses the emit hook and silently loses rows.  Require the parallel
+       * branch's runtime conditions here, where falling back to materialization is
+       * still safe (no probe row has been consumed yet). */
+      if (thread_p->private_heap_id == 0 || !hjoin_stream_check_parallel_in_mem (inner_xasl->list_id))
+	{
+	  return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+	}
+    }
+#endif /* defined (SERVER_MODE) */
+
   /* Pre-open the (empty) probe list so domain setup can read its type list.
    * The probe proc itself runs later with the emit hook installed; see hjoin_stream_execute. */
   if (outer_xasl->list_id->type_list.type_cnt == 0)
@@ -696,6 +712,40 @@ hjoin_stream_check_single (QFILE_LIST_ID * build_list_id)
 
   return (part_cnt <= 1);
 }
+
+#if defined (SERVER_MODE)
+/*
+ * hjoin_stream_check_parallel_in_mem() -
+ *   return: True if hjoin_scan_init will build this input as HASH_METH_IN_MEM.
+ *   build_list_id(in): List identifier of the materialized build input.
+ *
+ * Note: Mirrors hjoin_scan_init's IN_MEM estimate (slot array + one entry per row + the
+ *       tuple pages themselves) and must stay in sync with it.  The parallel streaming
+ *       probe requires the shared table to be IN_MEM; predicting the method here lets
+ *       hjoin_stream_check fall back to materialization while that is still safe.
+ */
+static bool
+hjoin_stream_check_parallel_in_mem (QFILE_LIST_ID * build_list_id)
+{
+  UINT64 mem_limit;
+  UINT64 slot_array_size, entries_size, payload_size, in_mem_size;
+
+  assert (build_list_id != NULL);
+
+  mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+  if (mem_limit == 0 || build_list_id->tuple_cnt > INT_MAX)
+    {
+      return false;
+    }
+
+  slot_array_size = (UINT64) mht_hls_slot_count ((int) build_list_id->tuple_cnt) * sizeof (MHT_HLS_SLOT);
+  entries_size = (UINT64) build_list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
+  payload_size = (UINT64) build_list_id->page_cnt * DB_PAGESIZE;
+  in_mem_size = slot_array_size + entries_size + payload_size;
+
+  return (in_mem_size <= mem_limit);
+}
+#endif /* defined (SERVER_MODE) */
 
 #if defined (SERVER_MODE)
 /*
@@ -803,6 +853,8 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
        * clock; worker elapsed times feed only the min/max range. Passing PARALLEL_PROBE
        * as the merge policy keeps worker times out of the sum (same convention as the
        * full parallel probe path); the context status itself stays SINGLE. */
+      bool any_valid_slot = false;
+
       hjoin_trace_end (thread_p, &stats->probe, &start_stats);
 
       stats->probe.range = init_range;
@@ -813,6 +865,7 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
 	      /* lazy worker init: an empty slice never measured anything */
 	      continue;
 	    }
+	  any_valid_slot = true;
 	  hjoin_trace_merge_stats (stats, &slots[i].stats, HASHJOIN_STATUS_PARALLEL_PROBE);
 
 	  perfmon_update_min_timeval (&stats->probe.range.elapsed_time.min, &slots[i].stats.probe.elapsed_time);
@@ -825,6 +878,11 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
 	    MIN (stats->probe.range.qualified_rows.min, slots[i].stats.probe.qualified_rows);
 	  stats->probe.range.qualified_rows.max =
 	    MAX (stats->probe.range.qualified_rows.max, slots[i].stats.probe.qualified_rows);
+	}
+      if (!any_valid_slot)
+	{
+	  /* every slice was empty: show zeros, not the untouched min/max sentinels */
+	  memset (&stats->probe.range, 0, sizeof (stats->probe.range));
 	}
       stats->num_parallel_threads = (UINT32) w;
     }
