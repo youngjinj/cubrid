@@ -634,8 +634,14 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
        * producer path, because the serial-hook fallback could open a parallel scan
        * that bypasses the emit hook and silently loses rows.  Require the parallel
        * branch's runtime conditions here, where falling back to materialization is
-       * still safe (no probe row has been consumed yet). */
-      if (thread_p->private_heap_id == 0 || !hjoin_stream_check_parallel_in_mem (inner_xasl->list_id))
+       * still safe (no probe row has been consumed yet).  The producer path also
+       * refuses what scan_open_parallel_heap_scan itself refuses: scans that must
+       * lock rows (non-S_SELECT), system classes, and MVCC-disabled classes. */
+      OID *outer_cls_oid = &outer_xasl->spec_list->s.cls_node.cls_oid;
+
+      if (outer_xasl->scan_op_type != S_SELECT
+	  || oid_is_system_class (outer_cls_oid) || mvcc_is_mvcc_disabled_class (outer_cls_oid)
+	  || thread_p->private_heap_id == 0 || !hjoin_stream_check_parallel_in_mem (inner_xasl->list_id))
 	{
 	  return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
 	}

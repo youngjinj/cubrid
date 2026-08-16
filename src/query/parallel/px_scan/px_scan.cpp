@@ -2292,9 +2292,15 @@ scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xa
 	    break;
 	  }
 	trace_handler *trace_p = thread_p->on_trace ? &trace : nullptr;
+	/* Mirror the executor's fixed-scan decision for the admitted shape: a single
+	 * innermost sequential class spec (chains, indexes and correlated/HAVING
+	 * subqueries are gate-rejected and the caller requires S_SELECT), so only the
+	 * compile-time opt-out remains.  A non-fixed scan re-fixes the page and copies
+	 * the record for every row, which dominated the probe profile. */
+	bool is_fixed = !XASL_IS_FLAGED (outer_xasl, XASL_NO_FIXED_SCAN);
 	task_p = placement_new (task_p, thread_p, query_entry, handler_p, input_p, &interrupt, &err_messages,
 				vd, trace_p, worker_mgr, outer_xasl->header.id, hfid, cls_oid,
-				false /* is_fixed */, false /* is_grouped */, false /* is_cached_scan */,
+				is_fixed, false /* is_grouped */, false /* is_cached_scan */,
 				uses_xasl_clone, outer_xasl, &pre_exec_info);
 	task_p->set_row_sink (sink, sink_end, sink_args[i]);
 
