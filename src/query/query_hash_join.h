@@ -319,6 +319,11 @@ typedef struct hashjoin_stream_slot
    * (lazy worker init), so it must not feed the min/max ranges. */
   HASHJOIN_STATS stats;
   bool stats_valid;
+
+  /* Streamed grace batching (S3b): this worker's private spill lists, one per
+   * partition, created lazily by the worker and connect-merged into the partition
+   * probe lists by the main thread.  NULL when the join is not batched. */
+  QFILE_LIST_ID **spill_list_id;
 } HASHJOIN_STREAM_SLOT;
 
 /* HASHJOIN_INPUT_SPLIT_INFO */
@@ -452,6 +457,15 @@ typedef struct hashjoin_manager
   parallel_query::worker_manager *px_worker_manager;
   // *INDENT-ON*
   UINT64 *px_worker_stats;
+
+  /* Streamed grace batching (S3b), parallel producers: the resident partition's
+   * context replaces single_context as the workers' probe source, and each worker
+   * routes rows by stream_part_cnt (spilling to its private per-partition lists).
+   * All zero when the join is not batched or streams serially. */
+  HASHJOIN_CONTEXT *stream_resident_context;
+  UINT32 stream_part_cnt;
+  bool stream_is_outer_join;
+  QFILE_TUPLE_VALUE_TYPE_LIST *stream_spill_type_list;
 
   /* From HASHJOIN_PROC_NODE */
   HASHJOIN_STATS_GROUP *stats_group;
