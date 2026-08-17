@@ -116,7 +116,7 @@ static bool hjoin_stream_parallel_outer_shape (XASL_NODE * outer_xasl);
 static int hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
 					  HASHJOIN_CONTEXT * context, XASL_STATE * xasl_state,
 					  QFILE_LIST_ID ** result_list_id);
-static bool hjoin_stream_check_parallel_in_mem (QFILE_LIST_ID * build_list_id);
+static HASH_METHOD hjoin_scan_predict_method (QFILE_LIST_ID * list_id);
 #endif /* defined (SERVER_MODE) */
 static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming);
 static bool hjoin_stream_check_single (QFILE_LIST_ID * build_list_id);
@@ -636,12 +636,15 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
        * branch's runtime conditions here, where falling back to materialization is
        * still safe (no probe row has been consumed yet).  The producer path also
        * refuses what scan_open_parallel_heap_scan itself refuses: scans that must
-       * lock rows (non-S_SELECT), system classes, and MVCC-disabled classes. */
+       * lock rows (non-S_SELECT), system classes, and MVCC-disabled classes.
+       * The method prediction shares hjoin_scan_init's decision code, so the branch
+       * below can rely on the built table being IN_MEM or HYBRID (S3a). */
       OID *outer_cls_oid = &outer_xasl->spec_list->s.cls_node.cls_oid;
 
       if (outer_xasl->scan_op_type != S_SELECT
 	  || oid_is_system_class (outer_cls_oid) || mvcc_is_mvcc_disabled_class (outer_cls_oid)
-	  || thread_p->private_heap_id == 0 || !hjoin_stream_check_parallel_in_mem (inner_xasl->list_id))
+	  || thread_p->private_heap_id == 0
+	  || hjoin_scan_predict_method (inner_xasl->list_id) == HASH_METH_HASH_FILE)
 	{
 	  return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
 	}
@@ -718,40 +721,6 @@ hjoin_stream_check_single (QFILE_LIST_ID * build_list_id)
 
   return (part_cnt <= 1);
 }
-
-#if defined (SERVER_MODE)
-/*
- * hjoin_stream_check_parallel_in_mem() -
- *   return: True if hjoin_scan_init will build this input as HASH_METH_IN_MEM.
- *   build_list_id(in): List identifier of the materialized build input.
- *
- * Note: Mirrors hjoin_scan_init's IN_MEM estimate (slot array + one entry per row + the
- *       tuple pages themselves) and must stay in sync with it.  The parallel streaming
- *       probe requires the shared table to be IN_MEM; predicting the method here lets
- *       hjoin_stream_check fall back to materialization while that is still safe.
- */
-static bool
-hjoin_stream_check_parallel_in_mem (QFILE_LIST_ID * build_list_id)
-{
-  UINT64 mem_limit;
-  UINT64 slot_array_size, entries_size, payload_size, in_mem_size;
-
-  assert (build_list_id != NULL);
-
-  mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
-  if (mem_limit == 0 || build_list_id->tuple_cnt > INT_MAX)
-    {
-      return false;
-    }
-
-  slot_array_size = (UINT64) mht_hls_slot_count ((int) build_list_id->tuple_cnt) * sizeof (MHT_HLS_SLOT);
-  entries_size = (UINT64) build_list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
-  payload_size = (UINT64) build_list_id->page_cnt * DB_PAGESIZE;
-  in_mem_size = slot_array_size + entries_size + payload_size;
-
-  return (in_mem_size <= mem_limit);
-}
-#endif /* defined (SERVER_MODE) */
 
 #if defined (SERVER_MODE)
 /*
@@ -1087,7 +1056,8 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
    * probe the shared table in-worker. Runtime-gated here; any producer failure aborts the
    * join (rows may already be consumed, so there is no fallback past this point). */
   if ((manager->join_type == JOIN_INNER || manager->join_type == JOIN_LEFT)
-      && context->hash_scan.hash_list_scan_type == HASH_METH_IN_MEM
+      && (context->hash_scan.hash_list_scan_type == HASH_METH_IN_MEM
+	  || context->hash_scan.hash_list_scan_type == HASH_METH_HYBRID)
       && thread_p->private_heap_id != 0 && hjoin_stream_parallel_outer_shape (outer_xasl))
     {
       error = hjoin_stream_execute_parallel (thread_p, manager, context, xasl_state, &context->list_id);
@@ -4074,6 +4044,56 @@ hjoin_destroy_qlist (THREAD_ENTRY * thread_p, HASHJOIN_CONTEXT * context)
 }
 
 /*
+ * hjoin_scan_predict_method() -
+ *   return: The hash method hjoin_scan_init will choose for this build input.
+ *   list_id(in): Materialized build input (non-NULL, tuple_cnt > 0).
+ *
+ * Note: The single source of the method decision -- hjoin_scan_init switches on this
+ *       prediction, so a caller that gates on it (the parallel streaming probe requires
+ *       IN_MEM or HYBRID and must fall back before any probe row is consumed) can never
+ *       drift from the actual choice.
+ */
+static HASH_METHOD
+hjoin_scan_predict_method (QFILE_LIST_ID * list_id)
+{
+  UINT64 mem_limit;
+  UINT64 in_mem_size = 0;
+  UINT64 hybrid_size = 0;
+
+  assert (list_id != NULL && list_id->tuple_cnt > 0);
+
+  mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+  assert (mem_limit > 0);
+
+  /* the slot array is int-indexed; the estimates are computable only when tuple_cnt fits in int */
+  if (list_id->tuple_cnt <= INT_MAX)
+    {
+      UINT64 slot_array_size = (UINT64) mht_hls_slot_count ((int) list_id->tuple_cnt) * sizeof (MHT_HLS_SLOT);
+      UINT64 entries_size = (UINT64) list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
+      UINT64 payload_size;
+
+      /* IN_MEM: slot array + one entry (header) per row + the tuples themselves */
+      payload_size = (UINT64) list_id->page_cnt * DB_PAGESIZE;
+      in_mem_size = slot_array_size + entries_size + payload_size;
+
+      /* HYBRID: slot array + one entry (header) per row + a tuple position per row; tuples stay on the temp file */
+      payload_size = (UINT64) list_id->tuple_cnt * sizeof (QFILE_TUPLE_SIMPLE_POS);
+      hybrid_size = slot_array_size + entries_size + payload_size;
+    }
+
+  if (list_id->tuple_cnt <= INT_MAX && in_mem_size <= mem_limit)
+    {
+      return HASH_METH_IN_MEM;
+    }
+  else if (list_id->tuple_cnt <= INT_MAX && hybrid_size <= mem_limit)
+    {
+      return HASH_METH_HYBRID;
+    }
+
+  return HASH_METH_HASH_FILE;
+}
+
+/*
  * hjoin_scan_init() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
  *   thread_p(in): Thread entry.
@@ -4084,17 +4104,12 @@ hjoin_destroy_qlist (THREAD_ENTRY * thread_p, HASHJOIN_CONTEXT * context)
 int
 hjoin_scan_init (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, int key_cnt, QFILE_LIST_ID * list_id)
 {
-  UINT64 mem_limit;
-
   int error = NO_ERROR;
 
   assert (thread_p != NULL);
   assert (hash_scan != NULL);
   assert (list_id == NULL || list_id->tuple_cnt > 0);
   assert (key_cnt > 0);
-
-  mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
-  assert (mem_limit > 0);
 
   assert (hash_scan->build_regu_list == NULL);	/* Unused */
   assert (hash_scan->probe_regu_list == NULL);	/* Unused */
@@ -4113,30 +4128,11 @@ hjoin_scan_init (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, int key_cn
 
   if (list_id != NULL)
     {
-      UINT64 in_mem_size = 0;
-      UINT64 hybrid_size = 0;
-
-      /* the slot array is int-indexed; the estimates are computable only when tuple_cnt fits in int */
-      if (list_id->tuple_cnt <= INT_MAX)
+      switch (hjoin_scan_predict_method (list_id))
 	{
-	  UINT64 slot_array_size = (UINT64) mht_hls_slot_count ((int) list_id->tuple_cnt) * sizeof (MHT_HLS_SLOT);
-	  UINT64 entries_size = (UINT64) list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
-	  UINT64 payload_size;
-
-	  /* IN_MEM: slot array + one entry (header) per row + the tuples themselves */
-	  payload_size = (UINT64) list_id->page_cnt * DB_PAGESIZE;
-	  in_mem_size = slot_array_size + entries_size + payload_size;
-
-	  /* HYBRID: slot array + one entry (header) per row + a tuple position per row; tuples stay on the temp file */
-	  payload_size = (UINT64) list_id->tuple_cnt * sizeof (QFILE_TUPLE_SIMPLE_POS);
-	  hybrid_size = slot_array_size + entries_size + payload_size;
-	}
-
-      if (list_id->tuple_cnt <= INT_MAX && in_mem_size <= mem_limit)
-	{
+	case HASH_METH_IN_MEM:
 #if HASHJOIN_DUMP_BUILD
 	  fprintf (stdout, "\nHash Join Method: In Memory\n");
-	  fprintf (stdout, "  - in_mem_size %lu <= mem_limit %lu\n", in_mem_size, mem_limit);
 #endif /* HASHJOIN_DUMP_BUILD */
 
 	  hash_scan->hash_list_scan_type = HASH_METH_IN_MEM;
@@ -4148,13 +4144,11 @@ hjoin_scan_init (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, int key_cn
 	    }
 
 	  hash_scan->memory.curr_hash_entry = NULL;
-	}
-      else if (list_id->tuple_cnt <= INT_MAX && hybrid_size <= mem_limit)
-	{
+	  break;
+
+	case HASH_METH_HYBRID:
 #if HASHJOIN_DUMP_BUILD
 	  fprintf (stdout, "\nHash Join Method: Hybrid\n");
-	  fprintf (stdout, "  - in_mem_size %lu > mem_limit %lu\n", in_mem_size, mem_limit);
-	  fprintf (stdout, "  - hybrid_size %lu <= mem_limit %lu\n", hybrid_size, mem_limit);
 #endif /* HASHJOIN_DUMP_BUILD */
 
 	  hash_scan->hash_list_scan_type = HASH_METH_HYBRID;
@@ -4166,12 +4160,12 @@ hjoin_scan_init (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, int key_cn
 	    }
 
 	  hash_scan->memory.curr_hash_entry = NULL;
-	}
-      else
-	{
+	  break;
+
+	default:
+	  assert (hjoin_scan_predict_method (list_id) == HASH_METH_HASH_FILE);
 #if HASHJOIN_DUMP_BUILD
 	  fprintf (stdout, "\nHash Join Method: File\n");
-	  fprintf (stdout, "  - hybrid_size %lu > mem_limit %lu\n", hybrid_size, mem_limit);
 #endif /* HASHJOIN_DUMP_BUILD */
 
 	  hash_scan->hash_list_scan_type = HASH_METH_HASH_FILE;
