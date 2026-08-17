@@ -80,7 +80,30 @@ typedef struct hashjoin_stream_state
   QFILE_LIST_ID *list_id;
   QFILE_TUPLE_RECORD overflow_record;
   INT64 probe_rows;
+
+  /* Streamed grace batching (S3b): when part_cnt > 1, context is the resident
+   * partition 0 and rows of other partitions are stamped with their hash key and
+   * appended to spill_list_id[part] instead of being probed. */
+  UINT32 part_cnt;
+  bool is_outer_join;
+  QFILE_LIST_ID **spill_list_id;
 } HASHJOIN_STREAM_STATE;
+
+/*
+ * hjoin_stream_partition_id() -
+ *   return: Partition of a non-NULL-key row; identical to hjoin_split_qlist's
+ *           placement (the last partition of an outer join is reserved for NULL keys
+ *           and receives no hashed rows), so a streamed probe row always lands in the
+ *           partition that holds its possible build matches.
+ *   hash_key(in): Full 32-bit hash of the join key.
+ *   part_cnt(in): Total partition count (including an outer join's NULL partition).
+ *   is_outer_join(in): Whether the join reserves the last partition for NULL keys.
+ */
+static UINT32
+hjoin_stream_partition_id (UINT32 hash_key, UINT32 part_cnt, bool is_outer_join)
+{
+  return (is_outer_join) ? (hash_key % (part_cnt - 1)) : (hash_key % part_cnt);
+}
 
 /* HASHJOIN_STREAM_WORKER: one parallel streaming probe worker.
  * Owns its join result list, its cursor over the shared read-only hash table, and its
@@ -122,6 +145,8 @@ static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_S
 static bool hjoin_stream_check_single (QFILE_LIST_ID * build_list_id);
 static int hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
 				 XASL_STATE * xasl_state);
+static int hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+					 HASHJOIN_CONTEXT * context, XASL_STATE * xasl_state);
 static int hjoin_stream_probe_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record);
 
 /* Hash Join Manager */
@@ -623,8 +648,14 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
 
   if (!hjoin_stream_check_single (inner_xasl->list_id))
     {
-      /* The build input needs partitioning; fall back to the materializing path. */
-      return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+      /* The build input needs partitioning.  Streamed grace batching (S3b) consumes
+       * probe rows through the serial emit hook only, so a parallel-capable outer
+       * keeps the materializing path; a serial-pinned outer streams with the build
+       * side split (hjoin_stream_execute_batched). */
+      if (!hjoin_stream_outer_scans_serial (outer_xasl))
+	{
+	  return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+	}
     }
 
 #if defined (SERVER_MODE)
@@ -968,6 +999,312 @@ cleanup:
 #endif /* defined (SERVER_MODE) */
 
 /*
+ * hjoin_stream_execute_batched() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager containing shared state.
+ *   context(in): Single context (its build input is consumed; its list_id receives
+ *                the merged join result).
+ *   xasl_state(in): XASL state of the query.
+ *
+ * Note: Streamed grace batching (S3b).  The build input does not fit one table, so it
+ *       is split into K partitions with the legacy splitter and partition 0's table is
+ *       built resident.  The probe then streams through the serial emit hook: rows of
+ *       partition 0 are probed immediately, rows of other partitions are stamped with
+ *       their hash and spilled to that partition's probe list.  The remaining
+ *       partitions run through the standard per-partition execution, which also
+ *       handles an outer join's reserved NULL partition (its spill stays empty because
+ *       NULL-key probe rows are filled inline by the stream, so the FILL_NULL_VALUES
+ *       pass emits nothing).  Only the probe rows of partitions 1..K-1 are
+ *       materialized -- 1/K of the input stays fully streamed.
+ */
+static int
+hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+			      XASL_STATE * xasl_state)
+{
+  HASHJOIN_SPLIT_INFO split_info;
+  QFILE_LIST_ID **temp_part_list_id = NULL;
+  QFILE_LIST_ID **spill_list_id = NULL;
+  HASH_SCAN_KEY *temp_key = NULL;
+  HASHJOIN_CONTEXT *part0 = NULL;
+  QFILE_LIST_ID *list_id = NULL;
+  XASL_NODE *outer_xasl;
+  UINT64 mem_limit, per_entry_size;
+  UINT32 part_cnt, part_index;
+  bool split_prepared = false;
+  bool part0_scan_opened = false;
+  // *INDENT-OFF*
+  HASHJOIN_STREAM_STATE stream_state = { NULL, NULL, NULL, { NULL, 0 }, 0, 0, false, NULL };
+  HASHJOIN_STREAM_HOOK stream_hook = { NULL, NULL };
+  // *INDENT-ON*
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (manager != NULL);
+  assert (context == &manager->single_context);
+  assert (manager->context_cnt == 0);
+  assert (context->build == &context->inner && context->probe == &context->outer);
+  assert (hjoin_stream_outer_scans_serial (manager->outer->xasl));
+
+  HASHJOIN_STATS *stats = context->stats;
+  HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
+  assert (!thread_is_on_trace (thread_p) || stats != NULL);
+
+  outer_xasl = manager->outer->xasl;
+
+  /* K from the build side only (same per-entry estimate as hjoin_check_partition; the
+   * probe size is unknown while it streams).  check_single failed, so K >= 2. */
+  mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+  per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS);
+  part_cnt =
+    CEIL_PTVDIV (per_entry_size * context->inner.list_id->tuple_cnt, mem_limit * PARTITION_FILL_FACTOR);
+  assert (part_cnt > 1);
+  if (IS_OUTER_JOIN_TYPE (manager->join_type))
+    {
+      part_cnt += 1;
+    }
+  manager->context_cnt = part_cnt;
+
+  error = hjoin_prepare_partition (thread_p, manager, &split_info);
+  if (error != NO_ERROR)
+    {
+      manager->context_cnt = 0;
+      goto error_exit;
+    }
+  split_prepared = true;
+
+  temp_part_list_id = (QFILE_LIST_ID **) db_private_alloc (thread_p, part_cnt * sizeof (QFILE_LIST_ID *));
+  if (temp_part_list_id == NULL)
+    {
+      goto error_exit;
+    }
+  memset (temp_part_list_id, 0, part_cnt * sizeof (QFILE_LIST_ID *));
+
+  temp_key = qdata_alloc_hscan_key (thread_p, manager->key_cnt, true);
+  if (temp_key == NULL)
+    {
+      goto error_exit;
+    }
+
+  /* split the BUILD side only; the probe side is routed while it streams */
+  error = hjoin_split_qlist (thread_p, manager, &split_info.inner, temp_part_list_id, temp_key);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  /* the single build list is consumed; the single (empty, preopened) probe list is no
+   * longer needed either -- spill lists carry its type list already */
+  hjoin_destroy_qlist (thread_p, context);
+
+  /* resident partition 0 */
+  part0 = &manager->contexts[0];
+  part0->build = &part0->inner;
+  part0->probe = &part0->outer;
+  part0->outer.list_scan_id.status = S_CLOSED;
+  part0->inner.list_scan_id.status = S_CLOSED;
+  if (manager->join_type == JOIN_LEFT)
+    {
+      part0->outer.fill_record = &part0->outer.tuple_record;
+      part0->inner.fill_record = NULL;
+    }
+
+  if (part0->inner.list_id->tuple_cnt > 0)
+    {
+      error = hjoin_scan_init (thread_p, &part0->hash_scan, manager->key_cnt, part0->inner.list_id);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+
+      error = qfile_open_list_scan (part0->inner.list_id, &part0->inner.list_scan_id);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+      part0_scan_opened = true;
+
+      error = hjoin_build (thread_p, manager, part0);	/* context_cnt > 0: stored-hash build */
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+    }
+  else
+    {
+      /* an empty resident partition still needs a probing table so its rows take the
+       * ordinary no-match path (INNER skips, LEFT fills inline) */
+      error = hjoin_scan_init (thread_p, &part0->hash_scan, manager->key_cnt, NULL);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+      part0->hash_scan.hash_list_scan_type = HASH_METH_IN_MEM;
+      part0->hash_scan.memory.hash_table = mht_create_hls ("Hash Join", 1, NULL, NULL);
+      if (part0->hash_scan.memory.hash_table == NULL)
+	{
+	  ASSERT_ERROR_AND_SET (error);
+	  goto error_exit;
+	}
+      part0->hash_scan.memory.curr_hash_entry = NULL;
+    }
+
+  /* stream the probe */
+  list_id = qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id, manager->qlist_flag, NULL);
+  if (list_id == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error);
+      goto error_exit;
+    }
+
+  spill_list_id = (QFILE_LIST_ID **) db_private_alloc (thread_p, part_cnt * sizeof (QFILE_LIST_ID *));
+  if (spill_list_id == NULL)
+    {
+      goto error_exit;
+    }
+  for (part_index = 0; part_index < part_cnt; part_index++)
+    {
+      spill_list_id[part_index] = manager->contexts[part_index].outer.list_id;
+    }
+
+  /* hjoin_probe_key distinguishes the first probe from chain continuation by
+   * tuple_record.tpl, so reset after the build loop left it on its last tuple */
+  // *INDENT-OFF*
+  part0->outer.tuple_record = { NULL, 0 };
+  part0->inner.tuple_record = { NULL, 0 };
+  // *INDENT-ON*
+
+  stream_state.manager = manager;
+  stream_state.context = part0;
+  stream_state.list_id = list_id;
+  stream_state.part_cnt = part_cnt;
+  stream_state.is_outer_join = IS_OUTER_JOIN_TYPE (manager->join_type);
+  stream_state.spill_list_id = spill_list_id;
+
+  stream_hook.func = hjoin_stream_probe_tuple;
+  stream_hook.arg = &stream_state;
+
+  assert (outer_xasl->emit_tuple_hook == NULL);
+  outer_xasl->emit_tuple_hook = &stream_hook;
+
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_start (thread_p, &start_stats);
+    }
+
+  error = qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+
+  outer_xasl->emit_tuple_hook = NULL;
+
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_end (thread_p, &stats->probe, &start_stats);
+      stats->probe.read_rows = stream_state.probe_rows;
+      stats->probe.qualified_rows = list_id->tuple_cnt;
+    }
+
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  qfile_close_list (thread_p, list_id);
+
+  /* the spill lists stayed open across the stream (single serial writer); close them
+   * for the per-partition scans */
+  for (part_index = 0; part_index < part_cnt; part_index++)
+    {
+      qfile_close_list (thread_p, manager->contexts[part_index].outer.list_id);
+    }
+
+  if (part0_scan_opened)
+    {
+      qfile_close_scan (thread_p, &part0->inner.list_scan_id);
+      part0_scan_opened = false;
+    }
+
+  /* partition 0 is fully consumed; clear it so the standard loop sees empty inputs */
+  hjoin_scan_clear (thread_p, &part0->hash_scan);
+  hjoin_clear_context (thread_p, part0);
+  part0->build = NULL;
+  part0->probe = NULL;
+
+  /* the stream result is the merge target of the per-partition loop */
+  context->list_id = list_id;
+  list_id = NULL;
+
+  error = hjoin_execute_partitions (thread_p, manager);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  hjoin_clear_split_info (thread_p, manager, &split_info, false);
+  db_private_free_and_init (thread_p, spill_list_id);
+  qdata_free_hscan_key (thread_p, temp_key, manager->key_cnt);
+  temp_key = NULL;
+  db_private_free_and_init (thread_p, temp_part_list_id);
+
+  ASSERT_NO_ERROR_OR_INTERRUPTED ();
+  return NO_ERROR;
+
+error_exit:
+  if (outer_xasl->emit_tuple_hook != NULL)
+    {
+      outer_xasl->emit_tuple_hook = NULL;
+    }
+  if (part0_scan_opened)
+    {
+      qfile_close_scan (thread_p, &part0->inner.list_scan_id);
+    }
+  if (part0 != NULL)
+    {
+      hjoin_scan_clear (thread_p, &part0->hash_scan);
+    }
+  if (list_id != NULL)
+    {
+      qfile_close_list (thread_p, list_id);
+      qfile_destroy_list (thread_p, list_id);
+      QFILE_FREE_AND_INIT_LIST_ID (list_id);
+    }
+  if (spill_list_id != NULL)
+    {
+      db_private_free_and_init (thread_p, spill_list_id);
+    }
+  if (temp_key != NULL)
+    {
+      qdata_free_hscan_key (thread_p, temp_key, manager->key_cnt);
+    }
+  if (temp_part_list_id != NULL)
+    {
+      for (part_index = 0; part_index < part_cnt; part_index++)
+	{
+	  if (temp_part_list_id[part_index] != NULL)
+	    {
+	      qfile_close_list (thread_p, temp_part_list_id[part_index]);
+	      qfile_destroy_list (thread_p, temp_part_list_id[part_index]);
+	      QFILE_FREE_AND_INIT_LIST_ID (temp_part_list_id[part_index]);
+	    }
+	}
+      db_private_free_and_init (thread_p, temp_part_list_id);
+    }
+  if (split_prepared)
+    {
+      /* the contexts (and their partition lists) are released by hjoin_clear_manager */
+      hjoin_clear_split_info (thread_p, manager, &split_info, false);
+    }
+
+  if (error == NO_ERROR || er_errid () == NO_ERROR)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      error = er_errid ();
+    }
+
+  return error;
+}
+
+/*
  * hjoin_stream_execute() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
  *   thread_p(in): Thread entry.
@@ -989,7 +1326,7 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   XASL_NODE *outer_xasl;
   QFILE_LIST_ID *list_id = NULL;
   // *INDENT-OFF*
-  HASHJOIN_STREAM_STATE stream_state = { NULL, NULL, NULL, { NULL, 0 }, 0 };
+  HASHJOIN_STREAM_STATE stream_state = { NULL, NULL, NULL, { NULL, 0 }, 0, 0, false, NULL };
   HASHJOIN_STREAM_HOOK stream_hook = { NULL, NULL };
   // *INDENT-ON*
 
@@ -1023,6 +1360,13 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
     {
       outer->fill_record = &outer->tuple_record;
       inner->fill_record = NULL;
+    }
+
+  if (!hjoin_stream_check_single (build->list_id))
+    {
+      /* streamed grace batching (S3b); hjoin_stream_check only admits this shape when
+       * the outer chain is pinned serial, so the emit hook sees every probe row */
+      return hjoin_stream_execute_batched (thread_p, manager, context, xasl_state);
     }
 
   error = hjoin_scan_init (thread_p, &context->hash_scan, manager->key_cnt, build->list_id);
@@ -1264,6 +1608,21 @@ hjoin_stream_probe_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD
     }
 
   hash_scan->curr_hash_key = qdata_hash_scan_key (key, UINT_MAX, hash_scan->hash_list_scan_type);
+
+  if (stream_state->part_cnt > 1)
+    {
+      UINT32 part_id = hjoin_stream_partition_id (hash_scan->curr_hash_key, stream_state->part_cnt,
+						  stream_state->is_outer_join);
+
+      if (part_id != 0)
+	{
+	  /* another batch's row: stamp the hash into the reserved first column (as the
+	   * legacy split does) and spill it; partitions 1..K-1 run through the standard
+	   * per-partition execution after the stream ends */
+	  hjoin_update_tuple_hash_key (thread_p, &probe->tuple_record, hash_scan->curr_hash_key);
+	  return qfile_add_tuple_to_list (thread_p, stream_state->spill_list_id[part_id], probe->tuple_record.tpl);
+	}
+    }
 
   do
     {
