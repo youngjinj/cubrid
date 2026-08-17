@@ -675,6 +675,13 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
 	  UINT64 part_cnt = CEIL_PTVDIV (per_entry_size * inner_xasl->list_id->tuple_cnt,
 					 mem_limit * PARTITION_FILL_FACTOR);
 
+	  if (IS_OUTER_JOIN_TYPE (join_type))
+	    {
+	      /* the batched executor adds the reserved NULL partition; keep the cap
+	       * comparison on the same total */
+	      part_cnt += 1;
+	    }
+
 	  if (part_cnt > HJOIN_SBATCH_MAX_PARALLEL_PARTS)
 	    {
 	      return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
@@ -964,7 +971,13 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
 		  /* adopt: the empty preopened partition list gives way to the worker's
 		   * (same pattern as hjoin_split_qlist's temp adoption) */
 		  qfile_destroy_list (thread_p, part_base);
-		  qfile_copy_list_id (part_base, wl, false, QFILE_PROHIBIT_DEPENDENT);
+		  error = qfile_copy_list_id (part_base, wl, false, QFILE_PROHIBIT_DEPENDENT);
+		  if (error != NO_ERROR)
+		    {
+		      qfile_destroy_list (thread_p, wl);
+		      QFILE_FREE_AND_INIT_LIST_ID (wl);
+		      break;
+		    }
 		  QFILE_FREE_AND_INIT_LIST_ID (wl);
 		}
 	      else
