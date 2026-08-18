@@ -326,6 +326,38 @@ typedef struct hashjoin_stream_slot
   QFILE_LIST_ID **spill_list_id;
 } HASHJOIN_STREAM_SLOT;
 
+/* HASHJOIN_STREAM_BUILD_BUDGET (B3)
+ * Shared reserve-before-allocate budget of the parallel streamed build: every worker
+ * reserves bytes with a CAS loop before it allocates (slot arrays, arena chunks, the
+ * final merge table), so concurrent workers cannot race past the limit.  A failed
+ * reservation trips stop_capacity once; the sinks then discard rows and the main
+ * thread restarts the build as a serial materialization. */
+typedef struct hashjoin_stream_build_budget
+{
+  UINT64 limit;
+  volatile UINT64 reserved;
+  volatile INT32 stop_capacity;
+} HASHJOIN_STREAM_BUILD_BUDGET;
+
+/* HASHJOIN_STREAM_BUILD_SLOT (B3)
+ * One parallel streamed-build worker.  worker_state holds the worker-private
+ * resources (table, temp key, tuple buffer), created lazily on the worker's first
+ * row; the finalize hook moves the finished table out into hash_table for the main
+ * thread to merge (worker tables are contention-free — merging happens after all
+ * producers joined). */
+typedef struct hashjoin_stream_build_slot
+{
+  HASHJOIN_MANAGER *manager;
+  HASHJOIN_STREAM_BUILD_BUDGET *budget;
+  void *worker_state;
+  MHT_HLS_TABLE *hash_table;
+
+  INT64 rows_seen;
+  INT64 keys_inserted;
+
+  int error;
+} HASHJOIN_STREAM_BUILD_SLOT;
+
 /* HASHJOIN_INPUT_SPLIT_INFO */
 typedef struct hashjoin_input_split_info
 {

@@ -2169,16 +2169,16 @@ namespace parallel_scan
   template class manager<RESULT_TYPE::BUILDVALUE_OPT, SCAN_TYPE::INDEX>;
 }
 
-/* scan_run_hashjoin_probe_producers - see px_scan.hpp. Mirrors the minimal subset of
-   * manager<MERGEABLE_LIST, HEAP>::open/start_tasks/read for a caller that owns the probe:
-   * rows never reach the writer lists (the row sink diverts them), so read () only waits
-   * for worker completion and merges empty lists into the (empty, preopened) outer list. */
+/* scan_run_hashjoin_producers - see px_scan.hpp. Mirrors the minimal subset of
+   * manager<MERGEABLE_LIST, HEAP>::open/start_tasks/read for a caller that owns the rows:
+   * they never reach the writer lists (the row sink diverts them), so read () only waits
+   * for worker completion and merges empty lists into the (empty, preopened) list. */
 int
-scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xasl_node *outer_xasl,
-				   val_descr *orig_vd, HFID hfid, OID cls_oid, int parallelism,
-				   parallel_query::worker_manager *worker_mgr,
-				   int (*sink) (THREAD_ENTRY *, OUTPTR_LIST *, val_descr *, void *),
-				   void (*sink_end) (THREAD_ENTRY *, void *), void **sink_args)
+scan_run_hashjoin_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xasl_node *producer_xasl,
+			     val_descr *orig_vd, HFID hfid, OID cls_oid, int parallelism,
+			     parallel_query::worker_manager *worker_mgr,
+			     int (*sink) (THREAD_ENTRY *, OUTPTR_LIST *, val_descr *, void *),
+			     void (*sink_end) (THREAD_ENTRY *, void *), void **sink_args, bool merge_worker_trace)
 {
   {
     using namespace parallel_scan;
@@ -2200,7 +2200,7 @@ scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xa
     int error = NO_ERROR;
     int h, i;
 
-    assert (thread_p != nullptr && outer_xasl != nullptr && orig_vd != nullptr);
+    assert (thread_p != nullptr && producer_xasl != nullptr && orig_vd != nullptr);
     assert (parallelism >= 1 && sink != nullptr && sink_end != nullptr && sink_args != nullptr);
 
     query_entry = qmgr_get_query_entry (thread_p, query_id, thread_p->tran_index);
@@ -2248,7 +2248,7 @@ scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xa
 	  }
       }
 
-    pre_exec_info.capture_precomp_vals (outer_xasl);
+    pre_exec_info.capture_precomp_vals (producer_xasl);
 
     input_p = (input_t *) db_private_alloc (thread_p, sizeof (input_t));
     if (input_p == nullptr)
@@ -2272,13 +2272,13 @@ scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xa
 	goto cleanup;
       }
     handler_p = placement_new (handler_p, query_id, &interrupt, &err_messages, parallelism,
-			       false /* g_agg_domain_resolve_need */, outer_xasl);
+			       false /* g_agg_domain_resolve_need */, producer_xasl);
     handler_p->set_trace_handler (&trace);
-    if (thread_p->on_trace)
+    if (thread_p->on_trace && merge_worker_trace)
       {
 	/* task finalize merges worker stats into the main tree; without this the merge
 	 * dereferences a null main tree (crash observed at px_scan_trace_handler.cpp:482) */
-	trace.m_trace_storage_for_sibling_xasl.set_main_xasl_tree (outer_xasl);
+	trace.m_trace_storage_for_sibling_xasl.set_main_xasl_tree (producer_xasl);
       }
 
     for (i = 0; i < parallelism; i++)
@@ -2291,17 +2291,17 @@ scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xa
 	    error = ER_FAILED;
 	    break;
 	  }
-	trace_handler *trace_p = thread_p->on_trace ? &trace : nullptr;
+	trace_handler *trace_p = (thread_p->on_trace && merge_worker_trace) ? &trace : nullptr;
 	/* Mirror the executor's fixed-scan decision for the admitted shape: a single
 	 * innermost sequential class spec (chains, indexes and correlated/HAVING
 	 * subqueries are gate-rejected and the caller requires S_SELECT), so only the
 	 * compile-time opt-out remains.  A non-fixed scan re-fixes the page and copies
 	 * the record for every row, which dominated the probe profile. */
-	bool is_fixed = !XASL_IS_FLAGED (outer_xasl, XASL_NO_FIXED_SCAN);
+	bool is_fixed = !XASL_IS_FLAGED (producer_xasl, XASL_NO_FIXED_SCAN);
 	task_p = placement_new (task_p, thread_p, query_entry, handler_p, input_p, &interrupt, &err_messages,
-				vd, trace_p, worker_mgr, outer_xasl->header.id, hfid, cls_oid,
+				vd, trace_p, worker_mgr, producer_xasl->header.id, hfid, cls_oid,
 				is_fixed, false /* is_grouped */, false /* is_cached_scan */,
-				uses_xasl_clone, outer_xasl, &pre_exec_info);
+				uses_xasl_clone, producer_xasl, &pre_exec_info);
 	task_p->set_row_sink (sink, sink_end, sink_args[i]);
 
 	if (worker_mgr != nullptr)
@@ -2324,7 +2324,7 @@ scan_run_hashjoin_probe_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xa
 	 * writer lists are all empty (rows were diverted), so the merge is a no-op append
 	 * into the preopened empty outer list. */
 	handler_p->read_initialize (thread_p);
-	scan_code = handler_p->read (thread_p, outer_xasl->list_id);
+	scan_code = handler_p->read (thread_p, producer_xasl->list_id);
 	handler_p->read_finalize (thread_p);
 	if (scan_code == S_ERROR)
 	  {

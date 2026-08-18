@@ -34,7 +34,7 @@
 #include "file_manager.h"	/* file_get_num_user_pages */
 #include "log_impl.h"		/* logtb_get_mvcc_snapshot */
 #include "px_parallel.hpp"	/* parallel_query::compute_parallel_degree */
-#include "px_scan.hpp"		/* scan_run_hashjoin_probe_producers */
+#include "px_scan.hpp"		/* scan_run_hashjoin_producers */
 #include "px_worker_manager.hpp"	/* parallel_query::worker_manager */
 #include "query_executor.h"	/* XASL_STATE, qexec_execute_mainblock */
 #include "query_list.h"		/* JOIN_TYPE */
@@ -202,6 +202,15 @@ typedef struct hashjoin_stream_build_state
 
 static int hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
 				     XASL_STATE * xasl_state, bool * resident);
+#if defined (SERVER_MODE)
+static int hjoin_stream_build_input_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+					      HASHJOIN_CONTEXT * context, XASL_STATE * xasl_state, bool * resident,
+					      bool * materialized);
+static int hjoin_stream_build_row_sink (THREAD_ENTRY * thread_p, OUTPTR_LIST * outptr_list, struct val_descr *vd,
+					void *arg);
+static void hjoin_stream_build_row_sink_end (THREAD_ENTRY * thread_p, void *arg);
+static bool hjoin_stream_build_budget_reserve (HASHJOIN_STREAM_BUILD_BUDGET * budget, UINT64 bytes);
+#endif /* defined (SERVER_MODE) */
 static int hjoin_stream_build_pin_serial (THREAD_ENTRY * thread_p, XASL_NODE * inner_xasl,
 					  ACCESS_SPEC_TYPE *** pinned_specs, int *pinned_cnt);
 static void hjoin_stream_build_unpin_serial (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE ** pinned_specs,
@@ -1016,7 +1025,7 @@ hjoin_stream_check_single (QFILE_LIST_ID * build_list_id)
  *   result_list_id(out): The merged join result (closed).
  *
  * Note: Lifecycle adapter of the parallel streaming probe (design §4). Runs W producer
- *       tasks over the outer heap via scan_run_hashjoin_probe_producers; each worker
+ *       tasks over the outer heap via scan_run_hashjoin_producers; each worker
  *       probes the shared table through hjoin_stream_row_sink into a main-created join
  *       list. Reservation failure degrades to one synchronous producer on this thread.
  *       Returns ER_FAILED without a fallback once producers may have consumed rows.
@@ -1102,10 +1111,11 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
       hjoin_trace_start (thread_p, &start_stats);
     }
 
-  error = scan_run_hashjoin_probe_producers (thread_p, manager->query_id, outer_xasl,
-					     context->val_descr, spec->s.cls_node.hfid,
-					     spec->s.cls_node.cls_oid, w, worker_mgr,
-					     hjoin_stream_row_sink, hjoin_stream_row_sink_end, slot_args);
+  error = scan_run_hashjoin_producers (thread_p, manager->query_id, outer_xasl,
+				       context->val_descr, spec->s.cls_node.hfid,
+				       spec->s.cls_node.cls_oid, w, worker_mgr,
+				       hjoin_stream_row_sink, hjoin_stream_row_sink_end, slot_args,
+				       true /* merge_worker_trace */ );
 
   for (i = 0; i < w; i++)
     {
@@ -1681,6 +1691,581 @@ error_exit:
 
   return error;
 }
+
+#if defined (SERVER_MODE)
+
+/* HASHJOIN_STREAM_BUILD_WORKER (B3)
+ * Worker-private parallel streamed-build state, created lazily on the first row and
+ * released on the worker thread (its temp key and tuple buffer live on the worker's
+ * private heap).  The finished table is moved out to the slot at finalize; the main
+ * thread merges the tables after every producer joined. */
+typedef struct hashjoin_stream_build_worker
+{
+  MHT_HLS_TABLE *hash_table;
+  HASH_SCAN_KEY *temp_key;
+  QFILE_TUPLE_RECORD tuple_buf;
+
+  /* read-only column layout shared with the main context; tuple_record unused */
+  HASHJOIN_FETCH_INFO fetch;
+
+  /* per-arena chunk model; the bytes themselves are reserved on the shared budget */
+  UINT64 chunk_free;
+} HASHJOIN_STREAM_BUILD_WORKER;
+
+/*
+ * hjoin_stream_build_budget_reserve() -
+ *   return: True when bytes were reserved; false when the limit would be exceeded.
+ *   budget(in): Shared budget.
+ *   bytes(in): Bytes to reserve BEFORE the allocation they cover.
+ */
+static bool
+hjoin_stream_build_budget_reserve (HASHJOIN_STREAM_BUILD_BUDGET * budget, UINT64 bytes)
+{
+  UINT64 cur;
+
+  do
+    {
+      cur = budget->reserved;
+      if (cur + bytes > budget->limit)
+	{
+	  return false;
+	}
+    }
+  while (!ATOMIC_CAS_64 (&budget->reserved, cur, cur + bytes));
+
+  return true;
+}
+
+/*
+ * hjoin_stream_build_worker_init() -
+ *   return: Error code; a capacity refusal is not an error (stop_capacity trips).
+ *   thread_p(in): Worker thread entry.
+ *   slot(in): This worker's slot.
+ */
+static int
+hjoin_stream_build_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_SLOT * slot)
+{
+  HASHJOIN_STREAM_BUILD_WORKER *worker;
+  HASHJOIN_MANAGER *manager = slot->manager;
+  HASHJOIN_CONTEXT *single_context = &manager->single_context;
+  UINT64 fixed_bytes;
+
+  assert (slot->worker_state == NULL);
+
+  /* the empty table's fixed footprint, reserved before anything is created */
+  fixed_bytes = HASH_LIST_SCAN_DATA_CHUNK_SIZE
+    + (UINT64) mht_hls_slot_count (HJOIN_STREAM_BUILD_INITIAL_EST) * sizeof (MHT_HLS_SLOT)
+    + sizeof (MHT_HLS_TABLE);
+  if (!hjoin_stream_build_budget_reserve (slot->budget, fixed_bytes))
+    {
+      ATOMIC_TAS_32 (&slot->budget->stop_capacity, 1);
+      return NO_ERROR;		/* sink discards from here on; the main thread restarts */
+    }
+
+  worker = (HASHJOIN_STREAM_BUILD_WORKER *) db_private_alloc (thread_p, sizeof (HASHJOIN_STREAM_BUILD_WORKER));
+  if (worker == NULL)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+  memset (worker, 0, sizeof (HASHJOIN_STREAM_BUILD_WORKER));
+
+  worker->temp_key = qdata_alloc_hscan_key (thread_p, manager->key_cnt, true);
+  if (worker->temp_key == NULL)
+    {
+      db_private_free_and_init (thread_p, worker);
+      assert_release_error (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+
+  worker->hash_table = mht_create_hls ("Hash Join", HJOIN_STREAM_BUILD_INITIAL_EST, NULL, NULL);
+  if (worker->hash_table == NULL)
+    {
+      qdata_free_hscan_key (thread_p, worker->temp_key, worker->temp_key->val_count);
+      db_private_free_and_init (thread_p, worker);
+      assert_release_error (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+
+  worker->chunk_free = HJOIN_STREAM_BUILD_CHUNK_USABLE;
+
+  /* read-only column layout; the fetch record is passed per row */
+  worker->fetch.list_id = NULL;
+  worker->fetch.list_scan_id.status = S_CLOSED;
+  worker->fetch.input = single_context->inner.input;
+  worker->fetch.coerce_domains = single_context->inner.coerce_domains;
+  worker->fetch.need_coerce_domains = single_context->inner.need_coerce_domains;
+  worker->fetch.fill_record = NULL;
+
+  slot->worker_state = worker;
+
+  return NO_ERROR;
+}
+
+/*
+ * hjoin_stream_build_row_sink() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Worker thread entry.
+ *   outptr_list(in): Producer's projected row.
+ *   vd(in): Worker value descriptor.
+ *   arg(in): HASHJOIN_STREAM_BUILD_SLOT of this worker.
+ *
+ * Note: B3 parallel streamed build: materialize the projected row into the worker's
+ *       private buffer and insert it into the worker's private table.  After a
+ *       capacity stop the remaining rows are discarded (the whole parallel build is
+ *       restarted as a serial materialization), so no error state is raised for it.
+ */
+static int
+hjoin_stream_build_row_sink (THREAD_ENTRY * thread_p, OUTPTR_LIST * outptr_list, struct val_descr *vd, void *arg)
+{
+  HASHJOIN_STREAM_BUILD_SLOT *slot = (HASHJOIN_STREAM_BUILD_SLOT *) arg;
+  HASHJOIN_STREAM_BUILD_WORKER *worker;
+  MHT_HLS_TABLE *hash_table;
+  MHT_HLS_ENTRY *entry;
+  UINT32 hash_key;
+  UINT64 row_cost, slot_bytes, need, chunk_charge, chunk_capacity;
+  bool need_skip = false, grow_needed;
+
+  int error = NO_ERROR;
+
+  if (slot->budget->stop_capacity != 0)
+    {
+      return NO_ERROR;		/* discarding; the restart rebuilds from the heap */
+    }
+
+  if (slot->worker_state == NULL)
+    {
+      error = hjoin_stream_build_worker_init (thread_p, slot);
+      if (error != NO_ERROR)
+	{
+	  slot->error = error;
+	  return error;
+	}
+      if (slot->worker_state == NULL)
+	{
+	  return NO_ERROR;	/* capacity refusal at init */
+	}
+    }
+  worker = (HASHJOIN_STREAM_BUILD_WORKER *) slot->worker_state;
+  hash_table = worker->hash_table;
+
+  slot->rows_seen++;
+
+  if (qdata_copy_valptr_list_to_tuple (thread_p, outptr_list, vd, &worker->tuple_buf) != NO_ERROR)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      slot->error = er_errid ();
+      return slot->error;
+    }
+
+  error = hjoin_fetch_key (thread_p, &worker->fetch, &worker->tuple_buf, worker->temp_key, NULL /* compare_key */ ,
+			   &need_skip);
+  if (error != NO_ERROR)
+    {
+      slot->error = error;
+      return error;
+    }
+  if (need_skip)
+    {
+      return NO_ERROR;		/* NULL join key: never matches (same as the serial build) */
+    }
+
+  hash_key = qdata_hash_scan_key (worker->temp_key, UINT_MAX, HASH_METH_IN_MEM);
+
+  /* pre-insert reservation, mirroring the serial model (B1) with CAS reservations */
+  row_cost = DB_ALIGN (sizeof (MHT_HLS_ENTRY) + (UINT64) QFILE_GET_TUPLE_LENGTH (worker->tuple_buf.tpl),
+		       MAX_ALIGNMENT);
+  slot_bytes = (UINT64) hash_table->size * sizeof (MHT_HLS_SLOT);
+
+  need = 0;
+  chunk_charge = 0;
+  chunk_capacity = 0;
+  if (row_cost > worker->chunk_free)
+    {
+      if (row_cost > HJOIN_STREAM_BUILD_CHUNK_USABLE)
+	{
+	  chunk_charge = row_cost + HJOIN_STREAM_BUILD_CHUNK_OVERHEAD;
+	  chunk_capacity = row_cost;
+	}
+      else
+	{
+	  chunk_charge = HASH_LIST_SCAN_DATA_CHUNK_SIZE;
+	  chunk_capacity = HJOIN_STREAM_BUILD_CHUNK_USABLE;
+	}
+      need += chunk_charge;
+    }
+
+  grow_needed = ((UINT64) hash_table->nslots_used + 1 > HJOIN_STREAM_BUILD_GROW_AT (hash_table->size));
+  if (grow_needed)
+    {
+      need += slot_bytes;	/* doubling nets +slot_bytes */
+    }
+
+  if (need > 0 && !hjoin_stream_build_budget_reserve (slot->budget, need))
+    {
+      ATOMIC_TAS_32 (&slot->budget->stop_capacity, 1);
+      return NO_ERROR;
+    }
+
+  if (grow_needed)
+    {
+      error = mht_grow_hls (hash_table);
+      if (error != NO_ERROR)
+	{
+	  slot->error = error;
+	  return error;
+	}
+    }
+
+  entry = qdata_alloc_hscan_value (thread_p, hash_table->heap_id, worker->tuple_buf.tpl);
+  if (entry == NULL)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      slot->error = er_errid ();
+      return slot->error;
+    }
+
+  if (mht_put_hls_try (hash_table, (void *) &hash_key, entry) == NULL)
+    {
+      assert_release_error (false);
+      slot->error = er_errid ();
+      return slot->error;
+    }
+
+  if (chunk_charge != 0)
+    {
+      worker->chunk_free = chunk_capacity;
+    }
+  worker->chunk_free -= row_cost;
+  slot->keys_inserted++;
+
+  return NO_ERROR;
+}
+
+/*
+ * hjoin_stream_build_row_sink_end() -
+ *   thread_p(in): Worker thread entry.
+ *   arg(in): HASHJOIN_STREAM_BUILD_SLOT of this worker.
+ *
+ * Note: Runs once on the worker thread when its task finishes: the finished table
+ *       moves out to the slot (merged or destroyed by the main thread); the temp key
+ *       and tuple buffer live on the worker's private heap and are freed here.
+ */
+static void
+hjoin_stream_build_row_sink_end (THREAD_ENTRY * thread_p, void *arg)
+{
+  HASHJOIN_STREAM_BUILD_SLOT *slot = (HASHJOIN_STREAM_BUILD_SLOT *) arg;
+  HASHJOIN_STREAM_BUILD_WORKER *worker = (HASHJOIN_STREAM_BUILD_WORKER *) slot->worker_state;
+
+  if (worker == NULL)
+    {
+      return;
+    }
+
+  slot->hash_table = worker->hash_table;
+  worker->hash_table = NULL;
+
+  if (worker->temp_key != NULL)
+    {
+      qdata_free_hscan_key (thread_p, worker->temp_key, worker->temp_key->val_count);
+    }
+  if (worker->tuple_buf.tpl != NULL)
+    {
+      db_private_free_and_init (thread_p, worker->tuple_buf.tpl);
+    }
+
+  db_private_free_and_init (thread_p, worker);
+  slot->worker_state = NULL;
+}
+
+/*
+ * hjoin_stream_build_input_parallel() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager containing shared state.
+ *   context(in): Hash join context (single context; build/probe already assigned).
+ *   xasl_state(in): XASL state of the query.
+ *   resident(out): True when the merged table is ready in context->hash_scan.
+ *   materialized(out): True when a capacity stop restarted the build as a serial
+ *       materialization (the build input is a list now, same contract as an aptr run).
+ *
+ * Note: B3: W producer tasks stream the build input's heap slices into worker-private
+ *       tables; the main thread merges them (pointer-level chain splice, arenas
+ *       adopted) after every producer joined.  Neither *resident nor *materialized is
+ *       set when the input is too small for parallelism — the caller falls back to
+ *       the serial streamed build (B1).  Workers' trace statistics are not merged
+ *       into the build proc's tree (the result may be discarded); row counts flow
+ *       through the slots instead.
+ */
+static int
+hjoin_stream_build_input_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+				   XASL_STATE * xasl_state, bool * resident, bool * materialized)
+{
+  XASL_NODE *inner_xasl;
+  ACCESS_SPEC_TYPE *spec;
+  HASH_LIST_SCAN *hash_scan;
+  HASHJOIN_STREAM_BUILD_SLOT *slots = NULL;
+  void **slot_args = NULL;
+  MHT_HLS_TABLE *final_table = NULL;
+  // *INDENT-OFF*
+  HASHJOIN_STREAM_BUILD_BUDGET budget = { 0, 0, 0 };
+  parallel_query::worker_manager * worker_mgr = NULL;
+  // *INDENT-ON*
+  UINT64 total_slots_used = 0, final_bytes;
+  INT64 total_rows = 0, total_keys = 0;
+  UINT32 degree;
+  int num_pages = -1;
+  int w, i;
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL && manager != NULL && context != NULL);
+  assert (context->build == &context->inner);
+  assert (resident != NULL && materialized != NULL);
+
+  HASHJOIN_STATS *stats = context->stats;
+  HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
+  assert (!thread_is_on_trace (thread_p) || stats != NULL);
+
+  *resident = false;
+  *materialized = false;
+
+  inner_xasl = manager->inner->xasl;
+  spec = inner_xasl->spec_list;
+  hash_scan = &context->hash_scan;
+
+  /* The streamed build is one phase of a join whose parallel scale is set by the
+   * probe side (the legacy parallel hash join sizes its degree from the probe input
+   * too): a build whose own heap is small still serializes ~3x its scan cost into
+   * table inserts, and the probe phase that follows will run with this degree anyway.
+   * The caller admitted the parallel-probe shape, so the outer spec is a single
+   * sequential heap. */
+  error = file_get_num_user_pages (thread_p, &manager->outer->xasl->spec_list->s.cls_node.hfid.vfid, &num_pages);
+  if (error != NO_ERROR)
+    {
+      ASSERT_ERROR ();
+      return error;
+    }
+  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::SCAN, num_pages, -1 /* auto */ );
+  if (degree < 2)
+    {
+      /* too small for producers; the serial streamed build (B1) avoids the W-table
+       * fixed costs and the clone machinery */
+      return NO_ERROR;
+    }
+
+  worker_mgr = parallel_query::worker_manager::try_reserve_workers (degree);
+  w = (worker_mgr != NULL) ? worker_mgr->get_reserved_workers () : 1;
+
+  slots = (HASHJOIN_STREAM_BUILD_SLOT *) db_private_alloc (thread_p, w * sizeof (HASHJOIN_STREAM_BUILD_SLOT));
+  slot_args = (void **) db_private_alloc (thread_p, w * sizeof (void *));
+  if (slots == NULL || slot_args == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error);
+      goto cleanup;
+    }
+  memset (slots, 0, w * sizeof (HASHJOIN_STREAM_BUILD_SLOT));
+
+  budget.limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+  budget.reserved = 0;
+  budget.stop_capacity = 0;
+
+  for (i = 0; i < w; i++)
+    {
+      slots[i].manager = manager;
+      slots[i].budget = &budget;
+      slot_args[i] = &slots[i];
+    }
+
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_start (thread_p, &start_stats);
+    }
+
+  error = scan_run_hashjoin_producers (thread_p, manager->query_id, inner_xasl,
+				       context->val_descr, spec->s.cls_node.hfid,
+				       spec->s.cls_node.cls_oid, w, worker_mgr,
+				       hjoin_stream_build_row_sink, hjoin_stream_build_row_sink_end, slot_args,
+				       false /* merge_worker_trace: the result may be discarded */ );
+
+  /* the build worker reservation must be fully released before the probe phase
+   * reserves its own workers (no double reservation) */
+  if (worker_mgr != NULL)
+    {
+      worker_mgr->release_workers ();
+      worker_mgr = NULL;
+    }
+
+  for (i = 0; i < w; i++)
+    {
+      if (error == NO_ERROR && slots[i].error != NO_ERROR)
+	{
+	  error = slots[i].error;
+	}
+      total_slots_used += (slots[i].hash_table != NULL) ? slots[i].hash_table->nslots_used : 0;
+      total_rows += slots[i].rows_seen;
+      total_keys += slots[i].keys_inserted;
+    }
+
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  if (budget.stop_capacity != 0)
+    {
+      /* capacity restart: drop every worker table, then materialize the build input
+       * once — the heap is re-read under the same snapshot, and nothing of the
+       * abandoned attempt was committed (status, PSTAT, trace, lists all untouched) */
+      for (i = 0; i < w; i++)
+	{
+	  if (slots[i].hash_table != NULL)
+	    {
+	      mht_destroy_hls (slots[i].hash_table);
+	      slots[i].hash_table = NULL;
+	    }
+	}
+
+      error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+
+      *materialized = true;
+      goto trace_done;
+    }
+
+  /* merge: size the final table from the occupied-slot sum (an upper bound on its
+   * distinct hashes), reserve its whole footprint — slot array, initial chunk,
+   * descriptor and the attached-arena array — then adopt every worker table */
+  final_bytes = (UINT64) mht_hls_slot_count ((int) MIN (total_slots_used, (UINT64) INT32_MAX)) * sizeof (MHT_HLS_SLOT)
+    + HASH_LIST_SCAN_DATA_CHUNK_SIZE + sizeof (MHT_HLS_TABLE) + (UINT64) w * sizeof (HL_HEAPID);
+  if (total_slots_used > 0 && !hjoin_stream_build_budget_reserve (&budget, final_bytes))
+    {
+      /* the merge peak itself exceeds the limit; restart as above */
+      for (i = 0; i < w; i++)
+	{
+	  if (slots[i].hash_table != NULL)
+	    {
+	      mht_destroy_hls (slots[i].hash_table);
+	      slots[i].hash_table = NULL;
+	    }
+	}
+
+      error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+
+      *materialized = true;
+      goto trace_done;
+    }
+
+  final_table = mht_create_hls ("Hash Join", (int) MAX (total_slots_used, 1), NULL, NULL);
+  if (final_table == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error);
+      goto cleanup;
+    }
+
+  error = mht_prepare_attached_arenas_hls (final_table, w);
+  if (error != NO_ERROR)
+    {
+      goto cleanup;
+    }
+
+  for (i = 0; i < w; i++)
+    {
+      if (slots[i].hash_table != NULL)
+	{
+	  mht_adopt_hls (final_table, slots[i].hash_table);
+	  slots[i].hash_table = NULL;
+	}
+    }
+
+  /* hand the merged table to the context, mirroring hjoin_scan_init's IN_MEM setup */
+  assert (hash_scan->temp_key == NULL && hash_scan->temp_new_key == NULL);
+  hash_scan->temp_key = qdata_alloc_hscan_key (thread_p, manager->key_cnt, true);
+  if (hash_scan->temp_key == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error);
+      goto cleanup;
+    }
+  hash_scan->temp_new_key = qdata_alloc_hscan_key (thread_p, manager->key_cnt, true);
+  if (hash_scan->temp_new_key == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error);
+      goto cleanup;
+    }
+
+  hash_scan->hash_list_scan_type = HASH_METH_IN_MEM;
+  hash_scan->memory.hash_table = final_table;
+  hash_scan->memory.curr_hash_entry = NULL;
+  hash_scan->curr_hash_key = 0;
+  hash_scan->need_coerce_type = false;
+  final_table = NULL;		/* owned by the context (hjoin_scan_clear) now */
+
+  *resident = true;
+
+trace_done:
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_end (thread_p, &stats->build, &start_stats);
+      if (*resident)
+	{
+	  stats->build.read_rows = total_rows;
+	  stats->build.qualified_rows = total_keys;
+	  stats->hash_method = HASH_METH_IN_MEM;
+	  stats->swap_join_inputs = false;
+	}
+      /* on a restart the serial materialization and the list-based build own the
+       * build statistics; only the physical cost above is kept */
+    }
+
+cleanup:
+  if (worker_mgr != NULL)
+    {
+      worker_mgr->release_workers ();
+    }
+  if (error != NO_ERROR && slots != NULL)
+    {
+      for (i = 0; i < w; i++)
+	{
+	  if (slots[i].hash_table != NULL)
+	    {
+	      mht_destroy_hls (slots[i].hash_table);
+	    }
+	}
+    }
+  if (final_table != NULL)
+    {
+      mht_destroy_hls (final_table);
+    }
+  if (error != NO_ERROR)
+    {
+      hjoin_scan_clear (thread_p, hash_scan);
+    }
+  if (slots != NULL)
+    {
+      db_private_free_and_init (thread_p, slots);
+    }
+  if (slot_args != NULL)
+    {
+      db_private_free_and_init (thread_p, slot_args);
+    }
+
+  if (error != NO_ERROR && er_errid () == NO_ERROR)
+    {
+      assert_release_error (false);
+      error = ER_FAILED;
+    }
+
+  return error;
+}
+
+#endif /* defined (SERVER_MODE) */
 
 /*
  * hjoin_stream_build_pin_serial() -
@@ -2336,11 +2921,31 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   if (manager->stream_build_pending)
     {
       bool build_resident = false;
+      bool build_materialized = false;
 
-      error = hjoin_stream_build_input (thread_p, manager, context, xasl_state, &build_resident);
-      if (error != NO_ERROR)
+#if defined (SERVER_MODE)
+      if (!hjoin_stream_outer_scans_serial (manager->outer->xasl)
+	  && hjoin_stream_parallel_outer_shape (manager->inner->xasl))
 	{
-	  goto error_exit;
+	  /* B3: parallel streamed build (v1: parallel-probe shapes only, so the
+	   * duplicate-key emission order of the serial paths stays untouched).
+	   * Falls through to the serial hook when the input is too small. */
+	  error = hjoin_stream_build_input_parallel (thread_p, manager, context, xasl_state, &build_resident,
+						     &build_materialized);
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
+	}
+#endif /* defined (SERVER_MODE) */
+
+      if (!build_resident && !build_materialized)
+	{
+	  error = hjoin_stream_build_input (thread_p, manager, context, xasl_state, &build_resident);
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
 	}
 
       if (build_resident)

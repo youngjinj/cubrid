@@ -458,21 +458,28 @@ namespace parallel_scan
 
     if (thread_ref.on_trace)
       {
-	TSC_TICKS end_tick;
-	TSCTIMEVAL tv_diff;
-	struct timeval elapsed_time = {0, 0};
-	tsc_getticks (&end_tick);
-	tsc_elapsed_time_usec (&tv_diff, end_tick, m_start_tick);
-	TSC_ADD_TIMEVAL (elapsed_time, tv_diff);
-	if constexpr (result_type == RESULT_TYPE::MERGEABLE_LIST || result_type == RESULT_TYPE::BUILDVALUE_OPT)
+	/* m_trace_handler may be null even when tracing is on: a caller whose result
+	 * can still be discarded (the hash join's parallel streamed build) runs its
+	 * tasks without trace merging and accounts statistics through its row sinks
+	 * instead.  The parallel perfmon stats are destroyed either way (initialized
+	 * on on_trace alone). */
+	if (m_trace_handler != nullptr)
 	  {
-	    m_trace_handler->m_trace_storage_for_sibling_xasl.merge_xasl_tree (m_xasl);
+	    TSC_TICKS end_tick;
+	    TSCTIMEVAL tv_diff;
+	    struct timeval elapsed_time = {0, 0};
+	    tsc_getticks (&end_tick);
+	    tsc_elapsed_time_usec (&tv_diff, end_tick, m_start_tick);
+	    TSC_ADD_TIMEVAL (elapsed_time, tv_diff);
+	    if constexpr (result_type == RESULT_TYPE::MERGEABLE_LIST || result_type == RESULT_TYPE::BUILDVALUE_OPT)
+	      {
+		m_trace_handler->m_trace_storage_for_sibling_xasl.merge_xasl_tree (m_xasl);
+	      }
+	    m_trace_handler->add_trace (perfmon_get_from_statistic (&thread_ref, PSTAT_PB_NUM_FETCHES),
+					perfmon_get_from_statistic (&thread_ref, PSTAT_PB_NUM_IOREADS),
+					perfmon_get_from_statistic (&thread_ref, PSTAT_PB_PAGE_FIX_ACQUIRE_TIME_10USEC),
+					m_scan_id, elapsed_time);
 	  }
-	m_trace_handler->add_trace (perfmon_get_from_statistic (&thread_ref, PSTAT_PB_NUM_FETCHES),
-				    perfmon_get_from_statistic (&thread_ref, PSTAT_PB_NUM_IOREADS),
-				    perfmon_get_from_statistic (&thread_ref,PSTAT_PB_PAGE_FIX_ACQUIRE_TIME_10USEC),
-				    m_scan_id,
-				    elapsed_time);
 	perfmon_destroy_parallel_stats (&thread_ref);
       }
     m_result_handler->write_finalize (&thread_ref);
