@@ -1112,6 +1112,9 @@ mht_create_hls (const char *name, int est_size, unsigned int (*hash_func) (const
   ht->nentries = 0;
   ht->nslots_used = 0;
   ht->ncollisions = 0;
+  ht->attached_heaps = NULL;
+  ht->attached_heap_cnt = 0;
+  ht->attached_heap_cap = 0;
   ht->build_lru_list = false;
 
   return ht;
@@ -1228,6 +1231,8 @@ mht_destroy (MHT_TABLE * ht)
 void
 mht_destroy_hls (MHT_HLS_TABLE * ht)
 {
+  unsigned int i;
+
   assert (ht != NULL);
 
   free_and_init (ht->table);
@@ -1235,7 +1240,115 @@ mht_destroy_hls (MHT_HLS_TABLE * ht)
   /* free all payloads at once */
   db_destroy_ostk_heap (ht->heap_id);
 
+  /* arenas adopted from merged tables (parallel streamed build) die with this table */
+  for (i = 0; i < ht->attached_heap_cnt; i++)
+    {
+      db_destroy_ostk_heap (ht->attached_heaps[i]);
+    }
+  if (ht->attached_heaps != NULL)
+    {
+      free_and_init (ht->attached_heaps);
+    }
+
   free_and_init (ht);
+}
+
+/*
+ * mht_prepare_attached_arenas_hls - Pre-allocate room for adopted arenas
+ *   return: NO_ERROR, or ER_OUT_OF_VIRTUAL_MEMORY
+ *   ht(in/out): destination table of a coming merge
+ *   max_cnt(in): maximum number of tables that will be adopted
+ *
+ * Note: Called before any mht_adopt_hls so adoption itself cannot fail
+ *       (prepare -> commit; see the parallel streamed build merge).
+ */
+int
+mht_prepare_attached_arenas_hls (MHT_HLS_TABLE * ht, unsigned int max_cnt)
+{
+  assert (ht != NULL);
+  assert (ht->attached_heaps == NULL && ht->attached_heap_cnt == 0);
+
+  ht->attached_heaps = (HL_HEAPID *) malloc (max_cnt * sizeof (HL_HEAPID));
+  if (ht->attached_heaps == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, max_cnt * sizeof (HL_HEAPID));
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+  ht->attached_heap_cap = max_cnt;
+
+  return NO_ERROR;
+}
+
+/*
+ * mht_adopt_hls - Merge every chain of src into dst and adopt src's arena
+ *   return: NO_ERROR (cannot fail once dst is prepared; see below)
+ *   dst(in/out): destination table (slot capacity must already cover the merge)
+ *   src(in): source table; its slot array and descriptor are freed here, its
+ *            payload arena moves into dst's attached arenas
+ *
+ * Note: Entries and payloads never move or copy.  Each occupied src slot's whole
+ *       chain is spliced in front of the dst chain with the same hash (or claims a
+ *       free slot).  The caller must have sized dst so occupied slots stay under
+ *       the fill bound (sum of nslots_used is an upper bound) and must have
+ *       prepared the attached-arena room; both are asserted, not checked.
+ */
+int
+mht_adopt_hls (MHT_HLS_TABLE * dst, MHT_HLS_TABLE * src)
+{
+  unsigned int i, idx, mask, hash;
+  MHT_HLS_ENTRY *head, *tail;
+
+  assert (dst != NULL && src != NULL);
+  assert (dst->attached_heap_cnt < dst->attached_heap_cap);
+  assert (src->attached_heap_cnt == 0);	/* worker tables never adopt */
+  assert ((UINT64) dst->nslots_used + src->nslots_used < dst->size);
+
+  mask = dst->size - 1;
+
+  for (i = 0; i < src->size; i++)
+    {
+      head = src->table[i].entry;
+      if (head == NULL)
+	{
+	  continue;
+	}
+      hash = src->table[i].hash;
+
+      for (idx = hash & mask; dst->table[idx].entry != NULL && dst->table[idx].hash != hash; idx = (idx + 1) & mask)
+	{
+	  dst->ncollisions++;
+	}
+
+      if (dst->table[idx].entry == NULL)
+	{
+	  dst->table[idx].entry = head;
+	  dst->table[idx].hash = hash;
+	  dst->nslots_used++;
+	}
+      else
+	{
+	  /* same hash in both tables: splice the whole src chain in front (the walk
+	   * to the src tail visits every entry at most once across the whole merge) */
+	  for (tail = head; tail->next != NULL; tail = tail->next)
+	    {
+	      ;
+	    }
+	  tail->next = dst->table[idx].entry;
+	  dst->table[idx].entry = head;
+	  dst->ncollisions++;
+	}
+
+    }
+
+  dst->nentries += src->nentries;
+
+  /* commit: src's payloads now live in dst's chains; move the arena, drop the shell */
+  dst->attached_heaps[dst->attached_heap_cnt++] = src->heap_id;
+
+  free_and_init (src->table);
+  free_and_init (src);
+
+  return NO_ERROR;
 }
 
 /*

@@ -171,12 +171,23 @@ struct mht_hls_table
   unsigned int nslots_used;	/* occupied slots (distinct hashes); chained duplicates take no slot */
   unsigned int ncollisions;	/* Number of collisions in HT */
   HL_HEAPID heap_id;		/* obstack (arena) for the entry payloads (tuple copy / position) */
+
+  /* Arenas adopted from merged tables (parallel streamed build): their entries now
+   * live in this table's chains, so they are destroyed exactly once, with this table.
+   * The array is pre-allocated (mht_prepare_attached_arenas_hls) before any merge so
+   * adoption itself cannot fail (prepare -> commit). */
+  HL_HEAPID *attached_heaps;
+  unsigned int attached_heap_cnt;
+  unsigned int attached_heap_cap;
+
   bool build_lru_list;		/* true if LRU list must be built */
 };
 
 extern const void *mht_put_hls (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry);
 extern const void *mht_put_hls_try (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry);
 extern int mht_grow_hls (MHT_HLS_TABLE * ht);
+extern int mht_prepare_attached_arenas_hls (MHT_HLS_TABLE * ht, unsigned int max_cnt);
+extern int mht_adopt_hls (MHT_HLS_TABLE * dst, MHT_HLS_TABLE * src);
 extern MHT_HLS_ENTRY *mht_get_hls (const MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY ** last);
 extern MHT_HLS_ENTRY *mht_get_next_hls (const MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY ** last);
 extern MHT_HLS_TABLE *mht_create_hls (const char *name, int est_size,
