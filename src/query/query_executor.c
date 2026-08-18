@@ -15654,6 +15654,7 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
   int multi_upddel = false;
   QFILE_LIST_MERGE_INFO *merge_infop;
   XASL_NODE *hjoin_stream_outer_xasl;
+  XASL_NODE *hjoin_stream_inner_xasl;
   XASL_NODE *outer_xasl = NULL, *inner_xasl = NULL;
   XASL_NODE *fixed_scan_xasl = NULL;
   bool iscan_oid_order, force_select_lock = false;
@@ -15996,6 +15997,7 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
 
 	  merge_infop = NULL;	/* init */
 	  hjoin_stream_outer_xasl = NULL;	/* init */
+	  hjoin_stream_inner_xasl = NULL;	/* init */
 
 	  if (xptr->type == MERGELIST_PROC)
 	    {
@@ -16015,6 +16017,14 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
 		{
 		  /* The probe input is not materialized here; qexec_hash_join streams it. */
 		  hjoin_stream_outer_xasl = outer_xasl;
+
+		  if (qexec_hjoin_can_stream_build (xptr))
+		    {
+		      /* B1: the build input is not materialized here either; qexec_hash_join
+		       * streams it into the hash table (or materializes it itself when its
+		       * runtime conditions fail). */
+		      hjoin_stream_inner_xasl = inner_xasl;
+		    }
 		}
 	    }
 	  else
@@ -16024,7 +16034,7 @@ qexec_execute_mainblock_internal (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XAS
 
 	  for (xptr2 = xptr->aptr_list; xptr2; xptr2 = xptr2->next)
 	    {
-	      if (xptr2 == hjoin_stream_outer_xasl)
+	      if (xptr2 == hjoin_stream_outer_xasl || xptr2 == hjoin_stream_inner_xasl)
 		{
 		  continue;
 		}

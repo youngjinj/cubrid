@@ -68,7 +68,7 @@
 #endif
 
 /* obstack chunk size for HASH LIST SCAN entry payloads (tuple copies / positions) */
-#define HASH_LIST_SCAN_DATA_CHUNK_SIZE (64 * 1024)
+/* HASH_LIST_SCAN_DATA_CHUNK_SIZE moved to memory_hash.h */
 
 /* constants for rehash */
 static const float MHT_REHASH_TRESHOLD = 0.7f;
@@ -1110,6 +1110,7 @@ mht_create_hls (const char *name, int est_size, unsigned int (*hash_func) (const
   ht->name = name;
   ht->size = ht_estsize;
   ht->nentries = 0;
+  ht->nslots_used = 0;
   ht->ncollisions = 0;
   ht->build_lru_list = false;
 
@@ -1793,8 +1794,90 @@ mht_put_new (MHT_TABLE * ht, const void *key, void *data)
 const void *
 mht_put_hls (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry)
 {
+  const void *ret;
+
+  assert (ht != NULL && key != NULL);
+
+  ret = mht_put_hls_internal (ht, key, entry, MHT_OPT_INSERT_ONLY);
+  if (ret == NULL)
+    {
+      /* should never happen: sizing keeps occupied slots < size */
+      assert_release_error (false);
+    }
+  return ret;
+}
+
+/*
+ * mht_put_hls_try - Insert an entry; report a full table instead of asserting
+ *   return: key on success, or NULL when every slot holds a distinct hash
+ *   ht(in/out): hash table
+ *   key(in): pointer to the hash to insert under
+ *   entry(in): entry (with its payload) to insert
+ *
+ * Note: NULL does not set an error; it is a recoverable signal for callers that
+ *       size the table incrementally (streaming build: grow or degrade).
+ */
+const void *
+mht_put_hls_try (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry)
+{
   assert (ht != NULL && key != NULL);
   return mht_put_hls_internal (ht, key, entry, MHT_OPT_INSERT_ONLY);
+}
+
+/*
+ * mht_grow_hls - Double the open-addressing slot array
+ *   return: NO_ERROR, or ER_OUT_OF_VIRTUAL_MEMORY
+ *   ht(in/out): hash table to grow
+ *
+ * Note: Entries and their payloads never move; each occupied slot (a distinct
+ *       hash with its whole chain) is re-slotted into the larger array by its
+ *       stored hash.  Cost is O(slots), independent of chained duplicates.
+ */
+int
+mht_grow_hls (MHT_HLS_TABLE * ht)
+{
+  MHT_HLS_SLOT *new_table;
+  unsigned int new_size, new_mask, idx, i;
+
+  assert (ht != NULL && ht->table != NULL);
+  assert ((ht->size & (ht->size - 1)) == 0);	/* power of two */
+
+  if (ht->size >= (1U << 31))
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      (size_t) ht->size * sizeof (MHT_HLS_SLOT));
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+  new_size = ht->size * 2;
+  new_table = (MHT_HLS_SLOT *) calloc (new_size, sizeof (MHT_HLS_SLOT));
+  if (new_table == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+	      (size_t) new_size * sizeof (MHT_HLS_SLOT));
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+
+  new_mask = new_size - 1;
+  for (i = 0; i < ht->size; i++)
+    {
+      if (ht->table[i].entry == NULL)
+	{
+	  continue;
+	}
+
+      for (idx = ht->table[i].hash & new_mask; new_table[idx].entry != NULL; idx = (idx + 1) & new_mask)
+	{
+	  ;			/* linear probing; the new array always has a free slot */
+	}
+      new_table[idx] = ht->table[i];
+    }
+
+  free_and_init (ht->table);
+  ht->table = new_table;
+  ht->size = new_size;
+
+  return NO_ERROR;
 }
 
 /*
@@ -2695,6 +2778,7 @@ mht_put_hls_internal (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry
 	  ht->table[idx].entry = entry;
 	  ht->table[idx].hash = hash;
 	  ht->nentries++;
+	  ht->nslots_used++;
 	  return key;
 	}
 
@@ -2713,8 +2797,8 @@ mht_put_hls_internal (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry
       idx = (idx + 1) & mask;
     }
 
-  /* no free slot found - should never happen (sizing keeps occupied slots < size) */
-  assert_release_error (false);
+  /* no free slot found: the table is full of distinct hashes.  The caller decides
+   * whether this is recoverable (mht_put_hls_try) or a sizing bug (mht_put_hls). */
   return NULL;
 }
 

@@ -57,6 +57,26 @@
  * (each holding a small membuf); K beyond this bound falls back to materializing. */
 #define HJOIN_SBATCH_MAX_PARALLEL_PARTS 32
 
+/* B1 streamed build: initial estimated entry count for the growable in-memory table
+ * (the slot array starts small and doubles with the stream; see mht_grow_hls). */
+#define HJOIN_STREAM_BUILD_INITIAL_EST 2048
+
+/* B1 streamed build: grow the slot array when occupied slots reach 70% (the same
+ * fill bound mht_hls_slot_count sizes for). */
+#define HJOIN_STREAM_BUILD_GROW_AT(size) ((UINT64) (size) * 7 / 10)
+
+/* B1 streamed build: the fixed footprint of an empty streamed table — the initial
+ * obstack chunk plus the initial slot array (4096 slots * 16B = one more chunk).
+ * A memory limit below this cannot hold anything; materialize instead. */
+#define HJOIN_STREAM_BUILD_MIN_BUDGET ((UINT64) 2 * HASH_LIST_SCAN_DATA_CHUNK_SIZE)
+
+/* B1 streamed build: conservative per-chunk bookkeeping overhead of the payload
+ * arena (obstack ChunkHeader + alignment slack; the real header is two pointers).
+ * The model must never think chunk space remains when the allocator would open a
+ * new chunk, so the usable capacity is under-estimated by this margin. */
+#define HJOIN_STREAM_BUILD_CHUNK_OVERHEAD ((UINT64) 256)
+#define HJOIN_STREAM_BUILD_CHUNK_USABLE ((UINT64) HASH_LIST_SCAN_DATA_CHUNK_SIZE - HJOIN_STREAM_BUILD_CHUNK_OVERHEAD)
+
 #define DUMP_HASH_TABLE_LIMIT 100
 #define DUMP_PROBE_LIMIT 20
 
@@ -148,8 +168,43 @@ static int hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANA
 					  QFILE_LIST_ID ** result_list_id);
 static HASH_METHOD hjoin_scan_predict_method (QFILE_LIST_ID * list_id);
 #endif /* defined (SERVER_MODE) */
-static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming);
+static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming,
+			       bool * stream_build);
 static bool hjoin_stream_check_single (QFILE_LIST_ID * build_list_id);
+
+/* HASHJOIN_STREAM_BUILD_STATE (B1)
+ * Serial streamed build: the emit hook inserts each build row into the in-memory
+ * table; on memory overflow it degrades once (transactionally) to appending into the
+ * build proc's own list, restoring the materialized-input contract. */
+typedef struct hashjoin_stream_build_state
+{
+  HASHJOIN_MANAGER *manager;
+  HASHJOIN_CONTEXT *context;
+  XASL_NODE *inner_xasl;
+
+  /* Degrade target: a private temp list; adopted into inner_xasl->list_id only after
+   * the whole build input streamed successfully (single commit point in
+   * hjoin_stream_build_input).  inner_xasl->list_id is never touched on failure. */
+  QFILE_LIST_ID *degrade_list_id;
+
+  /* Budget model: used_bytes counts the slot array plus the obstack chunks reserved
+   * so far; chunk_free tracks the unused tail of the current chunk, so chunk-granular
+   * arena growth (and its slack) is accounted before each insert. */
+  UINT64 mem_limit;
+  UINT64 used_bytes;
+  UINT64 chunk_free;
+
+  INT64 rows_seen;
+  INT64 keys_inserted;
+
+  bool degraded;
+} HASHJOIN_STREAM_BUILD_STATE;
+
+static int hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+				     XASL_STATE * xasl_state, bool * resident);
+static int hjoin_stream_build_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record);
+static int hjoin_stream_build_degrade (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_STATE * build_state,
+				       QFILE_TUPLE_RECORD * tuple_record);
 static int hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
 				 XASL_STATE * xasl_state);
 static int hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
@@ -243,6 +298,7 @@ qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_st
   HASHJOIN_CONTEXT *single_context;
   HASHJOIN_STATUS status, part_status;
   bool streaming = false;
+  bool stream_build = false;
 
   int error = NO_ERROR;
 
@@ -251,7 +307,7 @@ qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_st
   assert (xasl_state != NULL);
   assert (xasl_state->query_id != NULL_QUERY_ID);
 
-  error = hjoin_stream_check (thread_p, xasl, xasl_state, &streaming);
+  error = hjoin_stream_check (thread_p, xasl, xasl_state, &streaming, &stream_build);
   if (error != NO_ERROR)
     {
       /* the manager is not initialized yet */
@@ -264,6 +320,8 @@ qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_st
     {
       goto error_exit;
     }
+
+  manager.stream_build_pending = stream_build;
 
   single_context = &manager.single_context;
 
@@ -536,6 +594,57 @@ qexec_hjoin_can_stream_probe (XASL_NODE * xasl)
 }
 
 /*
+ * qexec_hjoin_can_stream_build() -
+ *   return: True if the build (inner) input can be streamed into the hash table
+ *           instead of materialized first (B1).
+ *   xasl(in): HASHJOIN_PROC node.
+ *
+ * Note: Plan-shape conditions only.  The aptr loop skips the build input exactly when
+ *       this returns true, and hjoin_stream_check re-evaluates the same predicate:
+ *       when its runtime conditions fail there, it materializes the deferred build
+ *       input itself (the F1-style sync invariant of the probe gate applies here too).
+ */
+bool
+qexec_hjoin_can_stream_build (XASL_NODE * xasl)
+{
+  XASL_NODE *inner_xasl;
+
+  assert (xasl != NULL);
+  assert (xasl->type == HASHJOIN_PROC);
+
+  /* B1: the streamed build pairs with the streamed-probe plan shape only. */
+  if (!qexec_hjoin_can_stream_probe (xasl))
+    {
+      return false;
+    }
+
+  inner_xasl = xasl->proc.hashjoin.inner.xasl;
+  if (inner_xasl == NULL || inner_xasl->type != BUILDLIST_PROC)
+    {
+      return false;
+    }
+
+  if (inner_xasl->parallelism != 0)
+    {
+      return false;
+    }
+
+  /* The build input must be a plain projection: the emit hook replaces only the list
+   * append in qexec_end_one_iteration, so any later mainblock stage that reads the
+   * materialized list back would observe an empty one. */
+  if (inner_xasl->outptr_list == NULL || inner_xasl->orderby_list != NULL || inner_xasl->option == Q_DISTINCT
+      || inner_xasl->proc.buildlist.groupby_list != NULL || inner_xasl->proc.buildlist.g_agg_list != NULL
+      || inner_xasl->proc.buildlist.a_eval_list != NULL || inner_xasl->selected_upd_list != NULL
+      || inner_xasl->upd_del_class_cnt > 0 || inner_xasl->connect_by_ptr != NULL || inner_xasl->single_tuple != NULL
+      || XASL_IS_FLAGED (inner_xasl, XASL_LINK_TO_REGU_VARIABLE))
+    {
+      return false;
+    }
+
+  return true;
+}
+
+/*
  * hjoin_stream_parallel_shape() -
  *   return: True if the join qualifies for the parallel streaming probe (I-min shape).
  *   xasl(in): HASHJOIN_PROC node (plain-outer checks already passed in the caller).
@@ -605,16 +714,21 @@ hjoin_stream_parallel_outer_shape (XASL_NODE * outer_xasl)
  *   xasl(in): HASHJOIN_PROC node.
  *   xasl_state(in): XASL state of the query.
  *   streaming(out): Set to true if the probe input will be streamed.
+ *   stream_build(out): Set to true if the build input will be streamed too (B1).
  *
  * Note: Called before hjoin_init_manager. When streaming is not possible, the deferred
  *       probe input is materialized here so the legacy path sees its usual inputs.
+ *       Likewise, when the aptr loop deferred the build input but its runtime
+ *       conditions fail here, the build input is materialized in place.
  */
 static int
-hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming)
+hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming,
+		    bool * stream_build)
 {
   XASL_NODE *outer_xasl, *inner_xasl;
   JOIN_TYPE join_type;
   bool batching = false;
+  bool build_streaming;
 
   int error = NO_ERROR;
 
@@ -622,8 +736,10 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
   assert (xasl != NULL);
   assert (xasl_state != NULL);
   assert (streaming != NULL);
+  assert (stream_build != NULL);
 
   *streaming = false;
+  *stream_build = false;
 
   if (!qexec_hjoin_can_stream_probe (xasl))
     {
@@ -638,6 +754,69 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
     {
       /* The probe input was already materialized. */
       return NO_ERROR;
+    }
+
+  /* B1 streamed build: the aptr loop deferred the build input iff the same predicate
+   * held there.  The runtime conditions are checked here; when one fails, materialize
+   * the build input now so everything below sees the usual list. */
+  build_streaming = qexec_hjoin_can_stream_build (xasl) && IS_XASL_INITIAL_STATUS (inner_xasl->status);
+
+  if (build_streaming)
+    {
+      UINT64 mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+
+      if (mem_limit < HJOIN_STREAM_BUILD_MIN_BUDGET	/* an empty streamed table would already exceed it */
+	  || !hjoin_stream_outer_scans_serial (outer_xasl)	/* B1 pairs with the serial-hook probe only */
+	  || !hjoin_stream_outer_scans_serial (inner_xasl))	/* F1: a parallel scan would bypass the hook */
+	{
+	  error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
+	  if (error != NO_ERROR)
+	    {
+	      return error;
+	    }
+	  build_streaming = false;
+	}
+    }
+
+  if (build_streaming)
+    {
+      /* The build size is unknown until it streams: the empty-input early-outs and the
+       * single-table sizing below move to hjoin_stream_execute (post-build-stream).
+       * Pre-open the (empty) build list so hjoin_init_domain_info can read its type
+       * list; the build proc itself runs later with the emit hook installed. */
+      if (inner_xasl->list_id->type_list.type_cnt == 0)
+	{
+	  QFILE_TUPLE_VALUE_TYPE_LIST type_list;
+	  int ls_flag = 0;
+
+	  error = qdata_get_valptr_type_list (thread_p, inner_xasl->outptr_list, &type_list);
+	  if (error != NO_ERROR)
+	    {
+	      if (type_list.domp != NULL)
+		{
+		  db_private_free_and_init (thread_p, type_list.domp);
+		}
+	      return error;
+	    }
+
+	  QFILE_SET_FLAG (ls_flag, QFILE_FLAG_ALL);
+	  inner_xasl->list_id =
+	    qfile_open_list (thread_p, &type_list, inner_xasl->after_iscan_list, xasl_state->query_id, ls_flag,
+			     inner_xasl->list_id);
+
+	  if (type_list.domp != NULL)
+	    {
+	      db_private_free_and_init (thread_p, type_list.domp);
+	    }
+
+	  if (inner_xasl->list_id == NULL)
+	    {
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+	}
+
+      goto stream_probe_list;
     }
 
   if (inner_xasl->list_id == NULL || inner_xasl->list_id->type_list.type_cnt == 0
@@ -714,6 +893,7 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
     }
 #endif /* defined (SERVER_MODE) */
 
+stream_probe_list:
   /* Pre-open the (empty) probe list so domain setup can read its type list.
    * The probe proc itself runs later with the emit hook installed; see hjoin_stream_execute. */
   if (outer_xasl->list_id->type_list.type_cnt == 0)
@@ -749,6 +929,7 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
     }
 
   *streaming = true;
+  *stream_build = build_streaming;
 
   ASSERT_NO_ERROR_OR_INTERRUPTED ();
   return NO_ERROR;
@@ -1463,6 +1644,430 @@ error_exit:
 }
 
 /*
+ * hjoin_stream_build_input() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager containing shared state.
+ *   context(in): Hash join context (single context; build/probe already assigned).
+ *   xasl_state(in): XASL state of the query.
+ *   resident(out): True when the whole build input fit the in-memory table;
+ *                  false when the state degraded to a materialized list.
+ *
+ * Note: B1 streamed build: runs the build (inner) proc with the emit hook installed,
+ *       inserting each row into a growable IN_MEM table.  On memory overflow the hook
+ *       degrades transactionally to materializing the build input (see
+ *       hjoin_stream_build_degrade); the caller then takes the ordinary list-based
+ *       path as if the aptr loop had materialized the input.
+ */
+static int
+hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+			  XASL_STATE * xasl_state, bool * resident)
+{
+  XASL_NODE *inner_xasl;
+  HASH_LIST_SCAN *hash_scan;
+  // *INDENT-OFF*
+  HASHJOIN_STREAM_BUILD_STATE build_state = { NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, false };
+  HASHJOIN_STREAM_HOOK stream_hook = { NULL, NULL };
+  // *INDENT-ON*
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (manager != NULL);
+  assert (context != NULL);
+  assert (context->build == &context->inner);
+  assert (resident != NULL);
+
+  HASHJOIN_STATS *stats = context->stats;
+  HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
+  assert (!thread_is_on_trace (thread_p) || stats != NULL);
+
+  *resident = false;
+
+  inner_xasl = manager->inner->xasl;
+  assert (inner_xasl != NULL);
+  assert (inner_xasl->list_id != NULL && inner_xasl->list_id->type_list.type_cnt > 0);
+
+  hash_scan = &context->hash_scan;
+
+  /* IN_MEM setup without a materialized list: the table starts small and grows with
+   * the stream (mirrors hjoin_scan_init's IN_MEM branch otherwise). */
+  assert (hash_scan->build_regu_list == NULL);	/* Unused */
+  assert (hash_scan->probe_regu_list == NULL);	/* Unused */
+
+  hash_scan->temp_key = qdata_alloc_hscan_key (thread_p, manager->key_cnt, true);
+  if (hash_scan->temp_key == NULL)
+    {
+      goto error_exit;
+    }
+
+  hash_scan->temp_new_key = qdata_alloc_hscan_key (thread_p, manager->key_cnt, true);
+  if (hash_scan->temp_new_key == NULL)
+    {
+      goto error_exit;
+    }
+
+  hash_scan->hash_list_scan_type = HASH_METH_IN_MEM;
+
+  hash_scan->memory.hash_table = mht_create_hls ("Hash Join", HJOIN_STREAM_BUILD_INITIAL_EST, NULL, NULL);
+  if (hash_scan->memory.hash_table == NULL)
+    {
+      goto error_exit;
+    }
+
+  hash_scan->memory.curr_hash_entry = NULL;
+  hash_scan->curr_hash_key = 0;
+  hash_scan->need_coerce_type = false;
+
+  build_state.manager = manager;
+  build_state.context = context;
+  build_state.inner_xasl = inner_xasl;
+  build_state.mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+
+  /* fixed footprint of the empty table: the initial obstack chunk + the slot array
+   * (the gate guarantees mem_limit covers this; see HJOIN_STREAM_BUILD_MIN_BUDGET) */
+  build_state.used_bytes = HASH_LIST_SCAN_DATA_CHUNK_SIZE
+    + (UINT64) hash_scan->memory.hash_table->size * sizeof (MHT_HLS_SLOT);
+  build_state.chunk_free = HJOIN_STREAM_BUILD_CHUNK_USABLE;
+  assert (build_state.used_bytes <= build_state.mem_limit);
+
+  /* hjoin_fetch_key reads join columns relative to this record */
+  // *INDENT-OFF*
+  context->build->tuple_record = { NULL, 0 };
+  // *INDENT-ON*
+
+  stream_hook.func = hjoin_stream_build_tuple;
+  stream_hook.arg = &build_state;
+
+  assert (inner_xasl->emit_tuple_hook == NULL);
+  inner_xasl->emit_tuple_hook = &stream_hook;
+
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_start (thread_p, &start_stats);
+    }
+
+  /* Run the build input; each produced tuple is inserted via hjoin_stream_build_tuple
+   * (or appended to inner_xasl->list_id once the state degraded). */
+  error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
+
+  inner_xasl->emit_tuple_hook = NULL;
+
+  if (thread_is_on_trace (thread_p))
+    {
+      hjoin_trace_end (thread_p, &stats->build, &start_stats);
+      if (!build_state.degraded)
+	{
+	  /* On degrade the list-based path that follows owns the row counters (it
+	   * re-reads the materialized list); only the physical costs above are kept,
+	   * so the logical rows are not counted twice. */
+	  stats->build.read_rows = build_state.rows_seen;
+	  assert (stats->build.read_keys == 0);
+	  stats->build.qualified_rows = build_state.keys_inserted;
+	}
+    }
+
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  if (build_state.degraded)
+    {
+      /* Commit point: the whole build input streamed into the private degrade list;
+       * adopt it as inner_xasl->list_id (the same contract as an aptr run) exactly
+       * once.  The pre-opened inner list is empty (the hook bypassed every append),
+       * so the adopt is the S3b destroy-and-copy pattern.  The temp keys and table
+       * were already dropped when the degrade started. */
+      assert (hash_scan->hash_list_scan_type == HASH_METH_NOT_USE);
+      assert (build_state.degrade_list_id != NULL);
+      assert (inner_xasl->list_id->tuple_cnt == 0);
+
+      qfile_close_list (thread_p, build_state.degrade_list_id);
+
+      /* prepare -> commit: complete the descriptor copy into a local first, so a copy
+       * failure leaves both the degrade list and the pre-opened build list intact
+       * (qfile_copy_list_id memcpys before it allocates; a half-copied destination
+       * would alias the temp file and invite a double destroy). */
+      QFILE_LIST_ID adopt_list_id;
+      memset (&adopt_list_id, 0, sizeof (QFILE_LIST_ID));
+
+      error = qfile_copy_list_id (&adopt_list_id, build_state.degrade_list_id, false, QFILE_PROHIBIT_DEPENDENT);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+
+      qfile_destroy_list (thread_p, inner_xasl->list_id);	/* the empty pre-opened list; also clears it */
+      *inner_xasl->list_id = adopt_list_id;
+      QFILE_FREE_AND_INIT_LIST_ID (build_state.degrade_list_id);
+
+      return NO_ERROR;
+    }
+
+  if (thread_is_on_trace (thread_p))
+    {
+      stats->hash_method = HASH_METH_IN_MEM;
+      stats->swap_join_inputs = false;
+    }
+
+  *resident = true;
+
+  ASSERT_NO_ERROR_OR_INTERRUPTED ();
+  return NO_ERROR;
+
+error_exit:
+  hjoin_scan_clear (thread_p, hash_scan);
+
+  if (build_state.degrade_list_id != NULL)
+    {
+      /* the uncommitted degrade list is private; inner_xasl->list_id was not touched */
+      qfile_close_list (thread_p, build_state.degrade_list_id);
+      qfile_destroy_list (thread_p, build_state.degrade_list_id);
+      QFILE_FREE_AND_INIT_LIST_ID (build_state.degrade_list_id);
+    }
+
+  if (error == NO_ERROR || er_errid () == NO_ERROR)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      error = (er_errid () != NO_ERROR) ? er_errid () : ER_FAILED;
+    }
+  else
+    {
+      error = er_errid ();
+    }
+
+  return error;
+}
+
+/*
+ * hjoin_stream_build_tuple() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   arg(in): HASHJOIN_STREAM_BUILD_STATE.
+ *   tuple_record(in): Tuple produced by the build proc.
+ *
+ * Note: Single-build-row body of hjoin_build, fed by the emit hook instead of a list
+ *       scan.  NULL join keys are not stored: they can never match, and the legacy
+ *       build skips them the same way (the materialized list keeps such rows, so a
+ *       degraded list differs there only for rows seen before the degrade; matching
+ *       behavior is unaffected for INNER and LEFT).
+ */
+static int
+hjoin_stream_build_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record)
+{
+  HASHJOIN_STREAM_BUILD_STATE *build_state = (HASHJOIN_STREAM_BUILD_STATE *) arg;
+  HASHJOIN_CONTEXT *context;
+  HASH_LIST_SCAN *hash_scan;
+  MHT_HLS_TABLE *hash_table;
+  MHT_HLS_ENTRY *entry;
+  HASH_SCAN_KEY *key;
+
+  UINT64 row_cost, slot_bytes;
+  bool need_skip = false;
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (build_state != NULL);
+  assert (tuple_record != NULL && tuple_record->tpl != NULL);
+
+  context = build_state->context;
+  build_state->rows_seen++;
+
+  if (build_state->degraded)
+    {
+      return qfile_add_tuple_to_list (thread_p, build_state->degrade_list_id, tuple_record->tpl);
+    }
+
+  hash_scan = &context->hash_scan;
+  key = hash_scan->temp_key;
+
+  error = hjoin_fetch_key (thread_p, context->build, tuple_record, key, NULL /* compare_key */ , &need_skip);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+  if (need_skip)
+    {
+      return NO_ERROR;
+    }
+
+  hash_scan->curr_hash_key = qdata_hash_scan_key (key, UINT_MAX, HASH_METH_IN_MEM);
+
+  hash_table = hash_scan->memory.hash_table;
+
+  /* Pre-insert budget check, modeling what the insert will actually reserve:
+   * the aligned obstack allocation (a fresh chunk when it does not fit the current
+   * one) and the doubled slot array when the fill bound is hit.  Deciding before the
+   * insert keeps the degrade dump exact (the current row is appended after the dump,
+   * never stored twice). */
+  row_cost = DB_ALIGN (sizeof (MHT_HLS_ENTRY) + (UINT64) QFILE_GET_TUPLE_LENGTH (tuple_record->tpl), MAX_ALIGNMENT);
+  slot_bytes = (UINT64) hash_table->size * sizeof (MHT_HLS_SLOT);
+
+  UINT64 need = 0;
+  UINT64 chunk_charge = 0;
+  UINT64 chunk_capacity = 0;
+
+  if (row_cost > build_state->chunk_free)
+    {
+      /* the arena reserves a whole new chunk, or a dedicated one for a large row;
+       * the charge includes the chunk header, the capacity excludes it */
+      if (row_cost > HJOIN_STREAM_BUILD_CHUNK_USABLE)
+	{
+	  chunk_charge = row_cost + HJOIN_STREAM_BUILD_CHUNK_OVERHEAD;
+	  chunk_capacity = row_cost;
+	}
+      else
+	{
+	  chunk_charge = HASH_LIST_SCAN_DATA_CHUNK_SIZE;
+	  chunk_capacity = HJOIN_STREAM_BUILD_CHUNK_USABLE;
+	}
+      need += chunk_charge;
+    }
+
+  bool grow_needed = ((UINT64) hash_table->nslots_used + 1 > HJOIN_STREAM_BUILD_GROW_AT (hash_table->size));
+  if (grow_needed)
+    {
+      /* doubling nets +slot_bytes (the old array is freed) */
+      need += slot_bytes;
+    }
+
+  if (build_state->used_bytes + need > build_state->mem_limit)
+    {
+      return hjoin_stream_build_degrade (thread_p, build_state, tuple_record);
+    }
+
+  if (grow_needed)
+    {
+      error = mht_grow_hls (hash_table);
+      if (error != NO_ERROR)
+	{
+	  return error;
+	}
+      build_state->used_bytes += slot_bytes;
+    }
+
+  entry = qdata_alloc_hscan_value (thread_p, hash_table->heap_id, tuple_record->tpl);
+  if (entry == NULL)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+
+  if (mht_put_hls_try (hash_table, (void *) &hash_scan->curr_hash_key, entry) == NULL)
+    {
+      /* cannot happen: the growth policy keeps occupied slots under the fill bound */
+      assert_release_error (false);
+      return er_errid ();
+    }
+
+  if (chunk_charge != 0)
+    {
+      build_state->used_bytes += chunk_charge;
+      build_state->chunk_free = chunk_capacity;
+    }
+  build_state->chunk_free -= row_cost;
+  build_state->keys_inserted++;
+
+  return NO_ERROR;
+}
+
+/*
+ * hjoin_stream_build_degrade() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   build_state(in): Streamed build state.
+ *   tuple_record(in): The row whose insertion exceeded the budget.
+ *
+ * Note: Transactional: every stored row is dumped into a private temp list and the
+ *       current row appended; only then is the MATERIALIZING state committed and the
+ *       table dropped (subsequent hook rows append to the same private list, which
+ *       hjoin_stream_build_input adopts as the build list on overall success).  On
+ *       any failure the state stays BUILDING, the error propagates through the
+ *       mainblock run, and the caller's cleanup owns the table and the private list;
+ *       the pre-opened build list is never touched.
+ */
+static int
+hjoin_stream_build_degrade (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_STATE * build_state,
+			    QFILE_TUPLE_RECORD * tuple_record)
+{
+  HASH_LIST_SCAN *hash_scan = &build_state->context->hash_scan;
+  MHT_HLS_TABLE *hash_table = hash_scan->memory.hash_table;
+  QFILE_LIST_ID *list_id;
+  MHT_HLS_ENTRY *entry, *prev, *next;
+  unsigned int slot_index, dumped = 0;
+  bool continue_checking = true;
+
+  int error = NO_ERROR;
+
+  assert (hash_table != NULL);
+  assert (build_state->degrade_list_id == NULL);
+
+  /* The dump target is a private temp list; inner_xasl->list_id is adopted only at
+   * the commit point in hjoin_stream_build_input, so a failure below leaves the
+   * pre-opened (empty) build list untouched. */
+  build_state->degrade_list_id =
+    qfile_open_list (thread_p, &build_state->inner_xasl->list_id->type_list, NULL, build_state->manager->query_id,
+		     QFILE_FLAG_ALL, NULL);
+  if (build_state->degrade_list_id == NULL)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      return er_errid ();
+    }
+  list_id = build_state->degrade_list_id;
+
+  for (slot_index = 0; slot_index < hash_table->size; slot_index++)
+    {
+      entry = hash_table->table[slot_index].entry;
+      if (entry == NULL)
+	{
+	  continue;
+	}
+
+      /* Same-hash entries were prepended at insert; reverse the chain so the dump
+       * restores the arrival order (a later rebuild prepends again and recreates the
+       * chain order the legacy materialize-then-build path would have produced). */
+      prev = NULL;
+      while (entry != NULL)
+	{
+	  next = entry->next;
+	  entry->next = prev;
+	  prev = entry;
+	  entry = next;
+	}
+      hash_table->table[slot_index].entry = prev;
+
+      for (entry = prev; entry != NULL; entry = entry->next)
+	{
+	  error = qfile_add_tuple_to_list (thread_p, list_id, (QFILE_TUPLE) MHT_HLS_ENTRY_PAYLOAD (entry));
+	  if (error != NO_ERROR)
+	    {
+	      return error;
+	    }
+
+	  if ((++dumped & 0x3FFF) == 0 && logtb_is_interrupted (thread_p, true, &continue_checking))
+	    {
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_INTERRUPTED, 0);
+	      return ER_INTERRUPTED;
+	    }
+	}
+    }
+
+  error = qfile_add_tuple_to_list (thread_p, list_id, tuple_record->tpl);
+  if (error != NO_ERROR)
+    {
+      return error;
+    }
+
+  /* commit: from here on the hook appends to the list */
+  build_state->degraded = true;
+  hjoin_scan_clear (thread_p, hash_scan);
+
+  return NO_ERROR;
+}
+
+/*
  * hjoin_stream_execute() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
  *   thread_p(in): Thread entry.
@@ -1470,10 +2075,11 @@ error_exit:
  *   context(in): Hash join context (single context).
  *   xasl_state(in): XASL state of the query.
  *
- * Note: Builds the hash table from the materialized build (inner) input, then executes
- *       the probe (outer) proc with the emit hook installed. Each tuple the probe proc
- *       produces is probed immediately by hjoin_stream_probe_tuple; the probe input is
- *       never materialized.
+ * Note: Builds the hash table — streaming the build input directly into it when the
+ *       aptr loop deferred it (B1), from the materialized list otherwise — then
+ *       executes the probe (outer) proc with the emit hook installed. Each tuple the
+ *       probe proc produces is probed immediately by hjoin_stream_probe_tuple; the
+ *       probe input is never materialized.
  */
 static int
 hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
@@ -1520,6 +2126,40 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
       inner->fill_record = NULL;
     }
 
+  if (manager->stream_build_pending)
+    {
+      bool build_resident = false;
+
+      error = hjoin_stream_build_input (thread_p, manager, context, xasl_state, &build_resident);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+
+      if (build_resident)
+	{
+	  if (manager->join_type == JOIN_INNER && context->hash_scan.memory.hash_table->nentries == 0)
+	    {
+	      /* Empty build input: the join result is empty without running the probe
+	       * input (the legacy path skips it through the aptr-loop empty check). */
+	      list_id = qfile_open_list (thread_p, &manager->type_list, NULL, manager->query_id,
+					 manager->qlist_flag, NULL);
+	      if (list_id == NULL)
+		{
+		  goto error_exit;
+		}
+	      qfile_close_list (thread_p, list_id);
+	      context->list_id = list_id;
+	      goto stream_done;
+	    }
+
+	  /* the table is built; skip the list-based sizing and build below */
+	  goto stream_probe;
+	}
+
+      /* degraded: the build input is a materialized list now; fall through */
+    }
+
   if (!hjoin_stream_check_single (build->list_id))
     {
       /* streamed grace batching (S3b); hjoin_stream_check only admits this shape when
@@ -1551,6 +2191,7 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
       goto error_exit;
     }
 
+stream_probe:
   outer_xasl = manager->outer->xasl;
 
 #if defined (SERVER_MODE)
@@ -1622,6 +2263,7 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
 #if defined (SERVER_MODE)
 parallel_done:
 #endif /* defined (SERVER_MODE) */
+stream_done:
   ASSERT_NO_ERROR_OR_INTERRUPTED ();
 
 cleanup:

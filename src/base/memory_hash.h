@@ -124,6 +124,10 @@ extern int mht_dump (THREAD_ENTRY * thread_p, FILE * out_fp, const MHT_TABLE * h
 		     int (*print_func) (THREAD_ENTRY * thread_p, FILE * fp, const void *key, void *data, void *args),
 		     void *func_args);
 
+/* obstack chunk size of the HASH LIST SCAN payload arena (exported so budget
+ * accounting can model the arena's chunk-granular growth) */
+#define HASH_LIST_SCAN_DATA_CHUNK_SIZE (64 * 1024)
+
 /*
  * Hash table for HASH LIST SCAN
  * In order to minimize the size of the hash entry, a hash table for HASH LIST SCAN is created separately.
@@ -164,12 +168,15 @@ struct mht_hls_table
   MHT_HLS_SLOT *table;		/* The hash table (open-addressing slots) */
   unsigned int size;		/* power of two */
   unsigned int nentries;	/* Actual number of entries */
+  unsigned int nslots_used;	/* occupied slots (distinct hashes); chained duplicates take no slot */
   unsigned int ncollisions;	/* Number of collisions in HT */
   HL_HEAPID heap_id;		/* obstack (arena) for the entry payloads (tuple copy / position) */
   bool build_lru_list;		/* true if LRU list must be built */
 };
 
 extern const void *mht_put_hls (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry);
+extern const void *mht_put_hls_try (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry);
+extern int mht_grow_hls (MHT_HLS_TABLE * ht);
 extern MHT_HLS_ENTRY *mht_get_hls (const MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY ** last);
 extern MHT_HLS_ENTRY *mht_get_next_hls (const MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY ** last);
 extern MHT_HLS_TABLE *mht_create_hls (const char *name, int est_size,

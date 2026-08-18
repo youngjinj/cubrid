@@ -467,6 +467,11 @@ typedef struct hashjoin_manager
   bool stream_is_outer_join;
   QFILE_TUPLE_VALUE_TYPE_LIST *stream_spill_type_list;
 
+  /* B1 streamed build: the build (inner) input was not materialized by the aptr loop;
+   * hjoin_stream_execute streams it into the hash table (or degrades to a
+   * materialized list on memory overflow) before the probe phase. */
+  bool stream_build_pending;
+
   /* From HASHJOIN_PROC_NODE */
   HASHJOIN_STATS_GROUP *stats_group;
 
@@ -518,6 +523,7 @@ struct xasl_state;
 
 int qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, struct xasl_state *xasl_state);
 bool qexec_hjoin_can_stream_probe (XASL_NODE * xasl);
+bool qexec_hjoin_can_stream_build (XASL_NODE * xasl);
 
 /* Parallel streaming probe worker API — row sink callbacks installed on px scan tasks.
  * hjoin_stream_row_sink consumes one produced row (lazy worker init on first row);
