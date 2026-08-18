@@ -140,10 +140,10 @@ extern "C"
    * still be discarded (the parallel streamed build before its restart decision) must
    * pass false and account statistics through its sinks instead. */
   extern int scan_run_hashjoin_producers (THREAD_ENTRY *thread_p, QUERY_ID query_id, xasl_node *producer_xasl,
-      val_descr *orig_vd, HFID hfid, OID cls_oid, int parallelism,
-      parallel_query::worker_manager *worker_mgr,
-      int (*sink) (THREAD_ENTRY *, OUTPTR_LIST *, val_descr *, void *),
-      void (*sink_end) (THREAD_ENTRY *, void *), void **sink_args, bool merge_worker_trace);
+					  val_descr *orig_vd, HFID hfid, OID cls_oid, int parallelism,
+					  parallel_query::worker_manager *worker_mgr,
+					  int (*sink) (THREAD_ENTRY *, OUTPTR_LIST *, val_descr *, void *),
+					  void (*sink_end) (THREAD_ENTRY *, void *), void **sink_args, bool merge_worker_trace);
 
   extern int scan_reset_scan_block_parallel_heap_scan (THREAD_ENTRY *thread_p, SCAN_ID *scan_id);
   extern void scan_end_parallel_heap_scan (THREAD_ENTRY *thread_p, SCAN_ID *scan_id);

@@ -1957,8 +1957,7 @@ mht_grow_hls (MHT_HLS_TABLE * ht)
 
   if (ht->size >= (1U << 31))
     {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
-	      (size_t) ht->size * sizeof (MHT_HLS_SLOT));
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) ht->size * sizeof (MHT_HLS_SLOT));
       return ER_OUT_OF_VIRTUAL_MEMORY;
     }
 
@@ -1966,8 +1965,7 @@ mht_grow_hls (MHT_HLS_TABLE * ht)
   new_table = (MHT_HLS_SLOT *) calloc (new_size, sizeof (MHT_HLS_SLOT));
   if (new_table == NULL)
     {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
-	      (size_t) new_size * sizeof (MHT_HLS_SLOT));
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (size_t) new_size * sizeof (MHT_HLS_SLOT));
       return ER_OUT_OF_VIRTUAL_MEMORY;
     }
 

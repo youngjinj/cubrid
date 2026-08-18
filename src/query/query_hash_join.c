@@ -213,8 +213,7 @@ static bool hjoin_stream_build_budget_reserve (HASHJOIN_STREAM_BUILD_BUDGET * bu
 #endif /* defined (SERVER_MODE) */
 static int hjoin_stream_build_pin_serial (THREAD_ENTRY * thread_p, XASL_NODE * inner_xasl,
 					  ACCESS_SPEC_TYPE *** pinned_specs, int *pinned_cnt);
-static void hjoin_stream_build_unpin_serial (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE ** pinned_specs,
-					     int pinned_cnt);
+static void hjoin_stream_build_unpin_serial (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE ** pinned_specs, int pinned_cnt);
 static int hjoin_stream_build_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record);
 static int hjoin_stream_build_degrade (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_STATE * build_state,
 				       QFILE_TUPLE_RECORD * tuple_record);
@@ -1754,8 +1753,7 @@ hjoin_stream_build_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_S
 
   /* the empty table's fixed footprint, reserved before anything is created */
   fixed_bytes = HASH_LIST_SCAN_DATA_CHUNK_SIZE
-    + (UINT64) mht_hls_slot_count (HJOIN_STREAM_BUILD_INITIAL_EST) * sizeof (MHT_HLS_SLOT)
-    + sizeof (MHT_HLS_TABLE);
+    + (UINT64) mht_hls_slot_count (HJOIN_STREAM_BUILD_INITIAL_EST) * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_TABLE);
   if (!hjoin_stream_build_budget_reserve (slot->budget, fixed_bytes))
     {
       ATOMIC_TAS_32 (&slot->budget->stop_capacity, 1);
@@ -1873,8 +1871,7 @@ hjoin_stream_build_row_sink (THREAD_ENTRY * thread_p, OUTPTR_LIST * outptr_list,
   hash_key = qdata_hash_scan_key (worker->temp_key, UINT_MAX, HASH_METH_IN_MEM);
 
   /* pre-insert reservation, mirroring the serial model (B1) with CAS reservations */
-  row_cost = DB_ALIGN (sizeof (MHT_HLS_ENTRY) + (UINT64) QFILE_GET_TUPLE_LENGTH (worker->tuple_buf.tpl),
-		       MAX_ALIGNMENT);
+  row_cost = DB_ALIGN (sizeof (MHT_HLS_ENTRY) + (UINT64) QFILE_GET_TUPLE_LENGTH (worker->tuple_buf.tpl), MAX_ALIGNMENT);
   slot_bytes = (UINT64) hash_table->size * sizeof (MHT_HLS_SLOT);
 
   need = 0;
@@ -2140,7 +2137,7 @@ hjoin_stream_build_input_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * m
    * distinct hashes), reserve its whole footprint — slot array, initial chunk,
    * descriptor and the attached-arena array — then adopt every worker table */
   final_bytes = (UINT64) mht_hls_slot_count ((int) MIN (total_slots_used, (UINT64) INT32_MAX)) * sizeof (MHT_HLS_SLOT)
-    + HASH_LIST_SCAN_DATA_CHUNK_SIZE + sizeof (MHT_HLS_TABLE) + (UINT64) w * sizeof (HL_HEAPID);
+    + HASH_LIST_SCAN_DATA_CHUNK_SIZE + sizeof (MHT_HLS_TABLE) + (UINT64) w *sizeof (HL_HEAPID);
   if (total_slots_used > 0 && !hjoin_stream_build_budget_reserve (&budget, final_bytes))
     {
       /* the merge peak itself exceeds the limit; restart as above */
