@@ -202,11 +202,17 @@ typedef struct hashjoin_stream_build_state
 
 static int hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
 				     XASL_STATE * xasl_state, bool * resident);
+static int hjoin_stream_build_pin_serial (THREAD_ENTRY * thread_p, XASL_NODE * inner_xasl,
+					  ACCESS_SPEC_TYPE *** pinned_specs, int *pinned_cnt);
+static void hjoin_stream_build_unpin_serial (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE ** pinned_specs,
+					     int pinned_cnt);
 static int hjoin_stream_build_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record);
 static int hjoin_stream_build_degrade (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_STATE * build_state,
 				       QFILE_TUPLE_RECORD * tuple_record);
+static void hjoin_stream_prepare_legacy_fallback (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+						  HASHJOIN_CONTEXT * context);
 static int hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
-				 XASL_STATE * xasl_state);
+				 XASL_STATE * xasl_state, bool * legacy_fallback);
 static int hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
 					 HASHJOIN_CONTEXT * context, XASL_STATE * xasl_state);
 static int hjoin_stream_probe_tuple (THREAD_ENTRY * thread_p, void *arg, QFILE_TUPLE_RECORD * tuple_record);
@@ -327,25 +333,34 @@ qexec_hash_join (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_st
 
   if (streaming)
     {
+      bool legacy_fallback = false;
+
       single_context->status = HASHJOIN_STATUS_SINGLE;
       status = HASHJOIN_STATUS_SINGLE;
 
-      /* monitor */
-      perfmon_inc_stat (thread_p, PSTAT_QM_NUM_HASHJOINS);
-
-      error = hjoin_stream_execute (thread_p, &manager, single_context, xasl_state);
-
-      if (thread_is_on_trace (thread_p))
-	{
-	  xasl->executed_parallelism = manager.num_parallel_threads;
-	}
+      error = hjoin_stream_execute (thread_p, &manager, single_context, xasl_state, &legacy_fallback);
 
       if (error != NO_ERROR)
 	{
 	  goto error_exit;
 	}
 
-      goto finalize;
+      if (!legacy_fallback)
+	{
+	  /* monitor: counted after the fallback decision so exactly one counter
+	   * reflects the method that actually executed */
+	  perfmon_inc_stat (thread_p, PSTAT_QM_NUM_HASHJOINS);
+
+	  if (thread_is_on_trace (thread_p))
+	    {
+	      xasl->executed_parallelism = manager.num_parallel_threads;
+	    }
+
+	  goto finalize;
+	}
+
+      /* B1.5 legacy fallback: both inputs are materialized and nothing was consumed
+       * or produced; the ordinary dispatch below owns the join from here. */
     }
 
   status = hjoin_check_empty_inputs (&manager, single_context);
@@ -765,9 +780,7 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
     {
       UINT64 mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
 
-      if (mem_limit < HJOIN_STREAM_BUILD_MIN_BUDGET	/* an empty streamed table would already exceed it */
-	  || !hjoin_stream_outer_scans_serial (outer_xasl)	/* B1 pairs with the serial-hook probe only */
-	  || !hjoin_stream_outer_scans_serial (inner_xasl))	/* F1: a parallel scan would bypass the hook */
+      if (mem_limit < HJOIN_STREAM_BUILD_MIN_BUDGET)	/* an empty streamed table would already exceed it */
 	{
 	  error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
 	  if (error != NO_ERROR)
@@ -777,6 +790,32 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
 	  build_streaming = false;
 	}
     }
+
+#if defined (SERVER_MODE)
+  if (build_streaming && !hjoin_stream_outer_scans_serial (outer_xasl))
+    {
+      /* B1.5: a parallel-capable probe shape.  Its F1 preconditions (see the gate below
+       * for the non-streamed-build case) do not depend on the build size, so they are
+       * checked before the build streams; when one fails, materialize both deferred
+       * inputs here and keep the legacy path (the streaming gate below would have to
+       * fall back to the serial hook, which such a probe shape must never take). */
+      OID *outer_cls_oid = &outer_xasl->spec_list->s.cls_node.cls_oid;
+
+      if (outer_xasl->scan_op_type != S_SELECT
+	  || oid_is_system_class (outer_cls_oid) || mvcc_is_mvcc_disabled_class (outer_cls_oid)
+	  || thread_p->private_heap_id == 0)
+	{
+	  error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
+	  if (error != NO_ERROR)
+	    {
+	      return error;
+	    }
+	  return qexec_execute_mainblock (thread_p, outer_xasl, xasl_state, NULL);
+	}
+    }
+#endif /* defined (SERVER_MODE) */
+  /* (SA mode never opens parallel scans — px_scan is a server-only target — so the
+   * serial hook path is always safe there and needs no shape gating.) */
 
   if (build_streaming)
     {
@@ -1644,6 +1683,111 @@ error_exit:
 }
 
 /*
+ * hjoin_stream_build_pin_serial() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   inner_xasl(in): Build-side BUILDLIST proc.
+ *   pinned_specs(out): The specs this call newly flagged (private array).
+ *   pinned_cnt(out): Number of entries in pinned_specs.
+ *
+ * Note: B1.5: pins every spec in the build proc's scan chain to a serial scan while
+ *       the emit hook runs — a parallel scan would bypass the hook (F1).  Only specs
+ *       newly flagged here are recorded; hjoin_stream_build_unpin_serial restores
+ *       exactly those.  Cached XASL clones are returned to the cache and reused, so a
+ *       leaked flag would serialize later executions; a pre-existing flag is a
+ *       permanent fact (px_scan sets it for scans that can never run parallel) and
+ *       must never be cleared.
+ */
+static int
+hjoin_stream_build_pin_serial (THREAD_ENTRY * thread_p, XASL_NODE * inner_xasl, ACCESS_SPEC_TYPE *** pinned_specs,
+			       int *pinned_cnt)
+{
+  XASL_NODE *xptr;
+  ACCESS_SPEC_TYPE *spec;
+  ACCESS_SPEC_TYPE **pinned = NULL;
+  int spec_cnt = 0, cnt = 0;
+
+  assert (inner_xasl != NULL);
+  assert (pinned_specs != NULL && pinned_cnt != NULL);
+
+  *pinned_specs = NULL;
+  *pinned_cnt = 0;
+
+  for (xptr = inner_xasl; xptr != NULL; xptr = xptr->scan_ptr)
+    {
+      for (spec = xptr->spec_list; spec != NULL; spec = spec->next)
+	{
+	  spec_cnt++;
+	}
+      for (spec = xptr->merge_spec; spec != NULL; spec = spec->next)
+	{
+	  spec_cnt++;
+	}
+    }
+
+  if (spec_cnt == 0)
+    {
+      return NO_ERROR;
+    }
+
+  pinned = (ACCESS_SPEC_TYPE **) db_private_alloc (thread_p, spec_cnt * sizeof (ACCESS_SPEC_TYPE *));
+  if (pinned == NULL)
+    {
+      ASSERT_ERROR ();
+      return er_errid ();
+    }
+
+  for (xptr = inner_xasl; xptr != NULL; xptr = xptr->scan_ptr)
+    {
+      for (spec = xptr->spec_list; spec != NULL; spec = spec->next)
+	{
+	  if (!ACCESS_SPEC_IS_FLAGED (spec, ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN))
+	    {
+	      ACCESS_SPEC_SET_FLAG (spec, ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN);
+	      pinned[cnt++] = spec;
+	    }
+	}
+      for (spec = xptr->merge_spec; spec != NULL; spec = spec->next)
+	{
+	  if (!ACCESS_SPEC_IS_FLAGED (spec, ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN))
+	    {
+	      ACCESS_SPEC_SET_FLAG (spec, ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN);
+	      pinned[cnt++] = spec;
+	    }
+	}
+    }
+
+  *pinned_specs = pinned;
+  *pinned_cnt = cnt;
+
+  return NO_ERROR;
+}
+
+/*
+ * hjoin_stream_build_unpin_serial() -
+ *   thread_p(in): Thread entry.
+ *   pinned_specs(in): Specs recorded by hjoin_stream_build_pin_serial (freed here).
+ *   pinned_cnt(in): Number of entries.
+ */
+static void
+hjoin_stream_build_unpin_serial (THREAD_ENTRY * thread_p, ACCESS_SPEC_TYPE ** pinned_specs, int pinned_cnt)
+{
+  int i;
+
+  if (pinned_specs == NULL)
+    {
+      return;
+    }
+
+  for (i = 0; i < pinned_cnt; i++)
+    {
+      ACCESS_SPEC_UNSET_FLAG (pinned_specs[i], ACCESS_SPEC_FLAG_NO_PARALLEL_SCAN);
+    }
+
+  db_private_free_and_init (thread_p, pinned_specs);
+}
+
+/*
  * hjoin_stream_build_input() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
  *   thread_p(in): Thread entry.
@@ -1665,6 +1809,8 @@ hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, H
 {
   XASL_NODE *inner_xasl;
   HASH_LIST_SCAN *hash_scan;
+  ACCESS_SPEC_TYPE **pinned_specs = NULL;
+  int pinned_cnt = 0;
   // *INDENT-OFF*
   HASHJOIN_STREAM_BUILD_STATE build_state = { NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, false };
   HASHJOIN_STREAM_HOOK stream_hook = { NULL, NULL };
@@ -1739,6 +1885,14 @@ hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, H
   stream_hook.func = hjoin_stream_build_tuple;
   stream_hook.arg = &build_state;
 
+  /* B1.5: the hook must see every build row; pin the chain's scans serial for the
+   * duration of the run (restored below with the hook, on every path) */
+  error = hjoin_stream_build_pin_serial (thread_p, inner_xasl, &pinned_specs, &pinned_cnt);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
   assert (inner_xasl->emit_tuple_hook == NULL);
   inner_xasl->emit_tuple_hook = &stream_hook;
 
@@ -1752,6 +1906,8 @@ hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, H
   error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
 
   inner_xasl->emit_tuple_hook = NULL;
+  hjoin_stream_build_unpin_serial (thread_p, pinned_specs, pinned_cnt);
+  pinned_specs = NULL;
 
   if (thread_is_on_trace (thread_p))
     {
@@ -1817,6 +1973,8 @@ hjoin_stream_build_input (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, H
   return NO_ERROR;
 
 error_exit:
+  hjoin_stream_build_unpin_serial (thread_p, pinned_specs, pinned_cnt);	/* no-op after the normal unpin */
+
   hjoin_scan_clear (thread_p, hash_scan);
 
   if (build_state.degrade_list_id != NULL)
@@ -2068,12 +2226,58 @@ hjoin_stream_build_degrade (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_STATE
 }
 
 /*
+ * hjoin_stream_prepare_legacy_fallback() -
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager containing shared state.
+ *   context(in): Hash join context (single context).
+ *
+ * Note: B1.5: single-manager state transition back to the legacy dispatch in
+ *       qexec_hash_join.  Both inputs are materialized by the time this runs; every
+ *       field the streaming attempt touched is reset to the state hjoin_init_manager
+ *       left behind, so the legacy path sees its usual contract.  The streamed-build
+ *       trace contribution is dropped: the legacy build owns the build statistics
+ *       (the physical cost of the abandoned attempt remains in the statement total
+ *       only — a documented decision).
+ */
+static void
+hjoin_stream_prepare_legacy_fallback (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context)
+{
+  assert (context == &manager->single_context);
+  assert (context->list_id == NULL);
+  assert (context->hash_scan.hash_list_scan_type == HASH_METH_NOT_USE);
+  assert (manager->contexts == NULL && manager->context_cnt == 0);
+
+  context->outer.list_scan_id.status = S_CLOSED;
+  context->inner.list_scan_id.status = S_CLOSED;
+  context->outer.fill_record = NULL;
+  context->inner.fill_record = NULL;
+  context->build = NULL;
+  context->probe = NULL;
+  context->status = HASHJOIN_STATUS_NONE;
+
+  manager->stream_build_pending = false;
+  manager->stream_resident_context = NULL;
+  manager->stream_part_cnt = 0;
+  manager->stream_is_outer_join = false;
+  manager->stream_spill_type_list = NULL;
+
+  if (thread_is_on_trace (thread_p) && context->stats != NULL)
+    {
+      memset (&context->stats->build, 0, sizeof (context->stats->build));
+      context->stats->hash_method = HASH_METH_NOT_USE;
+    }
+}
+
+/*
  * hjoin_stream_execute() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
  *   thread_p(in): Thread entry.
  *   manager(in): Hash join manager containing shared state.
  *   context(in): Hash join context (single context).
  *   xasl_state(in): XASL state of the query.
+ *   legacy_fallback(out): Set when the join was handed back to the legacy dispatch
+ *       (both inputs materialized, nothing consumed or produced); see
+ *       hjoin_stream_prepare_legacy_fallback.
  *
  * Note: Builds the hash table — streaming the build input directly into it when the
  *       aptr loop deferred it (B1), from the materialized list otherwise — then
@@ -2083,7 +2287,7 @@ hjoin_stream_build_degrade (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_BUILD_STATE
  */
 static int
 hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
-		      XASL_STATE * xasl_state)
+		      XASL_STATE * xasl_state, bool * legacy_fallback)
 {
   HASHJOIN_FETCH_INFO *outer, *inner;
   HASHJOIN_FETCH_INFO *build = NULL;
@@ -2103,6 +2307,9 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
   assert (context->list_id == NULL);
   assert (manager->join_type == JOIN_INNER || manager->join_type == JOIN_LEFT);
   assert (manager->context_cnt == 0);
+  assert (legacy_fallback != NULL);
+
+  *legacy_fallback = false;
 
   HASHJOIN_STATS *stats = context->stats;
   HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
@@ -2158,6 +2365,54 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
 	}
 
       /* degraded: the build input is a materialized list now; fall through */
+#if defined (SERVER_MODE)
+      if (!hjoin_stream_outer_scans_serial (manager->outer->xasl))
+	{
+	  /* B1.5 parallel-capable probe shape: forms the parallel producer cannot take
+	   * must never reach the serial hook below (F1).  This is still a safe point —
+	   * no probe row has been consumed — so such joins are handed back to the
+	   * legacy dispatch with the probe input materialized here.  Mirrors the
+	   * pre-stream gate conditions that needed the build size. */
+	  bool fallback = false;
+
+	  if (!hjoin_stream_check_single (build->list_id))
+	    {
+	      UINT64 mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+	      UINT64 per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY)
+		+ sizeof (QFILE_TUPLE_SIMPLE_POS);
+	      UINT64 part_cnt = CEIL_PTVDIV (per_entry_size * build->list_id->tuple_cnt,
+					     mem_limit * PARTITION_FILL_FACTOR);
+
+	      if (IS_OUTER_JOIN_TYPE (manager->join_type))
+		{
+		  part_cnt += 1;	/* the reserved NULL partition (see hjoin_stream_execute_batched) */
+		}
+	      if (part_cnt > HJOIN_SBATCH_MAX_PARALLEL_PARTS)
+		{
+		  fallback = true;
+		}
+	    }
+	  else if (hjoin_scan_predict_method (build->list_id) == HASH_METH_HASH_FILE)
+	    {
+	      /* the band where the single-table estimate passes but the method
+	       * prediction does not; the parallel branch would refuse it */
+	      fallback = true;
+	    }
+
+	  if (fallback)
+	    {
+	      error = qexec_execute_mainblock (thread_p, manager->outer->xasl, xasl_state, NULL);
+	      if (error != NO_ERROR)
+		{
+		  goto error_exit;
+		}
+
+	      hjoin_stream_prepare_legacy_fallback (thread_p, manager, context);
+	      *legacy_fallback = true;
+	      return NO_ERROR;
+	    }
+	}
+#endif /* defined (SERVER_MODE) */
     }
 
   if (!hjoin_stream_check_single (build->list_id))
