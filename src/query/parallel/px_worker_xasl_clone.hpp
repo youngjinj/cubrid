@@ -53,8 +53,8 @@ namespace parallel_query
 	: m_uses_xasl_clone (false),
 	  m_xasl_cache_entry (nullptr),
 	  m_xasl_clone ({nullptr, nullptr}),
-	  m_xasl_tree (nullptr),
-	  m_xasl_unpack_info (nullptr)
+      m_xasl_tree (nullptr),
+      m_xasl_unpack_info (nullptr)
       {
       }
 

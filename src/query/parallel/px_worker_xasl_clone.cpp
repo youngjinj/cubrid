@@ -49,7 +49,7 @@ namespace parallel_query
       {
 	pthread_mutex_lock (&main_thread_p->m_px_lock_mutex);
 	err_code = xcache_find_xasl_id_for_execute (thread_ref, &query_entry->xasl_id, &m_xasl_cache_entry,
-			&m_xasl_clone);
+		   &m_xasl_clone);
 	if (err_code != NO_ERROR)
 	  {
 	    pthread_mutex_unlock (&main_thread_p->m_px_lock_mutex);

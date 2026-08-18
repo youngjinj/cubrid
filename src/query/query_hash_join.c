@@ -670,8 +670,7 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
       if (!hjoin_stream_outer_scans_serial (outer_xasl))
 	{
 	  /* parallel producers keep W x K private spill lists alive; bound K */
-	  UINT64 per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY)
-	    + sizeof (QFILE_TUPLE_SIMPLE_POS);
+	  UINT64 per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS);
 	  UINT64 part_cnt = CEIL_PTVDIV (per_entry_size * inner_xasl->list_id->tuple_cnt,
 					 mem_limit * PARTITION_FILL_FACTOR);
 
@@ -810,7 +809,7 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
   ACCESS_SPEC_TYPE *spec = outer_xasl->spec_list;
   HASHJOIN_STREAM_SLOT *slots = NULL;
   void **slot_args = NULL;
-  parallel_query::worker_manager *worker_mgr = NULL;
+  parallel_query::worker_manager * worker_mgr = NULL;
   QFILE_LIST_ID *base = NULL;
   HASHJOIN_STATS *stats = context->stats;
   HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
@@ -837,8 +836,7 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
       ASSERT_ERROR ();
       return error;
     }
-  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::SCAN, num_pages,
-						    -1 /* auto */);
+  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::SCAN, num_pages, -1 /* auto */ );
   if (degree >= 2)
     {
       worker_mgr = parallel_query::worker_manager::try_reserve_workers (degree);
@@ -885,10 +883,9 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
     }
 
   error = scan_run_hashjoin_probe_producers (thread_p, manager->query_id, outer_xasl,
-							    context->val_descr, spec->s.cls_node.hfid,
-							    spec->s.cls_node.cls_oid, w, worker_mgr,
-							    hjoin_stream_row_sink, hjoin_stream_row_sink_end,
-							    slot_args);
+					     context->val_descr, spec->s.cls_node.hfid,
+					     spec->s.cls_node.cls_oid, w, worker_mgr,
+					     hjoin_stream_row_sink, hjoin_stream_row_sink_end, slot_args);
 
   for (i = 0; i < w; i++)
     {
@@ -1173,8 +1170,7 @@ hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manage
    * probe size is unknown while it streams).  check_single failed, so K >= 2. */
   mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
   per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS);
-  part_cnt =
-    CEIL_PTVDIV (per_entry_size * context->inner.list_id->tuple_cnt, mem_limit * PARTITION_FILL_FACTOR);
+  part_cnt = CEIL_PTVDIV (per_entry_size * context->inner.list_id->tuple_cnt, mem_limit * PARTITION_FILL_FACTOR);
   assert (part_cnt > 1);
   if (IS_OUTER_JOIN_TYPE (manager->join_type))
     {
@@ -2000,8 +1996,8 @@ hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot)
      * probe (px_hash_join_task_manager probe_task::execute): get_val_descr first — it
      * creates DB_VALUEs the other spawned structures alias.  The TLS instance is
      * destroyed in hjoin_stream_worker_finalize on this same thread. */
-    parallel_query::hash_join::spawn_manager *spawner =
-	    parallel_query::hash_join::spawn_manager::get_instance (*thread_p);
+    parallel_query::hash_join::spawn_manager * spawner =
+      parallel_query::hash_join::spawn_manager::get_instance (*thread_p);
     if (spawner == NULL)
       {
 	assert_release_error (er_errid () != NO_ERROR);
