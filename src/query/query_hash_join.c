@@ -1389,6 +1389,107 @@ cleanup:
   *result_list_id = base;
   return NO_ERROR;
 }
+
+/*
+ * hjoin_stream_split_build_parallel() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager (context_cnt/partition lists already prepared).
+ *   input(in): Build-side input split info (its fetch_info->list_id is materialized).
+ *   done(out): True when the parallel split ran; false asks for the serial splitter.
+ *
+ * Note: The build list split is page-parallel through the legacy split tasks
+ *       (split_input_partitions).  The worker reservation is private to this phase
+ *       and fully released before the probe phase reserves its own producers; a
+ *       small list, a reservation failure or a stats allocation failure falls back
+ *       to the serial splitter.
+ */
+static int
+hjoin_stream_split_build_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+				   HASHJOIN_INPUT_SPLIT_INFO * input, bool * done)
+{
+  parallel_query::worker_manager * worker_mgr = NULL;
+  int saved_threads = manager->num_parallel_threads;
+  UINT32 degree;
+
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL && manager != NULL && input != NULL && done != NULL);
+  assert (input->fetch_info != NULL && input->fetch_info->list_id != NULL);
+  assert (manager->px_worker_manager == NULL && manager->px_worker_stats == NULL);
+
+  *done = false;
+
+  /* the split degree follows the join's policy axis with auto-compute: the hint axis
+   * (manager->num_parallel_threads, 0 under NO_PARALLEL_HASH_JOIN) governs the
+   * top-level legacy px dispatch only, while the join-internal producer phases --
+   * the streamed probe/build producers and this split -- size themselves from their
+   * input, like scan_run_hashjoin_producers' callers */
+  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::HASH_JOIN,
+						    input->fetch_info->list_id->page_cnt, -1 /* auto */ );
+  if (degree < 2)
+    {
+      return NO_ERROR;
+    }
+
+  worker_mgr = parallel_query::worker_manager::try_reserve_workers (degree);
+  if (worker_mgr == NULL)
+    {
+      return NO_ERROR;
+    }
+
+  manager->num_parallel_threads = worker_mgr->get_reserved_workers ();
+
+  if (thread_is_on_trace (thread_p))
+    {
+      /* immutable */
+      static const size_t stats_size = perfmon_get_number_of_statistic_values () * sizeof (UINT64);
+
+      manager->px_worker_stats = (UINT64 *) db_private_alloc (thread_p, manager->num_parallel_threads * stats_size);
+      if (manager->px_worker_stats == NULL)
+	{
+	  goto serial_fallback;
+	}
+      memset (manager->px_worker_stats, 0, manager->num_parallel_threads * stats_size);
+
+      /* only top-level parent */
+      if (thread_p->m_px_stats == NULL)
+	{
+	  thread_p->m_px_stats = perfmon_allocate_values ();
+	  if (thread_p->m_px_stats == NULL)
+	    {
+	      goto serial_fallback;
+	    }
+	  memset (thread_p->m_px_stats, 0, stats_size);
+	}
+    }
+
+  manager->px_worker_manager = worker_mgr;
+
+  // *INDENT-OFF*
+  error = parallel_query::hash_join::split_input_partitions (*thread_p, manager, input);
+  // *INDENT-ON*
+
+  manager->px_worker_manager = NULL;
+  *done = (error == NO_ERROR);
+
+serial_fallback:
+  if (manager->px_worker_stats != NULL)
+    {
+      /* drained into the parent by the split round; the array is phase-private */
+      db_private_free_and_init (thread_p, manager->px_worker_stats);
+    }
+  manager->num_parallel_threads = saved_threads;
+  worker_mgr->release_workers ();
+
+  if (error == NO_ERROR && !*done && er_errid () != NO_ERROR && er_errid () != ER_INTERRUPTED)
+    {
+      /* stats allocation failure only; the serial splitter takes over */
+      er_clear ();
+    }
+
+  return error;
+}
 #endif /* defined (SERVER_MODE) */
 
 /*
@@ -1425,6 +1526,7 @@ hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manage
   UINT64 mem_limit, per_entry_size;
   UINT32 part_cnt, part_index;
   bool split_prepared = false;
+  bool parallel_split_done = false;
   bool part0_scan_opened = false;
   // *INDENT-OFF*
   HASHJOIN_STREAM_STATE stream_state = { NULL, NULL, NULL, { NULL, 0 }, 0, 0, false, NULL, 0 };
@@ -1479,10 +1581,20 @@ hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manage
     }
 
   /* split the BUILD side only; the probe side is routed while it streams */
-  error = hjoin_split_qlist (thread_p, manager, &split_info.inner, temp_part_list_id, temp_key);
+#if defined (SERVER_MODE)
+  error = hjoin_stream_split_build_parallel (thread_p, manager, &split_info.inner, &parallel_split_done);
   if (error != NO_ERROR)
     {
       goto error_exit;
+    }
+#endif /* defined (SERVER_MODE) */
+  if (!parallel_split_done)
+    {
+      error = hjoin_split_qlist (thread_p, manager, &split_info.inner, temp_part_list_id, temp_key);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
     }
 
   /* the single build list is consumed; the single (empty, preopened) probe list is no

@@ -43,20 +43,41 @@ namespace parallel_query
     int
     build_partitions (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_SPLIT_INFO *split_info)
     {
-      HASHJOIN_INPUT_SPLIT_INFO *outer, *inner;
+      int error;
+
+      assert (manager != nullptr);
+      assert (split_info != nullptr);
+
+      error = split_input_partitions (thread_ref, manager, &split_info->outer);
+      if (error != NO_ERROR)
+	{
+	  return error;
+	}
+
+      return split_input_partitions (thread_ref, manager, &split_info->inner);
+    }
+
+    /*
+     * split_input_partitions - one materialized input is split into the manager's
+     * partition lists by W parallel split tasks (the single-input round of
+     * build_partitions; the streamed grace batching calls it for its build side).
+     * The caller owns the committed partition lists on failure.
+     */
+
+    int
+    split_input_partitions (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+			    HASHJOIN_INPUT_SPLIT_INFO *input)
+    {
       HASHJOIN_SHARED_SPLIT_INFO shared_info;
       UINT32 task_cnt, task_index;
       int error = NO_ERROR;
 
       assert (manager != nullptr);
-      assert (split_info != nullptr);
+      assert (input != nullptr);
 
       HASHJOIN_STATS *stats = manager->single_context.stats;
       HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
       assert (!thread_is_on_trace (&thread_ref) || stats != nullptr);
-
-      outer = &split_info->outer;
-      inner = &split_info->inner;
 
       task_cnt = manager->num_parallel_threads;
 
@@ -75,8 +96,8 @@ namespace parallel_query
 	  hjoin_trace_start (&thread_ref, &start_stats);
 	}
 
-      /* collect data page sectors for outer relation */
-      error = qfile_open_list_sector_scan (&thread_ref, outer->fetch_info->list_id, &shared_info.sector_scan);
+      /* collect data page sectors for the input relation */
+      error = qfile_open_list_sector_scan (&thread_ref, input->fetch_info->list_id, &shared_info.sector_scan);
       if (error != NO_ERROR)
 	{
 	  goto error_exit;
@@ -84,39 +105,7 @@ namespace parallel_query
 
       for (task_index = 0; task_index < task_cnt; task_index++)
 	{
-	  task = new split_task (task_manager, manager, outer, &shared_info, task_index);
-	  task_manager.push_task (task);
-	}
-
-      task_manager.join ();
-
-      if (thread_is_on_trace (&thread_ref))
-	{
-	  hjoin_trace_drain_worker_stats (&thread_ref, manager);
-	  hjoin_trace_end (&thread_ref, &stats->split, &start_stats);
-	}
-
-      if (task_manager.has_error ())
-	{
-	  goto error_exit;
-	}
-
-      if (thread_is_on_trace (&thread_ref))
-	{
-	  hjoin_trace_start (&thread_ref, &start_stats);
-	}
-
-      /* collect data page sectors for inner relation
-       * (outer's sector_info is freed internally by qfile_collect_list_sector_info) */
-      error = qfile_open_list_sector_scan (&thread_ref, inner->fetch_info->list_id, &shared_info.sector_scan);
-      if (error != NO_ERROR)
-	{
-	  goto error_exit;
-	}
-
-      for (task_index = 0; task_index < task_cnt; task_index++)
-	{
-	  task = new split_task (task_manager, manager, inner, &shared_info, task_index);
+	  task = new split_task (task_manager, manager, input, &shared_info, task_index);
 	  task_manager.push_task (task);
 	}
 

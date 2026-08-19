@@ -37,6 +37,13 @@ namespace parallel_query
     int build_partitions (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_SPLIT_INFO *split_info);
 
     /*
+     * split_input_partitions
+     */
+
+    int split_input_partitions (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+				HASHJOIN_INPUT_SPLIT_INFO *input);
+
+    /*
      * execute_partitions
      */
 
