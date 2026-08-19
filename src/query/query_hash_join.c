@@ -1056,14 +1056,17 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
       return error;
     }
 
-  /* degree from the outer heap size, like scan_open_parallel_heap_scan */
+  /* degree from the outer heap size; HASH_JOIN policy so the join's producer scale
+   * follows the same axis as the legacy parallel hash join, independent of the
+   * scan (nested-loop) threshold */
   error = heap_get_num_data_pages (thread_p, &spec->s.cls_node.hfid, &num_pages);
   if (error != NO_ERROR)
     {
       ASSERT_ERROR ();
       return error;
     }
-  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::SCAN, num_pages, -1 /* auto */ );
+  degree =
+    parallel_query::compute_parallel_degree (parallel_query::parallel_type::HASH_JOIN, num_pages, -1 /* auto */ );
   if (degree >= 2)
     {
       worker_mgr = parallel_query::worker_manager::try_reserve_workers (degree);
@@ -2035,14 +2038,16 @@ hjoin_stream_build_input_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * m
    * too): a build whose own heap is small still serializes ~3x its scan cost into
    * table inserts, and the probe phase that follows will run with this degree anyway.
    * The caller admitted the parallel-probe shape, so the outer spec is a single
-   * sequential heap. */
+   * sequential heap. HASH_JOIN policy keeps the join's degree independent of the
+   * scan (nested-loop) threshold. */
   error = heap_get_num_data_pages (thread_p, &manager->outer->xasl->spec_list->s.cls_node.hfid, &num_pages);
   if (error != NO_ERROR)
     {
       ASSERT_ERROR ();
       return error;
     }
-  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::SCAN, num_pages, -1 /* auto */ );
+  degree =
+    parallel_query::compute_parallel_degree (parallel_query::parallel_type::HASH_JOIN, num_pages, -1 /* auto */ );
   if (degree < 2)
     {
       /* too small for producers; the serial streamed build (B1) avoids the W-table
