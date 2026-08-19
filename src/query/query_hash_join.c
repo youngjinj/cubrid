@@ -31,7 +31,6 @@
 #include "perf_monitor.h"	/* perfmon_get_from_statistic, PSTAT_... */
 #include "px_hash_join.hpp"	/* parallel_query::hash_join::... */
 #include "px_hash_join_spawn_manager.hpp"	/* parallel_query::hash_join::spawn_manager */
-#include "file_manager.h"	/* file_get_num_user_pages */
 #include "log_impl.h"		/* logtb_get_mvcc_snapshot */
 #include "px_parallel.hpp"	/* parallel_query::compute_parallel_degree */
 #include "px_scan.hpp"		/* scan_run_hashjoin_producers */
@@ -1058,7 +1057,7 @@ hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
     }
 
   /* degree from the outer heap size, like scan_open_parallel_heap_scan */
-  error = file_get_num_user_pages (thread_p, &spec->s.cls_node.hfid.vfid, &num_pages);
+  error = heap_get_num_data_pages (thread_p, &spec->s.cls_node.hfid, &num_pages);
   if (error != NO_ERROR)
     {
       ASSERT_ERROR ();
@@ -2037,7 +2036,7 @@ hjoin_stream_build_input_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * m
    * table inserts, and the probe phase that follows will run with this degree anyway.
    * The caller admitted the parallel-probe shape, so the outer spec is a single
    * sequential heap. */
-  error = file_get_num_user_pages (thread_p, &manager->outer->xasl->spec_list->s.cls_node.hfid.vfid, &num_pages);
+  error = heap_get_num_data_pages (thread_p, &manager->outer->xasl->spec_list->s.cls_node.hfid, &num_pages);
   if (error != NO_ERROR)
     {
       ASSERT_ERROR ();
