@@ -299,6 +299,7 @@ set(QUERY_SOURCES
   ${QUERY_DIR}/xasl_cache.c
   )
 set(QUERY_HEADERS
+  ${QUERY_DIR}/like_match_lockstep.i
   ${QUERY_DIR}/query_aggregate.hpp
   ${QUERY_DIR}/query_hash_scan.h
   ${QUERY_DIR}/query_hash_join.h
@@ -503,6 +504,7 @@ set(TRANSACTION_HEADERS
   )
 
 set(STORAGE_SOURCES
+  ${STORAGE_DIR}/bestspace.cpp
   ${STORAGE_DIR}/btree.c
   ${STORAGE_DIR}/btree_load.c
   ${STORAGE_DIR}/btree_unique.cpp
@@ -532,6 +534,7 @@ set(STORAGE_SOURCES
   ${STORAGE_DIR}/tde.c
   )
 set(STORAGE_HEADERS
+  ${STORAGE_DIR}/bestspace.hpp
   ${STORAGE_DIR}/btree_unique.hpp
   ${STORAGE_DIR}/double_write_buffer.hpp
   ${STORAGE_DIR}/ftab_set.hpp
