@@ -25,6 +25,7 @@
 #include "dbtype.h"		/* db_make_null */
 #include "error_manager.h"	/* er_errid, NO_ERROR, assert_release_error */
 #include "fetch.h"		/* fetch_val_list */
+#include "heap_file.h"		/* heap_estimate */
 #include "list_file.h"		/* qfile_open_list, qfile_close_list */
 #include "memory_alloc.h"	/* CEIL_PTVDIV */
 #include "object_representation.h"	/* TP_DOMAIN */
@@ -667,6 +668,52 @@ qexec_hjoin_can_stream_build (XASL_NODE * xasl)
 }
 
 /*
+ * hjoin_stream_build_doomed() -
+ *   return: True when the row-count estimate alone puts the streamed build over the
+ *           memory budget, so the attempt (whose end is a degrade dump or a parallel
+ *           capacity restart) is skipped and the build input materialized right away.
+ *   thread_p(in): Thread entry.
+ *   inner_xasl(in): Build (inner) BUILDLIST node whose runtime stream conditions passed.
+ *   mem_limit(in): Streamed-build memory budget (max_hash_list_scan_size).
+ *
+ * Note: Conservative heuristic.  Every inserted row costs at least its chain entry
+ *       plus the tuple length header whatever the projected width, and shapes that
+ *       can filter rows (predicates, limits, chains, ...) are exempt because the heap
+ *       estimate no longer bounds their streamed row count.  The estimate can still
+ *       overshoot the inserted rows -- NULL-key rows are never inserted, and the heap
+ *       statistics may count rows invisible to this snapshot -- so a fire is not a
+ *       certainty; a false fire costs the pre-stream (materializing) path, with
+ *       identical results.  An estimate failure keeps the optimistic attempt.
+ */
+static bool
+hjoin_stream_build_doomed (THREAD_ENTRY * thread_p, XASL_NODE * inner_xasl, UINT64 mem_limit)
+{
+  ACCESS_SPEC_TYPE *spec = inner_xasl->spec_list;
+  UINT64 row_cost_floor;
+  int npages, nobjs, avg_length;
+
+  if (spec == NULL || spec->next != NULL || inner_xasl->scan_ptr != NULL
+      || spec->type != TARGET_CLASS || spec->access != ACCESS_METHOD_SEQUENTIAL
+      || spec->where_key != NULL || spec->where_pred != NULL || spec->where_range != NULL
+      || inner_xasl->if_pred != NULL || inner_xasl->instnum_pred != NULL
+      || inner_xasl->limit_row_count != NULL || inner_xasl->dptr_list != NULL)
+    {
+      return false;
+    }
+
+  if (heap_estimate (thread_p, &spec->s.cls_node.hfid, &npages, &nobjs, &avg_length) < 0 || nobjs <= 0)
+    {
+      /* stale or unavailable statistics; keep the optimistic attempt */
+      er_clear ();
+      return false;
+    }
+
+  row_cost_floor = DB_ALIGN (sizeof (MHT_HLS_ENTRY) + QFILE_TUPLE_LENGTH_SIZE, MAX_ALIGNMENT);
+
+  return ((UINT64) nobjs * row_cost_floor > mem_limit);
+}
+
+/*
  * hjoin_stream_parallel_shape() -
  *   return: True if the join qualifies for the parallel streaming probe (I-min shape).
  *   xasl(in): HASHJOIN_PROC node (plain-outer checks already passed in the caller).
@@ -787,7 +834,8 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
     {
       UINT64 mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
 
-      if (mem_limit < HJOIN_STREAM_BUILD_MIN_BUDGET)	/* an empty streamed table would already exceed it */
+      if (mem_limit < HJOIN_STREAM_BUILD_MIN_BUDGET	/* an empty streamed table would already exceed it */
+	  || hjoin_stream_build_doomed (thread_p, inner_xasl, mem_limit))
 	{
 	  error = qexec_execute_mainblock (thread_p, inner_xasl, xasl_state, NULL);
 	  if (error != NO_ERROR)
