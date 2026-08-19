@@ -46,8 +46,29 @@ namespace parallel_query
      * parallel_probe
      */
 
-    int init_context (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *context);
+    int init_context (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *context,
+		      HASHJOIN_CONTEXT *source);
     void clear_context (cubthread::entry &thread_ref, HASHJOIN_CONTEXT *context);
+
+    /*
+     * partition_probe: the single-context parallel probe machinery, rearmed
+     * per partition. The session owns the W worker contexts and their trace stats;
+     * manager->contexts (the K-partition array) is never touched.
+     */
+
+    struct partition_probe_session
+    {
+      HASHJOIN_CONTEXT *worker_contexts;	/* W worker contexts (session-owned) */
+      HASHJOIN_STATS *worker_stats;		/* W stats, trace only (session-owned) */
+      UINT32 worker_cnt;
+    };
+
+    int partition_probe_prepare (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+				 partition_probe_session *session);
+    int partition_probe_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+				 HASHJOIN_CONTEXT *target, partition_probe_session *session);
+    void partition_probe_clear (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+				partition_probe_session *session);
 
     int probe_prepare (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager);
     int probe_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager);

@@ -266,15 +266,17 @@ error_exit:
      */
 
     int
-    init_context (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *context)
+    init_context (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *context,
+		  HASHJOIN_CONTEXT *source)
     {
       HASHJOIN_CONTEXT *single_context;
       int error = NO_ERROR;
 
       assert (manager != nullptr);
       assert (context != nullptr);
+      assert (source != nullptr);
 
-      single_context = &manager->single_context;
+      single_context = source;
 
       context->outer.list_id = single_context->outer.list_id;
       context->outer.input = single_context->outer.input;
@@ -398,7 +400,7 @@ error_exit:
 
       for (context_index = 0; context_index < context_cnt; context_index++)
 	{
-	  error = init_context (thread_ref, manager, &contexts[context_index]);
+	  error = init_context (thread_ref, manager, &contexts[context_index], &manager->single_context);
 	  if (error != NO_ERROR)
 	    {
 	      goto error_exit;
@@ -477,29 +479,35 @@ error_exit:
       return error;
     }
 
-    int
-    probe_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager)
+    /*
+     * probe_execute_target - the parallel probe round over one target context: the
+     * target owns the shared hash table and the probe input list; the workers'
+     * result lists are merged into single_context->list_id, and the worker stats
+     * (with the probe min/max ranges) into target->stats exactly once.
+     */
+
+    static int
+    probe_execute_target (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *target,
+			  HASHJOIN_CONTEXT *worker_contexts, UINT32 worker_cnt)
     {
-      HASHJOIN_CONTEXT *contexts = nullptr, *current_context;
+      HASHJOIN_CONTEXT *current_context;
       HASHJOIN_SHARED_PROBE_INFO shared_info;
       UINT32 context_index;
-      UINT32 task_cnt, task_index;
+      UINT32 task_index;
       int error = NO_ERROR;
 
       assert (manager != nullptr);
-      assert (manager->single_context.status == HASHJOIN_STATUS_PARALLEL_PROBE);
+      assert (target != nullptr);
+      assert (worker_contexts != nullptr && worker_cnt > 1);
       assert (manager->px_worker_manager != nullptr);
+      assert (worker_cnt == manager->num_parallel_threads);
 
-      HASHJOIN_STATS *stats = manager->single_context.stats;
+      HASHJOIN_STATS *stats = target->stats;
       HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
 #if HASHJOIN_PROFILE_TIME
       HASHJOIN_START_STATS profile_start_stats = HASHJOIN_START_STATS_INITIALIZER;
 #endif /* HASHJOIN_PROFILE_TIME */
       assert (!thread_is_on_trace (&thread_ref) || stats != nullptr);
-
-      contexts = manager->contexts;
-
-      task_cnt = manager->num_parallel_threads;
 
       THREAD_ENTRY *main_thread_p = thread_get_main_thread (&thread_ref);
       task_manager task_manager (manager->px_worker_manager, *main_thread_p);
@@ -511,15 +519,15 @@ error_exit:
 	}
 
       /* collect data page sectors for probe relation */
-      error = qfile_open_list_sector_scan (&thread_ref, manager->single_context.probe->list_id, &shared_info.sector_scan);
+      error = qfile_open_list_sector_scan (&thread_ref, target->probe->list_id, &shared_info.sector_scan);
       if (error != NO_ERROR)
 	{
 	  goto error_exit;
 	}
 
-      for (task_index = 0; task_index < task_cnt; task_index++)
+      for (task_index = 0; task_index < worker_cnt; task_index++)
 	{
-	  task = new probe_task (task_manager, manager, &contexts[task_index], &shared_info, task_index);
+	  task = new probe_task (task_manager, manager, &worker_contexts[task_index], target, &shared_info, task_index);
 	  task_manager.push_task (task);
 	}
 
@@ -545,13 +553,13 @@ error_exit:
 	  goto error_exit;
 	}
 
-      for (context_index = 0; context_index < manager->context_cnt; context_index++)
+      for (context_index = 0; context_index < worker_cnt; context_index++)
 	{
-	  current_context = &contexts[context_index];
+	  current_context = &worker_contexts[context_index];
 
 	  if (thread_is_on_trace (&thread_ref))
 	    {
-	      hjoin_trace_merge_stats (stats, current_context->stats, manager->single_context.status);
+	      hjoin_trace_merge_stats (stats, current_context->stats, HASHJOIN_STATUS_PARALLEL_PROBE);
 	    }
 
 	  if (current_context->list_id == nullptr)
@@ -606,6 +614,150 @@ error_exit:
 	}
 
       goto cleanup;
+    }
+
+    int
+    probe_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager)
+    {
+      assert (manager != nullptr);
+      assert (manager->single_context.status == HASHJOIN_STATUS_PARALLEL_PROBE);
+
+      return probe_execute_target (thread_ref, manager, &manager->single_context,
+				   manager->contexts, manager->num_parallel_threads);
+    }
+
+    /*
+     * partition_probe_prepare - allocate the session-owned worker arrays once,
+     * before the partition loop. The contexts are (re)armed per partition by
+     * partition_probe_execute; manager->contexts is never touched.
+     */
+
+    int
+    partition_probe_prepare (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+			     partition_probe_session *session)
+    {
+      UINT32 worker_cnt;
+
+      assert (manager != nullptr);
+      assert (session != nullptr);
+      assert (session->worker_contexts == nullptr && session->worker_stats == nullptr);
+
+      worker_cnt = manager->num_parallel_threads;
+      assert (worker_cnt > 1);
+
+      session->worker_contexts =
+	      (HASHJOIN_CONTEXT *) db_private_alloc (&thread_ref, worker_cnt * sizeof (HASHJOIN_CONTEXT));
+      if (session->worker_contexts == nullptr)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      memset (session->worker_contexts, 0, worker_cnt * sizeof (HASHJOIN_CONTEXT));
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  session->worker_stats = (HASHJOIN_STATS *) db_private_alloc (&thread_ref,
+				  worker_cnt * sizeof (HASHJOIN_STATS));
+	  if (session->worker_stats == nullptr)
+	    {
+	      db_private_free_and_init (&thread_ref, session->worker_contexts);
+
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+	  memset (session->worker_stats, 0, worker_cnt * sizeof (HASHJOIN_STATS));
+	}
+
+      session->worker_cnt = worker_cnt;
+
+      return NO_ERROR;
+    }
+
+    /*
+     * partition_probe_execute - rearm the session workers for one target partition
+     * and run the parallel probe round over it. The rearm is transactional: a
+     * failure while opening the W result lists clears exactly the initialized
+     * contexts, and any worker list left unmerged by a failed round is destroyed
+     * here, so the session arrays always come back empty.
+     */
+
+    int
+    partition_probe_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+			     HASHJOIN_CONTEXT *target, partition_probe_session *session)
+    {
+      HASHJOIN_CONTEXT *context;
+      UINT32 armed_cnt, worker_index;
+      int error = NO_ERROR;
+
+      assert (manager != nullptr);
+      assert (target != nullptr && target != &manager->single_context);
+      assert (target->status == HASHJOIN_STATUS_PARALLEL_PROBE);
+      assert (session != nullptr && session->worker_contexts != nullptr && session->worker_cnt > 1);
+
+      /* rearm: a fresh probe_prepare-equivalent state per partition (stats zeroed so
+       * this round merges only its own numbers into the target) */
+      for (armed_cnt = 0; armed_cnt < session->worker_cnt; armed_cnt++)
+	{
+	  context = &session->worker_contexts[armed_cnt];
+
+	  memset (context, 0, sizeof (HASHJOIN_CONTEXT));
+	  if (session->worker_stats != nullptr)
+	    {
+	      memset (&session->worker_stats[armed_cnt], 0, sizeof (HASHJOIN_STATS));
+	      context->stats = &session->worker_stats[armed_cnt];
+	    }
+
+	  error = init_context (thread_ref, manager, context, target);
+	  if (error != NO_ERROR)
+	    {
+	      break;
+	    }
+	}
+
+      if (error == NO_ERROR)
+	{
+	  error = probe_execute_target (thread_ref, manager, target, session->worker_contexts, session->worker_cnt);
+
+	  if (error == NO_ERROR && target->stats != nullptr)
+	    {
+	      /* the partition loop's merge aggregates this into the join's stats */
+	      target->stats->num_parallel_threads = session->worker_cnt;
+	    }
+	}
+
+      /* disarm: destroy any result list a failed round left behind (a successful
+       * round consumed them all through the merge) */
+      for (worker_index = 0; worker_index < armed_cnt; worker_index++)
+	{
+	  clear_context (thread_ref, &session->worker_contexts[worker_index]);
+	}
+
+      return error;
+    }
+
+    /*
+     * partition_probe_clear - free the session-owned arrays once, after the
+     * partition loop.
+     */
+
+    void
+    partition_probe_clear (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+			   partition_probe_session *session)
+    {
+      assert (manager != nullptr);
+      assert (session != nullptr);
+
+      if (session->worker_contexts != nullptr)
+	{
+	  db_private_free_and_init (&thread_ref, session->worker_contexts);
+	}
+
+      if (session->worker_stats != nullptr)
+	{
+	  db_private_free_and_init (&thread_ref, session->worker_stats);
+	}
+
+      session->worker_cnt = 0;
     }
 
   } /* namespace hash_join */

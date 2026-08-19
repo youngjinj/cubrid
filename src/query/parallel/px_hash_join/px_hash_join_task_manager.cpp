@@ -714,12 +714,14 @@ namespace parallel_query
      */
 
     probe_task::probe_task (task_manager &task_manager, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *context,
-			    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index)
+			    HASHJOIN_CONTEXT *target_context, HASHJOIN_SHARED_PROBE_INFO *shared_info, int index)
       : base_task (task_manager, manager, index)
       , m_context (context)
+      , m_target_context (target_context)
       , m_shared_info (shared_info)
     {
       assert (m_context != nullptr);
+      assert (m_target_context != nullptr);
       assert (m_shared_info != nullptr);
     }
 
@@ -729,7 +731,7 @@ namespace parallel_query
       task_execution_guard guard (thread_ref, m_task_manager);
 
       spawn_manager *spawn_manager = nullptr;
-      HASHJOIN_CONTEXT *single_context;
+      HASHJOIN_CONTEXT *target_context;
       int error = NO_ERROR;
 
       TSCTIMEVAL total_probe_time = { 0, 0 };
@@ -787,17 +789,17 @@ namespace parallel_query
 	  goto cleanup;		/* error_exit */
 	}
 
-      single_context = &m_manager->single_context;
-      switch (single_context->hash_scan.hash_list_scan_type)
+      target_context = m_target_context;
+      switch (target_context->hash_scan.hash_list_scan_type)
 	{
 	case HASH_METH_IN_MEM:
 	case HASH_METH_HYBRID:
-	  m_context->hash_scan.memory.hash_table = single_context->hash_scan.memory.hash_table;
+	  m_context->hash_scan.memory.hash_table = target_context->hash_scan.memory.hash_table;
 	  m_context->hash_scan.memory.curr_hash_entry = nullptr;
 	  break;
 
 	case HASH_METH_HASH_FILE:
-	  m_context->hash_scan.file.hash_table = single_context->hash_scan.file.hash_table;
+	  m_context->hash_scan.file.hash_table = target_context->hash_scan.file.hash_table;
 	  m_context->hash_scan.file.curr_oid = OID_INITIALIZER;
 	  m_context->hash_scan.file.is_dk_bucket = false;
 	  break;
@@ -810,7 +812,7 @@ namespace parallel_query
 	  m_task_manager.handle_error (thread_ref);
 	  goto cleanup;		/* error_exit */
 	}
-      m_context->hash_scan.hash_list_scan_type = single_context->hash_scan.hash_list_scan_type;
+      m_context->hash_scan.hash_list_scan_type = target_context->hash_scan.hash_list_scan_type;
 
       if (IS_OUTER_JOIN_TYPE (m_manager->join_type))
 	{
@@ -858,7 +860,7 @@ cleanup:
 
       qfile_close_scan (&thread_ref, &m_context->build->list_scan_id);
 
-      /* skip hash table — owned by single_context, must not be released here */
+      /* skip hash table — owned by the target context, must not be released here */
       switch (m_context->hash_scan.hash_list_scan_type)
 	{
 	case HASH_METH_IN_MEM:

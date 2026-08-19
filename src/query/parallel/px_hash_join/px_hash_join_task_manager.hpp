@@ -203,11 +203,13 @@ namespace parallel_query
     {
       public:
 	probe_task (task_manager &task_manager, HASHJOIN_MANAGER *manager,
-		    HASHJOIN_CONTEXT *context, HASHJOIN_SHARED_PROBE_INFO *shared_info, int index);
+		    HASHJOIN_CONTEXT *context, HASHJOIN_CONTEXT *target_context,
+		    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index);
 	void execute (cubthread::entry &thread_ref) override;
 
       private:
 	HASHJOIN_CONTEXT *m_context;
+	HASHJOIN_CONTEXT *m_target_context;	/* owner of the shared hash table */
 	HASHJOIN_SHARED_PROBE_INFO *m_shared_info;
 
 	void execute_inner (cubthread::entry &thread_ref);

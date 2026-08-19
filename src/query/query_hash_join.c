@@ -302,6 +302,168 @@ error_exit:
   goto cleanup;
 }
 
+#if defined (SERVER_MODE)
+/*
+ * hjoin_partition_probe_session_open() -
+ *   return: None (a failed setup leaves the session closed; every partition then
+ *           probes serially, today's behavior).
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager (context_cnt/partition lists prepared).
+ *   session(in/out): Zero-initialized session storage owned by the caller's frame.
+ *   worker_mgr_out(out): The session's worker reservation (NULL when closed).
+ *
+ * Note: Partition-internal parallel probe (P7-1b).  One reservation spans the whole
+ *       partition loop (the workers are rearmed per partition); the degree follows
+ *       the hash-join policy axis with auto-compute, sized by the LARGEST eligible
+ *       partition -- the partitions run sequentially, so a single partition's probe
+ *       input bounds the exploitable parallelism.  The caller must close the session
+ *       with hjoin_partition_probe_session_close on every exit path.
+ */
+static void
+hjoin_partition_probe_session_open (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+				    parallel_query::hash_join::partition_probe_session * session,
+				    parallel_query::worker_manager ** worker_mgr_out)
+{
+  parallel_query::worker_manager * worker_mgr = NULL;
+  HASHJOIN_CONTEXT *context;
+  UINT64 max_pages = 0;
+  UINT32 context_index;
+  UINT32 degree;
+  int entry_threads = manager->num_parallel_threads;
+
+  assert (thread_p != NULL && manager != NULL && session != NULL && worker_mgr_out != NULL);
+  assert (manager->px_worker_manager == NULL && manager->px_worker_stats == NULL);
+  assert (manager->pprobe_session == NULL);
+
+  *worker_mgr_out = NULL;
+
+  /* immutable */
+  static const size_t stats_size = perfmon_get_number_of_statistic_values () * sizeof (UINT64);
+
+  for (context_index = 0; context_index < manager->context_cnt; context_index++)
+    {
+      context = &manager->contexts[context_index];
+
+      if (IS_OUTER_JOIN_TYPE (manager->join_type) && context_index == manager->context_cnt - 1)
+	{
+	  /* the reserved NULL partition runs FILL_NULL_VALUES serially */
+	  continue;
+	}
+
+      if (hjoin_check_empty_inputs (manager, context) != HASHJOIN_STATUS_TRY)
+	{
+	  continue;
+	}
+
+      /* the probe side is chosen per partition in hjoin_init_context; the larger
+       * list is the work proxy, like hjoin_try_parallel's max_page_cnt */
+      max_pages = MAX (max_pages, (UINT64) MAX (context->outer.list_id->page_cnt, context->inner.list_id->page_cnt));
+    }
+
+  degree = parallel_query::compute_parallel_degree (parallel_query::parallel_type::HASH_JOIN, max_pages,
+						    -1 /* auto: the hint axis governs top-level dispatch only */ );
+  if (degree < 2)
+    {
+      return;
+    }
+
+  worker_mgr = parallel_query::worker_manager::try_reserve_workers (degree);
+  if (worker_mgr == NULL)
+    {
+      return;
+    }
+
+  manager->num_parallel_threads = worker_mgr->get_reserved_workers ();
+
+  if (thread_is_on_trace (thread_p))
+    {
+      manager->px_worker_stats = (UINT64 *) db_private_alloc (thread_p, manager->num_parallel_threads * stats_size);
+      if (manager->px_worker_stats == NULL)
+	{
+	  goto serial_fallback;
+	}
+      memset (manager->px_worker_stats, 0, manager->num_parallel_threads * stats_size);
+
+      /* only top-level parent */
+      if (thread_p->m_px_stats == NULL)
+	{
+	  thread_p->m_px_stats = perfmon_allocate_values ();
+	  if (thread_p->m_px_stats == NULL)
+	    {
+	      goto serial_fallback;
+	    }
+	  memset (thread_p->m_px_stats, 0, stats_size);
+	}
+    }
+
+  // *INDENT-OFF*
+  if (parallel_query::hash_join::partition_probe_prepare (*thread_p, manager, session) != NO_ERROR)
+    {
+      goto serial_fallback;
+    }
+  // *INDENT-ON*
+
+  manager->px_worker_manager = worker_mgr;
+  manager->pprobe_session = session;
+  *worker_mgr_out = worker_mgr;
+
+  return;
+
+serial_fallback:
+  /* every jump here is a setup allocation failure (worker stats arrays / session
+   * arrays); keep that invariant when adding steps, or a real error would be
+   * swallowed by the clear below */
+  if (manager->px_worker_stats != NULL)
+    {
+      db_private_free_and_init (thread_p, manager->px_worker_stats);
+    }
+  manager->num_parallel_threads = entry_threads;
+  worker_mgr->release_workers ();
+
+  if (er_errid () != ER_INTERRUPTED)
+    {
+      er_clear ();
+    }
+}
+
+/*
+ * hjoin_partition_probe_session_close() -
+ *   return: None.
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager.
+ *   session(in): Session storage passed to hjoin_partition_probe_session_open.
+ *   worker_mgr(in): The session's reservation (NULL when the session never opened).
+ *   saved_threads(in): manager->num_parallel_threads value to restore.
+ */
+static void
+hjoin_partition_probe_session_close (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+				     parallel_query::hash_join::partition_probe_session * session,
+				     parallel_query::worker_manager * worker_mgr, int saved_threads)
+{
+  assert (thread_p != NULL && manager != NULL && session != NULL);
+
+  manager->pprobe_session = NULL;
+
+  // *INDENT-OFF*
+  parallel_query::hash_join::partition_probe_clear (*thread_p, manager, session);
+  // *INDENT-ON*
+
+  if (worker_mgr != NULL)
+    {
+      manager->px_worker_manager = NULL;
+      worker_mgr->release_workers ();
+
+      if (manager->px_worker_stats != NULL)
+	{
+	  /* drained after every partition round; the array is session-private */
+	  db_private_free_and_init (thread_p, manager->px_worker_stats);
+	}
+
+      manager->num_parallel_threads = saved_threads;
+    }
+}
+#endif /* defined (SERVER_MODE) */
+
 /*
  * hjoin_execute_partitions() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
@@ -313,6 +475,13 @@ hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager)
 {
   HASHJOIN_CONTEXT *current_context;
   UINT32 context_cnt, context_index;
+#if defined (SERVER_MODE)
+  // *INDENT-OFF*
+  parallel_query::hash_join::partition_probe_session pprobe_session = { NULL, NULL, 0 };
+  parallel_query::worker_manager * pprobe_worker_mgr = NULL;
+  // *INDENT-ON*
+  int saved_threads = manager->num_parallel_threads;
+#endif /* defined (SERVER_MODE) */
 
   int error = NO_ERROR;
 
@@ -326,6 +495,10 @@ hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager)
   assert (!thread_is_on_trace (thread_p) || stats != NULL);
 
   context_cnt = manager->context_cnt;
+
+#if defined (SERVER_MODE)
+  hjoin_partition_probe_session_open (thread_p, manager, &pprobe_session, &pprobe_worker_mgr);
+#endif /* defined (SERVER_MODE) */
 
   for (context_index = 0; context_index < context_cnt; context_index++)
     {
@@ -370,7 +543,13 @@ hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager)
     }
 
   ASSERT_NO_ERROR_OR_INTERRUPTED ();
-  return NO_ERROR;
+
+cleanup:
+#if defined (SERVER_MODE)
+  hjoin_partition_probe_session_close (thread_p, manager, &pprobe_session, pprobe_worker_mgr, saved_threads);
+#endif /* defined (SERVER_MODE) */
+
+  return error;
 
 error_exit:
   if (error == NO_ERROR || er_errid () == NO_ERROR)
@@ -379,7 +558,7 @@ error_exit:
       error = er_errid ();
     }
 
-  return error;
+  goto cleanup;
 }
 
 /*
@@ -663,10 +842,23 @@ hjoin_execute_internal (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HAS
       goto error_exit;
     }
 
-  error = qfile_open_list_scan (probe->list_id, &probe->list_scan_id);
-  if (error != NO_ERROR)
+#if defined (SERVER_MODE)
+  if (manager->pprobe_session != NULL && context != &manager->single_context && context->status == HASHJOIN_STATUS_TRY)
     {
-      goto error_exit;
+      /* partition-internal parallel probe (P7-1b): the session reserved its workers
+       * before the partition loop; hjoin_probe dispatches on this status */
+      context->status = HASHJOIN_STATUS_PARALLEL_PROBE;
+    }
+#endif /* defined (SERVER_MODE) */
+
+  if (context->status != HASHJOIN_STATUS_PARALLEL_PROBE)
+    {
+      /* a parallel probe consumes its input through the sector scan instead */
+      error = qfile_open_list_scan (probe->list_id, &probe->list_scan_id);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
     }
 
   error = hjoin_probe (thread_p, manager, context);
@@ -3343,19 +3535,32 @@ hjoin_probe (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTE
 #if defined (SERVER_MODE)
   if (context->status == HASHJOIN_STATUS_PARALLEL_PROBE)
     {
-      assert (context == &manager->single_context);
-
       // *INDENT-OFF*
-      error = parallel_query::hash_join::probe_prepare (*thread_p, manager);
-      if (error != NO_ERROR)
+      if (context == &manager->single_context)
 	{
-	  goto error_exit;
-	}
+	  error = parallel_query::hash_join::probe_prepare (*thread_p, manager);
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
 
-      error = parallel_query::hash_join::probe_execute (*thread_p, manager);
-      if (error != NO_ERROR)
+	  error = parallel_query::hash_join::probe_execute (*thread_p, manager);
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
+	}
+      else
 	{
-	  goto error_exit;
+	  /* partition-internal parallel probe (P7-1b) */
+	  assert (manager->pprobe_session != NULL);
+
+	  error = parallel_query::hash_join::partition_probe_execute (*thread_p, manager, context,
+								      manager->pprobe_session);
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
 	}
       // *INDENT-ON*
     }
@@ -4634,6 +4839,39 @@ hjoin_trace_merge_stats (HASHJOIN_STATS * stats, HASHJOIN_STATS * context_stats,
   stats->probe.read_rows += context_stats->probe.read_rows;
   stats->probe.read_keys += context_stats->probe.read_keys;
   stats->probe.qualified_rows += context_stats->probe.qualified_rows;
+
+  if (context_stats->num_parallel_threads > 1)
+    {
+      /* partition-internal parallel probe: aggregate the contributing partitions'
+       * worker ranges (the first contribution seeds the range -- the merge target
+       * is zero-initialized, not sentinel-initialized) */
+      if (stats->num_partition_probe_threads == 0)
+	{
+	  stats->probe.range = context_stats->probe.range;
+	}
+      else
+	{
+	  perfmon_update_min_timeval (&stats->probe.range.elapsed_time.min,
+				      &context_stats->probe.range.elapsed_time.min);
+	  perfmon_update_max_timeval (&stats->probe.range.elapsed_time.max,
+				      &context_stats->probe.range.elapsed_time.max);
+	  stats->probe.range.read_rows.min = MIN (stats->probe.range.read_rows.min,
+						  context_stats->probe.range.read_rows.min);
+	  stats->probe.range.read_rows.max = MAX (stats->probe.range.read_rows.max,
+						  context_stats->probe.range.read_rows.max);
+	  stats->probe.range.read_keys.min = MIN (stats->probe.range.read_keys.min,
+						  context_stats->probe.range.read_keys.min);
+	  stats->probe.range.read_keys.max = MAX (stats->probe.range.read_keys.max,
+						  context_stats->probe.range.read_keys.max);
+	  stats->probe.range.qualified_rows.min = MIN (stats->probe.range.qualified_rows.min,
+						       context_stats->probe.range.qualified_rows.min);
+	  stats->probe.range.qualified_rows.max = MAX (stats->probe.range.qualified_rows.max,
+						       context_stats->probe.range.qualified_rows.max);
+	}
+
+      stats->num_partition_probe_threads = MAX (stats->num_partition_probe_threads,
+						context_stats->num_parallel_threads);
+    }
 
 #if HASHJOIN_PROFILE_TIME
   TSC_ADD_TIMEVAL (stats->profile.probe.fetch, context_stats->profile.probe.fetch);
