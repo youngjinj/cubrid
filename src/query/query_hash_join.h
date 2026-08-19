@@ -55,6 +55,11 @@
 namespace parallel_query
 {
   class worker_manager;
+
+  namespace hash_join
+  {
+    struct partition_probe_session;
+  }
 }
 
 struct xasl_node;
@@ -235,6 +240,11 @@ typedef struct hashjoin_start_stats
 typedef struct hashjoin_stats
 {
   UINT32 num_parallel_threads;
+
+  /* Partition-internal parallel probe (P7-1b): the largest worker count any
+   * contributing partition probed with; the aggregated worker ranges live in
+   * probe.range. Zero when every partition probed serially. */
+  UINT32 num_partition_probe_threads;
 
   HASH_METHOD hash_method;
   bool use_hash_memory;
@@ -487,6 +497,10 @@ typedef struct hashjoin_manager
 
   // *INDENT-OFF*
   parallel_query::worker_manager *px_worker_manager;
+
+  /* Partition-internal parallel probe (P7-1b): published for the lifetime of the
+   * hjoin_execute_partitions loop; NULL means every partition probes serially. */
+  parallel_query::hash_join::partition_probe_session *pprobe_session;
   // *INDENT-ON*
   UINT64 *px_worker_stats;
 

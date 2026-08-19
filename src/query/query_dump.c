@@ -4211,6 +4211,25 @@ qdump_print_hashjoin_stats_text (FILE * fp, xasl_node * xasl_p, int indent)
 		   (unsigned long) stats->probe.range.qualified_rows.min,
 		   (unsigned long) stats->probe.range.qualified_rows.max);
 	}
+      else if (stats->num_partition_probe_threads > 1)
+	{
+	  /* partition-internal parallel probe (streamed grace batching keeps the
+	   * single-context display): worker ranges aggregated over the partitions */
+	  fprintf (fp,
+		   "%*cPROBE (time: %d, fetch: %ld, ioread: %ld, readrows: %ld, readkeys: %ld, rows: %ld)\n",
+		   indent, ' ',
+		   TO_MSEC (stats->probe.elapsed_time),
+		   stats->probe.fetches, stats->probe.ioreads,
+		   stats->probe.read_rows, stats->probe.read_keys, stats->probe.qualified_rows);
+	  fprintf (fp,
+		   "%*c(partition parallel workers: %d, time: %d..%d, readrows: %lu..%lu, readkeys: %lu..%lu, rows: %lu..%lu)\n",
+		   indent + (int) (sizeof ("PROBE")), ' ', stats->num_partition_probe_threads,
+		   TO_MSEC (stats->probe.range.elapsed_time.min), TO_MSEC (stats->probe.range.elapsed_time.max),
+		   (unsigned long) stats->probe.range.read_rows.min, (unsigned long) stats->probe.range.read_rows.max,
+		   (unsigned long) stats->probe.range.read_keys.min, (unsigned long) stats->probe.range.read_keys.max,
+		   (unsigned long) stats->probe.range.qualified_rows.min,
+		   (unsigned long) stats->probe.range.qualified_rows.max);
+	}
       else
 	{
 	  fprintf (fp,
@@ -4310,6 +4329,22 @@ qdump_print_hashjoin_stats_text (FILE * fp, xasl_node * xasl_p, int indent)
 		   indent, ' ', TO_MSEC (stats->probe.elapsed_time),
 		   stats->probe.fetches, stats->probe.ioreads, stats->probe.read_rows, stats->probe.read_keys,
 		   stats->probe.qualified_rows);
+
+	  if (stats->num_partition_probe_threads > 1)
+	    {
+	      /* partition-internal parallel probe: worker ranges aggregated over the
+	       * contributing partitions */
+	      fprintf (fp,
+		       "%*c(parallel workers: %d, time: %d..%d, readrows: %lu..%lu, readkeys: %lu..%lu, rows: %lu..%lu)\n",
+		       indent + (int) (sizeof ("PROBE")), ' ', stats->num_partition_probe_threads,
+		       TO_MSEC (stats->probe.range.elapsed_time.min), TO_MSEC (stats->probe.range.elapsed_time.max),
+		       (unsigned long) stats->probe.range.read_rows.min,
+		       (unsigned long) stats->probe.range.read_rows.max,
+		       (unsigned long) stats->probe.range.read_keys.min,
+		       (unsigned long) stats->probe.range.read_keys.max,
+		       (unsigned long) stats->probe.range.qualified_rows.min,
+		       (unsigned long) stats->probe.range.qualified_rows.max);
+	    }
 	}
 
 #if HASHJOIN_DUMP_PARTITION
@@ -4556,6 +4591,33 @@ qdump_print_hashjoin_stats_json (xasl_node * xasl_p, json_t * parent)
 
 	  json_object_set_new (probe, "parallel", parallel);
 	}
+      else if (stats->num_partition_probe_threads > 1)
+	{
+	  /* partition-internal parallel probe (streamed grace batching keeps the
+	   * single-context display): worker ranges aggregated over the partitions */
+	  parallel = json_object ();
+
+	  json_object_set_new (parallel, "partition parallel workers",
+			       json_integer (stats->num_partition_probe_threads));
+
+	  snprintf (time_str, time_str_size, "%d..%d", TO_MSEC (stats->probe.range.elapsed_time.min),
+		    TO_MSEC (stats->probe.range.elapsed_time.max));
+	  json_object_set_new (parallel, "time", json_string (time_str));
+
+	  snprintf (rows_str, rows_str_size, "%lu..%lu", (unsigned long) stats->probe.range.read_rows.min,
+		    (unsigned long) stats->probe.range.read_rows.max);
+	  json_object_set_new (parallel, "readrows", json_string (rows_str));
+
+	  snprintf (rows_str, rows_str_size, "%lu..%lu", (unsigned long) stats->probe.range.read_keys.min,
+		    (unsigned long) stats->probe.range.read_keys.max);
+	  json_object_set_new (parallel, "readkeys", json_string (rows_str));
+
+	  snprintf (rows_str, rows_str_size, "%lu..%lu", (unsigned long) stats->probe.range.qualified_rows.min,
+		    (unsigned long) stats->probe.range.qualified_rows.max);
+	  json_object_set_new (parallel, "rows", json_string (rows_str));
+
+	  json_object_set_new (probe, "parallel", parallel);
+	}
 
       /* no parallel subquery */
       if (xasl_p->px_executor == NULL)
@@ -4646,6 +4708,33 @@ qdump_print_hashjoin_stats_json (xasl_node * xasl_p, json_t * parent)
       json_object_set_new (probe, "readrows", json_integer (stats->probe.read_rows));
       json_object_set_new (probe, "readkeys", json_integer (stats->probe.read_keys));
       json_object_set_new (probe, "rows", json_integer (stats->probe.qualified_rows));
+
+      if (stats->num_parallel_threads <= 1 && stats->num_partition_probe_threads > 1)
+	{
+	  /* partition-internal parallel probe: worker ranges aggregated over the
+	   * contributing partitions */
+	  parallel = json_object ();
+
+	  json_object_set_new (parallel, "parallel workers", json_integer (stats->num_partition_probe_threads));
+
+	  snprintf (time_str, time_str_size, "%d..%d", TO_MSEC (stats->probe.range.elapsed_time.min),
+		    TO_MSEC (stats->probe.range.elapsed_time.max));
+	  json_object_set_new (parallel, "time", json_string (time_str));
+
+	  snprintf (rows_str, rows_str_size, "%lu..%lu", (unsigned long) stats->probe.range.read_rows.min,
+		    (unsigned long) stats->probe.range.read_rows.max);
+	  json_object_set_new (parallel, "readrows", json_string (rows_str));
+
+	  snprintf (rows_str, rows_str_size, "%lu..%lu", (unsigned long) stats->probe.range.read_keys.min,
+		    (unsigned long) stats->probe.range.read_keys.max);
+	  json_object_set_new (parallel, "readkeys", json_string (rows_str));
+
+	  snprintf (rows_str, rows_str_size, "%lu..%lu", (unsigned long) stats->probe.range.qualified_rows.min,
+		    (unsigned long) stats->probe.range.qualified_rows.max);
+	  json_object_set_new (parallel, "rows", json_string (rows_str));
+
+	  json_object_set_new (probe, "parallel", parallel);
+	}
 
 #if HASHJOIN_DUMP_PARTITION
       part_array = json_array ();
