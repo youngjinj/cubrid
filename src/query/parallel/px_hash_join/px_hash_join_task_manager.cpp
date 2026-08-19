@@ -719,6 +719,7 @@ namespace parallel_query
       , m_context (context)
       , m_target_context (target_context)
       , m_shared_info (shared_info)
+      , m_stamped_probe (target_context != &manager->single_context)
     {
       assert (m_context != nullptr);
       assert (m_target_context != nullptr);
@@ -1056,7 +1057,21 @@ cleanup:
 		}
 
 	      HJOIN_PROFILE_START (&thread_ref, &profile_start_stats, HASHJOIN_PROFILE_PROBE_HASH);
-	      hash_scan->curr_hash_key = qdata_hash_scan_key (key, UINT_MAX, hash_method);
+	      if (m_stamped_probe)
+		{
+		  /* a partition probe list row carries the hash its router stamped into the
+		   * reserved first column (the same convention the serial partition probe
+		   * and the partition build read); recomputing it would re-hash the key */
+		  const char *tuple_value = probe->tuple_record.tpl + QFILE_TUPLE_LENGTH_SIZE;
+
+		  assert (QFILE_GET_TUPLE_VALUE_FLAG (tuple_value) == V_BOUND);
+		  assert (QFILE_GET_TUPLE_VALUE_LENGTH (tuple_value) == MAX_ALIGNMENT);
+		  hash_scan->curr_hash_key = (UINT32) OR_GET_INT (tuple_value + QFILE_TUPLE_VALUE_HEADER_LENGTH);
+		}
+	      else
+		{
+		  hash_scan->curr_hash_key = qdata_hash_scan_key (key, UINT_MAX, hash_method);
+		}
 	      HJOIN_PROFILE_END (&thread_ref, &stats->profile, &profile_start_stats, HASHJOIN_PROFILE_PROBE_HASH);
 
 	      do
@@ -1404,7 +1419,21 @@ cleanup:
 		}
 
 	      HJOIN_PROFILE_START (&thread_ref, &profile_start_stats, HASHJOIN_PROFILE_PROBE_HASH);
-	      hash_scan->curr_hash_key = qdata_hash_scan_key (key, UINT_MAX, hash_method);
+	      if (m_stamped_probe)
+		{
+		  /* a partition probe list row carries the hash its router stamped into the
+		   * reserved first column (the same convention the serial partition probe
+		   * and the partition build read); recomputing it would re-hash the key */
+		  const char *tuple_value = probe->tuple_record.tpl + QFILE_TUPLE_LENGTH_SIZE;
+
+		  assert (QFILE_GET_TUPLE_VALUE_FLAG (tuple_value) == V_BOUND);
+		  assert (QFILE_GET_TUPLE_VALUE_LENGTH (tuple_value) == MAX_ALIGNMENT);
+		  hash_scan->curr_hash_key = (UINT32) OR_GET_INT (tuple_value + QFILE_TUPLE_VALUE_HEADER_LENGTH);
+		}
+	      else
+		{
+		  hash_scan->curr_hash_key = qdata_hash_scan_key (key, UINT_MAX, hash_method);
+		}
 	      HJOIN_PROFILE_END (&thread_ref, &stats->profile, &profile_start_stats, HASHJOIN_PROFILE_PROBE_HASH);
 
 	      any_key_matched = false;

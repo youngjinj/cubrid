@@ -211,6 +211,7 @@ namespace parallel_query
 	HASHJOIN_CONTEXT *m_context;
 	HASHJOIN_CONTEXT *m_target_context;	/* owner of the shared hash table */
 	HASHJOIN_SHARED_PROBE_INFO *m_shared_info;
+	const bool m_stamped_probe;	/* partition probe lists carry the routed hash stamp */
 
 	void execute_inner (cubthread::entry &thread_ref);
 	void execute_outer (cubthread::entry &thread_ref);
