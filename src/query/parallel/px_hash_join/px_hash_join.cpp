@@ -725,6 +725,227 @@ error_exit:
     }
 
     /*
+     * partition_probe_round - see the header comment. Owns nothing the session or
+     * the target own; the workers reference its task manager and shared info until
+     * partition_probe_finish joins them.
+     */
+
+    struct partition_probe_round
+    {
+      task_manager tman;
+      HASHJOIN_SHARED_PROBE_INFO shared;
+      HASHJOIN_CONTEXT *target;
+      HASHJOIN_START_STATS start_stats;
+      UINT32 armed;
+      bool sector_open;
+
+      partition_probe_round (worker_manager *worker_mgr, cubthread::entry &main_thread_ref)
+	: tman (worker_mgr, main_thread_ref)
+	, shared ()
+	, target (nullptr)
+	, start_stats HASHJOIN_START_STATS_INITIALIZER
+	, armed (0)
+	, sector_open (false)
+      {
+      }
+    };
+
+    /*
+     * partition_probe_start - rearm the session workers for one target partition and
+     * push its probe tasks WITHOUT joining them: every fallible step (rearm, sector
+     * scan open, round allocation) happens before the first push, so a failure here
+     * means no task was launched and the session arrays are already clean. The main
+     * thread may run other work (the next partition's build) until
+     * partition_probe_finish.
+     */
+
+    int
+    partition_probe_start (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *target,
+			   partition_probe_session *session, partition_probe_round **round_out)
+    {
+      partition_probe_round *round = nullptr;
+      HASHJOIN_CONTEXT *context;
+      UINT32 armed_cnt = 0, worker_index;
+      int error = NO_ERROR;
+
+      assert (manager != nullptr);
+      assert (target != nullptr && target != &manager->single_context);
+      assert (target->status == HASHJOIN_STATUS_PARALLEL_PROBE);
+      assert (session != nullptr && session->worker_contexts != nullptr && session->worker_cnt > 1);
+      assert (round_out != nullptr);
+
+      *round_out = nullptr;
+
+      THREAD_ENTRY *main_thread_p = thread_get_main_thread (&thread_ref);
+
+      round = new partition_probe_round (manager->px_worker_manager, *main_thread_p);
+      round->target = target;
+
+      /* rearm: a fresh probe_prepare-equivalent state per partition (stats zeroed so
+       * this round merges only its own numbers into the target) */
+      for (armed_cnt = 0; armed_cnt < session->worker_cnt; armed_cnt++)
+	{
+	  context = &session->worker_contexts[armed_cnt];
+
+	  memset (context, 0, sizeof (HASHJOIN_CONTEXT));
+	  if (session->worker_stats != nullptr)
+	    {
+	      memset (&session->worker_stats[armed_cnt], 0, sizeof (HASHJOIN_STATS));
+	      context->stats = &session->worker_stats[armed_cnt];
+	    }
+
+	  error = init_context (thread_ref, manager, context, target);
+	  if (error != NO_ERROR)
+	    {
+	      break;
+	    }
+	}
+
+      if (error == NO_ERROR)
+	{
+	  error = qfile_open_list_sector_scan (&thread_ref, target->probe->list_id, &round->shared.sector_scan);
+	  if (error == NO_ERROR)
+	    {
+	      round->sector_open = true;
+	    }
+	}
+
+      if (error != NO_ERROR)
+	{
+	  for (worker_index = 0; worker_index < armed_cnt; worker_index++)
+	    {
+	      clear_context (thread_ref, &session->worker_contexts[worker_index]);
+	    }
+	  delete round;
+	  return error;
+	}
+
+      round->armed = armed_cnt;
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  hjoin_trace_start (&thread_ref, &round->start_stats);
+	}
+
+      for (worker_index = 0; worker_index < session->worker_cnt; worker_index++)
+	{
+	  probe_task *task = new probe_task (round->tman, manager, &session->worker_contexts[worker_index],
+					     target, &round->shared, (int) worker_index);
+	  round->tman.push_task (task);
+	}
+
+      *round_out = round;
+      return NO_ERROR;
+    }
+
+    /*
+     * partition_probe_finish - the mandatory second half of a round: joins the tasks
+     * FIRST on every path (success, error, interrupt), merges the worker results and
+     * stats into the target exactly once, disarms the session workers and releases
+     * the round. Safe to call exactly once per started round.
+     */
+
+    int
+    partition_probe_finish (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+			    partition_probe_session *session, partition_probe_round *round)
+    {
+      HASHJOIN_CONTEXT *current_context;
+      HASHJOIN_CONTEXT *target;
+      UINT32 worker_index;
+      int error = NO_ERROR;
+
+      assert (manager != nullptr && session != nullptr && round != nullptr);
+
+      target = round->target;
+      HASHJOIN_STATS *stats = target->stats;
+      assert (!thread_is_on_trace (&thread_ref) || stats != nullptr);
+#if HASHJOIN_PROFILE_TIME
+      HASHJOIN_START_STATS profile_start_stats = HASHJOIN_START_STATS_INITIALIZER;
+#endif /* HASHJOIN_PROFILE_TIME */
+
+      round->tman.join ();
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  hjoin_trace_drain_worker_stats (&thread_ref, manager);
+	  hjoin_trace_end (&thread_ref, &stats->probe, &round->start_stats);
+
+	  stats->probe.range.elapsed_time.min = round->shared.probe_range.elapsed_time.min;
+	  stats->probe.range.elapsed_time.max = round->shared.probe_range.elapsed_time.max;
+	  stats->probe.range.read_rows.min = round->shared.probe_range.read_rows.min;
+	  stats->probe.range.read_rows.max = round->shared.probe_range.read_rows.max;
+	  stats->probe.range.read_keys.min = round->shared.probe_range.read_keys.min;
+	  stats->probe.range.read_keys.max = round->shared.probe_range.read_keys.max;
+	  stats->probe.range.qualified_rows.min = round->shared.probe_range.qualified_rows.min;
+	  stats->probe.range.qualified_rows.max = round->shared.probe_range.qualified_rows.max;
+	}
+
+      if (round->tman.has_error ())
+	{
+	  round->tman.clear_interrupt (thread_ref);
+	  assert_release_error (er_errid () != NO_ERROR);
+	  error = er_errid ();
+	  goto disarm;
+	}
+
+      for (worker_index = 0; worker_index < round->armed; worker_index++)
+	{
+	  current_context = &session->worker_contexts[worker_index];
+
+	  if (thread_is_on_trace (&thread_ref))
+	    {
+	      hjoin_trace_merge_stats (stats, current_context->stats, HASHJOIN_STATUS_PARALLEL_PROBE);
+	    }
+
+	  if (current_context->list_id == nullptr)
+	    {
+	      error = er_errid ();
+	      if (error != NO_ERROR)
+		{
+		  goto disarm;
+		}
+	      continue;		/* empty result */
+	    }
+
+	  if (current_context->list_id->tuple_cnt == 0)
+	    {
+	      qfile_destroy_list (&thread_ref, current_context->list_id);
+	      QFILE_FREE_AND_INIT_LIST_ID (current_context->list_id);
+	      continue;
+	    }
+
+	  HJOIN_PROFILE_START (&thread_ref, &profile_start_stats, HASHJOIN_PROFILE_MERGE);
+	  error = hjoin_merge_qlist (&thread_ref, manager, current_context);
+	  HJOIN_PROFILE_MERGE_END (&thread_ref, &stats->profile, &profile_start_stats, HASHJOIN_PROFILE_MERGE,
+				   (manager->single_context.list_id != nullptr)
+				   ? manager->single_context.list_id->tuple_cnt : 0);
+	  if (error != NO_ERROR)
+	    {
+	      goto disarm;
+	    }
+	}
+
+      if (stats != nullptr && thread_is_on_trace (&thread_ref))
+	{
+	  stats->num_parallel_threads = session->worker_cnt;
+	}
+
+disarm:
+      for (worker_index = 0; worker_index < round->armed; worker_index++)
+	{
+	  clear_context (thread_ref, &session->worker_contexts[worker_index]);
+	}
+
+      if (round->sector_open)
+	{
+	  qfile_close_list_sector_scan (&thread_ref, &round->shared.sector_scan);
+	}
+
+      delete round;
+      return error;
+    }
+
+    /*
      * partition_probe_clear - free the session-owned arrays once, after the
      * partition loop.
      */

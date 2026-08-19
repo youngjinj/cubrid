@@ -155,6 +155,11 @@ static int hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER *
 static int hjoin_outer_fill_null_values (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
 					 HASHJOIN_CONTEXT * context);
 static int hjoin_execute_internal (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context);
+#if defined (SERVER_MODE)
+static int hjoin_partition_build_prepare (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
+					  HASHJOIN_CONTEXT * context);
+static void hjoin_partition_context_finish (THREAD_ENTRY * thread_p, HASHJOIN_CONTEXT * context);
+#endif /* defined (SERVER_MODE) */
 
 /* Hash Join Streaming Probe */
 static int hjoin_stream_worker_init (THREAD_ENTRY * thread_p, HASHJOIN_STREAM_SLOT * slot);
@@ -4117,8 +4122,10 @@ hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager)
 #if defined (SERVER_MODE)
   // *INDENT-OFF*
   parallel_query::hash_join::partition_probe_session pprobe_session = { NULL, NULL, 0 };
+  parallel_query::hash_join::partition_probe_round * fly_round = NULL;
   parallel_query::worker_manager * pprobe_worker_mgr = NULL;
   // *INDENT-ON*
+  HASHJOIN_CONTEXT *fly_context = NULL;
   int saved_threads = manager->num_parallel_threads;
 #endif /* defined (SERVER_MODE) */
 
@@ -4142,6 +4149,90 @@ hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager)
   for (context_index = 0; context_index < context_cnt; context_index++)
     {
       current_context = &manager->contexts[context_index];
+
+#if defined (SERVER_MODE)
+      /* Pipelined partition (build/probe overlap): while the previous partition's
+       * probe round is in flight on the workers, the main thread builds this
+       * partition's table; then the previous round is finished (join-first on every
+       * path) before this one starts. Non-TRY partitions and serial fallbacks drain
+       * the in-flight round first and run exactly as before. */
+      if (manager->pprobe_session != NULL
+	  && !(IS_OUTER_JOIN_TYPE (manager->join_type) && context_index == context_cnt - 1)
+	  && hjoin_check_empty_inputs (manager, current_context) == HASHJOIN_STATUS_TRY)
+	{
+	  current_context->status = HASHJOIN_STATUS_TRY;
+
+	  error = hjoin_partition_build_prepare (thread_p, manager, current_context);
+
+	  if (fly_round != NULL)
+	    {
+	      /* the previous round must be joined and merged whatever the build did;
+	       * the first observed error (the build's) wins the propagation */
+	      // *INDENT-OFF*
+	      int finish_error = parallel_query::hash_join::partition_probe_finish (*thread_p, manager,
+										   &pprobe_session, fly_round);
+	      // *INDENT-ON*
+	      fly_round = NULL;
+
+	      hjoin_partition_context_finish (thread_p, fly_context);
+
+	      if (error == NO_ERROR && finish_error != NO_ERROR)
+		{
+		  hjoin_partition_context_finish (thread_p, current_context);
+		  error = finish_error;
+		}
+	      else if (finish_error == NO_ERROR)
+		{
+		  if (thread_is_on_trace (thread_p))
+		    {
+		      hjoin_trace_merge_stats (stats, fly_context->stats, manager->single_context.status);
+		    }
+		  /* a pipelined partition's result merged through the workers;
+		   * fly_context->list_id stays NULL */
+		}
+	      fly_context = NULL;
+	    }
+
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
+
+	  // *INDENT-OFF*
+	  error = parallel_query::hash_join::partition_probe_start (*thread_p, manager, current_context,
+								    &pprobe_session, &fly_round);
+	  // *INDENT-ON*
+	  if (error != NO_ERROR)
+	    {
+	      hjoin_partition_context_finish (thread_p, current_context);
+	      goto error_exit;
+	    }
+	  fly_context = current_context;
+
+	  continue;
+	}
+
+      /* non-pipelined partition: drain the in-flight round first */
+      if (fly_round != NULL)
+	{
+	  // *INDENT-OFF*
+	  error = parallel_query::hash_join::partition_probe_finish (*thread_p, manager,
+								     &pprobe_session, fly_round);
+	  // *INDENT-ON*
+	  fly_round = NULL;
+	  hjoin_partition_context_finish (thread_p, fly_context);
+	  if (error != NO_ERROR)
+	    {
+	      fly_context = NULL;
+	      goto error_exit;
+	    }
+	  if (thread_is_on_trace (thread_p))
+	    {
+	      hjoin_trace_merge_stats (stats, fly_context->stats, manager->single_context.status);
+	    }
+	  fly_context = NULL;
+	}
+#endif /* defined (SERVER_MODE) */
 
       error = hjoin_execute (thread_p, manager, current_context);
       if (error != NO_ERROR)
@@ -4181,10 +4272,33 @@ hjoin_execute_partitions (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager)
 	}
     }
 
+#if defined (SERVER_MODE)
+  if (fly_round != NULL)
+    {
+      // *INDENT-OFF*
+      error = parallel_query::hash_join::partition_probe_finish (*thread_p, manager,
+								 &pprobe_session, fly_round);
+      // *INDENT-ON*
+      fly_round = NULL;
+      hjoin_partition_context_finish (thread_p, fly_context);
+      if (error != NO_ERROR)
+	{
+	  fly_context = NULL;
+	  goto error_exit;
+	}
+      if (thread_is_on_trace (thread_p))
+	{
+	  hjoin_trace_merge_stats (stats, fly_context->stats, manager->single_context.status);
+	}
+      fly_context = NULL;
+    }
+#endif /* defined (SERVER_MODE) */
+
   ASSERT_NO_ERROR_OR_INTERRUPTED ();
 
 cleanup:
 #if defined (SERVER_MODE)
+  assert (fly_round == NULL);
   hjoin_partition_probe_session_close (thread_p, manager, &pprobe_session, pprobe_worker_mgr, saved_threads);
 #endif /* defined (SERVER_MODE) */
 
@@ -4430,6 +4544,104 @@ error_exit:
 
   goto cleanup;
 }
+
+#if defined (SERVER_MODE)
+/*
+ * hjoin_partition_build_prepare() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   manager(in): Hash join manager containing shared state.
+ *   context(in): Partition context with status HASHJOIN_STATUS_TRY.
+ *
+ * Note: The build half of hjoin_execute_internal for a pipelined partition: role
+ *       selection, table creation and the serial build, promoted to PARALLEL_PROBE
+ *       at the end. The probe and the context cleanup are NOT run here -- the
+ *       partition loop overlaps this call with the previous partition's in-flight
+ *       probe round, probes it later, and releases it with
+ *       hjoin_partition_context_finish. On error the context is finished here and
+ *       nothing stays live.
+ */
+static int
+hjoin_partition_build_prepare (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context)
+{
+  HASHJOIN_FETCH_INFO *build = NULL;
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL && manager != NULL && context != NULL);
+  assert (context != &manager->single_context);
+  assert (context->status == HASHJOIN_STATUS_TRY);
+  assert (context->list_id == NULL);
+  assert (manager->pprobe_session != NULL);
+
+  /* Prevent faults when qfile_close_scan is called */
+  context->outer.list_scan_id.status = S_CLOSED;
+  context->inner.list_scan_id.status = S_CLOSED;
+
+  error = hjoin_init_context (thread_p, manager, context);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  build = context->build;
+  assert (build != NULL);
+
+  error = qfile_open_list_scan (build->list_id, &build->list_scan_id);
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  error = hjoin_build (thread_p, manager, context);
+
+  /* the workers fetch build tuples through their own scans on the same list */
+  qfile_close_scan (thread_p, &build->list_scan_id);
+
+  if (error != NO_ERROR)
+    {
+      goto error_exit;
+    }
+
+  context->status = HASHJOIN_STATUS_PARALLEL_PROBE;
+
+  ASSERT_NO_ERROR_OR_INTERRUPTED ();
+  return NO_ERROR;
+
+error_exit:
+  if (error == NO_ERROR || er_errid () == NO_ERROR)
+    {
+      assert_release_error (er_errid () != NO_ERROR);
+      error = er_errid ();
+    }
+
+  hjoin_partition_context_finish (thread_p, context);
+
+  return error;
+}
+
+/*
+ * hjoin_partition_context_finish() -
+ *   return: None.
+ *   thread_p(in): Thread entry.
+ *   context(in): Pipelined partition context whose probe round (if any) has been
+ *                finished; its table, input lists and scans are released here.
+ *
+ * Note: The cleanup half of hjoin_execute_internal. Must never run while a probe
+ *       round still references the context.
+ */
+static void
+hjoin_partition_context_finish (THREAD_ENTRY * thread_p, HASHJOIN_CONTEXT * context)
+{
+  assert (thread_p != NULL && context != NULL);
+
+  qfile_close_scan (thread_p, &context->outer.list_scan_id);
+  qfile_close_scan (thread_p, &context->inner.list_scan_id);
+
+  hjoin_destroy_qlist (thread_p, context);
+
+  hjoin_scan_clear (thread_p, &context->hash_scan);
+}
+#endif /* defined (SERVER_MODE) */
 
 /*
  * hjoin_execute_internal() -
