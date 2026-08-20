@@ -57,6 +57,12 @@
  * (each holding a small membuf); K beyond this bound falls back to materializing. */
 #define HJOIN_SBATCH_MAX_PARALLEL_PARTS 32
 
+/* Upper bound of the IN_MEM-sized partition count (hjoin_stream_part_cnt): a build
+ * whose rows are so wide (large overflow tuples) that even this many partitions
+ * cannot make one fit the limit is payload-dominated, and keeps the legacy
+ * HYBRID-sized K instead of exploding the partition file count. */
+#define HJOIN_SBATCH_MAX_IN_MEM_PARTS 64
+
 /* B1 streamed build: initial estimated entry count for the growable in-memory table
  * (the slot array starts small and doubles with the stream; see mht_grow_hls). */
 #define HJOIN_STREAM_BUILD_INITIAL_EST 2048
@@ -169,6 +175,8 @@ static int hjoin_stream_execute_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANA
 #endif /* defined (SERVER_MODE) */
 static int hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl_state, bool * streaming,
 			       bool * stream_build);
+static bool hjoin_stream_batch_in_mem_sized (void);
+static UINT32 hjoin_stream_part_cnt (QFILE_LIST_ID * build_list_id, UINT64 mem_limit, bool in_mem_sized);
 static bool hjoin_stream_check_single (QFILE_LIST_ID * build_list_id);
 
 /* HASHJOIN_STREAM_BUILD_STATE (B1)
@@ -943,9 +951,7 @@ hjoin_stream_check (THREAD_ENTRY * thread_p, XASL_NODE * xasl, XASL_STATE * xasl
       if (!hjoin_stream_outer_scans_serial (outer_xasl))
 	{
 	  /* parallel producers keep W x K private spill lists alive; bound K */
-	  UINT64 per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS);
-	  UINT64 part_cnt = CEIL_PTVDIV (per_entry_size * inner_xasl->list_id->tuple_cnt,
-					 mem_limit * PARTITION_FILL_FACTOR);
+	  UINT64 part_cnt = hjoin_stream_part_cnt (inner_xasl->list_id, mem_limit, hjoin_stream_batch_in_mem_sized ());
 
 	  if (IS_OUTER_JOIN_TYPE (join_type))
 	    {
@@ -1030,12 +1036,132 @@ stream_probe_list:
 }
 
 /*
+ * hjoin_stream_batch_in_mem_sized() -
+ *   return: True if the streamed grace batching should size K for IN_MEM partitions.
+ *
+ * Note: The IN_MEM sizing pays off only when no parallel workers can run: the spilled
+ *       partitions are then probed on this thread alone, and removing the per-candidate
+ *       HYBRID page fix is pure gain.  With workers available (both the parallel
+ *       producers and the serial hook's partition parallel probe), every extra
+ *       partition costs a reserve/rearm/join round, which was measured to outweigh
+ *       the fetch removal.  The parallelism parameter is the one switch that turns
+ *       all of those workers off together.
+ */
+static bool
+hjoin_stream_batch_in_mem_sized (void)
+{
+#if defined (SERVER_MODE)
+  return (prm_get_integer_value (PRM_ID_PARALLELISM) == 0);
+#else /* defined (SERVER_MODE) */
+  return true;
+#endif /* !defined (SERVER_MODE) */
+}
+
+/*
+ * hjoin_stream_part_cnt() -
+ *   return: Partition count K of the streamed grace batching.
+ *   build_list_id(in): Materialized build input (tuple_cnt > 0).
+ *   mem_limit(in): PRM_ID_MAX_HASH_LIST_SCAN_SIZE (> 0).
+ *   in_mem_sized(in): True sizes K so each partition's table predicts IN_MEM;
+ *                     false keeps the legacy HYBRID-fits-the-limit sizing.
+ *
+ * Note: The legacy splitter sizes K so a partition's HYBRID table fits the limit;
+ *       probing HYBRID then fetches every candidate's build tuple from the
+ *       partition's temp pages (qfile_jump_scan_tuple_position), a per-candidate
+ *       page fix that dominates the serial probe and turns into real rereads once
+ *       the temp working set outgrows the page buffer.  Sizing K on the IN_MEM
+ *       estimate keeps every probe hit inside the query-private arena: more
+ *       partitions, the same spilled bytes, no page fix per candidate.  The
+ *       estimate mirrors hjoin_scan_predict_method (slot array by
+ *       mht_hls_slot_count, entry headers, payload prorated by page count, plus one
+ *       page of slack for each partition's own partial last page).  The estimate is
+ *       still an estimate -- a skewed or repacked partition can exceed its prorated
+ *       share and fall back to HYBRID individually, which only costs that
+ *       partition's probe the page fixes back.
+ *       Only a fully serial execution sizes for IN_MEM (see
+ *       hjoin_stream_batch_in_mem_sized): with parallel workers available, every
+ *       partition's probe pays a fixed reserve/rearm/join cost, and the larger K
+ *       was measured to cost more than the removed fetches gain.
+ */
+static UINT32
+hjoin_stream_part_cnt (QFILE_LIST_ID * build_list_id, UINT64 mem_limit, bool in_mem_sized)
+{
+  UINT64 budget;
+  UINT64 payload_size;
+  UINT64 entries_size;
+  UINT64 part_cnt;
+
+  assert (build_list_id != NULL);
+  assert (build_list_id->tuple_cnt > 0);
+  assert (mem_limit > 0);
+
+  budget = (UINT64) (mem_limit * PARTITION_FILL_FACTOR);
+  if (budget == 0)
+    {
+      budget = 1;
+    }
+
+  if (!in_mem_sized)
+    {
+      UINT64 per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS);
+
+      part_cnt = CEIL_PTVDIV (per_entry_size * build_list_id->tuple_cnt, budget);
+      return (UINT32) MIN (MAX (part_cnt, 1), UINT32_MAX);
+    }
+
+  payload_size = (UINT64) build_list_id->page_cnt * DB_PAGESIZE;
+  entries_size = (UINT64) build_list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
+
+  /* linear lower bound without the slot array; the loop settles the power-of-two
+   * slot rounding, stepping by the overshoot ratio so a degenerate (tiny) limit
+   * converges geometrically instead of scanning K one by one. */
+  part_cnt = CEIL_PTVDIV (entries_size + payload_size, budget);
+  if (part_cnt < 1)
+    {
+      part_cnt = 1;
+    }
+
+  while (part_cnt <= HJOIN_SBATCH_MAX_IN_MEM_PARTS && part_cnt < (UINT64) build_list_id->tuple_cnt)
+    {
+      INT64 part_rows = CEIL_PTVDIV (build_list_id->tuple_cnt, (INT64) part_cnt);
+      UINT64 est;
+
+      if (part_rows <= INT_MAX)
+	{
+	  est = (UINT64) mht_hls_slot_count ((int) part_rows) * sizeof (MHT_HLS_SLOT)
+	    + (UINT64) part_rows * sizeof (MHT_HLS_ENTRY) + CEIL_PTVDIV (payload_size, part_cnt) + DB_PAGESIZE;
+
+	  if (est <= budget)
+	    {
+	      /* one below the UINT32 range so the caller's reserved NULL partition (+1) cannot wrap */
+	      return (UINT32) MIN (part_cnt, UINT32_MAX - 1);
+	    }
+
+	  part_cnt = MAX (CEIL_PTVDIV (est * part_cnt, budget), part_cnt + 1);
+	}
+      else
+	{
+	  part_cnt = MAX (CEIL_PTVDIV ((UINT64) build_list_id->tuple_cnt, (UINT64) INT_MAX), part_cnt + 1);
+	}
+    }
+
+  /* payload-dominated (or degenerate limit): IN_MEM partitions are out of reach
+   * within the part-count bound, so keep the legacy sizing */
+  return hjoin_stream_part_cnt (build_list_id, mem_limit, false);
+}
+
+/*
  * hjoin_stream_check_single() -
  *   return: True if the build input fits a single in-memory hash table.
  *   build_list_id(in): List identifier of the materialized build input.
  *
  * Note: Mirrors hjoin_check_partition, gated on the build input alone:
  *       the probe input is streamed, so its size is unknown and irrelevant here.
+ *       A single table that fits under either estimate streams with zero spill,
+ *       which batching cannot beat: the HYBRID per-entry bound admits what the
+ *       legacy splitter would keep whole, and the IN_MEM bound (see
+ *       hjoin_stream_part_cnt) additionally admits rows narrow enough to make
+ *       the tuple copy cheaper than a tuple position.
  */
 static bool
 hjoin_stream_check_single (QFILE_LIST_ID * build_list_id)
@@ -1057,7 +1183,7 @@ hjoin_stream_check_single (QFILE_LIST_ID * build_list_id)
 
   part_cnt = CEIL_PTVDIV (per_entry_size * build_list_id->tuple_cnt, mem_limit * PARTITION_FILL_FACTOR);
 
-  return (part_cnt <= 1);
+  return (part_cnt <= 1 || hjoin_stream_part_cnt (build_list_id, mem_limit, true) <= 1);
 }
 
 #if defined (SERVER_MODE)
@@ -1523,7 +1649,7 @@ hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manage
   HASHJOIN_CONTEXT *part0 = NULL;
   QFILE_LIST_ID *list_id = NULL;
   XASL_NODE *outer_xasl;
-  UINT64 mem_limit, per_entry_size;
+  UINT64 mem_limit;
   UINT32 part_cnt, part_index;
   bool split_prepared = false;
   bool parallel_split_done = false;
@@ -1547,11 +1673,12 @@ hjoin_stream_execute_batched (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manage
 
   outer_xasl = manager->outer->xasl;
 
-  /* K from the build side only (same per-entry estimate as hjoin_check_partition; the
-   * probe size is unknown while it streams).  check_single failed, so K >= 2. */
+  /* K from the build side only (the probe size is unknown while it streams).
+   * IN_MEM-sized only when the whole execution is serial, legacy HYBRID-sized
+   * otherwise -- see hjoin_stream_batch_in_mem_sized.  check_single failed, so
+   * K >= 2 under either estimate. */
   mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
-  per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS);
-  part_cnt = CEIL_PTVDIV (per_entry_size * context->inner.list_id->tuple_cnt, mem_limit * PARTITION_FILL_FACTOR);
+  part_cnt = hjoin_stream_part_cnt (context->inner.list_id, mem_limit, hjoin_stream_batch_in_mem_sized ());
   assert (part_cnt > 1);
   if (IS_OUTER_JOIN_TYPE (manager->join_type))
     {
@@ -3144,10 +3271,7 @@ hjoin_stream_execute (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJ
 	  if (!hjoin_stream_check_single (build->list_id))
 	    {
 	      UINT64 mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
-	      UINT64 per_entry_size = 2 * sizeof (MHT_HLS_SLOT) + sizeof (MHT_HLS_ENTRY)
-		+ sizeof (QFILE_TUPLE_SIMPLE_POS);
-	      UINT64 part_cnt = CEIL_PTVDIV (per_entry_size * build->list_id->tuple_cnt,
-					     mem_limit * PARTITION_FILL_FACTOR);
+	      UINT64 part_cnt = hjoin_stream_part_cnt (build->list_id, mem_limit, hjoin_stream_batch_in_mem_sized ());
 
 	      if (IS_OUTER_JOIN_TYPE (manager->join_type))
 		{
