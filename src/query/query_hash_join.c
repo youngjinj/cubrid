@@ -84,6 +84,8 @@ static int hjoin_init_domain_info (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * m
 /* Hash Join Partitioning */
 static HASHJOIN_STATUS hjoin_try_partition (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
 					    HASHJOIN_CONTEXT * single_context);
+static bool hjoin_partition_in_mem_sized (const HASHJOIN_MANAGER * manager);
+static UINT32 hjoin_partition_cnt_in_mem (QFILE_LIST_ID * build_list_id, UINT64 mem_limit);
 static HASHJOIN_STATUS hjoin_check_partition (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
 					      HASHJOIN_CONTEXT * single_context);
 static int hjoin_prepare_partition (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager,
@@ -1313,6 +1315,113 @@ error_exit:
 }
 
 /*
+ * hjoin_partition_in_mem_sized() -
+ *   return: True if the partition count should be sized for IN_MEM partition tables.
+ *
+ * Note: A HYBRID partition's probe fetches every matching candidate's build tuple
+ *       from the partition's temp pages (qfile_jump_scan_tuple_position); in a fully
+ *       serial execution this per-candidate page fix dominates the probe and turns
+ *       into real rereads once the temp working set outgrows the page buffer.
+ *       Sizing the partitions so their tables predict IN_MEM removes that fetch:
+ *       more partitions, the same spilled bytes, every probe hit inside the
+ *       query-private arena.  Only a fully serial execution takes this: with
+ *       parallel workers the per-partition costs scale with the partition count,
+ *       and the parallelism parameter is a forced server parameter, so the answer
+ *       cannot change between the sizing and the partition execution.
+ *       An explicit PARALLEL(N >= 2) hint overrides the parallelism parameter in
+ *       compute_parallel_degree, so it can raise the parallel executor even at
+ *       parallelism=0; only the auto (-1) and no-parallel (0) hint degrees are
+ *       pinned serial by the parameter.
+ */
+static bool
+hjoin_partition_in_mem_sized (const HASHJOIN_MANAGER * manager)
+{
+#if defined (SERVER_MODE)
+  return (prm_get_integer_value (PRM_ID_PARALLELISM) == 0 && manager->num_parallel_threads < 2);
+#else /* defined (SERVER_MODE) */
+  (void) manager;
+
+  return true;
+#endif /* !defined (SERVER_MODE) */
+}
+
+/*
+ * hjoin_partition_cnt_in_mem() -
+ *   return: Partition count K sized so each partition's table predicts IN_MEM,
+ *           or 0 when no K within HJOIN_MAX_IN_MEM_PARTS reaches it.
+ *   build_list_id(in): The list that becomes the build input (tuple_cnt > 0).
+ *   mem_limit(in): PRM_ID_MAX_HASH_LIST_SCAN_SIZE (> 0).
+ *
+ * Note: Mirrors the IN_MEM estimate of hjoin_scan_predict_method (slot array by
+ *       mht_hls_slot_count, entry headers, payload prorated by page count -- the
+ *       page count includes overflow pages -- plus one page of slack for each
+ *       partition's own partial last page).  The estimate is still an estimate:
+ *       a skewed or repacked partition can exceed its prorated share and fall
+ *       back to HYBRID individually through the per-partition method selection,
+ *       which only costs that partition's probe the page fixes back.
+ *       A payload-dominated build (rows so wide that even HJOIN_MAX_IN_MEM_PARTS
+ *       partitions cannot make one fit) returns 0, keeping the legacy sizing
+ *       instead of exploding the partition file count.
+ */
+static UINT32
+hjoin_partition_cnt_in_mem (QFILE_LIST_ID * build_list_id, UINT64 mem_limit)
+{
+#define HJOIN_MAX_IN_MEM_PARTS 64
+  UINT64 budget;
+  UINT64 payload_size;
+  UINT64 entries_size;
+  UINT64 part_cnt;
+
+  assert (build_list_id != NULL);
+  assert (build_list_id->tuple_cnt > 0);
+  assert (mem_limit > 0);
+
+  budget = (UINT64) (mem_limit * PARTITION_FILL_FACTOR);
+  if (budget == 0)
+    {
+      budget = 1;
+    }
+
+  payload_size = (UINT64) build_list_id->page_cnt * DB_PAGESIZE;
+  entries_size = (UINT64) build_list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
+
+  /* linear lower bound without the slot array; the loop settles the power-of-two
+   * slot rounding, stepping by the overshoot ratio so a degenerate (tiny) limit
+   * converges geometrically instead of scanning K one by one. */
+  part_cnt = CEIL_PTVDIV (entries_size + payload_size, budget);
+  if (part_cnt < 1)
+    {
+      part_cnt = 1;
+    }
+
+  while (part_cnt <= HJOIN_MAX_IN_MEM_PARTS && part_cnt < (UINT64) build_list_id->tuple_cnt)
+    {
+      INT64 part_rows = CEIL_PTVDIV (build_list_id->tuple_cnt, (INT64) part_cnt);
+      UINT64 est;
+
+      if (part_rows <= INT_MAX)
+	{
+	  est = (UINT64) mht_hls_slot_count ((int) part_rows) * sizeof (MHT_HLS_SLOT)
+	    + (UINT64) part_rows * sizeof (MHT_HLS_ENTRY) + CEIL_PTVDIV (payload_size, part_cnt) + DB_PAGESIZE;
+
+	  if (est <= budget)
+	    {
+	      return (UINT32) part_cnt;
+	    }
+
+	  part_cnt = MAX (CEIL_PTVDIV (est * part_cnt, budget), part_cnt + 1);
+	}
+      else
+	{
+	  part_cnt = MAX (CEIL_PTVDIV ((UINT64) build_list_id->tuple_cnt, (UINT64) INT_MAX), part_cnt + 1);
+	}
+    }
+
+  return 0;
+#undef HJOIN_MAX_IN_MEM_PARTS
+}
+
+/*
  * hjoin_check_partition() -
  *   return: One of the following HASHJOIN_STATUS values:
  *           - HASHJOIN_STATUS_SINGLE: Partitioning is not needed.
@@ -1356,6 +1465,48 @@ hjoin_check_partition (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASH
   part_cnt = CEIL_PTVDIV (per_entry_size * min_tuple_cnt, mem_limit * PARTITION_FILL_FACTOR);
   if (part_cnt > 1)
     {
+      if (hjoin_partition_in_mem_sized (manager))
+	{
+	  /* mirror hjoin_init_context's build choice: LEFT builds from the inner
+	   * input, RIGHT from the outer, INNER from the smaller (tuples, then
+	   * pages, then the inner) */
+	  QFILE_LIST_ID *build_list_id;
+
+	  switch (manager->join_type)
+	    {
+	    case JOIN_LEFT:
+	      build_list_id = inner_list_id;
+	      break;
+
+	    case JOIN_RIGHT:
+	      build_list_id = outer_list_id;
+	      break;
+
+	    default:
+	      if (outer_list_id->tuple_cnt < inner_list_id->tuple_cnt
+		  || (outer_list_id->tuple_cnt == inner_list_id->tuple_cnt
+		      && outer_list_id->page_cnt < inner_list_id->page_cnt))
+		{
+		  build_list_id = outer_list_id;
+		}
+	      else
+		{
+		  build_list_id = inner_list_id;
+		}
+	      break;
+	    }
+
+	  if (build_list_id->tuple_cnt > 0)
+	    {
+	      UINT32 in_mem_cnt = hjoin_partition_cnt_in_mem (build_list_id, mem_limit);
+
+	      if (in_mem_cnt > part_cnt)
+		{
+		  part_cnt = in_mem_cnt;
+		}
+	    }
+	}
+
       if (IS_OUTER_JOIN_TYPE (manager->join_type))
 	{
 	  /* In outer joins, tuples with NULL in any join column are placed in the last partition.
