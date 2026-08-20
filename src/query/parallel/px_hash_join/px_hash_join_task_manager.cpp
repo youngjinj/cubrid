@@ -710,6 +710,175 @@ namespace parallel_query
       return current_context;
     }
     /*
+     * build_task
+     */
+
+    build_task::build_task (task_manager &task_manager, HASHJOIN_MANAGER *manager, MHT_HLS_TABLE *table,
+			    HASH_METHOD method, HL_HEAPID arena, UINT64 *rows_out,
+			    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index)
+      : base_task (task_manager, manager, index)
+      , m_table (table)
+      , m_method (method)
+      , m_arena (arena)
+      , m_rows_out (rows_out)
+      , m_shared_info (shared_info)
+    {
+      assert (m_table != nullptr && m_arena != 0);
+      assert (m_rows_out != nullptr);
+      assert (m_shared_info != nullptr);
+      assert (m_method == HASH_METH_IN_MEM || m_method == HASH_METH_HYBRID);
+    }
+
+    void
+    build_task::execute (cubthread::entry &thread_ref)
+    {
+      task_execution_guard guard (thread_ref, m_task_manager);
+
+      QFILE_TUPLE_RECORD tuple_record = { nullptr, 0 };
+      QFILE_TUPLE_RECORD overflow_record = { nullptr, 0 };
+      PAGE_PTR page = nullptr;
+      char *tuple_value;
+      MHT_HLS_ENTRY *entry;
+      UINT32 hash_key;
+      int tuple_cnt, tuple_index, tuple_length;
+      int error = NO_ERROR;
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  thread_ref.m_px_stats = hjoin_trace_get_worker_stats (m_manager, m_index);
+	  thread_ref.m_uses_px_stats = true;
+	}
+      else
+	{
+	  assert (thread_ref.m_px_stats == nullptr);
+	}
+
+      /* next page */
+      do
+	{
+	  if (m_task_manager.has_error () || m_task_manager.check_interrupt (thread_ref))
+	    {
+	      break;
+	    }
+
+	  page = m_page_iter.get_next_page (&thread_ref, m_shared_info->sector_scan);
+	  if (page == nullptr)
+	    {
+	      if (er_errid () != NO_ERROR)
+		{
+		  m_task_manager.handle_error (thread_ref);
+		}
+	      break;		/* end or error */
+	    }
+
+	  tuple_cnt = QFILE_GET_TUPLE_COUNT (page);
+	  if (tuple_cnt == 0)
+	    {
+	      qmgr_free_old_page_and_init (&thread_ref, page, m_page_iter.get_current_tfile ());
+	      continue;
+	    }
+
+	  tuple_index = -1;
+	  tuple_record.tpl = (char *) page + QFILE_PAGE_HEADER_SIZE;
+
+	  if (QFILE_GET_OVERFLOW_PAGE_ID (page) != NULL_PAGEID)
+	    {
+	      assert (tuple_cnt == 1);
+
+	      error = qfile_assemble_overflow_tuple (&thread_ref, page, &overflow_record,
+						     m_page_iter.get_current_tfile ());
+	      if (error != NO_ERROR)
+		{
+		  m_task_manager.handle_error (thread_ref);
+		  qmgr_free_old_page_and_init (&thread_ref, page, m_page_iter.get_current_tfile ());
+		  break;
+		}
+
+	      tuple_record.tpl = overflow_record.tpl;
+	    }
+
+	  /* next tuple */
+	  do
+	    {
+	      if (tuple_index == -1)
+		{
+		  /* first tuple */
+		}
+	      else if (tuple_index < tuple_cnt - 1)
+		{
+		  tuple_length = QFILE_GET_TUPLE_LENGTH (tuple_record.tpl);
+		  tuple_record.tpl += tuple_length;
+		}
+	      else
+		{
+		  break;	/* next page */
+		}
+
+	      tuple_index++;
+
+	      /* every row of a TRY partition's build list is non-NULL-keyed and carries
+	       * the router's hash stamp in the reserved first column */
+	      tuple_value = tuple_record.tpl + QFILE_TUPLE_LENGTH_SIZE;
+	      assert (QFILE_GET_TUPLE_VALUE_FLAG (tuple_value) == V_BOUND);
+	      assert (QFILE_GET_TUPLE_VALUE_LENGTH (tuple_value) == MAX_ALIGNMENT);
+	      tuple_value += QFILE_TUPLE_VALUE_HEADER_LENGTH;
+	      hash_key = (UINT32) OR_GET_INT (tuple_value);
+
+	      if (m_method == HASH_METH_IN_MEM)
+		{
+		  entry = qdata_alloc_hscan_value (&thread_ref, m_arena, tuple_record.tpl);
+		}
+	      else
+		{
+		  /* HYBRID: the entry carries the tuple's position (the payload the
+		   * serial qdata_alloc_hscan_value_OID stores from its scan cursor) */
+		  entry = (MHT_HLS_ENTRY *) db_ostk_alloc (m_arena,
+			  sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS));
+		  if (entry != nullptr)
+		    {
+		      QFILE_TUPLE_SIMPLE_POS *pos = (QFILE_TUPLE_SIMPLE_POS *) MHT_HLS_ENTRY_PAYLOAD (entry);
+
+		      pos->vpid = m_page_iter.get_current_vpid ();
+		      pos->offset = (overflow_record.tpl != nullptr && tuple_record.tpl == overflow_record.tpl)
+				    ? QFILE_PAGE_HEADER_SIZE : (int) (tuple_record.tpl - (char *) page);
+		    }
+		  else
+		    {
+		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+			      sizeof (MHT_HLS_ENTRY) + sizeof (QFILE_TUPLE_SIMPLE_POS));
+		    }
+		}
+
+	      if (entry == nullptr || mht_put_hls_concurrent (m_table, hash_key, entry) != NO_ERROR)
+		{
+		  assert_release_error (er_errid () != NO_ERROR);
+		  m_task_manager.handle_error (thread_ref);
+		  break;
+		}
+
+	      (*m_rows_out)++;
+	    }
+	  while (true);
+
+	  qmgr_free_old_page_and_init (&thread_ref, page, m_page_iter.get_current_tfile ());
+	}
+      while (er_errid () == NO_ERROR && !m_task_manager.has_error ());
+
+      if (page != nullptr)
+	{
+	  qmgr_free_old_page_and_init (&thread_ref, page, m_page_iter.get_current_tfile ());
+	}
+
+      if (overflow_record.tpl != nullptr)
+	{
+	  db_private_free_and_init (&thread_ref, overflow_record.tpl);
+	}
+
+      thread_ref.m_px_stats = nullptr;
+      thread_ref.m_uses_px_stats = false;
+    }
+
+    /*
      * probe_task
      */
 

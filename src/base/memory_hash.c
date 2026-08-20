@@ -42,6 +42,9 @@
 #include "config.h"
 
 #include <stdio.h>
+#if defined (__x86_64__)
+#include <cpuid.h>
+#endif /* defined (__x86_64__) */
 #include <assert.h>
 
 #include "memory_hash.h"
@@ -66,9 +69,6 @@
 #else
 #define GET_PTR_FOR_HASH(key) (((UINT64)(key)) & 0xFFFFFFFFUL)
 #endif
-
-/* obstack chunk size for HASH LIST SCAN entry payloads (tuple copies / positions) */
-#define HASH_LIST_SCAN_DATA_CHUNK_SIZE (64 * 1024)
 
 /* constants for rehash */
 static const float MHT_REHASH_TRESHOLD = 0.7f;
@@ -1111,6 +1111,9 @@ mht_create_hls (const char *name, int est_size, unsigned int (*hash_func) (const
   ht->size = ht_estsize;
   ht->nentries = 0;
   ht->ncollisions = 0;
+  ht->attached_heaps = NULL;
+  ht->attached_heap_cnt = 0;
+  ht->attached_heap_cap = 0;
   ht->build_lru_list = false;
 
   return ht;
@@ -1227,6 +1230,8 @@ mht_destroy (MHT_TABLE * ht)
 void
 mht_destroy_hls (MHT_HLS_TABLE * ht)
 {
+  unsigned int i;
+
   assert (ht != NULL);
 
   free_and_init (ht->table);
@@ -1234,8 +1239,195 @@ mht_destroy_hls (MHT_HLS_TABLE * ht)
   /* free all payloads at once */
   db_destroy_ostk_heap (ht->heap_id);
 
+  /* arenas attached by the parallel partition build die with this table */
+  for (i = 0; i < ht->attached_heap_cnt; i++)
+    {
+      db_destroy_ostk_heap (ht->attached_heaps[i]);
+    }
+  if (ht->attached_heaps != NULL)
+    {
+      free_and_init (ht->attached_heaps);
+    }
+
   free_and_init (ht);
 }
+
+/*
+ * mht_put_hls_concurrent_available - true when this CPU provides the lock-free
+ *   16-byte CAS that mht_put_hls_concurrent requires (x86-64 CMPXCHG16B).  The
+ *   caller checks this BEFORE spawning build workers, so an unsupported platform
+ *   takes the untouched serial build instead of failing the join.
+ */
+bool
+mht_put_hls_concurrent_available (void)
+{
+#if defined (__x86_64__)
+  /* CPUID.01H:ECX.CMPXCHG16B[bit 13]; the probe is idempotent, so the racy
+   * initialization of the cache is benign */
+  static int available = -1;
+
+  if (available < 0)
+    {
+      unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+
+      available = (__get_cpuid (1, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 13))) ? 1 : 0;
+    }
+
+  return (available == 1);
+#else /* !defined (__x86_64__) */
+  return false;
+#endif /* defined (__x86_64__) */
+}
+
+/*
+ * mht_put_hls_concurrent - insert-only concurrent variant of mht_put_hls for the
+ *   parallel partition build: W workers insert into ONE pre-sized shared table.
+ *   return: NO_ERROR, or ER_FAILED when the platform lacks lock-free 16-byte CAS
+ *           (the caller falls back to the serial build).
+ *   ht(in): pre-sized table (no growth happens here; the caller sized it from the
+ *           exact row count). nentries is NOT maintained here -- the caller sets it
+ *           from worker-local row counters after joining every task.
+ *   hash(in): full 32-bit hash (the routers' stamped value).
+ *   entry(in): fully initialized entry from a worker-private arena.
+ *
+ * Note: every concurrent slot access is one 128-bit atomic (mixed-width access is
+ *       forbidden by the protocol). An empty slot is claimed by CAS'ing the exact
+ *       loaded 128-bit value to {entry, hash, 0}; a loser re-reads the SAME slot,
+ *       so two claimers of one hash converge on one slot (the loser takes the
+ *       duplicate-push path). Probing resumes only on a different-hash slot.
+ *       Readers (mht_get_hls) stay unchanged: the probe phase starts only after
+ *       every build task is joined, which provides the happens-before edge.
+ *       The plain 128-bit observation below is formally a C++ data race; it is a
+ *       deliberate trade (GCC emits no lock-free inline 128-bit atomic load) and
+ *       is safe because no observation takes effect without the CAS validating
+ *       the exact observed value.
+ */
+#if defined (__x86_64__)
+__attribute__ ((target ("cx16")))
+     int mht_put_hls_concurrent (MHT_HLS_TABLE * ht, unsigned int hash, MHT_HLS_ENTRY * entry)
+{
+  // *INDENT-OFF*
+  typedef unsigned __int128 slot_word_t;
+  // *INDENT-ON*
+  slot_word_t *slot_word;
+  slot_word_t observed, desired;
+  MHT_HLS_ENTRY *observed_entry;
+  unsigned int observed_hash;
+  unsigned int i, probes = 0;
+
+  assert (ht != NULL && entry != NULL);
+  assert (((uintptr_t) ht->table & 15) == 0);
+
+  i = hash % ht->size;
+
+  while (probes <= ht->size)
+    {
+      slot_word = (slot_word_t *) & ht->table[i];
+
+      /* Plain (possibly torn) observation is safe: every mutation of a slot changes
+       * its entry bits through the 16-byte CAS below, so a torn observation can
+       * never equal the slot's true value and the CAS rejects it (GCC 8 does not
+       * inline 128-bit __atomic loads; __sync CAS inlines cmpxchg16b under cx16). */
+      observed = *(volatile slot_word_t *) slot_word;
+
+      observed_entry = (MHT_HLS_ENTRY *) (uintptr_t) (observed & 0xffffffffffffffffULL);
+      observed_hash = (unsigned int) (observed >> 64);
+
+      if (observed_entry == NULL)
+	{
+	  /* claim: the entry must be complete BEFORE publication */
+	  entry->next = NULL;
+	  desired = ((slot_word_t) hash << 64) | (slot_word_t) (uintptr_t) entry;
+
+	  if (__sync_bool_compare_and_swap (slot_word, observed, desired))
+	    {
+	      return NO_ERROR;
+	    }
+	  continue;		/* lost the claim: re-read the SAME slot */
+	}
+
+      if (observed_hash == hash)
+	{
+	  /* duplicate: push onto this slot's chain head, hash bits preserved */
+	  entry->next = observed_entry;
+	  desired = (observed & ~(slot_word_t) 0xffffffffffffffffULL) | (slot_word_t) (uintptr_t) entry;
+
+	  if (__sync_bool_compare_and_swap (slot_word, observed, desired))
+	    {
+	      return NO_ERROR;
+	    }
+	  continue;		/* head moved: retry the SAME slot */
+	}
+
+      /* occupied by a different hash: linear probe on */
+      i = (i + 1) % ht->size;
+      probes++;
+    }
+
+  /* pre-sized from the exact row count, so a full table is a logic error */
+  assert (false);
+  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+  return ER_FAILED;
+}
+#else /* !defined (__x86_64__) */
+int
+mht_put_hls_concurrent (MHT_HLS_TABLE * ht, unsigned int hash, MHT_HLS_ENTRY * entry)
+{
+  /* no lock-free 16-byte CAS contract on this platform; the caller builds serially */
+  return ER_FAILED;
+}
+#endif /* defined (__x86_64__) */
+
+/*
+ * mht_attach_arena_hls - transfer ownership of one arena to the table: the
+ *   concurrent build allocates entries from worker-private arenas directly into
+ *   the shared table, so only the ownership moves. mht_destroy_hls frees
+ *   attached arenas.
+ *   return: NO_ERROR or error code (attached array full).
+ */
+int
+mht_attach_arena_hls (MHT_HLS_TABLE * ht, HL_HEAPID heap_id)
+{
+  assert (ht != NULL && heap_id != 0);
+  assert (ht->attached_heaps != NULL);
+
+  if (ht->attached_heap_cnt >= ht->attached_heap_cap)
+    {
+      assert (false);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+      return ER_FAILED;
+    }
+
+  ht->attached_heaps[ht->attached_heap_cnt++] = heap_id;
+  return NO_ERROR;
+}
+
+/*
+ * mht_prepare_attached_arenas_hls - Pre-allocate room for attached arenas
+ *   return: NO_ERROR, or ER_OUT_OF_VIRTUAL_MEMORY
+ *   ht(in/out): shared table of a coming parallel build
+ *   max_cnt(in): maximum number of arenas that will be attached
+ *
+ * Note: Called before any mht_attach_arena_hls so attaching itself cannot fail
+ *       (prepare -> commit).
+ */
+int
+mht_prepare_attached_arenas_hls (MHT_HLS_TABLE * ht, unsigned int max_cnt)
+{
+  assert (ht != NULL);
+  assert (ht->attached_heaps == NULL && ht->attached_heap_cnt == 0);
+
+  ht->attached_heaps = (HL_HEAPID *) malloc (max_cnt * sizeof (HL_HEAPID));
+  if (ht->attached_heaps == NULL)
+    {
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, max_cnt * sizeof (HL_HEAPID));
+      return ER_OUT_OF_VIRTUAL_MEMORY;
+    }
+  ht->attached_heap_cap = max_cnt;
+
+  return NO_ERROR;
+}
+
 
 /*
  * mht_clear - remove and free all entries of hash table
