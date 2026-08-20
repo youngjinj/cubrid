@@ -736,6 +736,165 @@ error_exit:
     }
 
     /*
+     * partition_build_execute - build one partition's table with W workers
+     * inserting CONCURRENTLY into ONE pre-sized shared table (mht_put_hls_concurrent):
+     * no worker tables, no merge, no growth (the partition list's exact tuple_cnt
+     * sizes the table upfront). Worker arenas are attached to the table BEFORE the
+     * tasks launch, so on every path -- success, error, interrupt -- the wholesale
+     * mht_destroy_hls frees them. A platform without lock-free 16-byte CAS or any
+     * pre-launch failure returns with *done == false for the untouched serial build.
+     */
+
+    int
+    partition_build_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *target,
+			     HASH_METHOD method, partition_probe_session *session, bool *done)
+    {
+      MHT_HLS_TABLE *table = nullptr;
+      HASHJOIN_SHARED_PROBE_INFO shared_info;
+      QFILE_LIST_ID *build_list;
+      UINT64 worker_rows[PRM_MAX_PARALLELISM] = { 0, };
+      UINT64 total_rows = 0;
+      UINT32 w, worker_cnt;
+      bool sector_open = false;
+      int error = NO_ERROR;
+
+      assert (manager != nullptr && target != nullptr && session != nullptr && done != nullptr);
+      assert (target != &manager->single_context);
+      assert (session->worker_cnt > 1 && session->worker_cnt <= PRM_MAX_PARALLELISM);
+      assert (target->hash_scan.hash_list_scan_type == HASH_METH_NOT_USE);
+      assert (method == HASH_METH_IN_MEM || method == HASH_METH_HYBRID);
+
+      *done = false;
+
+      if (!mht_put_hls_concurrent_available ())
+	{
+	  /* no lock-free 16-byte CAS on this CPU; the caller builds serially */
+	  return NO_ERROR;
+	}
+
+      HASHJOIN_STATS *stats = target->stats;
+      HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
+      assert (!thread_is_on_trace (&thread_ref) || stats != nullptr);
+
+      build_list = target->build->list_id;
+      assert (build_list != nullptr && build_list->tuple_cnt > 0 && build_list->tuple_cnt <= INT_MAX);
+
+      worker_cnt = session->worker_cnt;
+
+      THREAD_ENTRY *main_thread_p = thread_get_main_thread (&thread_ref);
+      task_manager task_manager (manager->px_worker_manager, *main_thread_p);
+      build_task *task = nullptr;
+
+      /* the same pre-sizing the serial hjoin_scan_init_table would use */
+      table = mht_create_hls ("Hash Join", (int) build_list->tuple_cnt, nullptr, nullptr);
+      if (table == nullptr)
+	{
+	  ASSERT_ERROR_AND_SET (error);
+	  return error;
+	}
+
+      /* worker arenas: created and ATTACHED before any task launches, so the table
+       * owns them on every subsequent path */
+      error = mht_prepare_attached_arenas_hls (table, (int) worker_cnt);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+
+      {
+	HL_HEAPID arenas[PRM_MAX_PARALLELISM] = { 0, };
+
+	for (w = 0; w < worker_cnt; w++)
+	  {
+	    arenas[w] = db_create_ostk_heap (HASH_LIST_SCAN_DATA_CHUNK_SIZE);
+	    if (arenas[w] == 0)
+	      {
+		/* db_create_ostk_heap does not set an error itself */
+		er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+			(size_t) HASH_LIST_SCAN_DATA_CHUNK_SIZE);
+		error = ER_OUT_OF_VIRTUAL_MEMORY;
+		goto cleanup;
+	      }
+	    if (mht_attach_arena_hls (table, arenas[w]) != NO_ERROR)
+	      {
+		db_destroy_ostk_heap (arenas[w]);
+		ASSERT_ERROR_AND_SET (error);
+		goto cleanup;
+	      }
+	  }
+
+	if (thread_is_on_trace (&thread_ref))
+	  {
+	    hjoin_trace_start (&thread_ref, &start_stats);
+	  }
+
+	error = qfile_open_list_sector_scan (&thread_ref, build_list, &shared_info.sector_scan);
+	if (error != NO_ERROR)
+	  {
+	    goto cleanup;
+	  }
+	sector_open = true;
+
+	for (w = 0; w < worker_cnt; w++)
+	  {
+	    task = new build_task (task_manager, manager, table, method, arenas[w],
+				   &worker_rows[w], &shared_info, (int) w);
+	    task_manager.push_task (task);
+	  }
+      }
+
+      task_manager.join ();
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  hjoin_trace_drain_worker_stats (&thread_ref, manager);
+	}
+
+      if (task_manager.has_error ())
+	{
+	  task_manager.clear_interrupt (thread_ref);
+	  assert_release_error (er_errid () != NO_ERROR);
+	  error = er_errid ();
+	  goto cleanup;
+	}
+
+      for (w = 0; w < worker_cnt; w++)
+	{
+	  total_rows += worker_rows[w];
+	}
+      assert (total_rows == (UINT64) build_list->tuple_cnt);
+      table->nentries = (unsigned int) total_rows;
+
+      /* publish, mirroring hjoin_scan_init_table's setup for the method */
+      target->hash_scan.hash_list_scan_type = method;
+      target->hash_scan.memory.hash_table = table;
+      target->hash_scan.memory.curr_hash_entry = nullptr;
+      table = nullptr;
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  hjoin_trace_end (&thread_ref, &stats->build, &start_stats);
+	  stats->build.read_rows = build_list->tuple_cnt;
+	  stats->build.qualified_rows = build_list->tuple_cnt;
+	}
+
+      *done = true;
+
+cleanup:
+      if (sector_open)
+	{
+	  qfile_close_list_sector_scan (&thread_ref, &shared_info.sector_scan);
+	}
+
+      if (table != nullptr)
+	{
+	  mht_destroy_hls (table);	/* frees the attached worker arenas too */
+	}
+
+      return error;
+    }
+
+    /*
      * partition_probe_clear - free the session-owned arrays once, after the
      * partition loop.
      */

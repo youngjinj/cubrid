@@ -107,7 +107,8 @@ static void hjoin_clear_split_info (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * 
 				    HASHJOIN_SPLIT_INFO * split_info, bool clear_all);
 
 /* Hash Join Context */
-static int hjoin_init_context (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context);
+static int hjoin_init_context (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+			       bool skip_hash_table);
 static void hjoin_clear_context (THREAD_ENTRY * thread_p, HASHJOIN_CONTEXT * context);
 static void hjoin_destroy_qlist (THREAD_ENTRY * thread_p, HASHJOIN_CONTEXT * context);
 
@@ -819,7 +820,19 @@ hjoin_execute_internal (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HAS
   outer->list_scan_id.status = S_CLOSED;
   inner->list_scan_id.status = S_CLOSED;
 
-  error = hjoin_init_context (thread_p, manager, context);
+#if defined (SERVER_MODE)
+  /* partition parallel build (P8-4): W workers insert into ONE pre-sized shared
+   * table (mht_put_hls_concurrent); a refusal falls back to the untouched serial
+   * build with the deferred table created here */
+  bool pbuild_try = (manager->pprobe_session != NULL && context != &manager->single_context
+		     && context->status == HASHJOIN_STATUS_TRY);
+  bool pbuild_done = false;
+#else /* !defined (SERVER_MODE) */
+  const bool pbuild_try = false;
+  const bool pbuild_done = false;
+#endif /* defined (SERVER_MODE) */
+
+  error = hjoin_init_context (thread_p, manager, context, pbuild_try /* skip_hash_table */ );
   if (error != NO_ERROR)
     {
       goto error_exit;
@@ -830,16 +843,53 @@ hjoin_execute_internal (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HAS
   assert (build != NULL);
   assert (probe != NULL);
 
-  error = qfile_open_list_scan (build->list_id, &build->list_scan_id);
-  if (error != NO_ERROR)
+#if defined (SERVER_MODE)
+  if (pbuild_try)
     {
-      goto error_exit;
-    }
+      HASH_METHOD pbuild_method = hjoin_scan_predict_method (build->list_id);
 
-  error = hjoin_build (thread_p, manager, context);
-  if (error != NO_ERROR)
+      if (pbuild_method == HASH_METH_IN_MEM || pbuild_method == HASH_METH_HYBRID)
+	{
+	  // *INDENT-OFF*
+	  error = parallel_query::hash_join::partition_build_execute (*thread_p, manager, context, pbuild_method,
+								      manager->pprobe_session, &pbuild_done);
+	  // *INDENT-ON*
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
+	}
+
+      if (!pbuild_done)
+	{
+	  /* serial fallback: create the deferred table and run the untouched build */
+	  error = hjoin_scan_init_table (thread_p, &context->hash_scan, build->list_id);
+	  if (error != NO_ERROR)
+	    {
+	      goto error_exit;
+	    }
+	}
+
+      if (thread_is_on_trace (thread_p) && context->stats != NULL)
+	{
+	  context->stats->hash_method = context->hash_scan.hash_list_scan_type;
+	}
+    }
+#endif /* defined (SERVER_MODE) */
+
+  if (!pbuild_done)
     {
-      goto error_exit;
+      error = qfile_open_list_scan (build->list_id, &build->list_scan_id);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
+
+      error = hjoin_build (thread_p, manager, context);
+      if (error != NO_ERROR)
+	{
+	  goto error_exit;
+	}
     }
 
 #if defined (SERVER_MODE)
@@ -2624,7 +2674,8 @@ hjoin_clear_shared_split_info (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manag
  *   context(in/out): Hash join context to initialize.
  */
 static int
-hjoin_init_context (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context)
+hjoin_init_context (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOIN_CONTEXT * context,
+		    bool skip_hash_table)
 {
   HASHJOIN_FETCH_INFO *outer, *inner;
   HASHJOIN_FETCH_INFO *build = NULL;
@@ -2686,7 +2737,9 @@ hjoin_init_context (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOI
   build = context->build;
   assert (build != NULL);
 
-  error = hjoin_scan_init (thread_p, &context->hash_scan, manager->key_cnt, build->list_id);
+  /* the partition parallel build defers the table so the shared concurrent build
+   * replaces it; stats->hash_method is stamped after the table is established */
+  error = hjoin_scan_init (thread_p, &context->hash_scan, manager->key_cnt, skip_hash_table ? NULL : build->list_id);
   if (error != NO_ERROR)
     {
       goto error_exit;
@@ -2816,6 +2869,142 @@ hjoin_destroy_qlist (THREAD_ENTRY * thread_p, HASHJOIN_CONTEXT * context)
 }
 
 /*
+ * hjoin_scan_predict_method() -
+ *   return: The hash method hjoin_scan_init will choose for this build input.
+ *   list_id(in): Materialized build input (non-NULL, tuple_cnt > 0).
+ *
+ * Note: The single source of the method decision -- hjoin_scan_init switches on this
+ *       prediction, so a caller that gates on it (the partition parallel build requires
+ *       IN_MEM or HYBRID) can never drift from the actual choice.
+ */
+HASH_METHOD
+hjoin_scan_predict_method (QFILE_LIST_ID * list_id)
+{
+  UINT64 mem_limit;
+  UINT64 in_mem_size = 0;
+  UINT64 hybrid_size = 0;
+
+  assert (list_id != NULL && list_id->tuple_cnt > 0);
+
+  mem_limit = prm_get_bigint_value (PRM_ID_MAX_HASH_LIST_SCAN_SIZE);
+  assert (mem_limit > 0);
+
+  /* the slot array is int-indexed; the estimates are computable only when tuple_cnt fits in int */
+  if (list_id->tuple_cnt <= INT_MAX)
+    {
+      UINT64 slot_array_size = (UINT64) mht_hls_slot_count ((int) list_id->tuple_cnt) * sizeof (MHT_HLS_SLOT);
+      UINT64 entries_size = (UINT64) list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
+      UINT64 payload_size;
+
+      /* IN_MEM: slot array + one entry (header) per row + the tuples themselves */
+      payload_size = (UINT64) list_id->page_cnt * DB_PAGESIZE;
+      in_mem_size = slot_array_size + entries_size + payload_size;
+
+      /* HYBRID: slot array + one entry (header) per row + a tuple position per row; tuples stay on the temp file */
+      payload_size = (UINT64) list_id->tuple_cnt * sizeof (QFILE_TUPLE_SIMPLE_POS);
+      hybrid_size = slot_array_size + entries_size + payload_size;
+    }
+
+  if (list_id->tuple_cnt <= INT_MAX && in_mem_size <= mem_limit)
+    {
+      return HASH_METH_IN_MEM;
+    }
+  else if (list_id->tuple_cnt <= INT_MAX && hybrid_size <= mem_limit)
+    {
+      return HASH_METH_HYBRID;
+    }
+
+  return HASH_METH_HASH_FILE;
+}
+
+/*
+ * hjoin_scan_init_table() -
+ *   return: Error code (NO_ERROR if successful, error code otherwise).
+ *   thread_p(in): Thread entry.
+ *   hash_scan(in/out): Hash scan whose keys were initialized (hjoin_scan_init with a
+ *                      NULL list); receives the build table by the predicted method.
+ *   list_id(in): Build input list.
+ *
+ * Note: The table-creation half of hjoin_scan_init, callable on its own so the
+ *       partition parallel build can defer (and on failure replace) the ordinary
+ *       table allocation.
+ */
+int
+hjoin_scan_init_table (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, QFILE_LIST_ID * list_id)
+{
+  int error = NO_ERROR;
+
+  assert (thread_p != NULL);
+  assert (hash_scan != NULL);
+  assert (list_id != NULL && list_id->tuple_cnt > 0);
+  assert (hash_scan->hash_list_scan_type == HASH_METH_NOT_USE);
+
+  switch (hjoin_scan_predict_method (list_id))
+    {
+    case HASH_METH_IN_MEM:
+#if HASHJOIN_DUMP_BUILD
+      fprintf (stdout, "\nHash Join Method: In Memory\n");
+#endif /* HASHJOIN_DUMP_BUILD */
+
+      hash_scan->hash_list_scan_type = HASH_METH_IN_MEM;
+
+      hash_scan->memory.hash_table = mht_create_hls ("Hash Join", list_id->tuple_cnt, NULL, NULL);
+      if (hash_scan->memory.hash_table == NULL)
+	{
+	  goto error_exit;
+	}
+
+      hash_scan->memory.curr_hash_entry = NULL;
+      break;
+
+    case HASH_METH_HYBRID:
+#if HASHJOIN_DUMP_BUILD
+      fprintf (stdout, "\nHash Join Method: Hybrid\n");
+#endif /* HASHJOIN_DUMP_BUILD */
+
+      hash_scan->hash_list_scan_type = HASH_METH_HYBRID;
+
+      hash_scan->memory.hash_table = mht_create_hls ("Hash Join", list_id->tuple_cnt, NULL, NULL);
+      if (hash_scan->memory.hash_table == NULL)
+	{
+	  goto error_exit;
+	}
+
+      hash_scan->memory.curr_hash_entry = NULL;
+      break;
+
+    default:
+      assert (hjoin_scan_predict_method (list_id) == HASH_METH_HASH_FILE);
+#if HASHJOIN_DUMP_BUILD
+      fprintf (stdout, "\nHash Join Method: File\n");
+#endif /* HASHJOIN_DUMP_BUILD */
+
+      hash_scan->hash_list_scan_type = HASH_METH_HASH_FILE;
+
+      hash_scan->file.hash_table = (FHSID *) db_private_alloc (thread_p, sizeof (FHSID));
+      if (hash_scan->file.hash_table == NULL)
+	{
+	  goto error_exit;
+	}
+
+      if (fhs_create (thread_p, hash_scan->file.hash_table, list_id->tuple_cnt) == NULL)
+	{
+	  goto error_exit;
+	}
+
+      hash_scan->file.curr_oid = OID_INITIALIZER;
+      hash_scan->file.is_dk_bucket = false;
+    }
+
+  ASSERT_NO_ERROR_OR_INTERRUPTED ();
+  return NO_ERROR;
+
+error_exit:
+  assert_release_error (er_errid () != NO_ERROR);
+  return er_errid ();
+}
+
+/*
  * hjoin_scan_init() -
  *   return: Error code (NO_ERROR if successful, error code otherwise).
  *   thread_p(in): Thread entry.
@@ -2853,90 +3042,15 @@ hjoin_scan_init (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, int key_cn
       goto error_exit;
     }
 
+  hash_scan->hash_list_scan_type = HASH_METH_NOT_USE;
+
   if (list_id != NULL)
     {
-      UINT64 in_mem_size = 0;
-      UINT64 hybrid_size = 0;
-
-      /* the slot array is int-indexed; the estimates are computable only when tuple_cnt fits in int */
-      if (list_id->tuple_cnt <= INT_MAX)
+      error = hjoin_scan_init_table (thread_p, hash_scan, list_id);
+      if (error != NO_ERROR)
 	{
-	  UINT64 slot_array_size = (UINT64) mht_hls_slot_count ((int) list_id->tuple_cnt) * sizeof (MHT_HLS_SLOT);
-	  UINT64 entries_size = (UINT64) list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
-	  UINT64 payload_size;
-
-	  /* IN_MEM: slot array + one entry (header) per row + the tuples themselves */
-	  payload_size = (UINT64) list_id->page_cnt * DB_PAGESIZE;
-	  in_mem_size = slot_array_size + entries_size + payload_size;
-
-	  /* HYBRID: slot array + one entry (header) per row + a tuple position per row; tuples stay on the temp file */
-	  payload_size = (UINT64) list_id->tuple_cnt * sizeof (QFILE_TUPLE_SIMPLE_POS);
-	  hybrid_size = slot_array_size + entries_size + payload_size;
+	  goto error_exit;
 	}
-
-      if (list_id->tuple_cnt <= INT_MAX && in_mem_size <= mem_limit)
-	{
-#if HASHJOIN_DUMP_BUILD
-	  fprintf (stdout, "\nHash Join Method: In Memory\n");
-	  fprintf (stdout, "  - in_mem_size %lu <= mem_limit %lu\n", in_mem_size, mem_limit);
-#endif /* HASHJOIN_DUMP_BUILD */
-
-	  hash_scan->hash_list_scan_type = HASH_METH_IN_MEM;
-
-	  hash_scan->memory.hash_table = mht_create_hls ("Hash Join", list_id->tuple_cnt, NULL, NULL);
-	  if (hash_scan->memory.hash_table == NULL)
-	    {
-	      goto error_exit;
-	    }
-
-	  hash_scan->memory.curr_hash_entry = NULL;
-	}
-      else if (list_id->tuple_cnt <= INT_MAX && hybrid_size <= mem_limit)
-	{
-#if HASHJOIN_DUMP_BUILD
-	  fprintf (stdout, "\nHash Join Method: Hybrid\n");
-	  fprintf (stdout, "  - in_mem_size %lu > mem_limit %lu\n", in_mem_size, mem_limit);
-	  fprintf (stdout, "  - hybrid_size %lu <= mem_limit %lu\n", hybrid_size, mem_limit);
-#endif /* HASHJOIN_DUMP_BUILD */
-
-	  hash_scan->hash_list_scan_type = HASH_METH_HYBRID;
-
-	  hash_scan->memory.hash_table = mht_create_hls ("Hash Join", list_id->tuple_cnt, NULL, NULL);
-	  if (hash_scan->memory.hash_table == NULL)
-	    {
-	      goto error_exit;
-	    }
-
-	  hash_scan->memory.curr_hash_entry = NULL;
-	}
-      else
-	{
-#if HASHJOIN_DUMP_BUILD
-	  fprintf (stdout, "\nHash Join Method: File\n");
-	  fprintf (stdout, "  - hybrid_size %lu > mem_limit %lu\n", hybrid_size, mem_limit);
-#endif /* HASHJOIN_DUMP_BUILD */
-
-	  hash_scan->hash_list_scan_type = HASH_METH_HASH_FILE;
-
-	  hash_scan->file.hash_table = (FHSID *) db_private_alloc (thread_p, sizeof (FHSID));
-	  if (hash_scan->file.hash_table == NULL)
-	    {
-	      goto error_exit;
-	    }
-
-	  if (fhs_create (thread_p, hash_scan->file.hash_table, list_id->tuple_cnt) == NULL)
-	    {
-	      goto error_exit;
-	    }
-
-	  hash_scan->file.curr_oid = OID_INITIALIZER;
-	  hash_scan->file.is_dk_bucket = false;
-	}
-    }
-  else
-    {
-      /* skip hash table */
-      hash_scan->hash_list_scan_type = HASH_METH_NOT_USE;
     }
 
   hash_scan->curr_hash_key = 0;

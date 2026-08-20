@@ -124,6 +124,10 @@ extern int mht_dump (THREAD_ENTRY * thread_p, FILE * out_fp, const MHT_TABLE * h
 		     int (*print_func) (THREAD_ENTRY * thread_p, FILE * fp, const void *key, void *data, void *args),
 		     void *func_args);
 
+/* obstack chunk size of the HASH LIST SCAN payload arena (exported so the parallel
+ * partition build creates its worker-private entry arenas with the same chunk size) */
+#define HASH_LIST_SCAN_DATA_CHUNK_SIZE (64 * 1024)
+
 /*
  * Hash table for HASH LIST SCAN
  * In order to minimize the size of the hash entry, a hash table for HASH LIST SCAN is created separately.
@@ -146,13 +150,21 @@ struct mht_hls_entry
 /* The payload of an entry; the result is not an entry anymore, hence void. */
 #define MHT_HLS_ENTRY_PAYLOAD(e) ((void *) ((e) + 1))
 
-/* Open-addressing slot for HASH LIST SCAN. entry == NULL means an empty slot. */
+/* Open-addressing slot for HASH LIST SCAN. entry == NULL means an empty slot.
+ * The layout is a 16-byte atomic contract: the concurrent build claims a slot with
+ * one double-width CAS over (entry, hash, reserved), so the padding is an explicit
+ * always-zero field and the alignment is fixed (see mht_put_hls_concurrent). */
 typedef struct mht_hls_slot MHT_HLS_SLOT;
-struct mht_hls_slot
+// *INDENT-OFF*
+struct alignas (16) mht_hls_slot
 {
   MHT_HLS_ENTRY *entry;		/* head of the same-hash entry chain; NULL means empty slot */
   unsigned int hash;		/* full 32-bit hash key */
+  unsigned int reserved;	/* explicit padding; always zero */
 };
+static_assert (sizeof (MHT_HLS_SLOT) == 16, "slot must be one double-width CAS word");
+static_assert (alignof (MHT_HLS_SLOT) >= 16, "slot must be 16-byte aligned for cmpxchg16b");
+// *INDENT-ON*
 
 /* Memory Hash Table for HASH LIST SCAN*/
 typedef struct mht_hls_table MHT_HLS_TABLE;
@@ -166,10 +178,23 @@ struct mht_hls_table
   unsigned int nentries;	/* Actual number of entries */
   unsigned int ncollisions;	/* Number of collisions in HT */
   HL_HEAPID heap_id;		/* obstack (arena) for the entry payloads (tuple copy / position) */
+
+  /* Arenas attached by the parallel partition build: their entries now
+   * live in this table's chains, so they are destroyed exactly once, with this table.
+   * The array is pre-allocated (mht_prepare_attached_arenas_hls) before any attach
+   * so attaching itself cannot fail (prepare -> commit). */
+  HL_HEAPID *attached_heaps;
+  unsigned int attached_heap_cnt;
+  unsigned int attached_heap_cap;
+
   bool build_lru_list;		/* true if LRU list must be built */
 };
 
 extern const void *mht_put_hls (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry);
+extern bool mht_put_hls_concurrent_available (void);
+extern int mht_put_hls_concurrent (MHT_HLS_TABLE * ht, unsigned int hash, MHT_HLS_ENTRY * entry);
+extern int mht_attach_arena_hls (MHT_HLS_TABLE * ht, HL_HEAPID heap_id);
+extern int mht_prepare_attached_arenas_hls (MHT_HLS_TABLE * ht, unsigned int max_cnt);
 extern MHT_HLS_ENTRY *mht_get_hls (const MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY ** last);
 extern MHT_HLS_ENTRY *mht_get_next_hls (const MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY ** last);
 extern MHT_HLS_TABLE *mht_create_hls (const char *name, int est_size,
