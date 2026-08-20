@@ -70,22 +70,11 @@ namespace parallel_query
       UINT32 worker_cnt;
     };
 
-    /* One in-flight parallel probe round over a target partition. Heap-allocated by
-     * partition_probe_start and always released by partition_probe_finish, so the
-     * task-visible state (task manager, shared sector scan, range accumulator)
-     * outlives the caller's frame while the main thread overlaps other work. */
-    struct partition_probe_round;
-
     int partition_probe_prepare (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
 				 partition_probe_session *session);
     int partition_build_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
 				 HASHJOIN_CONTEXT *target, HASH_METHOD method,
 				 partition_probe_session *session, bool *done);
-    int partition_probe_start (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
-			       HASHJOIN_CONTEXT *target, partition_probe_session *session,
-			       partition_probe_round **round_out);
-    int partition_probe_finish (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
-				partition_probe_session *session, partition_probe_round *round);
     int partition_probe_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
 				 HASHJOIN_CONTEXT *target, partition_probe_session *session);
     void partition_probe_clear (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,

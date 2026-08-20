@@ -162,3 +162,18 @@ build_x86_64_profile/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+## Youngjinj
+external/
+jdbc/
+java/
+csql.access
+csql.err
+
+# Never commit sensitive credentials to git
+*.key
+*.pem
+*.cert
+
+### OMC (Open Model Context) Specific ###
+.omc/
