@@ -1254,6 +1254,125 @@ mht_destroy_hls (MHT_HLS_TABLE * ht)
 }
 
 /*
+ * mht_put_hls_concurrent - insert-only concurrent variant of mht_put_hls for the
+ *   parallel partition build: W workers insert into ONE pre-sized shared table.
+ *   return: NO_ERROR, or ER_FAILED when the platform lacks lock-free 16-byte CAS
+ *           (the caller falls back to the serial build).
+ *   ht(in): pre-sized table (no growth happens here; the caller sized it from the
+ *           exact row count). nslots_used is NOT maintained -- the caller sums
+ *           worker-local counters after joining every task.
+ *   hash(in): full 32-bit hash (the routers' stamped value).
+ *   entry(in): fully initialized entry from a worker-private arena.
+ *
+ * Note: every concurrent slot access is one 128-bit atomic (mixed-width access is
+ *       forbidden by the protocol). An empty slot is claimed by CAS'ing the exact
+ *       loaded 128-bit value to {entry, hash, 0}; a loser re-reads the SAME slot,
+ *       so two claimers of one hash converge on one slot (the loser takes the
+ *       duplicate-push path). Probing resumes only on a different-hash slot.
+ *       Readers (mht_get_hls) stay unchanged: the probe phase starts only after
+ *       every build task is joined, which provides the happens-before edge.
+ */
+#if defined (__x86_64__)
+__attribute__ ((target ("cx16")))
+     int mht_put_hls_concurrent (MHT_HLS_TABLE * ht, unsigned int hash, MHT_HLS_ENTRY * entry)
+{
+  // *INDENT-OFF*
+  typedef unsigned __int128 slot_word_t;
+  // *INDENT-ON*
+  slot_word_t *slot_word;
+  slot_word_t observed, desired;
+  MHT_HLS_ENTRY *observed_entry;
+  unsigned int observed_hash;
+  unsigned int i, probes = 0;
+
+  assert (ht != NULL && entry != NULL);
+  assert (((uintptr_t) ht->table & 15) == 0);
+
+  i = hash % ht->size;
+
+  while (probes <= ht->size)
+    {
+      slot_word = (slot_word_t *) & ht->table[i];
+
+      /* Plain (possibly torn) observation is safe: every mutation of a slot changes
+       * its entry bits through the 16-byte CAS below, so a torn observation can
+       * never equal the slot's true value and the CAS rejects it (GCC 8 does not
+       * inline 128-bit __atomic loads; __sync CAS inlines cmpxchg16b under cx16). */
+      observed = *(volatile slot_word_t *) slot_word;
+
+      observed_entry = (MHT_HLS_ENTRY *) (uintptr_t) (observed & 0xffffffffffffffffULL);
+      observed_hash = (unsigned int) (observed >> 64);
+
+      if (observed_entry == NULL)
+	{
+	  /* claim: the entry must be complete BEFORE publication */
+	  entry->next = NULL;
+	  desired = ((slot_word_t) hash << 64) | (slot_word_t) (uintptr_t) entry;
+
+	  if (__sync_bool_compare_and_swap (slot_word, observed, desired))
+	    {
+	      return NO_ERROR;
+	    }
+	  continue;		/* lost the claim: re-read the SAME slot */
+	}
+
+      if (observed_hash == hash)
+	{
+	  /* duplicate: push onto this slot's chain head, hash bits preserved */
+	  entry->next = observed_entry;
+	  desired = (observed & ~(slot_word_t) 0xffffffffffffffffULL) | (slot_word_t) (uintptr_t) entry;
+
+	  if (__sync_bool_compare_and_swap (slot_word, observed, desired))
+	    {
+	      return NO_ERROR;
+	    }
+	  continue;		/* head moved: retry the SAME slot */
+	}
+
+      /* occupied by a different hash: linear probe on */
+      i = (i + 1) % ht->size;
+      probes++;
+    }
+
+  /* pre-sized from the exact row count, so a full table is a logic error */
+  assert (false);
+  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+  return ER_FAILED;
+}
+#else /* !defined (__x86_64__) */
+int
+mht_put_hls_concurrent (MHT_HLS_TABLE * ht, unsigned int hash, MHT_HLS_ENTRY * entry)
+{
+  /* no lock-free 16-byte CAS contract on this platform; the caller builds serially */
+  return ER_FAILED;
+}
+#endif /* defined (__x86_64__) */
+
+/*
+ * mht_attach_arena_hls - transfer ownership of one arena to the table WITHOUT the
+ *   chain merge of mht_adopt_hls: the concurrent build allocates entries from
+ *   worker-private arenas directly into the shared table, so only the ownership
+ *   moves. mht_destroy_hls frees attached arenas.
+ *   return: NO_ERROR or error code (attached array full).
+ */
+int
+mht_attach_arena_hls (MHT_HLS_TABLE * ht, HL_HEAPID heap_id)
+{
+  assert (ht != NULL && heap_id != 0);
+  assert (ht->attached_heaps != NULL);
+
+  if (ht->attached_heap_cnt >= ht->attached_heap_cap)
+    {
+      assert (false);
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_GENERIC_ERROR, 0);
+      return ER_FAILED;
+    }
+
+  ht->attached_heaps[ht->attached_heap_cnt++] = heap_id;
+  return NO_ERROR;
+}
+
+/*
  * mht_prepare_attached_arenas_hls - Pre-allocate room for adopted arenas
  *   return: NO_ERROR, or ER_OUT_OF_VIRTUAL_MEMORY
  *   ht(in/out): destination table of a coming merge

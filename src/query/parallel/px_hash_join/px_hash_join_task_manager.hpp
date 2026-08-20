@@ -199,6 +199,30 @@ namespace parallel_query
      * probe_task
      */
 
+    /*
+     * build_task (P8-4): one worker of the concurrent partition build. Sector-walks
+     * the partition build list and inserts every row (stamped hash reused) into the
+     * ONE pre-sized shared table via mht_put_hls_concurrent; entries come from this
+     * worker's own arena, whose ownership was attached to the table BEFORE launch.
+     */
+
+    class build_task: public base_task
+    {
+      public:
+	build_task (task_manager &task_manager, HASHJOIN_MANAGER *manager, MHT_HLS_TABLE *table,
+		    HASH_METHOD method, HL_HEAPID arena, UINT64 *rows_out, UINT64 *slots_out,
+		    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index);
+	void execute (cubthread::entry &thread_ref) override;
+
+      private:
+	MHT_HLS_TABLE *m_table;	/* shared; concurrent-insert only */
+	HASH_METHOD m_method;	/* IN_MEM: tuple copies / HYBRID: tuple positions */
+	HL_HEAPID m_arena;	/* worker-private entry arena (table-attached) */
+	UINT64 *m_rows_out;	/* caller-owned counters (task may be retired after join) */
+	UINT64 *m_slots_out;
+	HASHJOIN_SHARED_PROBE_INFO *m_shared_info;
+    };
+
     class probe_task: public base_task
     {
       public:

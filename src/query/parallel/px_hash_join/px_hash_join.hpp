@@ -78,6 +78,9 @@ namespace parallel_query
 
     int partition_probe_prepare (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
 				 partition_probe_session *session);
+    int partition_build_execute (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
+				 HASHJOIN_CONTEXT *target, HASH_METHOD method,
+				 partition_probe_session *session, bool *done);
     int partition_probe_start (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager,
 			       HASHJOIN_CONTEXT *target, partition_probe_session *session,
 			       partition_probe_round **round_out);
