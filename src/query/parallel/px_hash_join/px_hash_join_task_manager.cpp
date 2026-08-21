@@ -355,13 +355,23 @@ namespace parallel_query
 
 		  if (qfile_reopen_list_as_append_mode (&thread_ref, part_list_id[part_id]) != NO_ERROR)
 		    {
-		      break;		/* error_exit */
+		      assert_release_error (er_errid () != NO_ERROR);
+		      m_task_manager.handle_error (thread_ref);
+		      has_error = true;
+		      break;
 		    }
 
 		  error = qfile_add_tuple_to_list (&thread_ref, part_list_id[part_id], tuple_record.tpl);
 		  if (error != NO_ERROR)
 		    {
-		      break;		/* error_exit */
+		      /* the list was reopened above; leaving it in append mode would trip
+		       * the next worker that takes this partition's mutex */
+		      qfile_close_list (&thread_ref, part_list_id[part_id]);
+
+		      assert_release_error (er_errid () != NO_ERROR);
+		      m_task_manager.handle_error (thread_ref);
+		      has_error = true;
+		      break;
 		    }
 
 		  qfile_close_list (&thread_ref, part_list_id[part_id]);
@@ -740,6 +750,9 @@ namespace parallel_query
       char *tuple_value;
       MHT_HLS_ENTRY *entry;
       UINT32 hash_key;
+      UINT64 rows = 0;		/* local: the caller-owned counters are adjacent array
+				 * elements, so a per-tuple increment through m_rows_out
+				 * would false-share one cache line across the workers */
       int tuple_cnt, tuple_index, tuple_length;
       int error = NO_ERROR;
 
@@ -856,7 +869,7 @@ namespace parallel_query
 		  break;
 		}
 
-	      (*m_rows_out)++;
+	      rows++;
 	    }
 	  while (true);
 
@@ -873,6 +886,8 @@ namespace parallel_query
 	{
 	  db_private_free_and_init (&thread_ref, overflow_record.tpl);
 	}
+
+      *m_rows_out = rows;	/* single store; the caller reads it after the join */
 
       thread_ref.m_px_stats = nullptr;
       thread_ref.m_uses_px_stats = false;
