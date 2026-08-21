@@ -782,6 +782,7 @@ static const char sysprm_ha_conf_file_name[] = "cubrid_ha.conf";
 #define PRM_NAME_PARALLEL_SCAN_PAGE_THRESHOLD "parallel_scan_page_threshold"
 #define PRM_NAME_PARALLEL_INDEX_SCAN_PAGE_THRESHOLD "parallel_index_scan_page_threshold"
 #define PRM_NAME_PARALLEL_HASH_JOIN_PAGE_THRESHOLD "parallel_hash_join_page_threshold"
+#define PRM_NAME_HASH_JOIN_PARALLEL_EXECUTOR "hash_join_parallel_executor"
 #define PRM_NAME_PARALLEL_SORT_PAGE_THRESHOLD "parallel_sort_page_threshold"
 
 #define PRM_NAME_TCP_KEEPALIVE_IDLE "tcp_keepalive_idle"
@@ -5514,6 +5515,18 @@ SYSPRM_PARAM prm_Def[] = {
    {false, {.b = false}},
    NULL_SYSPRM_PARAM_VALUE,
    NULL_SYSPRM_PARAM_VALUE,
+   (char *) NULL,
+   (DUP_PRM_FUNC) NULL,
+   (DUP_PRM_FUNC) NULL},
+  {PRM_ID_HASH_JOIN_PARALLEL_EXECUTOR,
+   PRM_NAME_HASH_JOIN_PARALLEL_EXECUTOR,
+   (PRM_FOR_SERVER | PRM_HIDDEN),
+   PRM_INTEGER,
+   PRM_CLEAR_DYNAMIC_FLAG,
+   {false, {.i = 0}},
+   {false, {.i = 0}},
+   {false, {.i = 1}},
+   {false, {.i = 0}},
    (char *) NULL,
    (DUP_PRM_FUNC) NULL,
    (DUP_PRM_FUNC) NULL},

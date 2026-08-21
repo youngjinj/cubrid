@@ -237,7 +237,7 @@ typedef struct hashjoin_stats
 {
   UINT32 num_parallel_threads;
 
-  /* Partition-internal parallel probe (P7-1b): the largest worker count any
+  /* Partition-internal parallel probe: the largest worker count any
    * contributing partition probed with; the aggregated worker ranges live in
    * probe.range. Zero when every partition probed serially. */
   UINT32 num_partition_probe_threads;
@@ -425,7 +425,13 @@ typedef struct hashjoin_manager
   // *INDENT-OFF*
   parallel_query::worker_manager *px_worker_manager;
 
-  /* Partition-internal parallel probe (P7-1b): published for the lifetime of the
+  /* Chosen at dispatch (hjoin_try_parallel) together with the reservation:
+   * false runs the legacy px executor (workers own whole partitions), true runs
+   * the partition loop (partitions one at a time, the workers share each phase,
+   * one table resident). Meaningless without a reservation. */
+  bool px_partition_loop;
+
+  /* Partition-internal parallel probe: published for the lifetime of the
    * hjoin_execute_partitions loop; NULL means every partition probes serially. */
   parallel_query::hash_join::partition_probe_session *pprobe_session;
   // *INDENT-ON*
