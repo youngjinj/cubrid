@@ -42,6 +42,9 @@
 #include "config.h"
 
 #include <stdio.h>
+#if defined (__x86_64__)
+#include <cpuid.h>
+#endif /* defined (__x86_64__) */
 #include <assert.h>
 
 #include "memory_hash.h"
@@ -1254,6 +1257,33 @@ mht_destroy_hls (MHT_HLS_TABLE * ht)
 }
 
 /*
+ * mht_put_hls_concurrent_available - true when this CPU provides the lock-free
+ *   16-byte CAS that mht_put_hls_concurrent requires (x86-64 CMPXCHG16B).  The
+ *   caller checks this BEFORE spawning build workers, so an unsupported platform
+ *   takes the untouched serial build instead of failing the join.
+ */
+bool
+mht_put_hls_concurrent_available (void)
+{
+#if defined (__x86_64__)
+  /* CPUID.01H:ECX.CMPXCHG16B[bit 13]; the probe is idempotent, so the racy
+   * initialization of the cache is benign */
+  static int available = -1;
+
+  if (available < 0)
+    {
+      unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+
+      available = (__get_cpuid (1, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 13))) ? 1 : 0;
+    }
+
+  return (available == 1);
+#else /* !defined (__x86_64__) */
+  return false;
+#endif /* defined (__x86_64__) */
+}
+
+/*
  * mht_put_hls_concurrent - insert-only concurrent variant of mht_put_hls for the
  *   parallel partition build: W workers insert into ONE pre-sized shared table.
  *   return: NO_ERROR, or ER_FAILED when the platform lacks lock-free 16-byte CAS
@@ -1271,6 +1301,10 @@ mht_destroy_hls (MHT_HLS_TABLE * ht)
  *       duplicate-push path). Probing resumes only on a different-hash slot.
  *       Readers (mht_get_hls) stay unchanged: the probe phase starts only after
  *       every build task is joined, which provides the happens-before edge.
+ *       The plain 128-bit observation below is formally a C++ data race; it is a
+ *       deliberate trade (GCC emits no lock-free inline 128-bit atomic load) and
+ *       is safe because no observation takes effect without the CAS validating
+ *       the exact observed value.
  */
 #if defined (__x86_64__)
 __attribute__ ((target ("cx16")))

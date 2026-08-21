@@ -756,6 +756,12 @@ error_exit:
 
       *done = false;
 
+      if (!mht_put_hls_concurrent_available ())
+	{
+	  /* no lock-free 16-byte CAS on this CPU; the caller builds serially */
+	  return NO_ERROR;
+	}
+
       HASHJOIN_STATS *stats = target->stats;
       HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
       assert (!thread_is_on_trace (&thread_ref) || stats != nullptr);
@@ -844,6 +850,7 @@ error_exit:
 	}
       assert (total_rows == (UINT64) build_list->tuple_cnt);
       table->nslots_used = (unsigned int) total_slots;
+      table->nentries = (unsigned int) total_rows;
 
       /* publish, mirroring hjoin_scan_init_table's setup for the method */
       target->hash_scan.hash_list_scan_type = method;

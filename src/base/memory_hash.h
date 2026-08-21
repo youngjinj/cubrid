@@ -193,6 +193,7 @@ struct mht_hls_table
 
 extern const void *mht_put_hls (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry);
 extern const void *mht_put_hls_try (MHT_HLS_TABLE * ht, const void *key, MHT_HLS_ENTRY * entry);
+extern bool mht_put_hls_concurrent_available (void);
 extern int mht_put_hls_concurrent (MHT_HLS_TABLE * ht, unsigned int hash, MHT_HLS_ENTRY * entry);
 extern int mht_attach_arena_hls (MHT_HLS_TABLE * ht, HL_HEAPID heap_id);
 extern int mht_grow_hls (MHT_HLS_TABLE * ht);
