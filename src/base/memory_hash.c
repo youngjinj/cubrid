@@ -1304,7 +1304,9 @@ mht_put_hls_concurrent_available (void)
  *       The plain 128-bit observation below is formally a C++ data race; it is a
  *       deliberate trade (GCC emits no lock-free inline 128-bit atomic load) and
  *       is safe because no observation takes effect without the CAS validating
- *       the exact observed value.
+ *       the exact observed value; the observation itself is two 8-byte atomic
+ *       loads, entry half FIRST (see the in-loop comment -- that order is
+ *       load-bearing for the different-hash probe-advance branch).
  */
 #if defined (__x86_64__)
 __attribute__ ((target ("cx16")))
@@ -1317,25 +1319,36 @@ __attribute__ ((target ("cx16")))
   slot_word_t observed, desired;
   MHT_HLS_ENTRY *observed_entry;
   unsigned int observed_hash;
-  unsigned int i, probes = 0;
+  unsigned int i, mask, probes = 0;
+  UINT64 observed_lo, observed_hi;
 
   assert (ht != NULL && entry != NULL);
   assert (((uintptr_t) ht->table & 15) == 0);
 
-  i = hash % ht->size;
+  mask = ht->size - 1;		/* the size is a power of two */
+  i = hash & mask;
 
   while (probes <= ht->size)
     {
       slot_word = (slot_word_t *) & ht->table[i];
 
-      /* Plain (possibly torn) observation is safe: every mutation of a slot changes
-       * its entry bits through the 16-byte CAS below, so a torn observation can
-       * never equal the slot's true value and the CAS rejects it (GCC 8 does not
-       * inline 128-bit __atomic loads; __sync CAS inlines cmpxchg16b under cx16). */
-      observed = *(volatile slot_word_t *) slot_word;
+      /* The observation is two 8-byte atomic loads with the entry half read FIRST
+       * (the acquire keeps the hash load from moving above it; x86 keeps the
+       * load-load order). The claim and duplicate-push branches revalidate the
+       * whole observation through the 16-byte CAS below, so any torn combination
+       * fails there and retries on the same slot. The ONLY branch that acts on the
+       * observation without a CAS is the different-hash probe advance; it is safe
+       * because a slot's hash never changes once set, and the entry-first order
+       * makes the one dangerous torn view -- {claimed entry, still-zero hash} --
+       * unobservable: when the entry half already shows a claim, that claim's
+       * atomic 16-byte store is globally visible, so the later hash load must see
+       * its hash too. */
+      observed_lo = __atomic_load_n ((UINT64 *) slot_word, __ATOMIC_ACQUIRE);
+      observed_hi = __atomic_load_n ((UINT64 *) slot_word + 1, __ATOMIC_RELAXED);
+      observed = ((slot_word_t) observed_hi << 64) | (slot_word_t) observed_lo;
 
-      observed_entry = (MHT_HLS_ENTRY *) (uintptr_t) (observed & 0xffffffffffffffffULL);
-      observed_hash = (unsigned int) (observed >> 64);
+      observed_entry = (MHT_HLS_ENTRY *) (uintptr_t) observed_lo;
+      observed_hash = (unsigned int) observed_hi;
 
       if (observed_entry == NULL)
 	{
@@ -1364,7 +1377,7 @@ __attribute__ ((target ("cx16")))
 	}
 
       /* occupied by a different hash: linear probe on */
-      i = (i + 1) % ht->size;
+      i = (i + 1) & mask;
       probes++;
     }
 

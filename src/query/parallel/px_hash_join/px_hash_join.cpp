@@ -797,12 +797,17 @@ error_exit:
 	for (w = 0; w < worker_cnt; w++)
 	  {
 	    arenas[w] = db_create_ostk_heap (HASH_LIST_SCAN_DATA_CHUNK_SIZE);
-	    if (arenas[w] == 0 || mht_attach_arena_hls (table, arenas[w]) != NO_ERROR)
+	    if (arenas[w] == 0)
 	      {
-		if (arenas[w] != 0)
-		  {
-		    db_destroy_ostk_heap (arenas[w]);
-		  }
+		/* db_create_ostk_heap does not set an error itself */
+		er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+			(size_t) HASH_LIST_SCAN_DATA_CHUNK_SIZE);
+		error = ER_OUT_OF_VIRTUAL_MEMORY;
+		goto cleanup;
+	      }
+	    if (mht_attach_arena_hls (table, arenas[w]) != NO_ERROR)
+	      {
+		db_destroy_ostk_heap (arenas[w]);
 		ASSERT_ERROR_AND_SET (error);
 		goto cleanup;
 	      }
