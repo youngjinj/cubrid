@@ -1253,6 +1253,74 @@ mht_destroy_hls (MHT_HLS_TABLE * ht)
 }
 
 /*
+ * mht_adopt_hls - merge every chain of src into dst and adopt src's arena
+ *   return: NO_ERROR (cannot fail once dst is prepared; see below)
+ *   dst(in/out): destination table (slot capacity must already cover the merge)
+ *   src(in): source table; its slot array and descriptor are freed here, its
+ *            payload arena moves into dst's attached arenas
+ *
+ * Note: entries and payloads never move or copy.  Each occupied src slot's whole
+ *       chain is spliced in front of the dst chain with the same hash (or claims a
+ *       free slot).  The caller must have sized dst so occupied slots stay under
+ *       the fill bound and must have prepared the attached-arena room.
+ */
+int
+mht_adopt_hls (MHT_HLS_TABLE * dst, MHT_HLS_TABLE * src)
+{
+  unsigned int i, idx, mask, hash;
+  MHT_HLS_ENTRY *head, *tail;
+
+  assert (dst != NULL && src != NULL);
+  assert (dst->attached_heap_cnt < dst->attached_heap_cap);
+  assert (src->attached_heap_cnt == 0);	/* worker tables never adopt */
+
+  mask = dst->size - 1;
+
+  for (i = 0; i < src->size; i++)
+    {
+      head = src->table[i].entry;
+      if (head == NULL)
+	{
+	  continue;
+	}
+      hash = src->table[i].hash;
+
+      for (idx = hash & mask; dst->table[idx].entry != NULL && dst->table[idx].hash != hash; idx = (idx + 1) & mask)
+	{
+	  dst->ncollisions++;
+	}
+
+      if (dst->table[idx].entry == NULL)
+	{
+	  dst->table[idx].entry = head;
+	  dst->table[idx].hash = hash;
+	}
+      else
+	{
+	  /* same hash in both tables: splice the whole src chain in front (the walk
+	   * to the src tail visits every entry at most once across the whole merge) */
+	  for (tail = head; tail->next != NULL; tail = tail->next)
+	    {
+	      ;
+	    }
+	  tail->next = dst->table[idx].entry;
+	  dst->table[idx].entry = head;
+	  dst->ncollisions++;
+	}
+    }
+
+  dst->nentries += src->nentries;
+
+  /* commit: src's payloads now live in dst's chains; move the arena, drop the shell */
+  dst->attached_heaps[dst->attached_heap_cnt++] = src->heap_id;
+
+  free_and_init (src->table);
+  free_and_init (src);
+
+  return NO_ERROR;
+}
+
+/*
  * mht_put_hls_concurrent_available - true when this CPU provides the lock-free
  *   16-byte CAS that mht_put_hls_concurrent requires (x86-64 CMPXCHG16B).  The
  *   caller checks this BEFORE spawning build workers, so an unsupported platform

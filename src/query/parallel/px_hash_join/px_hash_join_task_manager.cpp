@@ -721,13 +721,14 @@ namespace parallel_query
 
     build_task::build_task (task_manager &task_manager, HASHJOIN_MANAGER *manager, MHT_HLS_TABLE *table,
 			    HASH_METHOD method, HL_HEAPID arena, UINT64 *rows_out,
-			    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index)
+			    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index, bool shared_table)
       : base_task (task_manager, manager, index)
       , m_table (table)
       , m_method (method)
       , m_arena (arena)
       , m_rows_out (rows_out)
       , m_shared_info (shared_info)
+      , m_shared_table (shared_table)
     {
       assert (m_table != nullptr && m_arena != 0);
       assert (m_rows_out != nullptr);
@@ -855,7 +856,11 @@ namespace parallel_query
 		    }
 		}
 
-	      if (entry == nullptr || mht_put_hls_concurrent (m_table, hash_key, entry) != NO_ERROR)
+	      /* shared table: one double-width CAS per insert; private table
+	       * (merge experiment): the plain serial put, no atomics */
+	      if (entry == nullptr
+		  || (m_shared_table ? (mht_put_hls_concurrent (m_table, hash_key, entry) != NO_ERROR)
+		      : (mht_put_hls (m_table, (void *) &hash_key, entry) == NULL)))
 		{
 		  assert_release_error (er_errid () != NO_ERROR);
 		  m_task_manager.handle_error (thread_ref);

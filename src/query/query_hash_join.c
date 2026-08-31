@@ -2226,7 +2226,8 @@ hjoin_try_parallel (THREAD_ENTRY * thread_p, HASHJOIN_MANAGER * manager, HASHJOI
    * limit-sized table; the parameter selects it until the dispatch policy is
    * settled.  Both are STATUS_PARALLEL -- STATUS_PARTITION stays the serial
    * executor and never sees a reservation. */
-  manager->px_partition_loop = (prm_get_integer_value (PRM_ID_HASH_JOIN_PARALLEL_EXECUTOR) == 1);
+  manager->px_partition_loop = (prm_get_integer_value (PRM_ID_HASH_JOIN_PARALLEL_EXECUTOR) >= 1);
+  manager->px_pbuild_merge = (prm_get_integer_value (PRM_ID_HASH_JOIN_PARALLEL_EXECUTOR) == 2);
 
   return HASHJOIN_STATUS_PARALLEL;
 

@@ -211,15 +211,16 @@ namespace parallel_query
       public:
 	build_task (task_manager &task_manager, HASHJOIN_MANAGER *manager, MHT_HLS_TABLE *table,
 		    HASH_METHOD method, HL_HEAPID arena, UINT64 *rows_out,
-		    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index);
+		    HASHJOIN_SHARED_PROBE_INFO *shared_info, int index, bool shared_table);
 	void execute (cubthread::entry &thread_ref) override;
 
       private:
-	MHT_HLS_TABLE *m_table;	/* shared; concurrent-insert only */
+	MHT_HLS_TABLE *m_table;	/* shared (concurrent CAS) or worker-private (merge experiment) */
 	HASH_METHOD m_method;	/* IN_MEM: tuple copies / HYBRID: tuple positions */
 	HL_HEAPID m_arena;	/* worker-private entry arena (table-attached) */
 	UINT64 *m_rows_out;	/* caller-owned counter (task may be retired after join) */
 	HASHJOIN_SHARED_PROBE_INFO *m_shared_info;
+	const bool m_shared_table;	/* true: CAS into the shared table / false: serial put into m_table */
     };
 
     class probe_task: public base_task

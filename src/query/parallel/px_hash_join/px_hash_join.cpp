@@ -736,6 +736,154 @@ error_exit:
     }
 
     /*
+     * partition_build_execute_merge (experiment, executor mode 2) - build one
+     * partition's table with W workers filling worker-PRIVATE tables (plain serial
+     * puts, no atomics), then serially merge them into the one full-size table by
+     * relinking the chain heads (mht_adopt_hls); entries and payloads never move --
+     * each private arena's ownership transfers to the final table.
+     */
+
+    static int
+    partition_build_execute_merge (cubthread::entry &thread_ref, HASHJOIN_MANAGER *manager, HASHJOIN_CONTEXT *target,
+				   HASH_METHOD method, partition_probe_session *session, bool *done)
+    {
+      MHT_HLS_TABLE *table = nullptr;
+      MHT_HLS_TABLE *privates[PRM_MAX_PARALLELISM] = { nullptr, };
+      HASHJOIN_SHARED_PROBE_INFO shared_info;
+      QFILE_LIST_ID *build_list;
+      UINT64 worker_rows[PRM_MAX_PARALLELISM] = { 0, };
+      UINT64 total_rows = 0;
+      UINT32 w, worker_cnt;
+      bool sector_open = false;
+      int error = NO_ERROR;
+
+      HASHJOIN_STATS *stats = target->stats;
+      HASHJOIN_START_STATS start_stats = HASHJOIN_START_STATS_INITIALIZER;
+      assert (!thread_is_on_trace (&thread_ref) || stats != nullptr);
+
+      build_list = target->build->list_id;
+      assert (build_list != nullptr && build_list->tuple_cnt > 0 && build_list->tuple_cnt <= INT_MAX);
+
+      worker_cnt = session->worker_cnt;
+
+      THREAD_ENTRY *main_thread_p = thread_get_main_thread (&thread_ref);
+      task_manager task_manager (manager->px_worker_manager, *main_thread_p);
+      build_task *task = nullptr;
+
+      /* the final table, pre-sized as usual; adoption moves W private arenas in */
+      table = mht_create_hls ("Hash Join", (int) build_list->tuple_cnt, nullptr, nullptr);
+      if (table == nullptr)
+	{
+	  ASSERT_ERROR_AND_SET (error);
+	  return error;
+	}
+
+      error = mht_prepare_attached_arenas_hls (table, (int) worker_cnt);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+
+      /* worker-private tables sized for an even share (the slot sizing itself
+       * adds the ~1.4x load-factor headroom over the estimate) */
+      for (w = 0; w < worker_cnt; w++)
+	{
+	  privates[w] = mht_create_hls ("Hash Join Worker", (int) (build_list->tuple_cnt / worker_cnt) + 1,
+					nullptr, nullptr);
+	  if (privates[w] == nullptr)
+	    {
+	      ASSERT_ERROR_AND_SET (error);
+	      goto cleanup;
+	    }
+	}
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  hjoin_trace_start (&thread_ref, &start_stats);
+	}
+
+      error = qfile_open_list_sector_scan (&thread_ref, build_list, &shared_info.sector_scan);
+      if (error != NO_ERROR)
+	{
+	  goto cleanup;
+	}
+      sector_open = true;
+
+      for (w = 0; w < worker_cnt; w++)
+	{
+	  task = new build_task (task_manager, manager, privates[w], method, privates[w]->heap_id,
+				 &worker_rows[w], &shared_info, (int) w, false /* shared_table */ );
+	  task_manager.push_task (task);
+	}
+
+      task_manager.join ();
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  hjoin_trace_drain_worker_stats (&thread_ref, manager);
+	}
+
+      if (task_manager.has_error ())
+	{
+	  task_manager.clear_interrupt (thread_ref);
+	  assert_release_error (er_errid () != NO_ERROR);
+	  error = er_errid ();
+	  goto cleanup;
+	}
+
+      for (w = 0; w < worker_cnt; w++)
+	{
+	  total_rows += worker_rows[w];
+	}
+      assert (total_rows == (UINT64) build_list->tuple_cnt);
+
+      /* the serial merge: relink chain heads slot by slot; duplicates ride along
+       * inside their chains for free */
+      for (w = 0; w < worker_cnt; w++)
+	{
+	  mht_adopt_hls (table, privates[w]);
+	  privates[w] = nullptr;
+	}
+      assert (table->nentries == (unsigned int) total_rows);
+
+      /* publish, mirroring hjoin_scan_init_table's setup for the method */
+      target->hash_scan.hash_list_scan_type = method;
+      target->hash_scan.memory.hash_table = table;
+      target->hash_scan.memory.curr_hash_entry = nullptr;
+      table = nullptr;
+
+      if (thread_is_on_trace (&thread_ref))
+	{
+	  hjoin_trace_end (&thread_ref, &stats->build, &start_stats);
+	  stats->build.read_rows = build_list->tuple_cnt;
+	  stats->build.qualified_rows = build_list->tuple_cnt;
+	}
+
+      *done = true;
+
+cleanup:
+      if (sector_open)
+	{
+	  qfile_close_list_sector_scan (&thread_ref, &shared_info.sector_scan);
+	}
+
+      for (w = 0; w < worker_cnt; w++)
+	{
+	  if (privates[w] != nullptr)
+	    {
+	      mht_destroy_hls (privates[w]);
+	    }
+	}
+
+      if (table != nullptr)
+	{
+	  mht_destroy_hls (table);	/* frees the already-adopted arenas too */
+	}
+
+      return error;
+    }
+
+    /*
      * partition_build_execute - build one partition's table with W workers
      * inserting CONCURRENTLY into ONE pre-sized shared table (mht_put_hls_concurrent):
      * no worker tables, no merge, no growth (the partition list's exact tuple_cnt
@@ -765,6 +913,12 @@ error_exit:
       assert (method == HASH_METH_IN_MEM || method == HASH_METH_HYBRID);
 
       *done = false;
+
+      if (manager->px_pbuild_merge)
+	{
+	  /* experiment (executor mode 2): private tables + adopt merge, no CAS */
+	  return partition_build_execute_merge (thread_ref, manager, target, method, session, done);
+	}
 
       if (!mht_put_hls_concurrent_available ())
 	{
@@ -833,7 +987,7 @@ error_exit:
 	for (w = 0; w < worker_cnt; w++)
 	  {
 	    task = new build_task (task_manager, manager, table, method, arenas[w],
-				   &worker_rows[w], &shared_info, (int) w);
+				   &worker_rows[w], &shared_info, (int) w, true /* shared_table */ );
 	    task_manager.push_task (task);
 	  }
       }

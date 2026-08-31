@@ -431,6 +431,10 @@ typedef struct hashjoin_manager
    * one table resident). Meaningless without a reservation. */
   bool px_partition_loop;
 
+  /* Experiment (executor mode 2): the loop's partition build uses worker-private
+   * tables merged by mht_adopt_hls instead of the shared-table concurrent CAS. */
+  bool px_pbuild_merge;
+
   /* Partition-internal parallel probe: published for the lifetime of the
    * hjoin_execute_partitions loop; NULL means every partition probes serially. */
   parallel_query::hash_join::partition_probe_session *pprobe_session;
