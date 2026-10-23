@@ -19,13 +19,12 @@
 /*
  * query_eval_hash.cpp - the hash over a list subquery's values for the equality lookups of a predicate
  *
- * A list subquery's R_EQ lookups read the whole list for every row that finds no match in it. From the second lookup
- * of one execution of the subquery on (a hash file, which costs more to build, the later the more rows a page of the
- * list holds), a hash over the list answers them: a value is hashed in the type its comparison compares it in, and only
- * the list values of the same hash are given back, for the caller to compare by that same comparison. A value the hash
- * cannot take as its comparison compares it (a conversion that fails, a NaN, a type or a collation left out) sends that
- * lookup, or the whole execution, back to reading the list.
- * A correlated subquery executes again for each row, so no execution of it reaches a second lookup.
+ * A list subquery's R_EQ lookups read the whole list for every row that finds no match in it. From a later lookup of
+ * one execution of the subquery on (eval_hash_for_lookup), a hash over the list answers them: a value is hashed in the
+ * type its comparison compares it in, and only the list values of the same hash are given back, for the caller to
+ * compare by that same comparison. A value the hash cannot take as its comparison compares it (a conversion that fails,
+ * a NaN, a type or a collation left out) sends that lookup, or the whole execution, back to reading the list.
+ * A subquery that executes again (a correlated one) builds its hash again.
  */
 
 #include "config.h"
@@ -75,7 +74,8 @@ static int eval_hash_build (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash, QFILE_
 static void eval_hash_clear (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash);
 
 /* building a hash file measured about 21 reads of its list with 2,000 INT rows a page of the list, and about 3 with 73
- * VARCHAR of 200 bytes: a wider row costs a read more. Measure again if the cost of a hash file changes */
+ * VARCHAR of 200 bytes: a wider row costs a read more. 64 builds at the 32nd and the 2nd lookup there, later and
+ * earlier than measured; measure again if the cost of a hash file changes */
 static const int EVAL_HASH_FILE_ROWS_PER_READ = 64;
 
 /*
@@ -142,14 +142,16 @@ eval_hash_type (DB_TYPE type)
 /*
  * eval_hash_comparable () - a comparison the hash can answer for: its two sides are the row's values, and it either
  *			     compares them as they are or converts them once each, without a failure resolved in
- *			     advance or a codeset brought to an ENUM's
+ *			     advance or a codeset brought to an ENUM's, and compares strings in a collation the hash takes
  */
 bool
 eval_hash_comparable (const DOMAIN_COMPARE *compare)
 {
   return (compare->method == DOMAIN_COMPARE_DIRECT || compare->method == DOMAIN_COMPARE_CONVERT)
 	 && compare->value[0] < 0 && compare->value[1] < 0 && compare->failed == 0 && compare->codeset_side < 0
-	 && compare->cmp != NULL && eval_hash_type (compare->cmp->id);
+	 && compare->cmp != NULL && eval_hash_type (compare->cmp->id)
+	 && (!TP_IS_CHAR_TYPE (compare->cmp->id)
+	     || (compare->collation >= 0 && lang_is_coll_fastcmp_byte (lang_get_collation (compare->collation))));
 }
 
 /*
@@ -170,10 +172,10 @@ eval_hash_value (const DOMAIN_COMPARE *compare, const DB_VALUE *value, unsigned 
     case DB_TYPE_CHAR:
     case DB_TYPE_VARCHAR:
     {
-      /* the comparison's collation, not the value's. The other collations' hash functions (lang_mht2str_*) tell apart
-       * strings their comparison finds equal */
+      /* the comparison's collation, not the value's: one of lang_fastcmp_byte (eval_hash_comparable). The other
+       * collations' hash functions (lang_mht2str_*) tell apart strings their comparison finds equal */
       const LANG_COLLATION *lang_coll = lang_get_collation (compare->collation);
-      if (!lang_is_coll_fastcmp_byte (lang_coll) || db_get_string_codeset (value) != lang_coll->codeset)
+      if (db_get_string_codeset (value) != lang_coll->codeset)
 	{
 	  return false;
 	}
@@ -386,8 +388,7 @@ eval_hash_clear (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash)
  *   return: error code
  *   subquery(in): the subquery whose list list_id is; it owns the hash
  *   compare(in): the lookup's comparison (eval_hash_comparable)
- *   hash(out): the hash with its table, or NULL: the caller reads the list (the execution's first lookup, a value the
- *		table cannot take, hashing turned off, or another comparison than the table's)
+ *   hash(out): the hash with its table, or NULL: the caller reads the list
  */
 int
 eval_hash_for_lookup (THREAD_ENTRY *thread_p, xasl_node *subquery, QFILE_LIST_ID *list_id,
@@ -510,6 +511,8 @@ eval_hash_next (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash, DB_VALUE **value)
   if (qfile_slot_read_column_value (&hash->tuple_record, 0, hash->list_scan.list_id.type_list.domp[0], &hash->value,
 				    false, &is_null) != NO_ERROR)
     {
+      /* a failed read may have freed what it left in the value */
+      db_make_null (&hash->value);
       return S_ERROR;
     }
   /* the list's NULLs are not in the table */

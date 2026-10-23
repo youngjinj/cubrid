@@ -1166,8 +1166,8 @@ eval_some_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * l
 }
 
 /*
- * eval_some_list_lookup () - eval_some_list_eval; from the second R_EQ lookup of an execution of the subquery on, the
- *			      list values of the item's hash (query_eval_hash.cpp) answer in place of the whole list
+ * eval_some_list_lookup () - eval_some_list_eval; once the subquery's list has a hash (query_eval_hash.cpp), the list
+ *			      values of the item's hash answer in place of the whole list
  *   subquery(in): the subquery whose list list_id is
  */
 static DB_LOGICAL
