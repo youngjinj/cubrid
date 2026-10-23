@@ -1061,6 +1061,9 @@ struct xasl_stat
   UINT64 fetches;
   UINT64 ioreads;
   UINT64 fetch_time;
+  UINT64 hash_lookup_builds;	/* tables built over this subquery's list for its IN lookups (query_eval_hash.cpp) */
+  UINT64 hash_lookup_count;	/* the lookups those tables answered */
+  int hash_lookup_method;	/* the tables' HASH_METHOD (query_hash_scan.h) */
 };
 
 struct func_stat
@@ -1268,6 +1271,8 @@ struct xasl_node
   int executed_parallelism;	/* parallelism of the query */
   memoize::storage *memoize_storage;
   // *INDENT-ON*
+  struct eval_list_hash *list_hash;	/* the hash over this subquery's list for its IN lookups (query_eval_hash.cpp) */
+  unsigned int execution_no;	/* how many times this node started executing: a list hash holds for one execution */
 #endif				/* defined (SERVER_MODE) || defined (SA_MODE) */
 };
 

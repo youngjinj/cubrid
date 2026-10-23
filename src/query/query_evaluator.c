@@ -45,6 +45,7 @@
 #include "dbtype.h"
 #include "language_support.h"
 #include "string_opfunc.h"
+#include "query_eval_hash.hpp"
 #include "thread_entry.hpp"
 #include "xasl_predicate.hpp"
 // XXX: SHOULD BE THE LAST INCLUDE HEADER
@@ -76,8 +77,12 @@ static DB_LOGICAL eval_all_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, DB_SE
 static int eval_item_card_set (THREAD_ENTRY * thread_p, DB_VALUE * item, DB_SET * set, REL_OP rel_operator);
 static DB_LOGICAL eval_some_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id,
 				       REL_OP rel_operator, const DOMAIN_COMPARE * compare, const val_descr * vd);
+static DB_LOGICAL eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id,
+					 REL_OP rel_operator, const DOMAIN_COMPARE * compare, const val_descr * vd,
+					 XASL_NODE * subquery);
 static DB_LOGICAL eval_all_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id,
-				      REL_OP rel_operator, const DOMAIN_COMPARE * compare, const val_descr * vd);
+				      REL_OP rel_operator, const DOMAIN_COMPARE * compare, const val_descr * vd,
+				      XASL_NODE * subquery);
 static int eval_item_card_sort_list (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id);
 static DB_LOGICAL eval_sub_multi_set_to_sort_list (THREAD_ENTRY * thread_p, DB_SET * set1, QFILE_LIST_ID * list_id);
 static DB_LOGICAL eval_sub_sort_list_to_multi_set (THREAD_ENTRY * thread_p, QFILE_LIST_ID * list_id, DB_SET * set);
@@ -1161,6 +1166,63 @@ eval_some_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * l
 }
 
 /*
+ * eval_some_list_lookup () - eval_some_list_eval; from the second R_EQ lookup of an execution of the subquery on, the
+ *			      list values of the item's hash (query_eval_hash.cpp) answer in place of the whole list
+ *   subquery(in): the subquery whose list list_id is
+ */
+static DB_LOGICAL
+eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id, REL_OP rel_operator,
+		       const DOMAIN_COMPARE * compare, const val_descr * vd, XASL_NODE * subquery)
+{
+  EVAL_LIST_HASH *hash;
+  DB_VALUE *list_val;
+  SCAN_CODE qp_scan;
+  DB_LOGICAL res, t_res;
+
+  /* a subquery answered from the result cache does not execute, so its execution_no does not tell its lists apart */
+  if (rel_operator != R_EQ || subquery->sub_xasl_id != NULL || list_id->type_list.type_cnt != 1
+      || !eval_hash_comparable (compare))
+    {
+      return eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd);
+    }
+  if (eval_hash_for_lookup (thread_p, subquery, list_id, compare, &hash) != NO_ERROR)
+    {
+      return V_ERROR;
+    }
+  if (hash == NULL || !eval_hash_start (hash, item))
+    {
+      return eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd);
+    }
+
+  res = eval_hash_has_null (hash) ? V_UNKNOWN : V_FALSE;
+  while ((qp_scan = eval_hash_next (thread_p, hash, &list_val)) == S_SUCCESS)
+    {
+      t_res = eval_value_rel_cmp (thread_p, item, list_val, R_EQ, NULL, vd, compare, NULL);
+      if (t_res == V_TRUE || t_res == V_ERROR)
+	{
+	  res = t_res;
+	  break;
+	}
+      else if (t_res == V_UNKNOWN)
+	{
+	  res = V_UNKNOWN;
+	}
+    }
+  eval_hash_end (thread_p, hash);
+  if (qp_scan == S_ERROR)
+    {
+      return V_ERROR;
+    }
+
+  subquery->xasl_stats.hash_lookup_count++;
+#if !defined (NDEBUG)
+  /* the hash answers as reading the list does */
+  assert (res == V_ERROR || res == eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd));
+#endif
+  return res;
+}
+
+/*
  * eval_all_list_eval () -
  *   return: DB_LOGICAL (V_TRUE, V_FALSE, V_UNKNOWN, V_ERROR)
  *   item(in): db_value
@@ -1188,7 +1250,7 @@ eval_some_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * l
  */
 static DB_LOGICAL
 eval_all_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id, REL_OP rel_operator,
-		    const DOMAIN_COMPARE * compare, const val_descr * vd)
+		    const DOMAIN_COMPARE * compare, const val_descr * vd, XASL_NODE * subquery)
 {
   DB_LOGICAL some_res;
 
@@ -1218,7 +1280,7 @@ eval_all_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * li
       return V_ERROR;
     }
 
-  some_res = eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd);
+  some_res = eval_some_list_lookup (thread_p, item, list_id, rel_operator, compare, vd, subquery);
   /* negate the result */
   return eval_negative (some_res);
 }
@@ -2580,12 +2642,12 @@ eval_pred (THREAD_ENTRY * thread_p, const PRED_EXPR * pr, val_descr * vd, OID * 
 		if (et_alsm->eq_flag == F_ALL)
 		  {
 		    result = eval_all_list_eval (thread_p, peek_val1, srlist_id->list_id, et_alsm->rel_op,
-						 elements.all, vd);
+						 elements.all, vd, et_alsm->elemset->xasl);
 		  }
 		else
 		  {
-		    result = eval_some_list_eval (thread_p, peek_val1, srlist_id->list_id, et_alsm->rel_op,
-						  elements.all, vd);
+		    result = eval_some_list_lookup (thread_p, peek_val1, srlist_id->list_id, et_alsm->rel_op,
+						    elements.all, vd, et_alsm->elemset->xasl);
 		  }
 	      }
 	    else if (rhs_is_set)
@@ -3009,11 +3071,13 @@ eval_pred_alsm5 (THREAD_ENTRY * thread_p, const PRED_EXPR * pr, val_descr * vd, 
   eval_resolved_elements (et_alsm, vd, &elements);
   if (et_alsm->eq_flag == F_ALL)
     {
-      return eval_all_list_eval (thread_p, peek_val1, srlist_id->list_id, et_alsm->rel_op, elements.all, vd);
+      return eval_all_list_eval (thread_p, peek_val1, srlist_id->list_id, et_alsm->rel_op, elements.all, vd,
+				 et_alsm->elemset->xasl);
     }
   else
     {
-      return eval_some_list_eval (thread_p, peek_val1, srlist_id->list_id, et_alsm->rel_op, elements.all, vd);
+      return eval_some_list_lookup (thread_p, peek_val1, srlist_id->list_id, et_alsm->rel_op, elements.all, vd,
+				    et_alsm->elemset->xasl);
     }
 }
 

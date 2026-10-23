@@ -41,6 +41,7 @@
 #include "query_opfunc.h"
 #include "string_opfunc.h"
 #include "query_hash_scan.h"
+#include "list_file.h"
 #include "qfile_tuple_layout.h"
 #include "db_value_printer.hpp"
 #include "dbtype.h"
@@ -788,6 +789,291 @@ qdata_alloc_hscan_value_OID (cubthread::entry * thread_p, HL_HEAPID heap_id, QFI
   simple_pos->vpid = scan_id_p->curr_vpid;
 
   return entry;
+}
+
+/*
+ * qdata_hscan_method () - the method a hash table over a list's tuples takes within mem_limit
+ *   return: HASH_METH_IN_MEM (the tuples in memory), HASH_METH_HYBRID (their positions in memory) or
+ *	     HASH_METH_HASH_FILE (a hash file)
+ *   list_id(in): the list the table is built over
+ *   mem_limit(in): the bytes the table may take in memory
+ */
+HASH_METHOD
+qdata_hscan_method (const QFILE_LIST_ID * list_id, UINT64 mem_limit)
+{
+  UINT64 slot_array_size, entries_size, in_mem_size, hybrid_size;
+
+  /* the IN_MEM/HYBRID table is int-indexed */
+  if (list_id->tuple_cnt > INT_MAX)
+    {
+      return HASH_METH_HASH_FILE;
+    }
+
+  slot_array_size = (UINT64) mht_hls_slot_count ((int) list_id->tuple_cnt) * sizeof (MHT_HLS_SLOT);
+  entries_size = (UINT64) list_id->tuple_cnt * sizeof (MHT_HLS_ENTRY);
+  /* IN_MEM: slot array + one entry (header) per row + the tuples themselves */
+  in_mem_size = slot_array_size + entries_size + (UINT64) list_id->page_cnt * DB_PAGESIZE;
+  /* HYBRID: slot array + one entry (header) per row + a tuple position per row; tuples stay on the temp file */
+  hybrid_size = slot_array_size + entries_size + (UINT64) list_id->tuple_cnt * sizeof (QFILE_TUPLE_SIMPLE_POS);
+
+  if (in_mem_size <= mem_limit)
+    {
+      return HASH_METH_IN_MEM;
+    }
+  if (hybrid_size <= mem_limit)
+    {
+      return HASH_METH_HYBRID;
+    }
+  return HASH_METH_HASH_FILE;
+}
+
+/*
+ * qdata_hscan_create () - the hash table of a method
+ *   return: error code
+ *   hash_scan(in/out): a hash scan with no table (HASH_METH_NOT_USE)
+ *   method(in): the table's method (qdata_hscan_method)
+ *   tuple_cnt(in): the tuples the table will hold
+ *   name(in): the name of a memory table
+ */
+int
+qdata_hscan_create (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, HASH_METHOD method, INT64 tuple_cnt,
+		    const char *name)
+{
+  assert (hash_scan->hash_list_scan_type == HASH_METH_NOT_USE);
+
+  switch (method)
+    {
+    case HASH_METH_IN_MEM:
+    case HASH_METH_HYBRID:
+      hash_scan->memory.hash_table = mht_create_hls (name, (int) tuple_cnt, NULL, NULL);
+      if (hash_scan->memory.hash_table == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      hash_scan->memory.curr_hash_entry = NULL;
+      break;
+
+    case HASH_METH_HASH_FILE:
+      hash_scan->file.hash_table = (FHSID *) db_private_alloc (thread_p, sizeof (FHSID));
+      if (hash_scan->file.hash_table == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      if (fhs_create (thread_p, hash_scan->file.hash_table, tuple_cnt) == NULL)
+	{
+	  db_private_free_and_init (thread_p, hash_scan->file.hash_table);
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      hash_scan->file.curr_oid = OID_INITIALIZER;
+      hash_scan->file.is_dk_bucket = false;
+      break;
+
+    case HASH_METH_NOT_USE:
+      /* a table always has a method */
+    default:
+      assert_release_error (false);
+      return er_errid ();
+    }
+
+  hash_scan->hash_list_scan_type = method;
+  return NO_ERROR;
+}
+
+/*
+ * qdata_hscan_destroy () - frees the hash table qdata_hscan_create made
+ *   hash_scan(in/out): the hash scan; it has no table (HASH_METH_NOT_USE) after
+ */
+void
+qdata_hscan_destroy (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan)
+{
+  switch (hash_scan->hash_list_scan_type)
+    {
+    case HASH_METH_IN_MEM:
+    case HASH_METH_HYBRID:
+      mht_destroy_hls (hash_scan->memory.hash_table);
+      hash_scan->memory.hash_table = NULL;
+      break;
+
+    case HASH_METH_HASH_FILE:
+      fhs_destroy (thread_p, hash_scan->file.hash_table);
+      db_private_free_and_init (thread_p, hash_scan->file.hash_table);
+      break;
+
+    case HASH_METH_NOT_USE:
+    default:
+      break;
+    }
+
+  hash_scan->hash_list_scan_type = HASH_METH_NOT_USE;
+}
+
+/*
+ * qdata_hscan_set_key () - the key of the next insert or probe
+ *   hash_key(in): a hash value; a hash file takes its own hash of it, as qdata_hash_scan_key gives a key
+ */
+void
+qdata_hscan_set_key (HASH_LIST_SCAN * hash_scan, unsigned int hash_key)
+{
+  hash_scan->curr_hash_key = hash_scan->hash_list_scan_type == HASH_METH_HASH_FILE ? fhs_hash (&hash_key) : hash_key;
+}
+
+/*
+ * qdata_hscan_insert () - adds the tuple a list scan is on under the current key (qdata_hscan_set_key)
+ *   return: error code
+ *   list_scan_id(in): the scan of the list the table is built over, on the tuple
+ *   tuple_record(in): the tuple
+ */
+int
+qdata_hscan_insert (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, QFILE_LIST_SCAN_ID * list_scan_id,
+		    QFILE_TUPLE_RECORD * tuple_record)
+{
+  MHT_HLS_ENTRY *entry = NULL;
+  TFTID tftid;
+
+  switch (hash_scan->hash_list_scan_type)
+    {
+    case HASH_METH_IN_MEM:
+      entry = qdata_alloc_hscan_value (thread_p, hash_scan->memory.hash_table->heap_id, tuple_record->tpl);
+      if (entry == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      if (mht_put_hls (hash_scan->memory.hash_table, (void *) &hash_scan->curr_hash_key, entry) == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      break;
+
+    case HASH_METH_HYBRID:
+      entry = qdata_alloc_hscan_value_OID (thread_p, hash_scan->memory.hash_table->heap_id, list_scan_id);
+      if (entry == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      if (mht_put_hls (hash_scan->memory.hash_table, (void *) &hash_scan->curr_hash_key, entry) == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      break;
+
+    case HASH_METH_HASH_FILE:
+      SET_TFTID (tftid, list_scan_id->curr_vpid.volid, list_scan_id->curr_vpid.pageid, list_scan_id->curr_offset);
+      if (fhs_insert (thread_p, hash_scan->file.hash_table, (void *) &hash_scan->curr_hash_key, &tftid) == NULL)
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      break;
+
+    case HASH_METH_NOT_USE:
+      /* an insert follows qdata_hscan_create */
+    default:
+      assert_release_error (false);
+      return er_errid ();
+    }
+
+  return NO_ERROR;
+}
+
+/*
+ * qdata_hscan_probe () - the next tuple under the current key (qdata_hscan_set_key)
+ *   return: error code
+ *   list_scan_id(in): an open scan of the list the table is built over; a tuple read by its position keeps its page
+ *		       fixed in this scan
+ *   tuple_record(in/out): the tuple found, tpl NULL when no tuple is left; tpl NULL on entry starts the key's tuples
+ */
+int
+qdata_hscan_probe (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, QFILE_LIST_SCAN_ID * list_scan_id,
+		   QFILE_TUPLE_RECORD * tuple_record)
+{
+  MHT_HLS_ENTRY *entry = NULL;
+  TFTID tftid;
+  EH_SEARCH eh_search;
+  QFILE_TUPLE_SIMPLE_POS *simple_pos;
+  QFILE_TUPLE_POSITION tuple_position;
+
+  switch (hash_scan->hash_list_scan_type)
+    {
+    case HASH_METH_IN_MEM:
+    case HASH_METH_HYBRID:
+      if (tuple_record->tpl == NULL)
+	{
+	  entry =
+	    mht_get_hls (hash_scan->memory.hash_table, (void *) &hash_scan->curr_hash_key,
+			 &hash_scan->memory.curr_hash_entry);
+	}
+      else
+	{
+	  entry =
+	    mht_get_next_hls (hash_scan->memory.hash_table, (void *) &hash_scan->curr_hash_key,
+			      &hash_scan->memory.curr_hash_entry);
+	}
+      if (entry == NULL)
+	{
+	  qfile_slot_reset (tuple_record);
+	}
+      else if (hash_scan->hash_list_scan_type == HASH_METH_IN_MEM)
+	{
+	  /* the payload is a tuple of the list, owned by the table */
+	  qfile_slot_set_tuple_ptr_and_layout (tuple_record, (QFILE_TUPLE) MHT_HLS_ENTRY_PAYLOAD (entry), 0,
+					       &list_scan_id->list_id.type_list);
+	}
+      else
+	{
+	  simple_pos = (QFILE_TUPLE_SIMPLE_POS *) MHT_HLS_ENTRY_PAYLOAD (entry);
+	  MAKE_TUPLE_POSTION (tuple_position, simple_pos, list_scan_id);
+	  if (qfile_jump_scan_tuple_position (thread_p, list_scan_id, &tuple_position, tuple_record, PEEK) != S_SUCCESS)
+	    {
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+	}
+      break;
+
+    case HASH_METH_HASH_FILE:
+      if (tuple_record->tpl == NULL)
+	{
+	  eh_search = fhs_search (thread_p, hash_scan, &tftid);
+	}
+      else
+	{
+	  eh_search = fhs_search_next (thread_p, hash_scan, &tftid);
+	}
+      if (eh_search == EH_KEY_FOUND)
+	{
+	  MAKE_TFTID_TO_TUPLE_POSTION (tuple_position, tftid, list_scan_id);
+	  if (qfile_jump_scan_tuple_position (thread_p, list_scan_id, &tuple_position, tuple_record, PEEK) != S_SUCCESS)
+	    {
+	      assert_release_error (er_errid () != NO_ERROR);
+	      return er_errid ();
+	    }
+	}
+      else if (eh_search == EH_KEY_NOTFOUND)
+	{
+	  qfile_slot_reset (tuple_record);
+	}
+      else
+	{
+	  assert_release_error (er_errid () != NO_ERROR);
+	  return er_errid ();
+	}
+      break;
+
+    case HASH_METH_NOT_USE:
+      /* a probe follows qdata_hscan_create */
+    default:
+      assert_release_error (false);
+      return er_errid ();
+    }
+
+  return NO_ERROR;
 }
 
 /*

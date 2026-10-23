@@ -89,6 +89,7 @@
 #include "subquery_cache.h"
 #include "query_hash_join.h"
 #include "memoize.hpp"
+#include "query_eval_hash.hpp"
 #include "ftab_set.hpp"
 
 #if SERVER_MODE && !WINDOWS
@@ -2323,6 +2324,11 @@ qexec_clear_xasl (THREAD_ENTRY * thread_p, xasl_node * xasl, bool is_final, bool
   if (xasl->memoize_storage)
     {
       clear_memoize_storage (thread_p, xasl);
+    }
+  if (xasl->list_hash != NULL)
+    {
+      eval_hash_destroy (thread_p, xasl->list_hash);
+      xasl->list_hash = NULL;
     }
   xasl->executed_parallelism = 0;
 
@@ -16218,6 +16224,7 @@ qexec_execute_mainblock (THREAD_ENTRY * thread_p, xasl_node * xasl, xasl_state *
       old_regu_ioreads = perfmon_get_from_statistic (thread_p, PSTAT_REGU_NUM_IOREADS);
     }
 
+  xasl->execution_no++;
   error = qexec_execute_mainblock_internal (thread_p, xasl, xstate, p_class_instance_lock_info);
 
   if (on_trace)

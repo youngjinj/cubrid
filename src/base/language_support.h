@@ -324,6 +324,7 @@ extern "C"
   extern char lang_digit_fractional_symbol (const INTL_LANG lang_id);
   extern bool lang_is_coll_name_allowed (const char *name);
   extern LANG_COLLATION *lang_get_collation (const int coll_id);
+  extern bool lang_is_coll_fastcmp_byte (const LANG_COLLATION * lang_coll);
   extern const char *lang_get_collation_name (const int coll_id);
   extern LANG_COLLATION *lang_get_collation_by_name (const char *coll_name);
   extern int lang_collation_count (void);

@@ -1735,6 +1735,18 @@ lang_get_collation (const int coll_id)
   return lang_Collations[coll_id];
 }
 
+/*
+ * lang_is_coll_fastcmp_byte - the collation compares strings by lang_fastcmp_byte: byte by byte, by the weights of
+ *			       coll.weights_ti apart from a space, which weighs 0 there
+ *   return: true if so
+ *   lang_coll(in): collation
+ */
+bool
+lang_is_coll_fastcmp_byte (const LANG_COLLATION * lang_coll)
+{
+  return lang_coll->fastcmp == lang_fastcmp_byte;
+}
+
 
 /*
  * lang_get_collation_name - return collation name

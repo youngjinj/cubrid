@@ -3690,6 +3690,7 @@ qdump_print_stats_json (xasl_node * xasl_p, trace_json_t * parent)
   xasl_node *xptr;
   trace_json_t *sq_cache;
   trace_json_t *memoize;
+  trace_json_t *hash_lookup;
 
   if (xasl_p == NULL || parent == NULL)
     {
@@ -3860,6 +3861,17 @@ qdump_print_stats_json (xasl_node * xasl_p, trace_json_t * parent)
 	  trace_json_object_set_new (sq_cache, "status", trace_json_string ("disabled"));
 	}
       trace_json_object_set_new (proc, "SUBQUERY_CACHE", sq_cache);
+    }
+
+  if (xasl_p->xasl_stats.hash_lookup_builds > 0)
+    {
+      hash_lookup = trace_json_object ();
+      trace_json_object_set_new (hash_lookup, "method",
+				 trace_json_string (qdump_hashjoin_type_string
+						    ((HASH_METHOD) xasl_p->xasl_stats.hash_lookup_method)));
+      trace_json_object_set_new (hash_lookup, "builds", trace_json_integer (xasl_p->xasl_stats.hash_lookup_builds));
+      trace_json_object_set_new (hash_lookup, "lookups", trace_json_integer (xasl_p->xasl_stats.hash_lookup_count));
+      trace_json_object_set_new (proc, "HASH_LOOKUP", hash_lookup);
     }
 
   gstats = &xasl_p->groupby_stats;
@@ -4576,6 +4588,15 @@ qdump_print_stats_text (FILE * fp, xasl_node * xasl_p, int indent)
 	  fprintf (fp, "SUBQUERY_CACHE (hit: %d, miss: %d, size: %lu, status: disabled)\n",
 		   SQ_CACHE_HIT (xasl_p), SQ_CACHE_MISS (xasl_p), SQ_CACHE_SIZE (xasl_p));
 	}
+    }
+
+  if (xasl_p->xasl_stats.hash_lookup_builds > 0)
+    {
+      fprintf (fp, "%*c", indent, ' ');
+      fprintf (fp, "HASH_LOOKUP (method: %s, builds: %llu, lookups: %llu)\n",
+	       qdump_hashjoin_type_string ((HASH_METHOD) xasl_p->xasl_stats.hash_lookup_method),
+	       (unsigned long long) xasl_p->xasl_stats.hash_lookup_builds,
+	       (unsigned long long) xasl_p->xasl_stats.hash_lookup_count);
     }
 
   astats = xasl_p->analytic_stats;

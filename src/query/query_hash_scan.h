@@ -179,6 +179,18 @@ extern EH_SEARCH fhs_search_next (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hlsi
 extern void fhs_dump (THREAD_ENTRY * thread_p, FHSID * fhsid);
 /* end : FILE HASH SCAN */
 
+/* A hash table over a list's tuples, keyed by a hash value: the tuples in memory, their positions in memory, or a
+ * hash file */
+extern HASH_METHOD qdata_hscan_method (const QFILE_LIST_ID * list_id, UINT64 mem_limit);
+extern int qdata_hscan_create (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, HASH_METHOD method,
+			       INT64 tuple_cnt, const char *name);
+extern void qdata_hscan_destroy (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan);
+extern void qdata_hscan_set_key (HASH_LIST_SCAN * hash_scan, unsigned int hash_key);
+extern int qdata_hscan_insert (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, QFILE_LIST_SCAN_ID * list_scan_id,
+			       QFILE_TUPLE_RECORD * tuple_record);
+extern int qdata_hscan_probe (THREAD_ENTRY * thread_p, HASH_LIST_SCAN * hash_scan, QFILE_LIST_SCAN_ID * list_scan_id,
+			      QFILE_TUPLE_RECORD * tuple_record);
+
 #endif /* defined (SERVER_MODE) || defined (SA_MODE) */
 
 #endif /* _QUERY_HASH_SCAN_H_ */
