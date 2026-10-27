@@ -1188,8 +1188,7 @@ eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID *
   /* a correlated subquery executes again for each outer row, so its list is seldom looked up twice. NO_SUBQUERY_HASH
    * turns the hash off */
   if (rel_operator != R_EQ || !XASL_IS_FLAGED (subquery, XASL_ZERO_CORR_LEVEL)
-      || XASL_IS_FLAGED (subquery, XASL_NO_SUBQUERY_HASH) || list_id->type_list.type_cnt != 1
-      || !eval_hash_comparable (compare))
+      || XASL_IS_FLAGED (subquery, XASL_NO_SUBQUERY_HASH) || list_id->type_list.type_cnt != 1)
     {
       return eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd, NULL);
     }

@@ -42,7 +42,6 @@ extern EVAL_LIST_HASH *eval_hash_create (THREAD_ENTRY *thread_p);
 extern void eval_hash_destroy (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash);
 extern void eval_hash_destroy_tree (THREAD_ENTRY *thread_p, xasl_node *xasl);
 
-extern bool eval_hash_comparable (const DOMAIN_COMPARE *compare);
 extern int eval_hash_for_lookup (THREAD_ENTRY *thread_p, xasl_node *subquery, qfile_list_id *list_id,
 				 const DOMAIN_COMPARE *compare, EVAL_LIST_HASH **hash);
 extern void eval_hash_count_read (xasl_node *subquery, INT64 rows);

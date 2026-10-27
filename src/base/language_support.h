@@ -123,6 +123,8 @@ typedef enum
 {
   LANG_FASTCMP_OTHER,
   LANG_FASTCMP_BYTE,		/* lang_fastcmp_byte */
+  LANG_FASTCMP_BYTE_CS,		/* lang_fastcmp_byte over the English case sensitive weights: a byte weighs itself, but
+				 * a space and NUL weigh 0 */
   LANG_FASTCMP_BINARY,		/* lang_fastcmp_binary */
   LANG_FASTCMP_KO,		/* lang_fastcmp_ko */
   LANG_FASTCMP_UTF8		/* lang_strcmp_utf8 */

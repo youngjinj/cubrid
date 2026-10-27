@@ -1745,6 +1745,10 @@ lang_get_coll_fastcmp (const LANG_COLLATION * lang_coll)
 {
   if (lang_coll->fastcmp == lang_fastcmp_byte)
     {
+      if (lang_coll->coll.weights == lang_Weight_EN_cs && lang_coll->coll.weights_ti == lang_Weight_EN_cs_ti)
+	{
+	  return LANG_FASTCMP_BYTE_CS;
+	}
       return LANG_FASTCMP_BYTE;
     }
   if (lang_coll->fastcmp == lang_fastcmp_binary)

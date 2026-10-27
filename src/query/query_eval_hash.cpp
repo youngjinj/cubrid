@@ -57,6 +57,8 @@ struct eval_list_hash
   bool unusable;		/* the lookups read the list: a value the table cannot take, or hashing turned off */
   bool has_null;		/* the list holds a NULL */
   const DOMAIN_COMPARE *compare;	/* the comparison the table was built for */
+  const LANG_COLLATION *lang_coll;	/* its collation if it compares strings, looked up once */
+  LANG_FASTCMP fastcmp;		/* lang_coll's compare function */
   HASH_LIST_SCAN hash_scan;	/* the table; HASH_METH_NOT_USE: none */
   QFILE_LIST_SCAN_ID list_scan;	/* open while the table is: the table is built over it and reads tuples through it */
   QFILE_TUPLE_RECORD tuple_record;	/* the tuple the last eval_hash_next found */
@@ -64,10 +66,12 @@ struct eval_list_hash
 };
 
 static unsigned int eval_hash_bytes (const void *bytes, size_t size);
-static unsigned int eval_hash_string (const LANG_COLLATION *lang_coll, const unsigned char *str, int size);
+static unsigned int eval_hash_string (const LANG_COLLATION *lang_coll, LANG_FASTCMP fastcmp, const unsigned char *str,
+				      int size);
 static bool eval_hash_type (DB_TYPE type);
-static bool eval_hash_value (const DOMAIN_COMPARE *compare, const DB_VALUE *value, unsigned int *hash_key);
-static bool eval_hash_key (const DOMAIN_COMPARE *compare, int side, const DB_VALUE *value, unsigned int *hash_key);
+static bool eval_hash_comparable (const DOMAIN_COMPARE *compare);
+static bool eval_hash_value (const EVAL_LIST_HASH *hash, const DB_VALUE *value, unsigned int *hash_key);
+static bool eval_hash_key (const EVAL_LIST_HASH *hash, int side, const DB_VALUE *value, unsigned int *hash_key);
 static int eval_hash_build (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash, QFILE_LIST_ID *list_id,
 			    const DOMAIN_COMPARE *compare, HASH_METHOD method);
 static void eval_hash_clear (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash);
@@ -97,15 +101,72 @@ eval_hash_bytes (const void *bytes, size_t size)
   return hash_key;
 }
 
+/* 8 bytes a step as FxHash steps (rotate, xor, multiply), then MurmurHash3's fmix64: a table takes the key's low bits */
+static const UINT64 EVAL_HASH_WORD_PRIME = 0x517cc1b727220a95ULL;
+
+/* the word with each byte that is NUL made a space */
+static UINT64
+eval_hash_nul_as_space (UINT64 word)
+{
+  const UINT64 low7 = 0x7f7f7f7f7f7f7f7fULL;
+  /* 0x80 in exactly the bytes that are 0 */
+  const UINT64 nul = ~ (((word & low7) + low7) | word | low7);
+  return word | ((nul >> 7) * ' ');
+}
+
+/* the bytes of a string a word at a time, without its trailing NULs. byte_cs (LANG_FASTCMP_BYTE_CS): a NUL hashes as a
+ * space, both weighing 0, and trailing spaces are left out too */
+static unsigned int
+eval_hash_words (const unsigned char *str, int size, bool byte_cs)
+{
+  while (size > 0 && (str[size - 1] == 0 || (byte_cs && str[size - 1] == ' ')))
+    {
+      size--;
+    }
+  UINT64 hash_key = (UINT64) size;
+  UINT64 word;
+  int i = 0;
+  for (; i + 8 <= size; i += 8)
+    {
+      memcpy (&word, str + i, sizeof (word));
+      if (byte_cs)
+	{
+	  word = eval_hash_nul_as_space (word);
+	}
+      hash_key = (((hash_key << 5) | (hash_key >> 59)) ^ word) * EVAL_HASH_WORD_PRIME;
+    }
+  if (i < size)
+    {
+      /* padded with NULs: the size hashed tells them from the string's own */
+      unsigned char tail[sizeof (word)] = { 0 };
+      for (int j = 0; i + j < size; j++)
+	{
+	  tail[j] = (byte_cs && str[i + j] == 0) ? ' ' : str[i + j];
+	}
+      memcpy (&word, tail, sizeof (word));
+      hash_key = (((hash_key << 5) | (hash_key >> 59)) ^ word) * EVAL_HASH_WORD_PRIME;
+    }
+  hash_key ^= hash_key >> 33;
+  hash_key *= 0xff51afd7ed558ccdULL;
+  hash_key ^= hash_key >> 33;
+  hash_key *= 0xc4ceb9fe1a85ec53ULL;
+  hash_key ^= hash_key >> 33;
+  return (unsigned int) hash_key;
+}
+
 /* the weights the collation's compare function (lang_get_coll_fastcmp) compares the string by, from its start, a space
  * weighing 0. Trailing weights 0 are left out: a compare function ignores them or tells the strings apart by them,
  * which the caller's comparison does again */
 static unsigned int
-eval_hash_string (const LANG_COLLATION *lang_coll, const unsigned char *str, int size)
+eval_hash_string (const LANG_COLLATION *lang_coll, LANG_FASTCMP fastcmp, const unsigned char *str, int size)
 {
-  const LANG_FASTCMP fastcmp = lang_get_coll_fastcmp (lang_coll);
   const unsigned int *weights = lang_coll->built_in ? lang_coll->coll.weights_ti : lang_coll->coll.weights;
   unsigned int hash_key = EVAL_HASH_FNV_OFFSET;
+  if (fastcmp == LANG_FASTCMP_BYTE_CS || fastcmp == LANG_FASTCMP_BINARY)
+    {
+      /* a weight is the byte itself, but NUL's and a space's (BYTE_CS): the bytes, 8 at a time */
+      return eval_hash_words (str, size, fastcmp == LANG_FASTCMP_BYTE_CS);
+    }
   if (fastcmp == LANG_FASTCMP_BYTE)
     {
       /* a loop of their own: the loop below hashed 200-byte strings about 1.5 times slower. weights_ti weighs a space
@@ -141,9 +202,9 @@ eval_hash_string (const LANG_COLLATION *lang_coll, const unsigned char *str, int
 	      str++;
 	    }
 	  break;
-	case LANG_FASTCMP_UTF8:
+	default:
 	{
-	  /* a code point past the weights weighs itself */
+	  /* LANG_FASTCMP_UTF8: a code point past the weights weighs itself */
 	  unsigned char *next;
 	  weight = intl_utf8_to_cp (str, (int) (end - str), &next);
 	  str = next;
@@ -153,10 +214,6 @@ eval_hash_string (const LANG_COLLATION *lang_coll, const unsigned char *str, int
 	    }
 	  break;
 	}
-	default:
-	  /* LANG_FASTCMP_BINARY: the byte */
-	  str++;
-	  break;
 	}
       if (weight == 0)
 	{
@@ -201,7 +258,7 @@ eval_hash_type (DB_TYPE type)
  *			     compares them as they are or converts them once each, without a failure resolved in
  *			     advance or a codeset brought to an ENUM's, and compares strings in a collation the hash takes
  */
-bool
+static bool
 eval_hash_comparable (const DOMAIN_COMPARE *compare)
 {
   return (compare->method == DOMAIN_COMPARE_DIRECT || compare->method == DOMAIN_COMPARE_CONVERT)
@@ -218,8 +275,9 @@ eval_hash_comparable (const DOMAIN_COMPARE *compare)
  *   return: false if the value has no such hash
  */
 static bool
-eval_hash_value (const DOMAIN_COMPARE *compare, const DB_VALUE *value, unsigned int *hash_key)
+eval_hash_value (const EVAL_LIST_HASH *hash, const DB_VALUE *value, unsigned int *hash_key)
 {
+  const DOMAIN_COMPARE *compare = hash->compare;
   const DB_TYPE type = DB_VALUE_DOMAIN_TYPE (value);
   if (type != compare->cmp->id && ! (TP_IS_CHAR_TYPE (type) && TP_IS_CHAR_TYPE (compare->cmp->id)))
     {
@@ -232,12 +290,11 @@ eval_hash_value (const DOMAIN_COMPARE *compare, const DB_VALUE *value, unsigned 
     {
       /* the comparison's collation, not the value's (eval_hash_comparable). The collations' hash functions
        * (lang_mht2str_*) tell apart strings their comparison finds equal */
-      const LANG_COLLATION *lang_coll = lang_get_collation (compare->collation);
-      if (db_get_string_codeset (value) != lang_coll->codeset)
+      if (db_get_string_codeset (value) != hash->lang_coll->codeset)
 	{
 	  return false;
 	}
-      *hash_key = eval_hash_string (lang_coll, (const unsigned char *) db_get_string (value),
+      *hash_key = eval_hash_string (hash->lang_coll, hash->fastcmp, (const unsigned char *) db_get_string (value),
 				    db_get_string_size (value));
       return true;
     }
@@ -287,17 +344,18 @@ eval_hash_value (const DOMAIN_COMPARE *compare, const DB_VALUE *value, unsigned 
  *   side(in): 0 the row's item, 1 a list value
  */
 static bool
-eval_hash_key (const DOMAIN_COMPARE *compare, int side, const DB_VALUE *value, unsigned int *hash_key)
+eval_hash_key (const EVAL_LIST_HASH *hash, int side, const DB_VALUE *value, unsigned int *hash_key)
 {
+  const DOMAIN_COMPARE *compare = hash->compare;
   if (compare->conv[side] == NULL)
     {
-      return eval_hash_value (compare, value, hash_key);
+      return eval_hash_value (hash, value, hash_key);
     }
   DB_VALUE converted;
   bool hashed = false;
   if (tp_value_convert (compare->conv[side], compare->target[side], value, &converted) == DOMAIN_COMPATIBLE)
     {
-      hashed = eval_hash_value (compare, &converted, hash_key);
+      hashed = eval_hash_value (hash, &converted, hash_key);
     }
   pr_clear_value (&converted);
   return hashed;
@@ -384,6 +442,13 @@ eval_hash_build (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash, QFILE_LIST_ID *li
       return error;
     }
   hash->compare = compare;
+  hash->lang_coll = NULL;
+  hash->fastcmp = LANG_FASTCMP_OTHER;
+  if (TP_IS_CHAR_TYPE (compare->cmp->id))
+    {
+      hash->lang_coll = lang_get_collation (compare->collation);
+      hash->fastcmp = lang_get_coll_fastcmp (hash->lang_coll);
+    }
   qfile_slot_set_layout (&hash->tuple_record, &hash->list_scan.list_id.type_list);
 
   while ((qp_scan = qfile_scan_list_next (thread_p, &hash->list_scan, &tuple_record, PEEK)) == S_SUCCESS)
@@ -398,7 +463,7 @@ eval_hash_build (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash, QFILE_LIST_ID *li
 	  hash->has_null = true;
 	  continue;
 	}
-      hashed = eval_hash_key (compare, 1, &value, &hash_key);
+      hashed = eval_hash_key (hash, 1, &value, &hash_key);
       /* read in place, but a compressed string is decompressed into its own buffer */
       pr_clear_value (&value);
       if (!hashed)
@@ -446,7 +511,7 @@ eval_hash_clear (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash)
  * eval_hash_for_lookup () - the hash that answers a lookup of the subquery's list
  *   return: error code
  *   subquery(in): the subquery whose list list_id is; it owns the hash
- *   compare(in): the lookup's comparison (eval_hash_comparable)
+ *   compare(in): the lookup's comparison; the table is built only for one eval_hash_comparable takes
  *   hash(out): the hash with its table, or NULL: the caller reads the list
  */
 int
@@ -491,6 +556,11 @@ eval_hash_for_lookup (THREAD_ENTRY *thread_p, xasl_node *subquery, QFILE_LIST_ID
 	  build_rows = MAX (1, rows_per_page / EVAL_HASH_FILE_ROWS_PER_READ) * list_id->tuple_cnt;
 	}
       if (list_hash->rows_read < build_rows)
+	{
+	  return NO_ERROR;
+	}
+      /* checked here, once a table would be built, rather than at each lookup */
+      if (!eval_hash_comparable (compare))
 	{
 	  return NO_ERROR;
 	}
@@ -551,7 +621,7 @@ eval_hash_start (EVAL_LIST_HASH *hash, const DB_VALUE *item)
 {
   unsigned int hash_key;
 
-  if (!eval_hash_key (hash->compare, 0, item, &hash_key))
+  if (!eval_hash_key (hash, 0, item, &hash_key))
     {
       return false;
     }
