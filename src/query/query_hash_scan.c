@@ -54,6 +54,9 @@
 #include "db_date.h"
 #include "thread_compat.hpp"
 #include "oid.h"
+#include "intl_support.h"
+#include "language_support.h"
+#include "numeric_opfunc.h"
 // XXX: SHOULD BE THE LAST INCLUDE HEADER
 #include "memory_wrapper.hpp"
 
@@ -282,6 +285,258 @@ qdata_free_hscan_key (cubthread::entry * thread_p, HASH_SCAN_KEY * key, int val_
   db_private_free (thread_p, key);
 }
 
+/* FNV-1a */
+static const unsigned int QDATA_HASH_FNV_OFFSET = 2166136261u;
+static const unsigned int QDATA_HASH_FNV_PRIME = 16777619u;
+
+/* 8 bytes a step: see qdata_hash_words */
+static const UINT64 QDATA_HASH_WORD_PRIME = 0x517cc1b727220a95ULL;
+
+/* the word with each byte that is NUL made a space */
+static UINT64
+qdata_hash_nul_as_space (UINT64 word)
+{
+  const UINT64 low7 = 0x7f7f7f7f7f7f7f7fULL;
+  /* 0x80 in exactly the bytes that are 0 */
+  const UINT64 nul = ~(((word & low7) + low7) | word | low7);
+  return word | ((nul >> 7) * ' ');
+}
+
+/* the bytes of a string a word at a time, without its trailing NULs: FxHash steps (rotate, xor, multiply), then
+ * MurmurHash3's fmix64, as a table takes the key's low bits. byte_cs (LANG_FASTCMP_BYTE_CS): a NUL hashes as a
+ * space, both weighing 0, and trailing spaces are left out too */
+static unsigned int
+qdata_hash_words (const unsigned char *str, int size, bool byte_cs)
+{
+  while (size > 0 && (str[size - 1] == 0 || (byte_cs && str[size - 1] == ' ')))
+    {
+      size--;
+    }
+  UINT64 hash_key = (UINT64) size;
+  UINT64 word;
+  int i = 0;
+  for (; i + 8 <= size; i += 8)
+    {
+      memcpy (&word, str + i, sizeof (word));
+      if (byte_cs)
+	{
+	  word = qdata_hash_nul_as_space (word);
+	}
+      hash_key = (((hash_key << 5) | (hash_key >> 59)) ^ word) * QDATA_HASH_WORD_PRIME;
+    }
+  if (i < size)
+    {
+      /* padded with NULs: the size hashed tells them from the string's own */
+      unsigned char tail[sizeof (word)] = { 0 };
+      for (int j = 0; i + j < size; j++)
+	{
+	  tail[j] = (byte_cs && str[i + j] == 0) ? ' ' : str[i + j];
+	}
+      memcpy (&word, tail, sizeof (word));
+      hash_key = (((hash_key << 5) | (hash_key >> 59)) ^ word) * QDATA_HASH_WORD_PRIME;
+    }
+  hash_key ^= hash_key >> 33;
+  hash_key *= 0xff51afd7ed558ccdULL;
+  hash_key ^= hash_key >> 33;
+  hash_key *= 0xc4ceb9fe1a85ec53ULL;
+  hash_key ^= hash_key >> 33;
+  return (unsigned int) hash_key;
+}
+
+/*
+ * qdata_hash_string () - the hash of a string as its collation's compare function weighs it: strings it finds equal
+ *			  hash alike, which the collations' own hashes (lang_mht2str_*) do not
+ *   lang_coll(in): the collation
+ *   fastcmp(in): its compare function (lang_get_coll_fastcmp), not LANG_FASTCMP_OTHER
+ *
+ * The weights the collation's compare function compares the string by, from its start, a space weighing 0. Trailing
+ * weights 0 are left out: a compare function ignores them or tells the strings apart by them, which the caller's
+ * comparison does again.
+ */
+unsigned int
+qdata_hash_string (const LANG_COLLATION * lang_coll, LANG_FASTCMP fastcmp, const unsigned char *str, int size)
+{
+  const unsigned int *weights = lang_coll->built_in ? lang_coll->coll.weights_ti : lang_coll->coll.weights;
+  unsigned int hash_key = QDATA_HASH_FNV_OFFSET;
+  if (fastcmp == LANG_FASTCMP_UTF8_CONTR)
+    {
+      return lang_hash_utf8_w_contr (lang_coll, str, size);
+    }
+  if (fastcmp == LANG_FASTCMP_UTF8_UCA)
+    {
+      return lang_hash_utf8_uca (lang_coll, str, size);
+    }
+  if (fastcmp == LANG_FASTCMP_BYTE_CS || fastcmp == LANG_FASTCMP_BINARY)
+    {
+      /* a weight is the byte itself, but NUL's and a space's (BYTE_CS): the bytes, 8 at a time */
+      return qdata_hash_words (str, size, fastcmp == LANG_FASTCMP_BYTE_CS);
+    }
+  if (fastcmp == LANG_FASTCMP_BYTE)
+    {
+      /* a loop of their own: the loop below hashed 200-byte strings about 1.5 times slower. weights_ti weighs a space
+       * 0 */
+      while (size > 0 && lang_coll->coll.weights_ti[str[size - 1]] == 0)
+	{
+	  size--;
+	}
+      for (int i = 0; i < size; i++)
+	{
+	  hash_key = (hash_key ^ lang_coll->coll.weights_ti[str[i]]) * QDATA_HASH_FNV_PRIME;
+	}
+      return hash_key;
+    }
+
+  const unsigned char *end = str + size;
+  int zeros = 0;		/* weights 0 not hashed yet */
+  while (str < end)
+    {
+      unsigned int weight = *str;
+      switch (fastcmp)
+	{
+	case LANG_FASTCMP_KO:
+	  /* the byte; an EUC space (0xA1 0xA1) weighs 0 as well */
+	  str++;
+	  if (weight == ' ')
+	    {
+	      weight = 0;
+	    }
+	  else if (weight == 0xa1 && str < end && *str == 0xa1)
+	    {
+	      weight = 0;
+	      str++;
+	    }
+	  break;
+	default:
+	  {
+	    /* LANG_FASTCMP_UTF8: a code point past the weights weighs itself */
+	    unsigned char *next;
+	    weight = intl_utf8_to_cp (str, (int) (end - str), &next);
+	    str = next;
+	    if (weight < (unsigned int) lang_coll->coll.w_count)
+	      {
+		weight = (weight == ' ') ? 0 : weights[weight];
+	      }
+	    break;
+	  }
+	}
+      if (weight == 0)
+	{
+	  zeros++;
+	  continue;
+	}
+      for (; zeros > 0; zeros--)
+	{
+	  hash_key *= QDATA_HASH_FNV_PRIME;
+	}
+      hash_key = (hash_key ^ weight) * QDATA_HASH_FNV_PRIME;
+    }
+  return hash_key;
+}
+
+/* FNV-1a over bytes */
+static unsigned int
+qdata_hash_bytes (const void *bytes, size_t size)
+{
+  const unsigned char *p = (const unsigned char *) bytes;
+  unsigned int hash_key = QDATA_HASH_FNV_OFFSET;
+  size_t i;
+
+  for (i = 0; i < size; i++)
+    {
+      hash_key = (hash_key ^ p[i]) * QDATA_HASH_FNV_PRIME;
+    }
+  return hash_key;
+}
+
+/*
+ * qdata_hash_number () - the hash of a NUMERIC, FLOAT or DOUBLE value: values their comparison finds equal hash alike,
+ *			  which mht_get_hash_number does not do for 1.0 and 1.00, or for 0.0 and -0.0
+ *   returns: false if the value is of another type or has no such hash: a NaN compares equal to every value (MR_CMP),
+ *	      and a NUMERIC of negative scale is left to mht_get_hash_number
+ *   value(in): a value, not NULL
+ *   hash_key(out): its hash
+ */
+bool
+qdata_hash_number (const DB_VALUE * value, unsigned int *hash_key)
+{
+  const DB_TYPE type = DB_VALUE_DOMAIN_TYPE (value);
+
+  switch (type)
+    {
+    case DB_TYPE_NUMERIC:
+      {
+	/* the digits without trailing zeros. A float NUMERIC keeps its scale in the value, not in its domain */
+	uint8_t digits[DB_NUMERIC_BUF_SIZE];
+	int precision, scale;
+
+	db_get_numeric_precision_and_scale (value, &precision, &scale, NULL);
+	if (scale < 0)
+	  {
+	    return false;
+	  }
+	if (scale == 0)
+	  {
+	    *hash_key = qdata_hash_bytes (db_locate_numeric (value), DB_NUMERIC_BUF_SIZE);
+	    return true;
+	  }
+	float_numeric_normalize_for_hash ((DB_C_NUMERIC) db_locate_numeric (value), digits, precision, scale);
+	*hash_key = qdata_hash_bytes (digits, DB_NUMERIC_BUF_SIZE);
+	return true;
+      }
+    case DB_TYPE_DOUBLE:
+    case DB_TYPE_FLOAT:
+      {
+	double d = (type == DB_TYPE_DOUBLE) ? db_get_double (value) : db_get_float (value);
+
+	if (d != d)
+	  {
+	    return false;
+	  }
+	/* -0.0 compares equal to 0.0 */
+	d = (d == 0) ? 0 : d;
+	*hash_key = qdata_hash_bytes (&d, sizeof (d));
+	return true;
+      }
+    default:
+      return false;
+    }
+}
+
+/*
+ * qdata_hash_scan_value () - the hash of a key value: values the key comparison finds equal hash alike. A NUMERIC,
+ *			      FLOAT or DOUBLE is hashed by qdata_hash_number, a string in a collation qdata_hash_string
+ *			      takes by it; a hash partition keeps placing rows by mht_get_hash_number, which tells apart
+ *			      some values their comparison finds equal
+ *   returns: hash value
+ *   ht_size(in): hash table size (in buckets)
+ *   value(in): key value
+ */
+static unsigned int
+qdata_hash_scan_value (unsigned int ht_size, const DB_VALUE * value)
+{
+  unsigned int hash_key;
+
+  if (DB_IS_NULL (value))
+    {
+      return mht_get_hash_number (ht_size, value);
+    }
+  if (qdata_hash_number (value, &hash_key))
+    {
+      return hash_key % ht_size;
+    }
+  if (TP_IS_CHAR_TYPE (DB_VALUE_DOMAIN_TYPE (value)))
+    {
+      const LANG_COLLATION *lang_coll = lang_get_collation (db_get_string_collation (value));
+      const LANG_FASTCMP fastcmp = lang_get_coll_fastcmp (lang_coll);
+      if (fastcmp != LANG_FASTCMP_OTHER && db_get_string_codeset (value) == lang_coll->codeset)
+	{
+	  return qdata_hash_string (lang_coll, fastcmp, (const unsigned char *) db_get_string (value),
+				    db_get_string_size (value)) % ht_size;
+	}
+    }
+  return mht_get_hash_number (ht_size, value);
+}
+
 /*
  * qdata_hash_scan_key () - compute hash of aggregate key
  *   returns: hash value
@@ -299,7 +554,7 @@ qdata_hash_scan_key (const void *key, unsigned int ht_size, HASH_METHOD hash_met
   for (i = 0; i < ckey->val_count; i++)
     {
       hash_val = ROTL32 (hash_val, 13);
-      tmp_hash_val = mht_get_hash_number (ht_size, ckey->values[i]);
+      tmp_hash_val = qdata_hash_scan_value (ht_size, ckey->values[i]);
       hash_val ^= tmp_hash_val;
       if (hash_val == 0)
 	{

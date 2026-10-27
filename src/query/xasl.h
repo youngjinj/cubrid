@@ -1271,7 +1271,7 @@ struct xasl_node
   int executed_parallelism;	/* parallelism of the query */
   memoize::storage *memoize_storage;
   // *INDENT-ON*
-  struct eval_list_hash *list_hash;	/* the hash over this subquery's list for its IN lookups (query_eval_hash.cpp) */
+  struct eval_hash_lookup *hash_lookup;	/* the hash over this subquery's list for its IN lookups (query_eval_hash.cpp) */
 #endif				/* defined (SERVER_MODE) || defined (SA_MODE) */
 };
 

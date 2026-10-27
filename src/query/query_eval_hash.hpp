@@ -36,18 +36,18 @@ struct DOMAIN_COMPARE;
 struct qfile_list_id;
 struct xasl_node;
 
-typedef struct eval_list_hash EVAL_LIST_HASH;
+typedef struct eval_hash_lookup EVAL_HASH_LOOKUP;
 
-extern EVAL_LIST_HASH *eval_hash_create (THREAD_ENTRY *thread_p);
-extern void eval_hash_destroy (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash);
+extern EVAL_HASH_LOOKUP *eval_hash_create (THREAD_ENTRY *thread_p);
+extern void eval_hash_destroy (THREAD_ENTRY *thread_p, EVAL_HASH_LOOKUP *hash);
 extern void eval_hash_destroy_tree (THREAD_ENTRY *thread_p, xasl_node *xasl);
 
 extern int eval_hash_for_lookup (THREAD_ENTRY *thread_p, xasl_node *subquery, qfile_list_id *list_id,
-				 const DOMAIN_COMPARE *compare, EVAL_LIST_HASH **hash);
+				 const DOMAIN_COMPARE *compare, EVAL_HASH_LOOKUP **hash);
 extern void eval_hash_count_read (xasl_node *subquery, INT64 rows);
-extern bool eval_hash_has_null (const EVAL_LIST_HASH *hash);
-extern bool eval_hash_start (EVAL_LIST_HASH *hash, const DB_VALUE *item);
-extern SCAN_CODE eval_hash_next (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash, DB_VALUE **value);
-extern void eval_hash_end (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash);
+extern bool eval_hash_has_null (const EVAL_HASH_LOOKUP *hash);
+extern bool eval_hash_start (EVAL_HASH_LOOKUP *hash, const DB_VALUE *item);
+extern SCAN_CODE eval_hash_next (THREAD_ENTRY *thread_p, EVAL_HASH_LOOKUP *hash, DB_VALUE **value);
+extern void eval_hash_end (THREAD_ENTRY *thread_p, EVAL_HASH_LOOKUP *hash);
 
 #endif /* _QUERY_EVAL_HASH_HPP_ */

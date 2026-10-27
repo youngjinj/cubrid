@@ -1180,7 +1180,7 @@ static DB_LOGICAL
 eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id, REL_OP rel_operator,
 		       const DOMAIN_COMPARE * compare, const val_descr * vd, XASL_NODE * subquery)
 {
-  EVAL_LIST_HASH *hash;
+  EVAL_HASH_LOOKUP *hash;
   DB_VALUE *list_val;
   SCAN_CODE qp_scan;
   DB_LOGICAL res, t_res;

@@ -127,7 +127,9 @@ typedef enum
 				 * a space and NUL weigh 0 */
   LANG_FASTCMP_BINARY,		/* lang_fastcmp_binary */
   LANG_FASTCMP_KO,		/* lang_fastcmp_ko */
-  LANG_FASTCMP_UTF8		/* lang_strcmp_utf8 */
+  LANG_FASTCMP_UTF8,		/* lang_strcmp_utf8 */
+  LANG_FASTCMP_UTF8_CONTR,	/* lang_strcmp_utf8_w_contr */
+  LANG_FASTCMP_UTF8_UCA		/* lang_strcmp_utf8_uca */
 } LANG_FASTCMP;
 
 #define LANG_GET_BINARY_COLLATION(c) (((c) == INTL_CODESET_UTF8) \
@@ -337,6 +339,9 @@ extern "C"
   extern bool lang_is_coll_name_allowed (const char *name);
   extern LANG_COLLATION *lang_get_collation (const int coll_id);
   extern LANG_FASTCMP lang_get_coll_fastcmp (const LANG_COLLATION * lang_coll);
+  extern unsigned int lang_hash_utf8_w_contr (const LANG_COLLATION * lang_coll, const unsigned char *str,
+					      const int size);
+  extern unsigned int lang_hash_utf8_uca (const LANG_COLLATION * lang_coll, const unsigned char *str, const int size);
   extern const char *lang_get_collation_name (const int coll_id);
   extern LANG_COLLATION *lang_get_collation_by_name (const char *coll_name);
   extern int lang_collation_count (void);

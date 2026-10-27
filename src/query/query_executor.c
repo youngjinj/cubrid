@@ -2426,10 +2426,10 @@ qexec_clear_xasl (THREAD_ENTRY * thread_p, xasl_node * xasl, bool is_final, bool
     {
       clear_memoize_storage (thread_p, xasl);
     }
-  if (xasl->list_hash != NULL)
+  if (xasl->hash_lookup != NULL)
     {
-      eval_hash_destroy (thread_p, xasl->list_hash);
-      xasl->list_hash = NULL;
+      eval_hash_destroy (thread_p, xasl->hash_lookup);
+      xasl->hash_lookup = NULL;
     }
   xasl->executed_parallelism = 0;
 

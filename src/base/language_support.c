@@ -1763,6 +1763,14 @@ lang_get_coll_fastcmp (const LANG_COLLATION * lang_coll)
     {
       return LANG_FASTCMP_UTF8;
     }
+  if (lang_coll->fastcmp == lang_strcmp_utf8_w_contr)
+    {
+      return LANG_FASTCMP_UTF8_CONTR;
+    }
+  if (lang_coll->fastcmp == lang_strcmp_utf8_uca)
+    {
+      return LANG_FASTCMP_UTF8_UCA;
+    }
   return LANG_FASTCMP_OTHER;
 }
 
@@ -4146,6 +4154,120 @@ lang_mht2str_utf8_exp (const LANG_COLLATION * lang_coll, const unsigned char *st
     }
 
   return pseudo_key;
+}
+
+/* FNV-1a, for the hashes below */
+static const unsigned int LANG_HASH_FNV_OFFSET = 2166136261u;
+static const unsigned int LANG_HASH_FNV_PRIME = 16777619u;
+
+/*
+ * lang_hash_utf8_w_contr() - the hash of a UTF-8 string as lang_strcmp_utf8_w_contr compares it: strings it finds
+ *			      equal hash alike
+ *   return: hash value
+ *   lang_coll(in) : collation with contractions (LANG_FASTCMP_UTF8_CONTR)
+ *   str(in):
+ *   size(in):
+ *
+ * The weights of the code points and contractions from the string's start. Trailing weights 0 are left out: the
+ * compare function ignores them along with trailing spaces, and tells the strings apart otherwise.
+ * lang_mht2str_utf8 hashes code points apart from the contractions they make, so it is not used here.
+ */
+unsigned int
+lang_hash_utf8_w_contr (const LANG_COLLATION * lang_coll, const unsigned char *str, const int size)
+{
+  const COLL_DATA *coll = &(lang_coll->coll);
+  const unsigned char *str_end = str + size;
+  unsigned char *str_next;
+  unsigned int hash_key = LANG_HASH_FNV_OFFSET;
+  unsigned int cp, w;
+  int zeros = 0;		/* weights 0 not hashed yet */
+
+  while (str < str_end)
+    {
+      cp = intl_utf8_to_cp (str, CAST_BUFLEN (str_end - str), &str_next);
+      w = cp;
+      if (cp < (unsigned int) coll->w_count)
+	{
+	  COLL_CONTRACTION *contr = NULL;
+
+	  if (str_end - str >= coll->contr_min_size && cp >= coll->cp_first_contr_offset
+	      && cp < (coll->cp_first_contr_offset + coll->cp_first_contr_count)
+	      && ((contr = lang_get_contr_for_string (coll, str, CAST_BUFLEN (str_end - str), cp)) != NULL))
+	    {
+	      w = contr->wv;
+	      str_next = (unsigned char *) str + contr->size;
+	    }
+	  else
+	    {
+	      w = coll->weights[cp];
+	    }
+	}
+      str = str_next;
+
+      if (w == 0)
+	{
+	  zeros++;
+	  continue;
+	}
+      for (; zeros > 0; zeros--)
+	{
+	  hash_key *= LANG_HASH_FNV_PRIME;
+	}
+      hash_key = (hash_key ^ w) * LANG_HASH_FNV_PRIME;
+    }
+
+  return hash_key;
+}
+
+/*
+ * lang_hash_utf8_uca() - the hash of a UTF-8 string as lang_strcmp_utf8_uca compares it: strings it finds equal hash
+ *			  alike
+ *   return: hash value
+ *   lang_coll(in) : collation with expansions (LANG_FASTCMP_UTF8_UCA)
+ *   str(in):
+ *   size(in):
+ *
+ * The level 1 weights, which the compare function compares first (lang_strmatch_utf8_uca_w_level). As it does, a
+ * weight 0 is skipped unless its character is a space, and trailing weights 0 are left out. lang_mht2str_utf8_exp
+ * hashes every weight 0 and every level, so it is not used here.
+ */
+unsigned int
+lang_hash_utf8_uca (const LANG_COLLATION * lang_coll, const unsigned char *str, const int size)
+{
+  const COLL_DATA *coll_data = &(lang_coll->coll);
+  const unsigned char *str_end = str + size;
+  unsigned char *str_next;
+  UCA_L13_W *uca_w_l13 = NULL;
+  unsigned int cp_contr;
+  unsigned int hash_key = LANG_HASH_FNV_OFFSET;
+  unsigned int w;
+  int num_ce, i;
+  int zeros = 0;		/* weights 0 of spaces not hashed yet */
+
+  while (str < str_end)
+    {
+      lang_get_uca_w_l13 (coll_data, true, str, CAST_BUFLEN (str_end - str), &uca_w_l13, &num_ce, &str_next, &cp_contr);
+      for (i = 0; i < num_ce; i++)
+	{
+	  w = UCA_GET_L1_W (uca_w_l13[i]);
+	  if (w == 0)
+	    {
+	      if (*str == ASCII_SPACE)
+		{
+		  zeros++;
+		}
+	      continue;
+	    }
+	  for (; zeros > 0; zeros--)
+	    {
+	      hash_key *= LANG_HASH_FNV_PRIME;
+	    }
+	  hash_key = (hash_key ^ w) * LANG_HASH_FNV_PRIME;
+	}
+      str = str_next;
+    }
+
+  return hash_key;
 }
 
 
