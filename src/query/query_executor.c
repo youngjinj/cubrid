@@ -16552,7 +16552,6 @@ qexec_execute_mainblock (THREAD_ENTRY * thread_p, xasl_node * xasl, xasl_state *
       old_regu_ioreads = perfmon_get_from_statistic (thread_p, PSTAT_REGU_NUM_IOREADS);
     }
 
-  xasl->execution_no++;
   error = qexec_execute_mainblock_internal (thread_p, xasl, xstate, p_class_instance_lock_info);
 
   if (on_trace)

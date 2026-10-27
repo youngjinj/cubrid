@@ -1736,15 +1736,30 @@ lang_get_collation (const int coll_id)
 }
 
 /*
- * lang_is_coll_fastcmp_byte - the collation compares strings by lang_fastcmp_byte: byte by byte, by the weights of
- *			       coll.weights_ti apart from a space, which weighs 0 there
- *   return: true if so
+ * lang_get_coll_fastcmp - which of the compare functions below the collation compares strings by
+ *   return: LANG_FASTCMP_OTHER if none of them
  *   lang_coll(in): collation
  */
-bool
-lang_is_coll_fastcmp_byte (const LANG_COLLATION * lang_coll)
+LANG_FASTCMP
+lang_get_coll_fastcmp (const LANG_COLLATION * lang_coll)
 {
-  return lang_coll->fastcmp == lang_fastcmp_byte;
+  if (lang_coll->fastcmp == lang_fastcmp_byte)
+    {
+      return LANG_FASTCMP_BYTE;
+    }
+  if (lang_coll->fastcmp == lang_fastcmp_binary)
+    {
+      return LANG_FASTCMP_BINARY;
+    }
+  if (lang_coll->fastcmp == lang_fastcmp_ko)
+    {
+      return LANG_FASTCMP_KO;
+    }
+  if (lang_coll->fastcmp == lang_strcmp_utf8)
+    {
+      return LANG_FASTCMP_UTF8;
+    }
+  return LANG_FASTCMP_OTHER;
 }
 
 

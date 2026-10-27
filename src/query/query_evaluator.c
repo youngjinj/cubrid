@@ -76,7 +76,8 @@ static DB_LOGICAL eval_all_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, DB_SE
 				 const EVAL_ELEMENTS * elements, const val_descr * vd);
 static int eval_item_card_set (THREAD_ENTRY * thread_p, DB_VALUE * item, DB_SET * set, REL_OP rel_operator);
 static DB_LOGICAL eval_some_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id,
-				       REL_OP rel_operator, const DOMAIN_COMPARE * compare, const val_descr * vd);
+				       REL_OP rel_operator, const DOMAIN_COMPARE * compare, const val_descr * vd,
+				       INT64 * rows);
 static DB_LOGICAL eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id,
 					 REL_OP rel_operator, const DOMAIN_COMPARE * compare, const val_descr * vd,
 					 XASL_NODE * subquery);
@@ -1073,6 +1074,7 @@ eval_item_card_set (THREAD_ENTRY * thread_p, DB_VALUE * item, DB_SET * set, REL_
  *   rel_operator(in): relational comparison operator
  *   compare(in): the comparison of the item with the list's column resolved for this execution
  *   vd(in): value descriptor of the term's execution
+ *   rows(out): the rows of the list read, or NULL
  *
  * Note: This routine tries to determine whether a specific relation
  *              as determined by the relational operator rel_operator holds between
@@ -1095,7 +1097,7 @@ eval_item_card_set (THREAD_ENTRY * thread_p, DB_VALUE * item, DB_SET * set, REL_
  */
 static DB_LOGICAL
 eval_some_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * list_id, REL_OP rel_operator,
-		     const DOMAIN_COMPARE * compare, const val_descr * vd)
+		     const DOMAIN_COMPARE * compare, const val_descr * vd, INT64 * rows)
 {
   DB_LOGICAL res, t_res;
   QFILE_LIST_SCAN_ID s_id;
@@ -1133,6 +1135,10 @@ eval_some_list_eval (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID * l
   res = V_FALSE;
   while ((qp_scan = qfile_scan_list_next (thread_p, &s_id, &tplrec, PEEK)) == S_SUCCESS)
     {
+      if (rows != NULL)
+	{
+	  (*rows)++;
+	}
       if (qfile_slot_read_column_value (&tplrec, 0, list_id->type_list.domp[0], &list_val, true, &is_null) != NO_ERROR)
 	{
 	  qfile_close_scan (thread_p, &s_id);
@@ -1179,11 +1185,13 @@ eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID *
   SCAN_CODE qp_scan;
   DB_LOGICAL res, t_res;
 
-  /* a subquery answered from the result cache does not execute, so its execution_no does not tell its lists apart */
-  if (rel_operator != R_EQ || subquery->sub_xasl_id != NULL || list_id->type_list.type_cnt != 1
+  /* a correlated subquery executes again for each outer row, so its list is seldom looked up twice. NO_SUBQUERY_HASH
+   * turns the hash off */
+  if (rel_operator != R_EQ || !XASL_IS_FLAGED (subquery, XASL_ZERO_CORR_LEVEL)
+      || XASL_IS_FLAGED (subquery, XASL_NO_SUBQUERY_HASH) || list_id->type_list.type_cnt != 1
       || !eval_hash_comparable (compare))
     {
-      return eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd);
+      return eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd, NULL);
     }
   if (eval_hash_for_lookup (thread_p, subquery, list_id, compare, &hash) != NO_ERROR)
     {
@@ -1191,7 +1199,13 @@ eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID *
     }
   if (hash == NULL || !eval_hash_start (hash, item))
     {
-      return eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd);
+      INT64 rows = 0;
+      res = eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd, &rows);
+      if (hash == NULL && res != V_ERROR)
+	{
+	  eval_hash_count_read (subquery, rows);
+	}
+      return res;
     }
 
   res = eval_hash_has_null (hash) ? V_UNKNOWN : V_FALSE;
@@ -1217,7 +1231,7 @@ eval_some_list_lookup (THREAD_ENTRY * thread_p, DB_VALUE * item, QFILE_LIST_ID *
   subquery->xasl_stats.hash_lookup_count++;
 #if !defined (NDEBUG)
   /* the hash answers as reading the list does */
-  assert (res == V_ERROR || res == eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd));
+  assert (res == V_ERROR || res == eval_some_list_eval (thread_p, item, list_id, rel_operator, compare, vd, NULL));
 #endif
   return res;
 }

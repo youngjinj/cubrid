@@ -17464,6 +17464,11 @@ pt_to_buildlist_proc (PARSER_CONTEXT * parser, PT_NODE * select_node, QO_PLAN * 
       XASL_SET_FLAG (xasl, XASL_NO_PARALLEL_SUBQUERY);
     }
 
+  if (select_node->info.query.q.select.hint & PT_HINT_NO_SUBQUERY_HASH)
+    {
+      XASL_SET_FLAG (xasl, XASL_NO_SUBQUERY_HASH);
+    }
+
   if (qo_plan == NULL || !pt_gen_optimized_plan (parser, select_node, qo_plan, xasl))
     {
       while (from)
@@ -17847,6 +17852,11 @@ pt_to_buildvalue_proc (PARSER_CONTEXT * parser, PT_NODE * select_node, QO_PLAN *
   if (select_node->info.query.q.select.hint & PT_HINT_NO_PARALLEL_SUBQUERY)
     {
       XASL_SET_FLAG (xasl, XASL_NO_PARALLEL_SUBQUERY);
+    }
+
+  if (select_node->info.query.q.select.hint & PT_HINT_NO_SUBQUERY_HASH)
+    {
+      XASL_SET_FLAG (xasl, XASL_NO_SUBQUERY_HASH);
     }
 
   if (!qo_plan || !pt_gen_optimized_plan (parser, select_node, qo_plan, xasl))

@@ -746,6 +746,7 @@ pt_get_hint (const char *text, PT_HINT hint_table[], PT_NODE * node)
 	    }
 	  break;
 	case PT_HINT_NO_SUBQUERY_CACHE:
+	case PT_HINT_NO_SUBQUERY_HASH:
 	  if (node->node_type == PT_SELECT)
 	    {
 	      node->info.query.q.select.hint = (PT_HINT_ENUM) (node->info.query.q.select.hint | hint_table[i].hint);

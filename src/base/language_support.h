@@ -118,6 +118,16 @@ enum
   LANG_COLL_BUILTIN_MAX = LANG_COLL_BINARY
 };
 
+/* the compare function of a collation (lang_get_coll_fastcmp) */
+typedef enum
+{
+  LANG_FASTCMP_OTHER,
+  LANG_FASTCMP_BYTE,		/* lang_fastcmp_byte */
+  LANG_FASTCMP_BINARY,		/* lang_fastcmp_binary */
+  LANG_FASTCMP_KO,		/* lang_fastcmp_ko */
+  LANG_FASTCMP_UTF8		/* lang_strcmp_utf8 */
+} LANG_FASTCMP;
+
 #define LANG_GET_BINARY_COLLATION(c) (((c) == INTL_CODESET_UTF8) \
   ? LANG_COLL_UTF8_BINARY :					 \
   (((c) == INTL_CODESET_KSC5601_EUC) ? LANG_COLL_EUCKR_BINARY :  \
@@ -324,7 +334,7 @@ extern "C"
   extern char lang_digit_fractional_symbol (const INTL_LANG lang_id);
   extern bool lang_is_coll_name_allowed (const char *name);
   extern LANG_COLLATION *lang_get_collation (const int coll_id);
-  extern bool lang_is_coll_fastcmp_byte (const LANG_COLLATION * lang_coll);
+  extern LANG_FASTCMP lang_get_coll_fastcmp (const LANG_COLLATION * lang_coll);
   extern const char *lang_get_collation_name (const int coll_id);
   extern LANG_COLLATION *lang_get_collation_by_name (const char *coll_name);
   extern int lang_collation_count (void);

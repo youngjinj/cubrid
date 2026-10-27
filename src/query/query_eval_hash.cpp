@@ -24,7 +24,7 @@
  * type its comparison compares it in, and only the list values of the same hash are given back, for the caller to
  * compare by that same comparison. A value the hash cannot take as its comparison compares it (a conversion that fails,
  * a NaN, a type or a collation left out) sends that lookup, or the whole execution, back to reading the list.
- * A subquery that executes again (a correlated one) builds its hash again.
+ * Only an uncorrelated subquery's list is hashed (eval_some_list_lookup); one that executes again builds its hash again.
  */
 
 #include "config.h"
@@ -53,9 +53,8 @@
 
 struct eval_list_hash
 {
-  unsigned int execution_no;	/* the subquery execution the fields below hold for */
-  int lookups;			/* lookups of that execution before the table was built */
-  bool unusable;		/* that execution reads its list: a value the table cannot take, or hashing turned off */
+  INT64 rows_read;		/* rows of the list the lookups without a table read (eval_hash_count_read) */
+  bool unusable;		/* the lookups read the list: a value the table cannot take, or hashing turned off */
   bool has_null;		/* the list holds a NULL */
   const DOMAIN_COMPARE *compare;	/* the comparison the table was built for */
   HASH_LIST_SCAN hash_scan;	/* the table; HASH_METH_NOT_USE: none */
@@ -65,7 +64,7 @@ struct eval_list_hash
 };
 
 static unsigned int eval_hash_bytes (const void *bytes, size_t size);
-static unsigned int eval_hash_weights (const unsigned int *weights, const unsigned char *str, int size);
+static unsigned int eval_hash_string (const LANG_COLLATION *lang_coll, const unsigned char *str, int size);
 static bool eval_hash_type (DB_TYPE type);
 static bool eval_hash_value (const DOMAIN_COMPARE *compare, const DB_VALUE *value, unsigned int *hash_key);
 static bool eval_hash_key (const DOMAIN_COMPARE *compare, int side, const DB_VALUE *value, unsigned int *hash_key);
@@ -74,8 +73,8 @@ static int eval_hash_build (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash, QFILE_
 static void eval_hash_clear (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash);
 
 /* building a hash file measured about 21 reads of its list with 2,000 INT rows a page of the list, and about 3 with 73
- * VARCHAR of 200 bytes: a wider row costs a read more. 64 builds at the 32nd and the 2nd lookup there, later and
- * earlier than measured; measure again if the cost of a hash file changes */
+ * VARCHAR of 200 bytes: a wider row costs a read more. 64 builds after 31 and 1 reads of the whole list there, later
+ * and earlier than measured; measure again if the cost of a hash file changes */
 static const int EVAL_HASH_FILE_ROWS_PER_READ = 64;
 
 /*
@@ -98,19 +97,77 @@ eval_hash_bytes (const void *bytes, size_t size)
   return hash_key;
 }
 
-/* the bytes' weights, as lang_fastcmp_byte compares them: a space and a NUL weigh 0, and trailing ones never tell two
- * equal strings apart */
+/* the weights the collation's compare function (lang_get_coll_fastcmp) compares the string by, from its start, a space
+ * weighing 0. Trailing weights 0 are left out: a compare function ignores them or tells the strings apart by them,
+ * which the caller's comparison does again */
 static unsigned int
-eval_hash_weights (const unsigned int *weights, const unsigned char *str, int size)
+eval_hash_string (const LANG_COLLATION *lang_coll, const unsigned char *str, int size)
 {
+  const LANG_FASTCMP fastcmp = lang_get_coll_fastcmp (lang_coll);
+  const unsigned int *weights = lang_coll->built_in ? lang_coll->coll.weights_ti : lang_coll->coll.weights;
   unsigned int hash_key = EVAL_HASH_FNV_OFFSET;
-  while (size > 0 && weights[str[size - 1]] == 0)
+  if (fastcmp == LANG_FASTCMP_BYTE)
     {
-      size--;
+      /* a loop of their own: the loop below hashed 200-byte strings about 1.5 times slower. weights_ti weighs a space
+       * 0 */
+      while (size > 0 && lang_coll->coll.weights_ti[str[size - 1]] == 0)
+	{
+	  size--;
+	}
+      for (int i = 0; i < size; i++)
+	{
+	  hash_key = (hash_key ^ lang_coll->coll.weights_ti[str[i]]) * EVAL_HASH_FNV_PRIME;
+	}
+      return hash_key;
     }
-  for (int i = 0; i < size; i++)
+
+  const unsigned char *end = str + size;
+  int zeros = 0;		/* weights 0 not hashed yet */
+  while (str < end)
     {
-      hash_key = (hash_key ^ weights[str[i]]) * EVAL_HASH_FNV_PRIME;
+      unsigned int weight = *str;
+      switch (fastcmp)
+	{
+	case LANG_FASTCMP_KO:
+	  /* the byte; an EUC space (0xA1 0xA1) weighs 0 as well */
+	  str++;
+	  if (weight == ' ')
+	    {
+	      weight = 0;
+	    }
+	  else if (weight == 0xa1 && str < end && *str == 0xa1)
+	    {
+	      weight = 0;
+	      str++;
+	    }
+	  break;
+	case LANG_FASTCMP_UTF8:
+	{
+	  /* a code point past the weights weighs itself */
+	  unsigned char *next;
+	  weight = intl_utf8_to_cp (str, (int) (end - str), &next);
+	  str = next;
+	  if (weight < (unsigned int) lang_coll->coll.w_count)
+	    {
+	      weight = (weight == ' ') ? 0 : weights[weight];
+	    }
+	  break;
+	}
+	default:
+	  /* LANG_FASTCMP_BINARY: the byte */
+	  str++;
+	  break;
+	}
+      if (weight == 0)
+	{
+	  zeros++;
+	  continue;
+	}
+      for (; zeros > 0; zeros--)
+	{
+	  hash_key *= EVAL_HASH_FNV_PRIME;
+	}
+      hash_key = (hash_key ^ weight) * EVAL_HASH_FNV_PRIME;
     }
   return hash_key;
 }
@@ -151,7 +208,8 @@ eval_hash_comparable (const DOMAIN_COMPARE *compare)
 	 && compare->value[0] < 0 && compare->value[1] < 0 && compare->failed == 0 && compare->codeset_side < 0
 	 && compare->cmp != NULL && eval_hash_type (compare->cmp->id)
 	 && (!TP_IS_CHAR_TYPE (compare->cmp->id)
-	     || (compare->collation >= 0 && lang_is_coll_fastcmp_byte (lang_get_collation (compare->collation))));
+	     || (compare->collation >= 0
+		 && lang_get_coll_fastcmp (lang_get_collation (compare->collation)) != LANG_FASTCMP_OTHER));
 }
 
 /*
@@ -172,15 +230,15 @@ eval_hash_value (const DOMAIN_COMPARE *compare, const DB_VALUE *value, unsigned 
     case DB_TYPE_CHAR:
     case DB_TYPE_VARCHAR:
     {
-      /* the comparison's collation, not the value's: one of lang_fastcmp_byte (eval_hash_comparable). The other
-       * collations' hash functions (lang_mht2str_*) tell apart strings their comparison finds equal */
+      /* the comparison's collation, not the value's (eval_hash_comparable). The collations' hash functions
+       * (lang_mht2str_*) tell apart strings their comparison finds equal */
       const LANG_COLLATION *lang_coll = lang_get_collation (compare->collation);
       if (db_get_string_codeset (value) != lang_coll->codeset)
 	{
 	  return false;
 	}
-      *hash_key = eval_hash_weights (lang_coll->coll.weights_ti, (const unsigned char *) db_get_string (value),
-				     db_get_string_size (value));
+      *hash_key = eval_hash_string (lang_coll, (const unsigned char *) db_get_string (value),
+				    db_get_string_size (value));
       return true;
     }
     case DB_TYPE_NUMERIC:
@@ -246,7 +304,8 @@ eval_hash_key (const DOMAIN_COMPARE *compare, int side, const DB_VALUE *value, u
 }
 
 /*
- * The hash of a subquery's list, owned by the subquery's XASL node (xasl_node::list_hash)
+ * The hash of a subquery's list, owned by the subquery's XASL node (xasl_node::list_hash). Only an uncorrelated
+ * subquery has one: it fills its list once in a query, and qexec_clear_xasl frees the hash at the query's end
  */
 
 /*
@@ -384,7 +443,7 @@ eval_hash_clear (THREAD_ENTRY *thread_p, EVAL_LIST_HASH *hash)
 }
 
 /*
- * eval_hash_for_lookup () - the hash that answers a lookup of the subquery's list in its current execution
+ * eval_hash_for_lookup () - the hash that answers a lookup of the subquery's list
  *   return: error code
  *   subquery(in): the subquery whose list list_id is; it owns the hash
  *   compare(in): the lookup's comparison (eval_hash_comparable)
@@ -405,16 +464,7 @@ eval_hash_for_lookup (THREAD_ENTRY *thread_p, xasl_node *subquery, QFILE_LIST_ID
 	{
 	  return er_errid ();
 	}
-      list_hash->execution_no = subquery->execution_no;
       subquery->list_hash = list_hash;
-    }
-  else if (list_hash->execution_no != subquery->execution_no)
-    {
-      /* the subquery executed again: its list is another */
-      eval_hash_clear (thread_p, list_hash);
-      list_hash->execution_no = subquery->execution_no;
-      list_hash->lookups = 0;
-      list_hash->unusable = false;
     }
 
   if (list_hash->unusable)
@@ -430,20 +480,28 @@ eval_hash_for_lookup (THREAD_ENTRY *thread_p, xasl_node *subquery, QFILE_LIST_ID
 	  list_hash->unusable = true;
 	  return NO_ERROR;
 	}
-      /* a table in memory costs about one read of the list to build, a hash file more the more rows a page of the list
-       * holds: the lookups before the build read the list */
+      /* a table in memory costs about one read of the list to build: the second lookup builds it. A hash file costs
+       * more the more rows a page of the list holds: the lookups before it read the list, until the rows they read cost
+       * about what building it does, wherever in the list their matches were */
       const HASH_METHOD method = qdata_hscan_method (list_id, mem_limit);
-      int build_lookup = 2;
+      INT64 build_rows = 1;
       if (method == HASH_METH_HASH_FILE)
 	{
 	  const INT64 rows_per_page = list_id->tuple_cnt / MAX (list_id->page_cnt, 1);
-	  build_lookup = MAX (2, (int) (1 + rows_per_page / EVAL_HASH_FILE_ROWS_PER_READ));
+	  build_rows = MAX (1, rows_per_page / EVAL_HASH_FILE_ROWS_PER_READ) * list_id->tuple_cnt;
 	}
-      if (++list_hash->lookups < build_lookup)
+      if (list_hash->rows_read < build_rows)
 	{
 	  return NO_ERROR;
 	}
       error = eval_hash_build (thread_p, list_hash, list_id, compare, method);
+      if (error != NO_ERROR && error != ER_INTERRUPTED && er_errid () != ER_INTERRUPTED)
+	{
+	  /* as a hash join falls back to a simpler method: the lookups read the list */
+	  er_clear ();
+	  error = NO_ERROR;
+	  list_hash->unusable = true;
+	}
       if (error != NO_ERROR || list_hash->unusable)
 	{
 	  return error;
@@ -456,10 +514,23 @@ eval_hash_for_lookup (THREAD_ENTRY *thread_p, xasl_node *subquery, QFILE_LIST_ID
       /* a term other than the one the table was built for */
       return NO_ERROR;
     }
-  assert (list_hash->list_scan.list_id.tuple_cnt == list_id->tuple_cnt);
+  /* the list the table was built over: the subquery has not filled it again */
+  assert (list_hash->list_scan.list_id.tuple_cnt == list_id->tuple_cnt
+	  && VPID_EQ (&list_hash->list_scan.list_id.first_vpid, &list_id->first_vpid));
 
   *hash = list_hash;
   return NO_ERROR;
+}
+
+/*
+ * eval_hash_count_read () - counts the rows a lookup read from the list for want of a table (eval_hash_for_lookup)
+ *   rows(in): the rows the lookup read: up to its match, or the whole list
+ */
+void
+eval_hash_count_read (xasl_node *subquery, INT64 rows)
+{
+  assert (subquery->list_hash != NULL);
+  subquery->list_hash->rows_read += rows;
 }
 
 /*
