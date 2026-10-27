@@ -105,7 +105,11 @@ extern "C" {
       dst_node->xasl_stats.hash_lookup_count += src_node->xasl_stats.hash_lookup_count;
       dst_node->xasl_stats.hash_lookup_method = (src_node->xasl_stats.hash_lookup_method != HASH_METH_NOT_USE) ? src_node->xasl_stats.hash_lookup_method : dst_node->xasl_stats.hash_lookup_method;
 
-      dst_node->groupby_stats.groupby_hash = (src_node->groupby_stats.groupby_hash != HS_NONE) ? src_node->groupby_stats.groupby_hash : dst_node->groupby_stats.groupby_hash;
+      /* HS_NONE < HS_ACCEPT_ALL < HS_REJECT_ALL: one clone that gave up hashing keeps the GROUP BY partial */
+      if (src_node->groupby_stats.groupby_hash > dst_node->groupby_stats.groupby_hash)
+	{
+	  dst_node->groupby_stats.groupby_hash = src_node->groupby_stats.groupby_hash;
+	}
       dst_node->groupby_stats.groupby_sort = dst_node->groupby_stats.groupby_sort ? true : src_node->groupby_stats.groupby_sort;
       dst_node->groupby_stats.run_groupby = dst_node->groupby_stats.run_groupby ? true : src_node->groupby_stats.run_groupby;
       dst_node->groupby_stats.groupby_pages += src_node->groupby_stats.groupby_pages;
