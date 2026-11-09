@@ -32,6 +32,8 @@
 #if !defined(SERVER_MODE)
 extern int db_get_connect_status (void);
 extern void db_set_connect_status (int status);
+extern CUB_THREAD_LOCAL int db_Disable_modifications;
+extern bool db_can_execute_statement_with_autocommit (struct parser_context *parser, struct parser_node *statement);
 #endif
 
 #define CUBRID_VERSION(X, Y)	(((X) << 8) | (Y))
