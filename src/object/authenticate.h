@@ -194,6 +194,20 @@ extern int au_fetch_instance_force (MOP op, MOBJ * obj_ptr, AU_FETCHMODE fetchmo
  * CHECK AUTHORIZATION OPERATIONS
  */
 extern int au_check_class_authorization (MOP op, DB_AUTH auth);	// legacy name - au_check_authorization
+extern int au_check_cached_class_authorization (MOP classmop, DB_AUTH type);
+
+/* the class authorization checks made while the log is set, with their outcome: a client that reuses what a
+ * compilation made repeats the checks of the compilation */
+#define AU_CHECK_LOG_SIZE 8
+typedef struct au_check_log AU_CHECK_LOG;
+struct au_check_log
+{
+  int count;			/* -1: more distinct checks than the log keeps */
+  OID class_oids[AU_CHECK_LOG_SIZE];
+  DB_AUTH types[AU_CHECK_LOG_SIZE];
+  bool granted[AU_CHECK_LOG_SIZE];
+};
+extern void au_set_check_log (AU_CHECK_LOG * log);
 extern int au_check_serial_authorization (MOP serial_object);
 extern int au_check_server_authorization (MOP server_object);
 extern int au_check_procedure_authorization (MOP procedure_object);

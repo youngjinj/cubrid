@@ -141,7 +141,6 @@ static bool is_allowed_as_prepared_statement_with_hv (PT_NODE * node);
 static bool db_check_limit_need_recompile (PARSER_CONTEXT * parser, PT_NODE * statement, int xasl_flag);
 static bool db_check_where_need_recompile (PARSER_CONTEXT * parser, PT_NODE * statement, int xasl_flag);
 
-static bool db_can_execute_statement_with_autocommit (PARSER_CONTEXT * parser, PT_NODE * statement);
 static PT_NODE *do_process_prepare_subquery_pre (PARSER_CONTEXT * parser, PT_NODE * stmt, void *arg,
 						 int *continue_walk);
 
@@ -1591,6 +1590,19 @@ db_has_untyped_host_var (const PARSER_CONTEXT * parser)
 	}
     }
   return false;
+}
+
+/*
+ * db_awaits_bind_signature_plan () - CBRD-27583: whether a driver session's one statement was compiled without a plan
+ *   only because a position has no type yet: each execution compiles the plan of its values' bind type signature
+ */
+bool
+db_awaits_bind_signature_plan (const DB_SESSION * session)
+{
+  const PT_NODE *statement = (session->dimension == 1) ? session->statements[0] : NULL;
+
+  return statement != NULL && statement->xasl_id == NULL && !statement->flag.cannot_prepare
+    && db_is_plan_statement (statement) && db_has_untyped_host_var (session->parser);
 }
 
 /*
@@ -6693,7 +6705,7 @@ db_set_statement_auto_commit (DB_SESSION * session, bool auto_commit)
  * statement(in): the statement
  *
  */
-static bool
+bool
 db_can_execute_statement_with_autocommit (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
   bool has_name_oid = false;

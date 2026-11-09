@@ -54,7 +54,10 @@ static int au_fetch_class_internal (MOP op, SM_CLASS **class_ptr, AU_FETCHMODE f
 				    FETCH_BY fetch_by);
 
 static int check_authorization (MOP classobj, SM_CLASS *sm_class, DB_AUTH type);
+static void log_check (MOP classobj, DB_AUTH type, bool granted);
 static int is_protected_class (MOP classmop, SM_CLASS *sm_class, DB_AUTH auth);
+
+static AU_CHECK_LOG *au_Check_log = NULL;
 
 /*
  * au_change_class_owner_including_partitions - This changes the owning user of a class.
@@ -943,7 +946,70 @@ check_authorization (MOP classobj, SM_CLASS *sm_class, DB_AUTH type)
 	}
     }
 
+  if (au_Check_log != NULL)
+    {
+      log_check (classobj, type, error == NO_ERROR);
+    }
   return error;
+}
+
+/*
+ * log_check - add a check to the check log unless the log already has it
+ *   return: none
+ *   classobj(in): the class checked
+ *   type(in): the authorization type checked
+ *   granted(in): the outcome
+ */
+static void
+log_check (MOP classobj, DB_AUTH type, bool granted)
+{
+  AU_CHECK_LOG *log = au_Check_log;
+
+  if (log->count < 0)
+    {
+      return;
+    }
+  for (int i = 0; i < log->count; i++)
+    {
+      if (OID_EQ (&log->class_oids[i], WS_OID (classobj)) && log->types[i] == type && log->granted[i] == granted)
+	{
+	  return;
+	}
+    }
+  if (log->count == AU_CHECK_LOG_SIZE)
+    {
+      log->count = -1;
+      return;
+    }
+  COPY_OID (&log->class_oids[log->count], WS_OID (classobj));
+  log->types[log->count] = type;
+  log->granted[log->count] = granted;
+  log->count++;
+}
+
+/*
+ * au_set_check_log - start logging the class authorization checks to a log, or stop with NULL
+ *   return: none
+ *   log(in): the log, its count set by the caller
+ */
+void
+au_set_check_log (AU_CHECK_LOG *log)
+{
+  au_Check_log = log;
+}
+
+/*
+ * au_check_cached_class_authorization - check an authorization of a class the workspace holds, without fetching it
+ *   return: error code
+ *   classmop(in): the class, its object in the workspace
+ *   type(in): authorization type
+ */
+int
+au_check_cached_class_authorization (MOP classmop, DB_AUTH type)
+{
+  assert (classmop->object != NULL && classmop->class_mop == sm_Root_class_mop);
+
+  return check_authorization (classmop, (SM_CLASS *) classmop->object, type);
 }
 
 /*
