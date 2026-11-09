@@ -162,6 +162,8 @@ struct t_srv_handle
   bool is_fetch_completed;
   bool is_holdable;
   bool is_from_current_transaction;
+  unsigned int session_generation;	/* the prepared session cache generation the session was compiled or taken
+					 * in; 0 = not reusable. Closing the handle parks the session while it matches */
 
   /* CGW fields */
   void *cgw_hstmt;

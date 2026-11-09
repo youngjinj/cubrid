@@ -32,6 +32,7 @@
 #if !defined(SERVER_MODE)
 extern int db_get_connect_status (void);
 extern void db_set_connect_status (int status);
+extern DB_SESSION *db_open_buffer_copy (const char *buffer);
 #endif
 
 #define CUBRID_VERSION(X, Y)	(((X) << 8) | (Y))

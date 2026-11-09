@@ -67,6 +67,7 @@ static FN_RETURN fn_prepare_internal (SOCKET sock_fd, int argc, void **argv, T_N
 				      int *ret_srv_h_id);
 static FN_RETURN fn_execute_internal (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf, T_REQ_INFO * req_info,
 				      int *prepared_srv_h_id);
+static void close_req_handle (int srv_h_id);
 
 void set_query_timeout (T_SRV_HANDLE * srv_handle, int query_timeout);
 
@@ -257,7 +258,7 @@ fn_prepare_internal (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf,
 	      int deferred_close_handle;
 	      net_arg_get_int (&deferred_close_handle, argv[i]);
 	      cas_log_write (0, true, "close_req_handle srv_h_id %d", deferred_close_handle);
-	      hm_srv_handle_free (deferred_close_handle);
+	      close_req_handle (deferred_close_handle);
 	    }
 	}
     }
@@ -1201,11 +1202,28 @@ fn_close_req_handle (SOCKET sock_fd, int argc, void **argv, T_NET_BUF * net_buf,
 
   cas_log_write (SRV_HANDLE_QUERY_SEQ_NUM (srv_handle), false, "close_req_handle srv_h_id %d", srv_h_id);
 
-  hm_srv_handle_free (srv_h_id);
+  close_req_handle (srv_h_id);
 
   net_buf_cp_int (net_buf, 0, NULL);	/* res code */
 
   return FN_KEEP_CONN;
+}
+
+/*
+ * close_req_handle () - free a handle the client closes, keeping its compiled session for a later prepare
+ *   return: none
+ *   srv_h_id(in): handle id
+ */
+static void
+close_req_handle (int srv_h_id)
+{
+  T_SRV_HANDLE *srv_handle = hm_find_srv_handle (srv_h_id);
+
+  if (srv_handle != NULL)
+    {
+      ux_keep_prepared_session (srv_handle);
+    }
+  hm_srv_handle_free (srv_h_id);
 }
 
 FN_RETURN

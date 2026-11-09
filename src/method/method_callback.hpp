@@ -123,6 +123,7 @@ namespace cubmethod
       error_context m_error_ctx;
 
       std::vector<query_handler *> m_query_handlers;
+      int m_num_query_handlers;	/* non-null entries of m_query_handlers */
       oid_handler *m_oid_handler;
 
       std::queue <cubmem::extensible_block> m_data_queue;

@@ -1164,6 +1164,21 @@ db_open_buffer (const char *buffer)
   return session;
 }
 
+/*
+ * db_open_buffer_copy() - db_open_buffer of a copy of the string its parser owns, for a session that outlives the
+ *    string
+ * return:new DB_SESSION
+ * buffer(in) : contains query text to be compiled
+ */
+DB_SESSION *
+db_open_buffer_copy (const char *buffer)
+{
+  CHECK_1ARG_NULL (buffer);
+  CHECK_CONNECT_NULL ();
+
+  return db_open_buffer_copy_local (buffer, strlen (buffer));
+}
+
 
 /*
  * db_open_file() - Starts a new SQL compile session on a query file

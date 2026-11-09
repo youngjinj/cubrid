@@ -80,6 +80,7 @@
 #include "cas_db_inc.h"
 #include "cas_common_vars.h"
 #include "query_replace.h"
+#include "parser.h"
 
 
 #if defined (SUPPRESS_STRLEN_WARNING)
@@ -168,6 +169,67 @@ struct t_attr_table
   char is_key;
   const char *comment;
 };
+
+/*
+ * Prepared session cache: a closed handle keeps its compiled DB_SESSION here, keyed by the SQL text with every plain
+ * string literal masked, so that the next prepare of the same text, or of a text that differs only in those
+ * literals, skips the compilation. The cache owns the parked sessions; ux_prepare takes one out for its handle.
+ */
+#define PREPARED_SESSION_CACHE_SIZE	32
+#define PREPARED_SESSION_MAX_LITERALS	16
+#define PREPARED_SESSION_MAX_LITERAL_LENGTH	256	/* a longer literal stays in the key */
+#define PREPARED_SESSION_LITERAL_MARK	'\001'
+/* a prepare with any of these flags compiles: the flags change the tree or how the statement is executed */
+#define PREPARED_SESSION_EXCLUDED_FLAGS \
+  (CCI_PREPARE_INCLUDE_OID | CCI_PREPARE_UPDATABLE | CCI_PREPARE_QUERY_INFO | CCI_PREPARE_CALL \
+   | CCI_PREPARE_XASL_CACHE_PINNED)
+
+typedef struct prepared_session_literal PREPARED_SESSION_LITERAL;
+struct prepared_session_literal
+{
+  const char *text;		/* the byte after the opening quote, inside the SQL text */
+  int length;			/* bytes up to the closing quote, a doubled quote counted as two */
+};
+
+typedef struct prepared_session_key PREPARED_SESSION_KEY;
+struct prepared_session_key
+{
+  char *text;			/* the SQL text with each masked literal replaced by PREPARED_SESSION_LITERAL_MARK */
+  unsigned int hash;
+  int num_literals;
+  PREPARED_SESSION_LITERAL literals[PREPARED_SESSION_MAX_LITERALS];
+};
+
+typedef struct prepared_session_literal_uses PREPARED_SESSION_LITERAL_USES;
+struct prepared_session_literal_uses
+{
+  const int *slots;		/* the auto parameter positions of the literals */
+  int num_slots;
+  int all[PREPARED_SESSION_MAX_LITERALS];	/* host variable nodes of each position */
+  int equal[PREPARED_SESSION_MAX_LITERALS];	/* of them, the operand of column = literal */
+};
+
+typedef struct prepared_session_entry PREPARED_SESSION_ENTRY;
+struct prepared_session_entry
+{
+  char *key_text;		/* NULL: the entry is free */
+  unsigned int key_hash;
+  int prepare_flag;
+  MOP user;			/* the user the session was compiled for: unqualified names resolve in its schema */
+  DB_SESSION *session;
+  unsigned int last_used;
+};
+
+static PREPARED_SESSION_ENTRY prepared_session_cache[PREPARED_SESSION_CACHE_SIZE];
+static unsigned int prepared_session_clock = 0;
+static unsigned int prepared_session_schema_version = 0;
+/* bumped by everything that may change what a compilation makes; a handle of an older generation does not park */
+static unsigned int prepared_session_generation = 1;
+/* the running transaction executed a statement that invalidated the cache; its rollback invalidates it again */
+static bool prepared_session_invalidated_in_tran = false;
+/* the last user prepared_session_cache_is_usable () found not to be a DBA, and the generation it found it in */
+static MOP prepared_session_non_dba_user = NULL;
+static unsigned int prepared_session_non_dba_generation = 0;
 
 extern void set_query_timeout (T_SRV_HANDLE * srv_handle, int query_timeout);
 
@@ -304,6 +366,31 @@ static bool call_returns_cursor (const T_PREPARE_CALL_INFO * call_info);
 static bool call_has_fetchable_output (const T_PREPARE_CALL_INFO * call_info);
 static int recompile_statement (T_SRV_HANDLE * srv_handle);
 
+static bool prepared_session_cache_is_usable (int prepare_flag, int replace_rule_idx);
+static int prepared_session_make_key (const char *sql_stmt, PREPARED_SESSION_KEY * key);
+static bool prepared_session_is_equal_operand (const char *key_start, const char *key_end, const char *after);
+static int prepared_session_literal_slots (const PARSER_CONTEXT * parser, int *slots);
+static int prepared_session_literal_value (const PREPARED_SESSION_LITERAL * literal, const DB_VALUE * like,
+					   char *buf, DB_VALUE * value);
+static bool prepared_session_literals_match (DB_SESSION * session, const PREPARED_SESSION_KEY * key);
+static int prepared_session_literal_index (const PREPARED_SESSION_LITERAL_USES * uses, const PT_NODE * node);
+static PT_NODE *prepared_session_count_literal_uses (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+						     int *continue_walk);
+static int prepared_session_bind_literals (DB_SESSION * session, const PREPARED_SESSION_KEY * key);
+static PT_NODE *prepared_session_find_unsafe_node (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+						   int *continue_walk);
+static bool prepared_session_names_tracked_inputs (DB_SESSION * session);
+static PT_NODE *prepared_session_find_untracked_name (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+						      int *continue_walk);
+static bool prepared_session_is_reusable (DB_SESSION * session, int stmt_id, const PREPARED_SESSION_KEY * key);
+static bool prepared_session_type_is_reusable (int stmt_type);
+static void prepared_session_note_execution (int stmt_type);
+static void prepared_session_note_end_tran (int tran_type);
+static void prepared_session_check_schema_version (void);
+static DB_SESSION *prepared_session_take (const PREPARED_SESSION_KEY * key, int prepare_flag);
+static void prepared_session_put (char *key_text, unsigned int key_hash, int prepare_flag, DB_SESSION * session);
+static void prepared_session_invalidate (void);
+
 static T_FETCH_FUNC fetch_func[] = {
   fetch_result,			/* query */
   fetch_result,			/* SCH_CLASS */
@@ -387,6 +474,9 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd, char **db_er
   int err_code, client_type;
   char *p = NULL;
   const char *host_connected = NULL;
+
+  /* the parked sessions were compiled for the previous client's user */
+  prepared_session_invalidate ();
 
   as_info->force_reconnect = false;
 
@@ -578,6 +668,9 @@ ux_set_default_setting ()
 void
 ux_database_shutdown (bool request_server)
 {
+  /* a parked session refers to the workspace the shutdown frees */
+  prepared_session_invalidate ();
+
   if (db_get_connect_status () != 0)	// only if connected to db
     {
       if (request_server)
@@ -656,6 +749,9 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
   char *tmp;
   int result_cache_lifetime;
   PT_NODE *statement = NULL;
+  PREPARED_SESSION_KEY session_key;
+
+  session_key.text = NULL;
 
   if ((flag & CCI_PREPARE_UPDATABLE) && (flag & CCI_PREPARE_HOLDABLE))
     {
@@ -782,8 +878,25 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
       goto prepare_result_set;
     }
 
+  if (prepared_session_cache_is_usable (flag, replace_rule_idx)
+      && prepared_session_make_key (sql_stmt, &session_key) == NO_ERROR)
+    {
+      session = prepared_session_take (&session_key, flag);
+      if (session != NULL)
+	{
+	  /* the compilation of this text, or of one that differs only in the masked literals now bound */
+	  stmt_id = 1;
+	  num_markers = get_num_markers (sql_stmt);
+	  stmt_type = db_get_statement_type (session, stmt_id);
+	  srv_handle->is_prepared = TRUE;
+	  srv_handle->session_generation = prepared_session_generation;
+	  goto prepare_result_set;
+	}
+    }
+
   db_init_lexer_lineno ();
-  session = db_open_buffer (sql_stmt);
+  /* the statements point into their text, which a parked session outlives: the handle frees sql_stmt */
+  session = (session_key.text != NULL) ? db_open_buffer_copy (sql_stmt) : db_open_buffer (sql_stmt);
   if (!session)
     {
       err_code = ERROR_INFO_SET (db_error_code (), DBMS_ERROR_INDICATOR);
@@ -794,6 +907,11 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
     {
       err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
       goto prepare_error;
+    }
+
+  if (session_key.text != NULL && !prepared_session_names_tracked_inputs (session))
+    {
+      FREE_MEM (session_key.text);
     }
 
   updatable_flag = flag & CCI_PREPARE_UPDATABLE;
@@ -850,6 +968,11 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
       num_markers = get_num_markers (sql_stmt);
       stmt_type = db_get_statement_type (session, stmt_id);
       srv_handle->is_prepared = TRUE;
+
+      if (session_key.text != NULL && prepared_session_is_reusable (session, stmt_id, &session_key))
+	{
+	  srv_handle->session_generation = prepared_session_generation;
+	}
     }
 
 prepare_result_set:
@@ -924,9 +1047,11 @@ prepare_result_set:
 
   db_get_cacheinfo (session, stmt_id, &srv_handle->use_plan_cache, &srv_handle->use_query_cache);
 
+  FREE_MEM (session_key.text);
   return srv_h_id;
 
 prepare_error:
+  FREE_MEM (session_key.text);
   NET_BUF_ERR_SET (net_buf);
 
   if (auto_commit_mode == TRUE)
@@ -948,11 +1073,44 @@ prepare_error:
   return err_code;
 }
 
+/*
+ * ux_keep_prepared_session () - park the session of a handle the client closes in the prepared session cache
+ *   return: none
+ *   srv_handle(in/out): the handle; it no longer owns the session if parked
+ */
+void
+ux_keep_prepared_session (T_SRV_HANDLE * srv_handle)
+{
+  PREPARED_SESSION_KEY key;
+
+  prepared_session_check_schema_version ();
+  if (srv_handle->session == NULL || srv_handle->session_generation != prepared_session_generation)
+    {
+      return;
+    }
+  /* the executions compiled plans of other bind type signatures with the literals of this text */
+  if (((DB_SESSION *) srv_handle->session)->signature_plans != NULL
+      || ((DB_SESSION *) srv_handle->session)->parser->host_var_compiled_domains != NULL)
+    {
+      return;
+    }
+  if (prepared_session_make_key (srv_handle->sql_stmt, &key) != NO_ERROR)
+    {
+      return;
+    }
+
+  /* end the results before the session outlives the handle */
+  hm_qresult_end (srv_handle, TRUE);
+  prepared_session_put (key.text, key.hash, srv_handle->prepare_flag, (DB_SESSION *) srv_handle->session);
+  srv_handle->session = NULL;
+}
+
 int
 ux_end_tran (int tran_type, bool reset_con_status, bool ddl_audit_log)
 {
   int err_code = 0;
 
+  prepared_session_note_end_tran (tran_type);
   ux_end_tran_cleanup (tran_type);
 
   if (tran_type == CCI_TRAN_COMMIT)
@@ -1201,6 +1359,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
 
   stmt_type = db_get_statement_type (session, stmt_id);
   update_query_execution_count (as_info, stmt_type);
+  prepared_session_note_execution (stmt_type);
 
   if (n < 0)
     {
@@ -1230,6 +1389,8 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
     {
       if (srv_handle->is_pooled && (n == ER_QPROC_INVALID_XASLNODE || n == ER_HEAP_UNKNOWN_OBJECT))
 	{
+	  /* another client changed the schema: the parked sessions may be as stale as this one */
+	  prepared_session_invalidate ();
 	  err_code = ERROR_INFO_SET_FORCE (CAS_ER_STMT_POOLING, CAS_ERROR_INDICATOR);
 	  goto execute_error;
 	}
@@ -1542,11 +1703,14 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_
       hm_set_current_srv_handle (-1);
 
       update_query_execution_count (as_info, stmt_type);
+      prepared_session_note_execution (stmt_type);
 
       if (n < 0)
 	{
 	  if (srv_handle->is_pooled && (n == ER_QPROC_INVALID_XASLNODE || n == ER_HEAP_UNKNOWN_OBJECT))
 	    {
+	      /* another client changed the schema: the parked sessions may be as stale as this one */
+	      prepared_session_invalidate ();
 	      err_code = ERROR_INFO_SET_FORCE (CAS_ER_STMT_POOLING, CAS_ERROR_INDICATOR);
 	      goto execute_all_error;
 	    }
@@ -1817,6 +1981,7 @@ ux_execute_call (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max
 
   stmt_type = db_get_statement_type (session, stmt_id);
   update_query_execution_count (as_info, stmt_type);
+  prepared_session_note_execution (stmt_type);
 
 
   if (n < 0)
@@ -2090,6 +2255,7 @@ ux_execute_batch (int argc, void **argv, T_NET_BUF * net_buf, T_REQ_INFO * req_i
       SQL_LOG2_EXEC_END (as_info->cur_sql_log2, stmt_id, res_count);
 
       update_query_execution_count (as_info, stmt_type);
+      prepared_session_note_execution (stmt_type);
 
       if (res_count < 0)
 	{
@@ -2430,12 +2596,15 @@ ux_execute_array (T_SRV_HANDLE * srv_handle, int argc, void **argv, T_NET_BUF * 
 	}
 
       update_query_execution_count (as_info, stmt_type);
+      prepared_session_note_execution (stmt_type);
 
 
       if (res_count < 0)
 	{
 	  if (res_count == ER_QPROC_INVALID_XASLNODE && retried_query_num != num_query)
 	    {
+	      /* another client changed the schema: the parked sessions may be as stale as this one */
+	      prepared_session_invalidate ();
 	      err_code = recompile_statement (srv_handle);
 	      if (err_code < 0)
 		{
@@ -8635,6 +8804,7 @@ sch_query_execute (T_SRV_HANDLE * srv_handle, char *sql_stmt, T_NET_BUF * net_bu
 
 
   update_query_execution_count (as_info, stmt_type);
+  prepared_session_note_execution (stmt_type);
 
 
   if (num_result < 0)
@@ -10724,7 +10894,759 @@ recompile_statement (T_SRV_HANDLE * srv_handle)
     }
 
   srv_handle->session = session;
+  srv_handle->session_generation = 0;
   srv_handle->q_result->stmt_id = stmt_id;
 
   return err_code;
+}
+
+/*
+ * prepared_session_cache_is_usable () - whether a prepare may take a session from the prepared session cache, and
+ *					 its handle park the session when it closes
+ *   return: true if usable
+ *   prepare_flag(in): CCI_PREPARE_* flags of the prepare
+ *   replace_rule_idx(in): query replace rule of the prepare, -1 if none
+ */
+static bool
+prepared_session_cache_is_usable (int prepare_flag, int replace_rule_idx)
+{
+  MOP user = db_get_user ();
+
+  /* A session parked before another client changed the schema fails its execute with CAS_ER_STMT_POOLING, which
+   * makes the driver prepare again only on a pooling broker. */
+  if (as_info->cur_statement_pooling != ON || cas_shard_flag != OFF || replace_rule_idx >= 0
+      || (prepare_flag & PREPARED_SESSION_EXCLUDED_FLAGS) != 0)
+    {
+      return false;
+    }
+
+  /* Skipping the compilation also skips its privilege checks: only the privileges of a DBA cannot be revoked. A user
+   * found not to be one is remembered for the generation, which a login or a GRANT of this client ends; a user who
+   * is one is asked again, since another client may take it out of the DBA group. */
+  if (user == prepared_session_non_dba_user && prepared_session_non_dba_generation == prepared_session_generation)
+    {
+      return false;
+    }
+  if (!au_is_dba_group_member (user))
+    {
+      prepared_session_non_dba_user = user;
+      prepared_session_non_dba_generation = prepared_session_generation;
+      return false;
+    }
+  return true;
+}
+
+/*
+ * prepared_session_make_key () - make the prepared session cache key of a SQL text
+ *   return: NO_ERROR, or ER_FAILED if the text cannot be cached
+ *   sql_stmt(in): the SQL text
+ *   key(out): the key; key->text is allocated and the caller frees it
+ *
+ * Note: a plain string literal, printable ASCII and the right operand of column = literal, is masked: the
+ *	 compilation turns it into an auto parameter, which prepared_session_bind_literals () fills from the next text.
+ *	 Comments, quoted identifiers and the other literals stay in the key as they are.
+ */
+static int
+prepared_session_make_key (const char *sql_stmt, PREPARED_SESSION_KEY * key)
+{
+  const char *p = sql_stmt;
+  char *q;
+
+  key->text = NULL;
+  key->num_literals = 0;
+
+  /* a backslash may escape a quote, and the scan below would then misplace the end of a literal */
+  if (strchr (sql_stmt, '\\') != NULL || strchr (sql_stmt, PREPARED_SESSION_LITERAL_MARK) != NULL)
+    {
+      return ER_FAILED;
+    }
+
+  key->text = (char *) MALLOC (strlen (sql_stmt) + 1);
+  if (key->text == NULL)
+    {
+      return ER_FAILED;
+    }
+  q = key->text;
+
+  while (*p != '\0')
+    {
+      const char *end;
+
+      if ((p[0] == '-' && p[1] == '-') || (p[0] == '/' && p[1] == '/'))
+	{
+	  end = strchr (p, '\n');
+	  end = (end != NULL) ? end + 1 : p + strlen (p);
+	}
+      else if (p[0] == '/' && p[1] == '*')
+	{
+	  end = strstr (p + 2, "*/");
+	  if (end == NULL)
+	    {
+	      goto not_cacheable;
+	    }
+	  end += 2;
+	}
+      else if (*p == '\'' || *p == '"' || *p == '`' || *p == '[')
+	{
+	  const char close = (*p == '[') ? ']' : *p;
+	  bool is_plain = (*p == '\'');
+
+	  for (end = p + 1; *end != '\0'; end++)
+	    {
+	      if (*end == close)
+		{
+		  if (close == ']' || end[1] != close)
+		    {
+		      break;
+		    }
+		  /* a doubled quote stands for the quote */
+		  end++;
+		}
+	      else if (*end < ' ' || *end > '~')
+		{
+		  is_plain = false;
+		}
+	    }
+	  if (*end == '\0')
+	    {
+	      goto not_cacheable;
+	    }
+	  end++;
+
+	  /* an empty literal is NULL under oracle_style_empty_string */
+	  if (is_plain && key->num_literals < PREPARED_SESSION_MAX_LITERALS && end - p - 2 > 0
+	      && end - p - 2 <= PREPARED_SESSION_MAX_LITERAL_LENGTH
+	      && prepared_session_is_equal_operand (key->text, q, end))
+	    {
+	      key->literals[key->num_literals].text = p + 1;
+	      key->literals[key->num_literals].length = (int) (end - p - 2);
+	      key->num_literals++;
+	      *q++ = PREPARED_SESSION_LITERAL_MARK;
+	      p = end;
+	      continue;
+	    }
+	}
+      else
+	{
+	  end = p + 1;
+	}
+
+      memcpy (q, p, end - p);
+      q += end - p;
+      p = end;
+    }
+  *q = '\0';
+
+  key->hash = 2166136261U;	/* FNV-1a */
+  for (q = key->text; *q != '\0'; q++)
+    {
+      key->hash = (key->hash ^ (unsigned char) *q) * 16777619U;
+    }
+  return NO_ERROR;
+
+not_cacheable:
+  FREE_MEM (key->text);
+  return ER_FAILED;
+}
+
+/*
+ * prepared_session_is_equal_operand () - whether a literal is the right operand of column = literal in the text
+ *   return: true if it is
+ *   key_start(in): the key made so far
+ *   key_end(in): the end of the key made so far, where the literal goes
+ *   after(in): the text after the literal
+ *
+ * Note: only there the compilation does not rewrite the predicate for the value; LIKE 'a' becomes = 'a', which a
+ *	 later LIKE 'a%' of the same key must not reuse.
+ */
+static bool
+prepared_session_is_equal_operand (const char *key_start, const char *key_end, const char *after)
+{
+  const char *s = key_end;
+
+  while (s > key_start && char_isspace (s[-1]))
+    {
+      s--;
+    }
+  if (s == key_start || s[-1] != '=')
+    {
+      return false;
+    }
+  s--;
+  if (s > key_start && strchr ("<>!:", s[-1]) != NULL)
+    {
+      return false;
+    }
+  while (s > key_start && char_isspace (s[-1]))
+    {
+      s--;
+    }
+  if (s == key_start || !(char_isalnum (s[-1]) || s[-1] == '_' || s[-1] == ']' || s[-1] == '"' || s[-1] == '`'))
+    {
+      return false;
+    }
+
+  while (char_isspace (*after))
+    {
+      after++;
+    }
+  return (*after == '\0' || *after == ')' || *after == ',' || *after == ';' || char_isalpha (*after));
+}
+
+/*
+ * prepared_session_literal_slots () - the host variable positions the compilation gave the literals of the text
+ *   return: number of positions, or -1 if more than PREPARED_SESSION_MAX_LITERALS
+ *   parser(in): parser of the compiled session
+ *   slots(out): the positions, PREPARED_SESSION_MAX_LITERALS long
+ */
+static int
+prepared_session_literal_slots (const PARSER_CONTEXT * parser, int *slots)
+{
+  int num_slots = 0;
+
+  for (int k = parser->host_var_count; k < parser->host_var_count + parser->auto_param_count; k++)
+    {
+      if (pt_is_derived_host_var (parser, k))
+	{
+	  /* a bind type signature copy of a user host variable, not a literal */
+	  continue;
+	}
+      if (num_slots == PREPARED_SESSION_MAX_LITERALS)
+	{
+	  return -1;
+	}
+      slots[num_slots++] = k;
+    }
+  return num_slots;
+}
+
+/*
+ * prepared_session_literal_value () - make the value of a masked literal the way the compilation made the value of
+ *				       its auto parameter
+ *   return: NO_ERROR, or ER_FAILED if the value of like is not one the compilation makes from a literal
+ *   literal(in): the masked literal
+ *   like(in): an auto parameter value of the compilation
+ *   buf(in): PREPARED_SESSION_MAX_LITERAL_LENGTH + 1 bytes the value refers to
+ *   value(out): the value, referring to buf
+ */
+static int
+prepared_session_literal_value (const PREPARED_SESSION_LITERAL * literal, const DB_VALUE * like, char *buf,
+				DB_VALUE * value)
+{
+  DB_TYPE type = DB_VALUE_DOMAIN_TYPE (like);
+  int precision = db_value_precision (like);
+  int length = 0;
+
+  for (int i = 0; i < literal->length; i++)
+    {
+      buf[length++] = literal->text[i];
+      if (literal->text[i] == '\'')
+	{
+	  /* skip the second quote of a doubled quote */
+	  i++;
+	}
+    }
+  buf[length] = '\0';
+
+  if ((type != DB_TYPE_CHAR && type != DB_TYPE_VARCHAR) || DB_IS_NULL (like))
+    {
+      return ER_FAILED;
+    }
+  if (precision != TP_FLOATING_PRECISION_VALUE)
+    {
+      /* the compilation gave the literal its own length as precision */
+      if (precision != db_get_string_length (like))
+	{
+	  return ER_FAILED;
+	}
+      precision = length;
+    }
+
+  if (type == DB_TYPE_CHAR)
+    {
+      db_make_char (value, precision, buf, length, db_get_string_codeset (like), db_get_string_collation (like));
+    }
+  else
+    {
+      db_make_varchar (value, precision, buf, length, db_get_string_codeset (like), db_get_string_collation (like));
+    }
+  return NO_ERROR;
+}
+
+/*
+ * prepared_session_literals_match () - whether the auto parameters of a fresh compilation are the masked literals of
+ *					its text, in the order of the text
+ *   return: true if they match
+ *   session(in): the compiled session
+ *   key(in): the key of its text
+ */
+static bool
+prepared_session_literals_match (DB_SESSION * session, const PREPARED_SESSION_KEY * key)
+{
+  PARSER_CONTEXT *parser = session->parser;
+  int slots[PREPARED_SESSION_MAX_LITERALS];
+  char buf[PREPARED_SESSION_MAX_LITERAL_LENGTH + 1];
+  PREPARED_SESSION_LITERAL_USES uses;
+
+  if (prepared_session_literal_slots (parser, slots) != key->num_literals)
+    {
+      /* a literal was folded or kept, or an auto parameter comes from elsewhere */
+      return false;
+    }
+
+  for (int i = 0; i < key->num_literals; i++)
+    {
+      const PREPARED_SESSION_LITERAL *literal = &key->literals[i];
+      const DB_VALUE *like = &parser->host_variables[slots[i]];
+      DB_VALUE value;
+
+      if (prepared_session_literal_value (literal, like, buf, &value) != NO_ERROR
+	  || db_value_precision (&value) != db_value_precision (like)
+	  || db_get_string_size (&value) != db_get_string_size (like)
+	  || memcmp (db_get_string (&value), db_get_string (like), db_get_string_size (like)) != 0)
+	{
+	  return false;
+	}
+
+      for (int j = 0; j < i; j++)
+	{
+	  /* two equal literals could have filled their positions in either order */
+	  if (key->literals[j].length == literal->length
+	      && memcmp (key->literals[j].text, literal->text, literal->length) == 0)
+	    {
+	      return false;
+	    }
+	}
+    }
+
+  /* another predicate may have been rewritten for the value of its literal (LIKE 'a%' into a range) */
+  memset (&uses, 0, sizeof (uses));
+  uses.slots = slots;
+  uses.num_slots = key->num_literals;
+  (void) parser_walk_tree (parser, session->statements[0], prepared_session_count_literal_uses, &uses, NULL, NULL);
+  for (int i = 0; i < key->num_literals; i++)
+    {
+      if (uses.all[i] == 0 || uses.all[i] != uses.equal[i])
+	{
+	  return false;
+	}
+    }
+  return true;
+}
+
+/*
+ * prepared_session_literal_index () - the literal whose auto parameter a node is
+ *   return: index into uses->slots, or -1 if the node is not one of them
+ *   uses(in): the literal positions
+ *   node(in): a node of the compiled tree
+ */
+static int
+prepared_session_literal_index (const PREPARED_SESSION_LITERAL_USES * uses, const PT_NODE * node)
+{
+  if (node == NULL || node->node_type != PT_HOST_VAR)
+    {
+      return -1;
+    }
+  for (int i = 0; i < uses->num_slots; i++)
+    {
+      if (uses->slots[i] == node->info.host_var.index)
+	{
+	  return i;
+	}
+    }
+  return -1;
+}
+
+/*
+ * prepared_session_count_literal_uses () - parser_walk_tree callback counting, for each literal, its auto parameter
+ *					     nodes and those of them that are an operand of column = literal
+ */
+static PT_NODE *
+prepared_session_count_literal_uses (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  PREPARED_SESSION_LITERAL_USES *uses = (PREPARED_SESSION_LITERAL_USES *) arg;
+  int i = prepared_session_literal_index (uses, node);
+
+  if (i >= 0)
+    {
+      uses->all[i]++;
+    }
+  else if (node->node_type == PT_EXPR && node->info.expr.op == PT_EQ)
+    {
+      PT_NODE *arg1 = node->info.expr.arg1;
+      PT_NODE *arg2 = node->info.expr.arg2;
+
+      if (arg1 != NULL && arg1->node_type == PT_NAME)
+	{
+	  i = prepared_session_literal_index (uses, arg2);
+	}
+      else if (arg2 != NULL && arg2->node_type == PT_NAME)
+	{
+	  i = prepared_session_literal_index (uses, arg1);
+	}
+      if (i >= 0)
+	{
+	  uses->equal[i]++;
+	}
+    }
+  return node;
+}
+
+/*
+ * prepared_session_bind_literals () - fill the auto parameters of a taken session from the literals of the new text
+ *   return: NO_ERROR or error code
+ *   session(in/out): the session taken from the cache
+ *   key(in): the key of the new text
+ */
+static int
+prepared_session_bind_literals (DB_SESSION * session, const PREPARED_SESSION_KEY * key)
+{
+  PARSER_CONTEXT *parser = session->parser;
+  int slots[PREPARED_SESSION_MAX_LITERALS];
+  char buf[PREPARED_SESSION_MAX_LITERAL_LENGTH + 1];
+
+  if (prepared_session_literal_slots (parser, slots) != key->num_literals)
+    {
+      return ER_FAILED;
+    }
+
+  for (int i = 0; i < key->num_literals; i++)
+    {
+      DB_VALUE *slot = &parser->host_variables[slots[i]];
+      DB_VALUE value;
+
+      if (prepared_session_literal_value (&key->literals[i], slot, buf, &value) != NO_ERROR)
+	{
+	  return ER_FAILED;
+	}
+      pr_clear_value (slot);
+      if (pr_clone_value (&value, slot) != NO_ERROR)
+	{
+	  return ER_FAILED;
+	}
+    }
+  return NO_ERROR;
+}
+
+/*
+ * prepared_session_find_unsafe_node () - parser_walk_tree callback finding a node whose compilation depends on what
+ *					   the server does not track for the XASL: a remote table or a stored routine
+ */
+static PT_NODE *
+prepared_session_find_unsafe_node (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  bool *is_unsafe = (bool *) arg;
+
+  switch (node->node_type)
+    {
+    case PT_DBLINK_TABLE:
+    case PT_DBLINK_TABLE_DML:
+    case PT_METHOD_CALL:
+      *is_unsafe = true;
+      *continue_walk = PT_STOP_WALK;
+      break;
+
+    default:
+      break;
+    }
+  return node;
+}
+
+/*
+ * prepared_session_names_tracked_inputs () - whether a parsed, not yet compiled, statement names only base classes
+ *					       named directly and no interpreter parameter
+ *   return: true if so
+ *   session(in): the session after db_open_buffer ()
+ *
+ * Note: the server drops the XASL when a class it reads changes, but not when a view or a synonym the text names
+ *	 changes, and the compilation binds the value of an interpreter parameter (:name). The compilation replaces
+ *	 all of them, so the check reads the tree before it.
+ */
+static bool
+prepared_session_names_tracked_inputs (DB_SESSION * session)
+{
+  bool is_other = false;
+
+  if (session->dimension != 1)
+    {
+      return false;
+    }
+  (void) parser_walk_tree (session->parser, session->statements[0], prepared_session_find_untracked_name, &is_other,
+			   NULL, NULL);
+  /* the lookups of names that are not classes or synonyms leave an error behind */
+  er_clear ();
+  return !is_other;
+}
+
+/*
+ * prepared_session_find_untracked_name () - parser_walk_tree callback finding an interpreter parameter or a spec that
+ *					     names a view, a synonym or anything else than a base class
+ */
+static PT_NODE *
+prepared_session_find_untracked_name (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  bool *is_other = (bool *) arg;
+  PT_NODE *name;
+  MOP class_mop = NULL;
+
+  if (node->node_type == PT_NAME && node->info.name.meta_class == PT_PARAMETER)
+    {
+      *is_other = true;
+      *continue_walk = PT_STOP_WALK;
+      return node;
+    }
+  if (node->node_type != PT_SPEC || node->info.spec.entity_name == NULL)
+    {
+      return node;
+    }
+
+  name = node->info.spec.entity_name;
+  if (name->node_type == PT_NAME && db_find_synonym (name->info.name.original) == NULL)
+    {
+      class_mop = sm_find_class (name->info.name.original);
+    }
+  if (class_mop == NULL || db_is_vclass (class_mop) != 0)
+    {
+      *is_other = true;
+      *continue_walk = PT_STOP_WALK;
+    }
+  return node;
+}
+
+/*
+ * prepared_session_is_reusable () - whether a freshly compiled session may serve a later prepare of its key
+ *   return: true if reusable
+ *   session(in): the compiled session
+ *   stmt_id(in): its statement
+ *   key(in): the key of its text
+ */
+static bool
+prepared_session_is_reusable (DB_SESSION * session, int stmt_id, const PREPARED_SESSION_KEY * key)
+{
+  PARSER_CONTEXT *parser = session->parser;
+  PT_NODE *statement;
+  bool is_unsafe = false;
+  int stmt_type;
+
+  if (session->dimension != 1)
+    {
+      return false;
+    }
+  statement = session->statements[0];
+
+  stmt_type = db_get_statement_type (session, stmt_id);
+  if (!prepared_session_type_is_reusable (stmt_type))
+    {
+      return false;
+    }
+
+  /* only a statement the server executes from its XASL; the others execute from the tree */
+  if (statement->xasl_id == NULL || statement->flag.cannot_prepare)
+    {
+      return false;
+    }
+  /* the hint asks every prepare for a new plan */
+  if (statement->flag.recompile)
+    {
+      return false;
+    }
+  if (stmt_type == CUBRID_STMT_SELECT && statement->info.query.into_list != NULL)
+    {
+      return false;
+    }
+  if (pt_has_session_variable (parser, statement))
+    {
+      return false;
+    }
+
+  (void) parser_walk_tree (parser, statement, prepared_session_find_unsafe_node, &is_unsafe, NULL, NULL);
+  if (is_unsafe)
+    {
+      return false;
+    }
+
+  return prepared_session_literals_match (session, key);
+}
+
+/*
+ * prepared_session_type_is_reusable () - whether statements of a type may be kept in the prepared session cache
+ *   return: true if they may
+ *   stmt_type(in): CUBRID_STMT_* type
+ */
+static bool
+prepared_session_type_is_reusable (int stmt_type)
+{
+  return (stmt_type == CUBRID_STMT_SELECT || stmt_type == CUBRID_STMT_INSERT || stmt_type == CUBRID_STMT_UPDATE
+	  || stmt_type == CUBRID_STMT_DELETE);
+}
+
+/*
+ * prepared_session_note_execution () - invalidate the prepared session cache after a statement that may change what
+ *					a compilation makes: DDL, GRANT, SET SYSTEM PARAMETERS, SET NAMES and the like
+ *   return: none
+ *   stmt_type(in): CUBRID_STMT_* type of the executed statement
+ */
+static void
+prepared_session_note_execution (int stmt_type)
+{
+  switch (stmt_type)
+    {
+    case CUBRID_STMT_SELECT:
+    case CUBRID_STMT_INSERT:
+    case CUBRID_STMT_UPDATE:
+    case CUBRID_STMT_DELETE:
+    case CUBRID_STMT_MERGE:
+    case CUBRID_STMT_COMMIT_WORK:
+    case CUBRID_STMT_ROLLBACK_WORK:
+    case CUBRID_STMT_SAVEPOINT:
+      break;
+
+    default:
+      prepared_session_invalidate ();
+      prepared_session_invalidated_in_tran = true;
+      break;
+    }
+}
+
+/*
+ * prepared_session_note_end_tran () - invalidate the prepared session cache when a transaction that changed the
+ *				       schema rolls back: the sessions parked after the change compiled against it
+ *   return: none
+ *   tran_type(in): CCI_TRAN_COMMIT or CCI_TRAN_ROLLBACK
+ */
+static void
+prepared_session_note_end_tran (int tran_type)
+{
+  if (tran_type != CCI_TRAN_COMMIT && prepared_session_invalidated_in_tran)
+    {
+      prepared_session_invalidate ();
+    }
+  prepared_session_invalidated_in_tran = false;
+}
+
+/*
+ * prepared_session_check_schema_version () - invalidate the prepared session cache if the local schema version
+ *					      changed since the last check
+ *   return: none
+ */
+static void
+prepared_session_check_schema_version (void)
+{
+  if (prepared_session_schema_version != sm_local_schema_version ())
+    {
+      prepared_session_invalidate ();
+      prepared_session_schema_version = sm_local_schema_version ();
+    }
+}
+
+/*
+ * prepared_session_take () - take the session parked under a key out of the prepared session cache
+ *   return: the session, now owned by the caller, or NULL
+ *   key(in): the key of the text to prepare; its literals fill the auto parameters of the session
+ *   prepare_flag(in): CCI_PREPARE_* flags of the prepare
+ */
+static DB_SESSION *
+prepared_session_take (const PREPARED_SESSION_KEY * key, int prepare_flag)
+{
+  MOP user = db_get_user ();
+
+  prepared_session_check_schema_version ();
+
+  for (int i = 0; i < PREPARED_SESSION_CACHE_SIZE; i++)
+    {
+      PREPARED_SESSION_ENTRY *entry = &prepared_session_cache[i];
+      DB_SESSION *session;
+
+      if (entry->key_text == NULL || entry->key_hash != key->hash || entry->prepare_flag != prepare_flag
+	  || entry->user != user || strcmp (entry->key_text, key->text) != 0)
+	{
+	  continue;
+	}
+
+      session = entry->session;
+      FREE_MEM (entry->key_text);
+      entry->session = NULL;
+
+      if (prepared_session_bind_literals (session, key) != NO_ERROR)
+	{
+	  db_close_session (session);
+	  return NULL;
+	}
+      return session;
+    }
+  return NULL;
+}
+
+/*
+ * prepared_session_put () - park a session in the prepared session cache, evicting the least recently parked one
+ *			     when the cache is full
+ *   return: none
+ *   key_text(in): the key; the cache owns it from now on
+ *   key_hash(in): hash of key_text
+ *   prepare_flag(in): CCI_PREPARE_* flags the session was prepared with
+ *   session(in): the session; the cache owns it from now on
+ */
+static void
+prepared_session_put (char *key_text, unsigned int key_hash, int prepare_flag, DB_SESSION * session)
+{
+  MOP user = db_get_user ();
+  PREPARED_SESSION_ENTRY *victim = &prepared_session_cache[0];
+
+  for (int i = 0; i < PREPARED_SESSION_CACHE_SIZE; i++)
+    {
+      PREPARED_SESSION_ENTRY *entry = &prepared_session_cache[i];
+
+      if (entry->key_text != NULL && entry->key_hash == key_hash && entry->prepare_flag == prepare_flag
+	  && entry->user == user && strcmp (entry->key_text, key_text) == 0)
+	{
+	  /* two handles of the text were open together: one session of it is enough */
+	  FREE_MEM (key_text);
+	  db_close_session (session);
+	  return;
+	}
+
+      if (victim->key_text != NULL && (entry->key_text == NULL || entry->last_used < victim->last_used))
+	{
+	  victim = entry;
+	}
+    }
+
+  if (victim->key_text != NULL)
+    {
+      FREE_MEM (victim->key_text);
+      db_close_session (victim->session);
+    }
+  victim->key_text = key_text;
+  victim->key_hash = key_hash;
+  victim->prepare_flag = prepare_flag;
+  victim->user = user;
+  victim->session = session;
+  victim->last_used = ++prepared_session_clock;
+}
+
+/*
+ * prepared_session_invalidate () - close every parked session and keep the open handles from parking theirs
+ *   return: none
+ */
+static void
+prepared_session_invalidate (void)
+{
+  for (int i = 0; i < PREPARED_SESSION_CACHE_SIZE; i++)
+    {
+      PREPARED_SESSION_ENTRY *entry = &prepared_session_cache[i];
+
+      if (entry->key_text != NULL)
+	{
+	  FREE_MEM (entry->key_text);
+	  db_close_session (entry->session);
+	  entry->session = NULL;
+	}
+    }
+
+  prepared_session_generation++;
+  if (prepared_session_generation == 0)
+    {
+      /* 0 marks a handle that does not park */
+      prepared_session_generation = 1;
+    }
 }

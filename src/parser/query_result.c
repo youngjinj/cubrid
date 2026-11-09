@@ -1148,7 +1148,19 @@ pt_new_query_result_descriptor (PARSER_CONTEXT * parser, PT_NODE * query)
   r->type_cnt = degree;
   if (list_id)
     {
+      /* the cursor takes the last page over instead of copying it */
+      PAGE_PTR last_page = list_id->last_pgptr;
+
+      list_id->last_pgptr = NULL;
       failure = !cursor_open (&r->res.s.cursor_id, list_id, false, r->oid_included);
+      if (failure)
+	{
+	  list_id->last_pgptr = last_page;
+	}
+      else
+	{
+	  r->res.s.cursor_id.list_id.last_pgptr = last_page;
+	}
       /* free result, which was copied by open cursor operation! */
       cursor_free_self_list_id (list_id);
     }

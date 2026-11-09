@@ -394,6 +394,8 @@ hm_session_free (T_SRV_HANDLE * srv_handle)
       db_close_session ((DB_SESSION *) (srv_handle->session));
     }
   srv_handle->session = NULL;
+  /* a session compiled in place of this one was not checked for the prepared session cache */
+  srv_handle->session_generation = 0;
 }
 
 void
