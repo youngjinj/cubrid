@@ -141,7 +141,6 @@ static bool is_allowed_as_prepared_statement_with_hv (PT_NODE * node);
 static bool db_check_limit_need_recompile (PARSER_CONTEXT * parser, PT_NODE * statement, int xasl_flag);
 static bool db_check_where_need_recompile (PARSER_CONTEXT * parser, PT_NODE * statement, int xasl_flag);
 
-static bool db_can_execute_statement_with_autocommit (PARSER_CONTEXT * parser, PT_NODE * statement);
 static PT_NODE *do_process_prepare_subquery_pre (PARSER_CONTEXT * parser, PT_NODE * stmt, void *arg,
 						 int *continue_walk);
 
@@ -6693,7 +6692,7 @@ db_set_statement_auto_commit (DB_SESSION * session, bool auto_commit)
  * statement(in): the statement
  *
  */
-static bool
+bool
 db_can_execute_statement_with_autocommit (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
   bool has_name_oid = false;

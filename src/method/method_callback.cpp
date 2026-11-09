@@ -141,6 +141,7 @@ namespace cubmethod
   callback_handler::callback_handler (int max_query_handler)
   {
     m_query_handlers.resize (max_query_handler, nullptr);
+    m_num_query_handlers = 0;
     m_oid_handler = nullptr;
   }
 
@@ -1198,6 +1199,7 @@ exit:
       {
 	m_query_handlers.push_back (handler);
       }
+    m_num_query_handlers++;
 
     return handler;
   }
@@ -1234,6 +1236,7 @@ exit:
 
 	    m_deferred_query_free_handler.push_back (m_query_handlers[id]);
 	    m_query_handlers[id] = nullptr;
+	    m_num_query_handlers--;
 	  }
 	else
 	  {
@@ -1245,6 +1248,11 @@ exit:
   void
   callback_handler::free_query_handle_all (bool is_free)
   {
+    if (m_num_query_handlers == 0)
+      {
+	/* every commit comes here: skip the walk of the empty table */
+	return;
+      }
     for (int i = 0; i < (int) m_query_handlers.size(); i++)
       {
 	free_query_handle (i, is_free);
@@ -1280,6 +1288,7 @@ exit:
 	  }
       }
     m_query_handlers.clear ();
+    m_num_query_handlers = 0;
 
     m_sql_handler_map.clear ();
     m_qid_handler_map.clear ();

@@ -1350,6 +1350,18 @@ parser_free_lcks_classes (PARSER_CONTEXT * parser)
       free_and_init (parser->lcks_classes);
       parser->num_lcks_classes = 0;
     }
+  if (parser->lcks_locks)
+    {
+      free_and_init (parser->lcks_locks);
+    }
+  if (parser->lcks_only_all)
+    {
+      free_and_init (parser->lcks_only_all);
+    }
+  if (parser->lcks_flags)
+    {
+      free_and_init (parser->lcks_flags);
+    }
 
   return;
 }
