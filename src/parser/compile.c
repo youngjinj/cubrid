@@ -588,13 +588,29 @@ pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement)
       PT_ERRORc (parser, statement, db_error_string (3));
     }
 
+  for (int i = 0; i < lcks.num_classes && !pt_has_error (parser); i++)
+    {
+      MOP class_mop = ws_find_class (lcks.classes[i]);
+
+      if (class_mop != NULL && db_is_vclass (class_mop) > 0)
+	{
+	  parser->flag.has_vclass_spec = 1;
+	}
+    }
+
   /* free already assigned parser->lcks_classes if exist */
   parser_free_lcks_classes (parser);
 
   /* parser->lcks_classes will be freed at parser_free_parser() */
   parser->lcks_classes = lcks.classes;
+  parser->lcks_locks = lcks.locks;
+  parser->lcks_only_all = lcks.only_all;
+  parser->lcks_flags = lcks.flags;
   parser->num_lcks_classes = lcks.num_classes;
   lcks.classes = NULL;
+  lcks.locks = NULL;
+  lcks.only_all = NULL;
+  lcks.flags = NULL;
 
   (void) parser_walk_tree (parser, statement, pt_set_class_chn, NULL, NULL, NULL);
 
@@ -868,6 +884,7 @@ pt_add_lock_class (PARSER_CONTEXT * parser, PT_CLASS_LOCKS * lcks, PT_NODE * spe
   synonym_mop = db_find_synonym (class_name);
   if (synonym_mop != NULL)
     {
+      parser->flag.has_synonym_spec = 1;
       class_name = db_get_synonym_target_name (synonym_mop, target_name, DB_MAX_IDENTIFIER_LENGTH);
       if (class_name == NULL)
 	{

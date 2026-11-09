@@ -3438,52 +3438,64 @@ tp_domain_resolve_value (const DB_VALUE * val, TP_DOMAIN * dbuf)
 	case DB_TYPE_VARCHAR:	/* new name for DB_TYPE_STRING */
 	case DB_TYPE_BIT:
 	case DB_TYPE_VARBIT:
-	  /* must find one with a matching precision */
-	  if (dbuf == NULL)
-	    {
-	      domain = tp_domain_new (value_type);
-	      if (domain == NULL)
-		{
-		  return NULL;
-		}
-	    }
-	  else
-	    {
-	      domain = dbuf;
-	      tp_domain_init (domain, value_type);
-	    }
-	  domain->codeset = db_get_string_codeset (val);
-	  domain->collation_id = db_get_string_collation (val);
-	  domain->precision = db_value_precision (val);
+	  {
+	    int codeset = db_get_string_codeset (val);
+	    int collation_id = db_get_string_collation (val);
+	    int precision = db_value_precision (val);
 
-	  /*
-	   * Convert references to the "floating" precisions to actual
-	   * precisions. This may not be necessary or desirable?
-	   * Zero seems to pop up occasionally in DB_VALUE precisions, until
-	   * this is fixed, treat it as the floater for the variable width
-	   * types.
-	   */
-	  if (TP_DOMAIN_TYPE (domain) == DB_TYPE_VARCHAR)
-	    {
-	      if (domain->precision == 0 || domain->precision == TP_FLOATING_PRECISION_VALUE
-		  || domain->precision > DB_MAX_VARCHAR_PRECISION)
-		{
-		  domain->precision = DB_MAX_VARCHAR_PRECISION;
-		}
-	    }
-	  else if (TP_DOMAIN_TYPE (domain) == DB_TYPE_VARBIT)
-	    {
-	      if (domain->precision == 0 || domain->precision == TP_FLOATING_PRECISION_VALUE
-		  || domain->precision > DB_MAX_VARBIT_PRECISION)
-		{
-		  domain->precision = DB_MAX_VARBIT_PRECISION;
-		}
-	    }
+	    /*
+	     * Convert references to the "floating" precisions to actual
+	     * precisions. This may not be necessary or desirable?
+	     * Zero seems to pop up occasionally in DB_VALUE precisions, until
+	     * this is fixed, treat it as the floater for the variable width
+	     * types.
+	     */
+	    if (value_type == DB_TYPE_VARCHAR)
+	      {
+		if (precision == 0 || precision == TP_FLOATING_PRECISION_VALUE || precision > DB_MAX_VARCHAR_PRECISION)
+		  {
+		    precision = DB_MAX_VARCHAR_PRECISION;
+		  }
+	      }
+	    else if (value_type == DB_TYPE_VARBIT)
+	      {
+		if (precision == 0 || precision == TP_FLOATING_PRECISION_VALUE || precision > DB_MAX_VARBIT_PRECISION)
+		  {
+		    precision = DB_MAX_VARBIT_PRECISION;
+		  }
+	      }
 
-	  if (dbuf == NULL)
-	    {
-	      domain = tp_domain_cache (domain);
-	    }
+	    /* must find one with a matching precision */
+	    if (dbuf == NULL)
+	      {
+		/* a cached domain is found without the transient domain tp_domain_cache () would free; for a CHAR it
+		 * matches the collation only, where tp_domain_cache () matches the codeset too */
+		domain =
+		  tp_domain_find_charbit (value_type, codeset, collation_id, TP_DOMAIN_COLL_NORMAL, precision, false);
+		if (domain != NULL && domain->codeset == codeset)
+		  {
+		    break;
+		  }
+		domain = tp_domain_new (value_type);
+		if (domain == NULL)
+		  {
+		    return NULL;
+		  }
+	      }
+	    else
+	      {
+		domain = dbuf;
+		tp_domain_init (domain, value_type);
+	      }
+	    domain->codeset = codeset;
+	    domain->collation_id = collation_id;
+	    domain->precision = precision;
+
+	    if (dbuf == NULL)
+	      {
+		domain = tp_domain_cache (domain);
+	      }
+	  }
 	  break;
 	case DB_TYPE_ENUMERATION:
 	  /*

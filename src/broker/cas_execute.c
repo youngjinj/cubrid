@@ -80,6 +80,12 @@
 #include "cas_db_inc.h"
 #include "cas_common_vars.h"
 #include "query_replace.h"
+#include "parser.h"
+#include "locator_cl.h"
+#include "work_space.h"
+#include "xasl.h"
+#include "query_cl.h"
+#include "network_interface_cl.h"
 
 
 #if defined (SUPPRESS_STRLEN_WARNING)
@@ -168,6 +174,124 @@ struct t_attr_table
   char is_key;
   const char *comment;
 };
+
+/*
+ * Prepared session cache: a closed handle keeps its compiled DB_SESSION here, keyed by the SQL text with every plain
+ * string literal masked, so that the next prepare of the same text, or of a text that differs only in those
+ * literals, skips the compilation. The cache owns the parked sessions; ux_prepare takes one out for its handle.
+ */
+#define PREPARED_SESSION_CACHE_SIZE	32
+#define PREPARED_SESSION_MAX_LITERALS	16
+#define PREPARED_SESSION_MAX_LITERAL_LENGTH	256	/* a longer literal stays in the key */
+#define PREPARED_SESSION_LITERAL_MARK	'\001'
+/* a prepare with any of these flags compiles: the flags change the tree or how the statement is executed */
+#define PREPARED_SESSION_EXCLUDED_FLAGS \
+  (CCI_PREPARE_INCLUDE_OID | CCI_PREPARE_UPDATABLE | CCI_PREPARE_QUERY_INFO | CCI_PREPARE_CALL \
+   | CCI_PREPARE_XASL_CACHE_PINNED)
+
+typedef struct prepared_session_literal PREPARED_SESSION_LITERAL;
+struct prepared_session_literal
+{
+  const char *text;		/* the byte after the opening quote, inside the SQL text */
+  int length;			/* bytes up to the closing quote, a doubled quote counted as two */
+};
+
+typedef struct prepared_session_key PREPARED_SESSION_KEY;
+struct prepared_session_key
+{
+  char *text;			/* the SQL text with each masked literal replaced by PREPARED_SESSION_LITERAL_MARK */
+  unsigned int hash;
+  int num_literals;
+  PREPARED_SESSION_LITERAL literals[PREPARED_SESSION_MAX_LITERALS];
+};
+
+typedef struct prepared_session_literal_uses PREPARED_SESSION_LITERAL_USES;
+struct prepared_session_literal_uses
+{
+  const int *slots;		/* the auto parameter positions of the literals */
+  int num_slots;
+  int all[PREPARED_SESSION_MAX_LITERALS];	/* host variable nodes of each position */
+  int equal[PREPARED_SESSION_MAX_LITERALS];	/* of them, the operand of column = literal */
+};
+
+/*
+ * What a prepare of a cached text needs instead of compiling it: the classes its compilation locked, with their
+ * cache coherency numbers to tell whether they changed since, and the prepare response the compilation produced.
+ * One allocation without pointers, so that it can be copied as it is.
+ */
+#define PREPARED_IMAGE_MAX_CLASSES	8
+
+typedef struct prepared_image_class PREPARED_IMAGE_CLASS;
+struct prepared_image_class
+{
+  int name_offset;		/* of the lock hint name in data */
+  LOCK lock;
+  int only_all;
+  LC_PREFETCH_FLAGS flags;
+  OID oid;			/* a class dropped and created again under the name may have the same number */
+  int chn;
+};
+
+typedef struct prepared_image PREPARED_IMAGE;
+struct prepared_image
+{
+  int size;			/* of the whole image, data included */
+  T_BROKER_VERSION client_version;	/* the response depends on it */
+  char stmt_type;
+  int num_markers;
+  bool use_plan_cache;
+  bool use_query_cache;
+  int num_column;
+  char include_oid;
+  int num_classes;
+  PREPARED_IMAGE_CLASS classes[PREPARED_IMAGE_MAX_CLASSES];
+  int null_type_column_offset;	/* num_column bytes */
+  int response_offset;		/* the prepare response after the handle id */
+  int response_size;
+
+  /* the execute without a session (prepared_image_execute); false keeps it to the compiled session */
+  bool can_execute;
+  bool can_commit;		/* db_can_execute_statement_with_autocommit () */
+  XASL_ID xasl_id;
+  int query_flag;		/* the QUERY_FLAG bits the statement decides */
+  int num_columns;		/* of the select list, the hidden ones left out */
+  int num_query_types;		/* of the type list of the result */
+  int oids_included;
+  int host_var_count;		/* the markers of the text */
+  int domains_offset;		/* host_var_count packed expected domains */
+  int bind_flags_offset;	/* host_var_count bytes of PREPARED_IMAGE_BIND_* */
+  int target_class;		/* of an INSERT or UPDATE, its index in classes */
+  int auto_param_count;		/* all of them the masked literals, in the order of the text */
+  int auto_params_offset;	/* auto_param_count packed values, aligned */
+};
+
+/* a host variable the value of which is assigned to a column: a VARCHAR value into a CHAR keeps the cast copy */
+#define PREPARED_IMAGE_BIND_ASSIGNMENT	0x01
+
+/* offsets of an image count from its start */
+#define PREPARED_IMAGE_AT(image, offset)	((char *) (image) + (offset))
+
+typedef struct prepared_session_entry PREPARED_SESSION_ENTRY;
+struct prepared_session_entry
+{
+  char *key_text;		/* NULL: the entry is free */
+  unsigned int key_hash;
+  int prepare_flag;
+  MOP user;			/* the user the text was compiled for: unqualified names resolve in its schema */
+  PREPARED_IMAGE *image;
+  unsigned int last_used;
+};
+
+static PREPARED_SESSION_ENTRY prepared_session_cache[PREPARED_SESSION_CACHE_SIZE];
+static unsigned int prepared_session_clock = 0;
+static unsigned int prepared_session_schema_version = 0;
+/* bumped by everything that may change what a compilation makes; a handle of an older generation does not park */
+static unsigned int prepared_session_generation = 1;
+/* the running transaction executed a statement that invalidated the cache; its rollback invalidates it again */
+static bool prepared_session_invalidated_in_tran = false;
+/* the last user prepared_session_cache_is_usable () found not to be a DBA, and the generation it found it in */
+static MOP prepared_session_non_dba_user = NULL;
+static unsigned int prepared_session_non_dba_generation = 0;
 
 extern void set_query_timeout (T_SRV_HANDLE * srv_handle, int query_timeout);
 
@@ -304,6 +428,53 @@ static bool call_returns_cursor (const T_PREPARE_CALL_INFO * call_info);
 static bool call_has_fetchable_output (const T_PREPARE_CALL_INFO * call_info);
 static int recompile_statement (T_SRV_HANDLE * srv_handle);
 
+static bool prepared_session_cache_is_usable (int prepare_flag, int replace_rule_idx);
+static int prepared_session_make_key (const char *sql_stmt, PREPARED_SESSION_KEY * key);
+static bool prepared_session_is_equal_operand (const char *key_start, const char *key_end, const char *after);
+static int prepared_session_literal_slots (const PARSER_CONTEXT * parser, int *slots);
+static int prepared_session_literal_value (const PREPARED_SESSION_LITERAL * literal, const DB_VALUE * like,
+					   char *buf, DB_VALUE * value);
+static bool prepared_session_literals_match (DB_SESSION * session, const PREPARED_SESSION_KEY * key);
+static bool prepared_session_text_has_literal (const char *key_text, const PREPARED_SESSION_LITERAL * literal);
+static int prepared_session_literal_index (const PREPARED_SESSION_LITERAL_USES * uses, const PT_NODE * node);
+static PT_NODE *prepared_session_count_literal_uses (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+						     int *continue_walk);
+static PT_NODE *prepared_session_find_unsafe_node (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+						   int *continue_walk);
+static bool prepared_session_names_tracked_inputs (DB_SESSION * session);
+static PT_NODE *prepared_session_find_untracked_name (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+						      int *continue_walk);
+static bool prepared_session_locks_base_classes (const PARSER_CONTEXT * parser);
+static bool prepared_session_is_reusable (DB_SESSION * session, int stmt_id, const PREPARED_SESSION_KEY * key);
+static bool prepared_session_type_is_reusable (int stmt_type);
+static void prepared_session_note_execution (int stmt_type);
+static void prepared_session_note_end_tran (int tran_type);
+static void prepared_session_check_schema_version (void);
+static PREPARED_IMAGE *prepared_session_take (const PREPARED_SESSION_KEY * key, int prepare_flag,
+					      T_BROKER_VERSION client_version);
+static void prepared_session_put (char *key_text, unsigned int key_hash, int prepare_flag, PREPARED_IMAGE * image);
+static void prepared_session_invalidate (void);
+static PREPARED_IMAGE *prepared_image_make (DB_SESSION * session, const T_QUERY_RESULT * q_result,
+					    const T_NET_BUF * net_buf, int response_offset,
+					    const T_SRV_HANDLE * srv_handle, T_BROKER_VERSION client_version);
+static int prepared_image_lock_classes (const PREPARED_IMAGE * image);
+static int prepared_image_send_response (const PREPARED_IMAGE * image, T_QUERY_RESULT * q_result, T_NET_BUF * net_buf);
+static int prepared_image_materialize (T_SRV_HANDLE * srv_handle);
+static int prepared_image_check_classes (T_SRV_HANDLE * srv_handle);
+static bool prepared_image_can_execute (DB_SESSION * session);
+static int prepared_image_target_class (const PREPARED_IMAGE * image, PT_NODE * statement);
+static int prepared_image_bind (const PREPARED_IMAGE * image, int num_bind, DB_VALUE * bind_values, DB_VALUE * values);
+static int prepared_image_execute_dml (T_SRV_HANDLE * srv_handle, DB_VALUE * values, int num_values,
+				       bool use_auto_commit, DB_QUERY_RESULT ** result);
+static PT_NODE *prepared_image_find_cached_subquery (PARSER_CONTEXT * parser, PT_NODE * node, void *arg,
+						     int *continue_walk);
+static int prepared_image_execute (T_SRV_HANDLE * srv_handle, int argc, void **argv, T_NET_BUF * net_buf,
+				   CACHE_TIME * clt_cache_time, DB_QUERY_RESULT ** result, bool * executed);
+static int prepared_image_execute_select (T_SRV_HANDLE * srv_handle, DB_VALUE * values, int num_values,
+					  bool use_auto_commit, CACHE_TIME * clt_cache_time, DB_QUERY_RESULT ** result);
+static void prepared_image_check_abort (int *err);
+static bool prepared_image_open_cursor (DB_QUERY_RESULT * qres, QFILE_LIST_ID * list_id);
+
 static T_FETCH_FUNC fetch_func[] = {
   fetch_result,			/* query */
   fetch_result,			/* SCH_CLASS */
@@ -387,6 +558,9 @@ ux_database_connect (char *db_name, char *db_user, char *db_passwd, char **db_er
   int err_code, client_type;
   char *p = NULL;
   const char *host_connected = NULL;
+
+  /* the parked sessions were compiled for the previous client's user */
+  prepared_session_invalidate ();
 
   as_info->force_reconnect = false;
 
@@ -578,6 +752,9 @@ ux_set_default_setting ()
 void
 ux_database_shutdown (bool request_server)
 {
+  /* a parked session refers to the workspace the shutdown frees */
+  prepared_session_invalidate ();
+
   if (db_get_connect_status () != 0)	// only if connected to db
     {
       if (request_server)
@@ -655,7 +832,11 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
   int is_first_out = 0;
   char *tmp;
   int result_cache_lifetime;
+  int response_offset;
   PT_NODE *statement = NULL;
+  PREPARED_SESSION_KEY session_key;
+
+  session_key.text = NULL;
 
   if ((flag & CCI_PREPARE_UPDATABLE) && (flag & CCI_PREPARE_HOLDABLE))
     {
@@ -782,6 +963,43 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
       goto prepare_result_set;
     }
 
+  if (prepared_session_cache_is_usable (flag, replace_rule_idx)
+      && prepared_session_make_key (sql_stmt, &session_key) == NO_ERROR)
+    {
+      PREPARED_IMAGE *image = prepared_session_take (&session_key, flag, client_version);
+
+      if (image != NULL)
+	{
+	  /* only the response of a SELECT holds the schema; the execute of the others finds a changed class by the XASL
+	   * the server dropped (prepared_image_check_classes) */
+	  err_code = (image->stmt_type == CUBRID_STMT_SELECT) ? prepared_image_lock_classes (image) : NO_ERROR;
+	  if (err_code == ER_LK_UNILATERALLY_ABORTED || err_code == ER_TM_SERVER_DOWN_UNILATERALLY_ABORTED
+	      || err_code == ER_INTERRUPTED)
+	    {
+	      /* the client aborted the transaction, or the user canceled the wait the compilation would repeat */
+	      FREE_MEM (image);
+	      err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
+	      goto prepare_error;
+	    }
+	  if (err_code == NO_ERROR)
+	    {
+	      /* the compilation of this text, or of one that differs only in the masked literals: the execute
+	       * compiles the session the handle runs (prepared_image_materialize) */
+	      srv_handle->prepared_image = image;
+	      stmt_id = 1;
+	      num_markers = image->num_markers;
+	      stmt_type = image->stmt_type;
+	      srv_handle->is_prepared = TRUE;
+	      srv_handle->session_generation = prepared_session_generation;
+	      goto prepare_result_set;
+	    }
+	  /* a class changed since the compilation, or the lock request failed: the compilation requests it again and
+	   * reports its error as before */
+	  er_clear ();
+	  FREE_MEM (image);
+	}
+    }
+
   db_init_lexer_lineno ();
   session = db_open_buffer (sql_stmt);
   if (!session)
@@ -794,6 +1012,11 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
     {
       err_code = ERROR_INFO_SET (err_code, DBMS_ERROR_INDICATOR);
       goto prepare_error;
+    }
+
+  if (session_key.text != NULL && !prepared_session_names_tracked_inputs (session))
+    {
+      FREE_MEM (session_key.text);
     }
 
   updatable_flag = flag & CCI_PREPARE_UPDATABLE;
@@ -850,6 +1073,11 @@ ux_prepare (char *sql_stmt, int flag, char auto_commit_mode, T_NET_BUF * net_buf
       num_markers = get_num_markers (sql_stmt);
       stmt_type = db_get_statement_type (session, stmt_id);
       srv_handle->is_prepared = TRUE;
+
+      if (session_key.text != NULL && prepared_session_is_reusable (session, stmt_id, &session_key))
+	{
+	  srv_handle->session_generation = prepared_session_generation;
+	}
     }
 
 prepare_result_set:
@@ -887,12 +1115,6 @@ prepare_result_set:
 
   net_buf_cp_int (net_buf, srv_h_id, NULL);
 
-  result_cache_lifetime = get_client_result_cache_lifetime (session, stmt_id);
-  net_buf_cp_int (net_buf, result_cache_lifetime, NULL);
-
-  net_buf_cp_byte (net_buf, stmt_type);
-  net_buf_cp_int (net_buf, (replace_rule_idx >= 0) ? srv_handle->num_orig_markers : num_markers, NULL);
-
   q_result = (T_QUERY_RESULT *) malloc (sizeof (T_QUERY_RESULT));
   if (q_result == NULL)
     {
@@ -904,11 +1126,45 @@ prepare_result_set:
   q_result->stmt_type = stmt_type;
   q_result->stmt_id = stmt_id;
 
-  err_code = prepare_column_list_info_set (session, flag, q_result, net_buf, client_version);
-  if (err_code < 0)
+  if (srv_handle->prepared_image != NULL)
     {
-      FREE_MEM (q_result);
-      goto prepare_error;
+      err_code = prepared_image_send_response (srv_handle->prepared_image, q_result, net_buf);
+      if (err_code < 0)
+	{
+	  FREE_MEM (q_result);
+	  goto prepare_error;
+	}
+      srv_handle->use_plan_cache = srv_handle->prepared_image->use_plan_cache;
+      srv_handle->use_query_cache = srv_handle->prepared_image->use_query_cache;
+    }
+  else
+    {
+      response_offset = net_buf->data_size;
+
+      result_cache_lifetime = get_client_result_cache_lifetime (session, stmt_id);
+      net_buf_cp_int (net_buf, result_cache_lifetime, NULL);
+
+      net_buf_cp_byte (net_buf, stmt_type);
+      net_buf_cp_int (net_buf, (replace_rule_idx >= 0) ? srv_handle->num_orig_markers : num_markers, NULL);
+
+      err_code = prepare_column_list_info_set (session, flag, q_result, net_buf, client_version);
+      if (err_code < 0)
+	{
+	  FREE_MEM (q_result);
+	  goto prepare_error;
+	}
+
+      db_get_cacheinfo (session, stmt_id, &srv_handle->use_plan_cache, &srv_handle->use_query_cache);
+
+      if (srv_handle->session_generation != 0)
+	{
+	  srv_handle->prepared_image =
+	    prepared_image_make (session, q_result, net_buf, response_offset, srv_handle, client_version);
+	  if (srv_handle->prepared_image == NULL)
+	    {
+	      srv_handle->session_generation = 0;
+	    }
+	}
     }
 
   srv_handle->session = session;
@@ -922,11 +1178,11 @@ prepare_result_set:
       srv_handle->is_holdable = true;
     }
 
-  db_get_cacheinfo (session, stmt_id, &srv_handle->use_plan_cache, &srv_handle->use_query_cache);
-
+  FREE_MEM (session_key.text);
   return srv_h_id;
 
 prepare_error:
+  FREE_MEM (session_key.text);
   NET_BUF_ERR_SET (net_buf);
 
   if (auto_commit_mode == TRUE)
@@ -948,11 +1204,42 @@ prepare_error:
   return err_code;
 }
 
+/*
+ * ux_keep_prepared_session () - park the prepared image of a handle the client closes in the prepared session cache
+ *   return: none
+ *   srv_handle(in/out): the handle; it no longer owns the image if parked
+ */
+void
+ux_keep_prepared_session (T_SRV_HANDLE * srv_handle)
+{
+  DB_SESSION *session = (DB_SESSION *) srv_handle->session;
+  PREPARED_SESSION_KEY key;
+
+  prepared_session_check_schema_version ();
+  if (srv_handle->prepared_image == NULL || srv_handle->session_generation != prepared_session_generation)
+    {
+      return;
+    }
+  /* the executions compiled plans of other bind type signatures with the literals of this text */
+  if (session != NULL && (session->signature_plans != NULL || session->parser->host_var_compiled_domains != NULL))
+    {
+      return;
+    }
+  if (prepared_session_make_key (srv_handle->sql_stmt, &key) != NO_ERROR)
+    {
+      return;
+    }
+
+  prepared_session_put (key.text, key.hash, srv_handle->prepare_flag, srv_handle->prepared_image);
+  srv_handle->prepared_image = NULL;
+}
+
 int
 ux_end_tran (int tran_type, bool reset_con_status, bool ddl_audit_log)
 {
   int err_code = 0;
 
+  prepared_session_note_end_tran (tran_type);
   ux_end_tran_cleanup (tran_type);
 
   if (tran_type == CCI_TRAN_COMMIT)
@@ -1073,9 +1360,10 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
   int num_bind = 0;
   int i, n, stmt_id;
   DB_QUERY_RESULT *result = NULL;
-  DB_SESSION *session;
+  DB_SESSION *session = NULL;
   T_BROKER_VERSION client_version = req_info->client_version;
   bool recompile = false;
+  bool log2_begun = false;
 
   char stmt_type;
 
@@ -1092,6 +1380,48 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
       srv_handle->is_prepared = FALSE;
       recompile = true;
       logddl_reset_query_text ();
+    }
+
+  if (srv_handle->session == NULL && srv_handle->prepared_image != NULL && srv_handle->is_prepared == TRUE
+      && (flag & (CCI_EXEC_QUERY_INFO | CCI_EXEC_ONLY_QUERY_PLAN | CCI_EXEC_RETURN_GENERATED_KEYS)) == 0)
+    {
+      bool executed;
+
+      stmt_id = srv_handle->q_result->stmt_id;
+      srv_handle->is_from_current_transaction = true;
+      SQL_LOG2_EXEC_BEGIN (as_info->cur_sql_log2, stmt_id);
+      log2_begun = true;
+      hm_set_current_srv_handle (srv_handle->id);
+      n = prepared_image_execute (srv_handle, argc, argv, net_buf, clt_cache_time, &result, &executed);
+      hm_set_current_srv_handle (-1);
+      if (!executed && n < 0)
+	{
+	  err_code = ERROR_INFO_SET (n, DBMS_ERROR_INDICATOR);
+	  goto execute_error;
+	}
+      if (executed && n != ER_QPROC_INVALID_XASLNODE && n != ER_QPROC_XASLNODE_RECOMPILE_REQUESTED
+	  && n != ER_QPROC_RESULT_CACHE_INVALID)
+	{
+	  stmt_type = srv_handle->prepared_image->stmt_type;
+	  goto image_executed;
+	}
+      if (executed)
+	{
+	  /* the XASL of the image is gone: the session compiles another one, and the image does not park */
+	  er_clear ();
+	  srv_handle->session_generation = 0;
+	}
+    }
+
+  err_code = prepared_image_check_classes (srv_handle);
+  if (err_code < 0)
+    {
+      goto execute_error;
+    }
+  err_code = prepared_image_materialize (srv_handle);
+  if (err_code < 0)
+    {
+      goto execute_error;
     }
 
   if (srv_handle->is_prepared == FALSE)
@@ -1178,7 +1508,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
   db_session_set_holdable ((DB_SESSION *) srv_handle->session, srv_handle->is_holdable);
   srv_handle->is_from_current_transaction = true;
 
-  if (!(flag & CCI_EXEC_QUERY_INFO))
+  if (!(flag & CCI_EXEC_QUERY_INFO) && !log2_begun)
     {
       SQL_LOG2_EXEC_BEGIN (as_info->cur_sql_log2, stmt_id);
     }
@@ -1200,7 +1530,10 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
   hm_set_current_srv_handle (-1);
 
   stmt_type = db_get_statement_type (session, stmt_id);
+
+image_executed:
   update_query_execution_count (as_info, stmt_type);
+  prepared_session_note_execution (stmt_type);
 
   if (n < 0)
     {
@@ -1230,6 +1563,8 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
     {
       if (srv_handle->is_pooled && (n == ER_QPROC_INVALID_XASLNODE || n == ER_HEAP_UNKNOWN_OBJECT))
 	{
+	  /* another client changed the schema: the parked sessions may be as stale as this one */
+	  prepared_session_invalidate ();
 	  err_code = ERROR_INFO_SET_FORCE (CAS_ER_STMT_POOLING, CAS_ERROR_INDICATOR);
 	  goto execute_error;
 	}
@@ -1237,7 +1572,7 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
       goto execute_error;
     }
 
-  if (max_row > 0 && db_get_statement_type (session, stmt_id) == CUBRID_STMT_SELECT && *clt_cache_reusable == FALSE)
+  if (max_row > 0 && stmt_type == CUBRID_STMT_SELECT && *clt_cache_reusable == FALSE)
     {
       err_code = db_query_seek_tuple (result, max_row, 1);
       if (err_code < 0)
@@ -1300,7 +1635,10 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
 	}
     }
 
-  db_get_cacheinfo (session, stmt_id, &srv_handle->use_plan_cache, &srv_handle->use_query_cache);
+  if (session != NULL)
+    {
+      db_get_cacheinfo (session, stmt_id, &srv_handle->use_plan_cache, &srv_handle->use_query_cache);
+    }
 
   if (do_commit_after_execute (*srv_handle))
     {
@@ -1337,7 +1675,8 @@ ux_execute (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_row,
       int result_cache_lifetime;
       char include_column_info;
 
-      if (db_check_single_query (session) == NO_ERROR)
+      /* an image is of a single statement */
+      if (session == NULL || db_check_single_query (session) == NO_ERROR)
 	{
 	  include_column_info = 0;
 	}
@@ -1421,6 +1760,17 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_
   int query_index = 0;
 
   srv_handle->query_info_flag = FALSE;
+
+  err_code = prepared_image_check_classes (srv_handle);
+  if (err_code < 0)
+    {
+      goto execute_all_error;
+    }
+  err_code = prepared_image_materialize (srv_handle);
+  if (err_code < 0)
+    {
+      goto execute_all_error;
+    }
 
   is_prepared = srv_handle->is_prepared;
 
@@ -1542,11 +1892,14 @@ ux_execute_all (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max_
       hm_set_current_srv_handle (-1);
 
       update_query_execution_count (as_info, stmt_type);
+      prepared_session_note_execution (stmt_type);
 
       if (n < 0)
 	{
 	  if (srv_handle->is_pooled && (n == ER_QPROC_INVALID_XASLNODE || n == ER_HEAP_UNKNOWN_OBJECT))
 	    {
+	      /* another client changed the schema: the parked sessions may be as stale as this one */
+	      prepared_session_invalidate ();
 	      err_code = ERROR_INFO_SET_FORCE (CAS_ER_STMT_POOLING, CAS_ERROR_INDICATOR);
 	      goto execute_all_error;
 	    }
@@ -1817,6 +2170,7 @@ ux_execute_call (T_SRV_HANDLE * srv_handle, char flag, int max_col_size, int max
 
   stmt_type = db_get_statement_type (session, stmt_id);
   update_query_execution_count (as_info, stmt_type);
+  prepared_session_note_execution (stmt_type);
 
 
   if (n < 0)
@@ -1976,6 +2330,12 @@ ux_next_result (T_SRV_HANDLE * srv_handle, char flag, T_NET_BUF * net_buf, T_REQ
 
   cur_result = &(srv_handle->q_result[srv_handle->cur_result_index]);
 
+  err_code = prepared_image_materialize (srv_handle);
+  if (err_code < 0)
+    {
+      goto next_result_error;
+    }
+
   net_buf_cp_int (net_buf, 0, NULL);	/* result code */
 
   /* result msg */
@@ -2090,6 +2450,7 @@ ux_execute_batch (int argc, void **argv, T_NET_BUF * net_buf, T_REQ_INFO * req_i
       SQL_LOG2_EXEC_END (as_info->cur_sql_log2, stmt_id, res_count);
 
       update_query_execution_count (as_info, stmt_type);
+      prepared_session_note_execution (stmt_type);
 
       if (res_count < 0)
 	{
@@ -2245,6 +2606,13 @@ ux_execute_array (T_SRV_HANDLE * srv_handle, int argc, void **argv, T_NET_BUF * 
     }
 
   hm_qresult_end (srv_handle, FALSE);
+
+  err_code = prepared_image_materialize (srv_handle);
+  if (err_code < 0)
+    {
+      goto execute_array_error;
+    }
+
   is_prepared = srv_handle->is_prepared;
 
   if (is_prepared == FALSE)
@@ -2430,12 +2798,15 @@ ux_execute_array (T_SRV_HANDLE * srv_handle, int argc, void **argv, T_NET_BUF * 
 	}
 
       update_query_execution_count (as_info, stmt_type);
+      prepared_session_note_execution (stmt_type);
 
 
       if (res_count < 0)
 	{
 	  if (res_count == ER_QPROC_INVALID_XASLNODE && retried_query_num != num_query)
 	    {
+	      /* another client changed the schema: the parked sessions may be as stale as this one */
+	      prepared_session_invalidate ();
 	      err_code = recompile_statement (srv_handle);
 	      if (err_code < 0)
 		{
@@ -3535,6 +3906,11 @@ ux_get_parameter_info (int srv_h_id, T_NET_BUF * net_buf)
     }
   else
     {
+      err_code = prepared_image_materialize (srv_handle);
+      if (err_code < 0)
+	{
+	  goto parameter_info_error;
+	}
       session = (DB_SESSION *) srv_handle->session;
       stmt_id = srv_handle->q_result->stmt_id;
       /* report K_orig to the driver when the query was rewritten */
@@ -8635,6 +9011,7 @@ sch_query_execute (T_SRV_HANDLE * srv_handle, char *sql_stmt, T_NET_BUF * net_bu
 
 
   update_query_execution_count (as_info, stmt_type);
+  prepared_session_note_execution (stmt_type);
 
 
   if (num_result < 0)
@@ -10724,7 +11101,1777 @@ recompile_statement (T_SRV_HANDLE * srv_handle)
     }
 
   srv_handle->session = session;
+  srv_handle->session_generation = 0;
   srv_handle->q_result->stmt_id = stmt_id;
 
   return err_code;
+}
+
+/*
+ * prepared_session_cache_is_usable () - whether a prepare may take a session from the prepared session cache, and
+ *					 its handle park the session when it closes
+ *   return: true if usable
+ *   prepare_flag(in): CCI_PREPARE_* flags of the prepare
+ *   replace_rule_idx(in): query replace rule of the prepare, -1 if none
+ */
+static bool
+prepared_session_cache_is_usable (int prepare_flag, int replace_rule_idx)
+{
+  MOP user = db_get_user ();
+
+  /* A session parked before another client changed the schema fails its execute with CAS_ER_STMT_POOLING, which
+   * makes the driver prepare again only on a pooling broker. */
+  if (as_info->cur_statement_pooling != ON || cas_shard_flag != OFF || replace_rule_idx >= 0
+      || (prepare_flag & PREPARED_SESSION_EXCLUDED_FLAGS) != 0)
+    {
+      return false;
+    }
+
+  /* Skipping the compilation also skips its privilege checks: only the privileges of a DBA cannot be revoked. A user
+   * found not to be one is remembered for the generation, which a login or a GRANT of this client ends; a user who
+   * is one is asked again, since another client may take it out of the DBA group. */
+  if (user == prepared_session_non_dba_user && prepared_session_non_dba_generation == prepared_session_generation)
+    {
+      return false;
+    }
+  if (!au_is_dba_group_member (user))
+    {
+      prepared_session_non_dba_user = user;
+      prepared_session_non_dba_generation = prepared_session_generation;
+      return false;
+    }
+  return true;
+}
+
+/*
+ * prepared_session_make_key () - make the prepared session cache key of a SQL text
+ *   return: NO_ERROR, or ER_FAILED if the text cannot be cached
+ *   sql_stmt(in): the SQL text
+ *   key(out): the key; key->text is allocated and the caller frees it
+ *
+ * Note: a plain string literal, printable ASCII and the right operand of column = literal, is masked: the
+ *	 compilation turns it into an auto parameter, which prepared_session_bind_literals () fills from the next text.
+ *	 Comments, quoted identifiers and the other literals stay in the key as they are.
+ */
+static int
+prepared_session_make_key (const char *sql_stmt, PREPARED_SESSION_KEY * key)
+{
+  const char *p = sql_stmt;
+  char *q;
+
+  key->text = NULL;
+  key->num_literals = 0;
+
+  /* a backslash may escape a quote, and the scan below would then misplace the end of a literal */
+  if (strchr (sql_stmt, '\\') != NULL || strchr (sql_stmt, PREPARED_SESSION_LITERAL_MARK) != NULL)
+    {
+      return ER_FAILED;
+    }
+
+  key->text = (char *) MALLOC (strlen (sql_stmt) + 1);
+  if (key->text == NULL)
+    {
+      return ER_FAILED;
+    }
+  q = key->text;
+
+  while (*p != '\0')
+    {
+      const char *end;
+
+      if ((p[0] == '-' && p[1] == '-') || (p[0] == '/' && p[1] == '/'))
+	{
+	  end = strchr (p, '\n');
+	  end = (end != NULL) ? end + 1 : p + strlen (p);
+	}
+      else if (p[0] == '/' && p[1] == '*')
+	{
+	  end = strstr (p + 2, "*/");
+	  if (end == NULL)
+	    {
+	      goto not_cacheable;
+	    }
+	  end += 2;
+	}
+      else if (*p == '\'' || *p == '"' || *p == '`' || *p == '[')
+	{
+	  const char close = (*p == '[') ? ']' : *p;
+	  bool is_plain = (*p == '\'');
+
+	  for (end = p + 1; *end != '\0'; end++)
+	    {
+	      if (*end == close)
+		{
+		  if (close == ']' || end[1] != close)
+		    {
+		      break;
+		    }
+		  /* a doubled quote stands for the quote */
+		  end++;
+		}
+	      else if (*end < ' ' || *end > '~')
+		{
+		  is_plain = false;
+		}
+	    }
+	  if (*end == '\0')
+	    {
+	      goto not_cacheable;
+	    }
+	  end++;
+
+	  /* an empty literal is NULL under oracle_style_empty_string */
+	  if (is_plain && key->num_literals < PREPARED_SESSION_MAX_LITERALS && end - p - 2 > 0
+	      && end - p - 2 <= PREPARED_SESSION_MAX_LITERAL_LENGTH
+	      && prepared_session_is_equal_operand (key->text, q, end))
+	    {
+	      key->literals[key->num_literals].text = p + 1;
+	      key->literals[key->num_literals].length = (int) (end - p - 2);
+	      key->num_literals++;
+	      *q++ = PREPARED_SESSION_LITERAL_MARK;
+	      p = end;
+	      continue;
+	    }
+	}
+      else
+	{
+	  end = p + 1;
+	}
+
+      memcpy (q, p, end - p);
+      q += end - p;
+      p = end;
+    }
+  *q = '\0';
+
+  key->hash = 2166136261U;	/* FNV-1a */
+  for (q = key->text; *q != '\0'; q++)
+    {
+      key->hash = (key->hash ^ (unsigned char) *q) * 16777619U;
+    }
+  return NO_ERROR;
+
+not_cacheable:
+  FREE_MEM (key->text);
+  return ER_FAILED;
+}
+
+/*
+ * prepared_session_is_equal_operand () - whether a literal is the right operand of column = literal in the text
+ *   return: true if it is
+ *   key_start(in): the key made so far
+ *   key_end(in): the end of the key made so far, where the literal goes
+ *   after(in): the text after the literal
+ *
+ * Note: only there the compilation does not rewrite the predicate for the value; LIKE 'a' becomes = 'a', which a
+ *	 later LIKE 'a%' of the same key must not reuse.
+ */
+static bool
+prepared_session_is_equal_operand (const char *key_start, const char *key_end, const char *after)
+{
+  const char *s = key_end;
+
+  while (s > key_start && char_isspace (s[-1]))
+    {
+      s--;
+    }
+  if (s == key_start || s[-1] != '=')
+    {
+      return false;
+    }
+  s--;
+  if (s > key_start && strchr ("<>!:", s[-1]) != NULL)
+    {
+      return false;
+    }
+  while (s > key_start && char_isspace (s[-1]))
+    {
+      s--;
+    }
+  if (s == key_start || !(char_isalnum (s[-1]) || s[-1] == '_' || s[-1] == ']' || s[-1] == '"' || s[-1] == '`'))
+    {
+      return false;
+    }
+
+  while (char_isspace (*after))
+    {
+      after++;
+    }
+  return (*after == '\0' || *after == ')' || *after == ',' || *after == ';' || char_isalpha (*after));
+}
+
+/*
+ * prepared_session_literal_slots () - the host variable positions the compilation gave the literals of the text
+ *   return: number of positions, or -1 if more than PREPARED_SESSION_MAX_LITERALS
+ *   parser(in): parser of the compiled session
+ *   slots(out): the positions, PREPARED_SESSION_MAX_LITERALS long
+ */
+static int
+prepared_session_literal_slots (const PARSER_CONTEXT * parser, int *slots)
+{
+  int num_slots = 0;
+
+  for (int k = parser->host_var_count; k < parser->host_var_count + parser->auto_param_count; k++)
+    {
+      if (pt_is_derived_host_var (parser, k))
+	{
+	  /* a bind type signature copy of a user host variable, not a literal */
+	  continue;
+	}
+      if (num_slots == PREPARED_SESSION_MAX_LITERALS)
+	{
+	  return -1;
+	}
+      slots[num_slots++] = k;
+    }
+  return num_slots;
+}
+
+/*
+ * prepared_session_literal_value () - make the value of a masked literal the way the compilation made the value of
+ *				       its auto parameter
+ *   return: NO_ERROR, or ER_FAILED if the value of like is not one the compilation makes from a literal
+ *   literal(in): the masked literal
+ *   like(in): an auto parameter value of the compilation
+ *   buf(in): PREPARED_SESSION_MAX_LITERAL_LENGTH + 1 bytes the value refers to
+ *   value(out): the value, referring to buf
+ */
+static int
+prepared_session_literal_value (const PREPARED_SESSION_LITERAL * literal, const DB_VALUE * like, char *buf,
+				DB_VALUE * value)
+{
+  DB_TYPE type = DB_VALUE_DOMAIN_TYPE (like);
+  int precision = db_value_precision (like);
+  int length = 0;
+
+  for (int i = 0; i < literal->length; i++)
+    {
+      buf[length++] = literal->text[i];
+      if (literal->text[i] == '\'')
+	{
+	  /* skip the second quote of a doubled quote */
+	  i++;
+	}
+    }
+  buf[length] = '\0';
+
+  if ((type != DB_TYPE_CHAR && type != DB_TYPE_VARCHAR) || DB_IS_NULL (like))
+    {
+      return ER_FAILED;
+    }
+  if (precision != TP_FLOATING_PRECISION_VALUE)
+    {
+      /* the compilation gave the literal its own length as precision */
+      if (precision != db_get_string_length (like))
+	{
+	  return ER_FAILED;
+	}
+      precision = length;
+    }
+
+  if (type == DB_TYPE_CHAR)
+    {
+      db_make_char (value, precision, buf, length, db_get_string_codeset (like), db_get_string_collation (like));
+    }
+  else
+    {
+      db_make_varchar (value, precision, buf, length, db_get_string_codeset (like), db_get_string_collation (like));
+    }
+  return NO_ERROR;
+}
+
+/*
+ * prepared_session_literals_match () - whether the auto parameters of a fresh compilation are the masked literals of
+ *					its text, in the order of the text
+ *   return: true if they match
+ *   session(in): the compiled session
+ *   key(in): the key of its text
+ */
+static bool
+prepared_session_literals_match (DB_SESSION * session, const PREPARED_SESSION_KEY * key)
+{
+  PARSER_CONTEXT *parser = session->parser;
+  int slots[PREPARED_SESSION_MAX_LITERALS];
+  char buf[PREPARED_SESSION_MAX_LITERAL_LENGTH + 1];
+  PREPARED_SESSION_LITERAL_USES uses;
+
+  if (prepared_session_literal_slots (parser, slots) != key->num_literals)
+    {
+      /* a literal was folded or kept, or an auto parameter comes from elsewhere */
+      return false;
+    }
+
+  for (int i = 0; i < key->num_literals; i++)
+    {
+      const PREPARED_SESSION_LITERAL *literal = &key->literals[i];
+      const DB_VALUE *like = &parser->host_variables[slots[i]];
+      DB_VALUE value;
+
+      if (prepared_session_literal_value (literal, like, buf, &value) != NO_ERROR
+	  || db_value_precision (&value) != db_value_precision (like)
+	  || db_get_string_size (&value) != db_get_string_size (like)
+	  || memcmp (db_get_string (&value), db_get_string (like), db_get_string_size (like)) != 0)
+	{
+	  return false;
+	}
+
+      if (prepared_session_text_has_literal (key->text, literal))
+	{
+	  /* the literal the compilation made the auto parameter of may be this unmasked one of the same value */
+	  return false;
+	}
+
+      for (int j = 0; j < i; j++)
+	{
+	  /* two equal literals could have filled their positions in either order */
+	  if (key->literals[j].length == literal->length
+	      && memcmp (key->literals[j].text, literal->text, literal->length) == 0)
+	    {
+	      return false;
+	    }
+	}
+    }
+
+  /* another predicate may have been rewritten for the value of its literal (LIKE 'a%' into a range) */
+  memset (&uses, 0, sizeof (uses));
+  uses.slots = slots;
+  uses.num_slots = key->num_literals;
+  (void) parser_walk_tree (parser, session->statements[0], prepared_session_count_literal_uses, &uses, NULL, NULL);
+  for (int i = 0; i < key->num_literals; i++)
+    {
+      if (uses.all[i] == 0 || uses.all[i] != uses.equal[i])
+	{
+	  return false;
+	}
+    }
+  return true;
+}
+
+/*
+ * prepared_session_text_has_literal () - whether a key keeps a string literal of the same text as a masked one
+ *   return: true if it does
+ *   key_text(in): the key, with the masked literals replaced by PREPARED_SESSION_LITERAL_MARK
+ *   literal(in): the masked literal
+ */
+static bool
+prepared_session_text_has_literal (const char *key_text, const PREPARED_SESSION_LITERAL * literal)
+{
+  for (const char *p = strchr (key_text, '\''); p != NULL; p = strchr (p + 1, '\''))
+    {
+      if (strncmp (p + 1, literal->text, literal->length) == 0 && p[1 + literal->length] == '\'')
+	{
+	  return true;
+	}
+    }
+  return false;
+}
+
+/*
+ * prepared_session_literal_index () - the literal whose auto parameter a node is
+ *   return: index into uses->slots, or -1 if the node is not one of them
+ *   uses(in): the literal positions
+ *   node(in): a node of the compiled tree
+ */
+static int
+prepared_session_literal_index (const PREPARED_SESSION_LITERAL_USES * uses, const PT_NODE * node)
+{
+  if (node == NULL || node->node_type != PT_HOST_VAR)
+    {
+      return -1;
+    }
+  for (int i = 0; i < uses->num_slots; i++)
+    {
+      if (uses->slots[i] == node->info.host_var.index)
+	{
+	  return i;
+	}
+    }
+  return -1;
+}
+
+/*
+ * prepared_session_count_literal_uses () - parser_walk_tree callback counting, for each literal, its auto parameter
+ *					     nodes and those of them that are an operand of column = literal
+ */
+static PT_NODE *
+prepared_session_count_literal_uses (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  PREPARED_SESSION_LITERAL_USES *uses = (PREPARED_SESSION_LITERAL_USES *) arg;
+  int i = prepared_session_literal_index (uses, node);
+
+  if (i >= 0)
+    {
+      uses->all[i]++;
+    }
+  else if (node->node_type == PT_EXPR && node->info.expr.op == PT_EQ)
+    {
+      PT_NODE *arg1 = node->info.expr.arg1;
+      PT_NODE *arg2 = node->info.expr.arg2;
+
+      if (arg1 != NULL && arg1->node_type == PT_NAME)
+	{
+	  i = prepared_session_literal_index (uses, arg2);
+	}
+      else if (arg2 != NULL && arg2->node_type == PT_NAME)
+	{
+	  i = prepared_session_literal_index (uses, arg1);
+	}
+      if (i >= 0)
+	{
+	  uses->equal[i]++;
+	}
+    }
+  return node;
+}
+
+/*
+ * prepared_session_find_unsafe_node () - parser_walk_tree callback finding a node whose compilation depends on what
+ *					   the server does not track for the XASL: a remote table or a stored routine
+ */
+static PT_NODE *
+prepared_session_find_unsafe_node (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  bool *is_unsafe = (bool *) arg;
+
+  switch (node->node_type)
+    {
+    case PT_DBLINK_TABLE:
+    case PT_DBLINK_TABLE_DML:
+    case PT_METHOD_CALL:
+      *is_unsafe = true;
+      *continue_walk = PT_STOP_WALK;
+      break;
+
+    default:
+      break;
+    }
+  return node;
+}
+
+/*
+ * prepared_session_names_tracked_inputs () - whether a parsed, not yet compiled, statement names no interpreter
+ *					       parameter and no common table expression
+ *   return: true if so
+ *   session(in): the session after db_open_buffer ()
+ *
+ * Note: the compilation binds the value of an interpreter parameter (:name, or a name a label of that name
+ *	 resolves to), and replaces it, so the check reads the tree before it. The walk asks the server nothing.
+ */
+static bool
+prepared_session_names_tracked_inputs (DB_SESSION * session)
+{
+  bool is_other = false;
+
+  if (session->dimension != 1)
+    {
+      return false;
+    }
+  (void) parser_walk_tree (session->parser, session->statements[0], prepared_session_find_untracked_name, &is_other,
+			   NULL, NULL);
+  return !is_other;
+}
+
+/*
+ * prepared_session_find_untracked_name () - parser_walk_tree callback finding an interpreter parameter, a name a
+ *					     label resolves to, or a common table expression
+ */
+static PT_NODE *
+prepared_session_find_untracked_name (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  bool *is_other = (bool *) arg;
+
+  if ((node->node_type == PT_NAME
+       && (node->info.name.meta_class == PT_PARAMETER || pt_find_value_of_label (node->info.name.original) != NULL))
+      || node->node_type == PT_CTE)
+    {
+      *is_other = true;
+      *continue_walk = PT_STOP_WALK;
+    }
+  return node;
+}
+
+/*
+ * prepared_session_locks_base_classes () - whether every class the compilation locked is a base class the text
+ *					     names directly
+ *   return: true if so
+ *   parser(in): parser of the compiled session
+ *
+ * Note: the server drops the XASL when a class it reads changes, but not when a view or a synonym the text names
+ *	 changes. pt_class_pre_fetch () locked the classes, so the lookups ask the server nothing.
+ */
+static bool
+prepared_session_locks_base_classes (const PARSER_CONTEXT * parser)
+{
+  /* the second pt_class_pre_fetch () of a compilation, after the views are translated, locks only their classes */
+  if (parser->flag.has_synonym_spec || parser->flag.has_vclass_spec)
+    {
+      return false;
+    }
+  for (int i = 0; i < parser->num_lcks_classes; i++)
+    {
+      MOP class_mop = ws_find_class (parser->lcks_classes[i]);
+
+      if (class_mop == NULL || db_is_vclass (class_mop) != 0)
+	{
+	  return false;
+	}
+    }
+  return true;
+}
+
+/*
+ * prepared_session_is_reusable () - whether a freshly compiled session may serve a later prepare of its key
+ *   return: true if reusable
+ *   session(in): the compiled session
+ *   stmt_id(in): its statement
+ *   key(in): the key of its text
+ */
+static bool
+prepared_session_is_reusable (DB_SESSION * session, int stmt_id, const PREPARED_SESSION_KEY * key)
+{
+  PARSER_CONTEXT *parser = session->parser;
+  PT_NODE *statement;
+  bool is_unsafe = false;
+  int stmt_type;
+
+  if (session->dimension != 1)
+    {
+      return false;
+    }
+  statement = session->statements[0];
+
+  stmt_type = db_get_statement_type (session, stmt_id);
+  if (!prepared_session_type_is_reusable (stmt_type))
+    {
+      return false;
+    }
+
+  /* only a statement the server executes from its XASL; the others execute from the tree */
+  if (statement->xasl_id == NULL || statement->flag.cannot_prepare)
+    {
+      return false;
+    }
+  /* the hint asks every prepare for a new plan */
+  if (statement->flag.recompile)
+    {
+      return false;
+    }
+  if (stmt_type == CUBRID_STMT_SELECT && statement->info.query.into_list != NULL)
+    {
+      return false;
+    }
+  if (pt_has_session_variable (parser, statement))
+    {
+      return false;
+    }
+
+  (void) parser_walk_tree (parser, statement, prepared_session_find_unsafe_node, &is_unsafe, NULL, NULL);
+  if (is_unsafe || !prepared_session_locks_base_classes (parser))
+    {
+      return false;
+    }
+
+  return prepared_session_literals_match (session, key);
+}
+
+/*
+ * prepared_session_type_is_reusable () - whether statements of a type may be kept in the prepared session cache
+ *   return: true if they may
+ *   stmt_type(in): CUBRID_STMT_* type
+ */
+static bool
+prepared_session_type_is_reusable (int stmt_type)
+{
+  return (stmt_type == CUBRID_STMT_SELECT || stmt_type == CUBRID_STMT_INSERT || stmt_type == CUBRID_STMT_UPDATE
+	  || stmt_type == CUBRID_STMT_DELETE);
+}
+
+/*
+ * prepared_session_note_execution () - invalidate the prepared session cache after a statement that may change what
+ *					a compilation makes: DDL, GRANT, SET SYSTEM PARAMETERS, SET NAMES and the like
+ *   return: none
+ *   stmt_type(in): CUBRID_STMT_* type of the executed statement
+ */
+static void
+prepared_session_note_execution (int stmt_type)
+{
+  switch (stmt_type)
+    {
+    case CUBRID_STMT_SELECT:
+    case CUBRID_STMT_INSERT:
+    case CUBRID_STMT_UPDATE:
+    case CUBRID_STMT_DELETE:
+    case CUBRID_STMT_MERGE:
+    case CUBRID_STMT_COMMIT_WORK:
+    case CUBRID_STMT_SAVEPOINT:
+      break;
+
+    case CUBRID_STMT_ROLLBACK_WORK:
+      /* ROLLBACK and ROLLBACK TO SAVEPOINT may undo a change the cache was invalidated for */
+      ux_note_partial_rollback ();
+      break;
+
+    default:
+      prepared_session_invalidate ();
+      prepared_session_invalidated_in_tran = true;
+      break;
+    }
+}
+
+/*
+ * prepared_session_note_end_tran () - invalidate the prepared session cache when a transaction that changed the
+ *				       schema rolls back: the sessions parked after the change compiled against it
+ *   return: none
+ *   tran_type(in): CCI_TRAN_COMMIT or CCI_TRAN_ROLLBACK
+ */
+static void
+prepared_session_note_end_tran (int tran_type)
+{
+  if (tran_type != CCI_TRAN_COMMIT && prepared_session_invalidated_in_tran)
+    {
+      prepared_session_invalidate ();
+    }
+  prepared_session_invalidated_in_tran = false;
+}
+
+/*
+ * ux_note_partial_rollback () - invalidate the prepared session cache when a rollback to a savepoint may undo a
+ *				 change of the running transaction the cache was invalidated for: the images parked
+ *				 after the change were made against it
+ *   return: none
+ */
+void
+ux_note_partial_rollback (void)
+{
+  if (prepared_session_invalidated_in_tran)
+    {
+      prepared_session_invalidate ();
+    }
+}
+
+/*
+ * prepared_session_check_schema_version () - invalidate the prepared session cache if the local schema version
+ *					      changed since the last check
+ *   return: none
+ */
+static void
+prepared_session_check_schema_version (void)
+{
+  if (prepared_session_schema_version != sm_local_schema_version ())
+    {
+      prepared_session_invalidate ();
+      prepared_session_schema_version = sm_local_schema_version ();
+    }
+}
+
+/*
+ * prepared_session_take () - take the image parked under a key out of the prepared session cache
+ *   return: the image, now owned by the caller, or NULL
+ *   key(in): the key of the text to prepare
+ *   prepare_flag(in): CCI_PREPARE_* flags of the prepare
+ *   client_version(in): protocol version of the client, which the prepare response depends on
+ */
+static PREPARED_IMAGE *
+prepared_session_take (const PREPARED_SESSION_KEY * key, int prepare_flag, T_BROKER_VERSION client_version)
+{
+  MOP user = db_get_user ();
+
+  prepared_session_check_schema_version ();
+
+  for (int i = 0; i < PREPARED_SESSION_CACHE_SIZE; i++)
+    {
+      PREPARED_SESSION_ENTRY *entry = &prepared_session_cache[i];
+      PREPARED_IMAGE *image;
+
+      if (entry->key_text == NULL || entry->key_hash != key->hash || entry->prepare_flag != prepare_flag
+	  || entry->user != user || entry->image->client_version != client_version
+	  || strcmp (entry->key_text, key->text) != 0)
+	{
+	  continue;
+	}
+
+      image = entry->image;
+      FREE_MEM (entry->key_text);
+      entry->image = NULL;
+      return image;
+    }
+  return NULL;
+}
+
+/*
+ * prepared_session_put () - park an image in the prepared session cache, evicting the least recently parked one
+ *			     when the cache is full
+ *   return: none
+ *   key_text(in): the key; the cache owns it from now on
+ *   key_hash(in): hash of key_text
+ *   prepare_flag(in): CCI_PREPARE_* flags the image was prepared with
+ *   image(in): the image; the cache owns it from now on
+ */
+static void
+prepared_session_put (char *key_text, unsigned int key_hash, int prepare_flag, PREPARED_IMAGE * image)
+{
+  MOP user = db_get_user ();
+  PREPARED_SESSION_ENTRY *victim = &prepared_session_cache[0];
+
+  for (int i = 0; i < PREPARED_SESSION_CACHE_SIZE; i++)
+    {
+      PREPARED_SESSION_ENTRY *entry = &prepared_session_cache[i];
+
+      if (entry->key_text != NULL && entry->key_hash == key_hash && entry->prepare_flag == prepare_flag
+	  && entry->user == user && entry->image->client_version == image->client_version
+	  && strcmp (entry->key_text, key_text) == 0)
+	{
+	  /* two handles of the text were open together: one image of it is enough */
+	  FREE_MEM (key_text);
+	  FREE_MEM (image);
+	  return;
+	}
+
+      if (victim->key_text != NULL && (entry->key_text == NULL || entry->last_used < victim->last_used))
+	{
+	  victim = entry;
+	}
+    }
+
+  if (victim->key_text != NULL)
+    {
+      FREE_MEM (victim->key_text);
+      FREE_MEM (victim->image);
+    }
+  victim->key_text = key_text;
+  victim->key_hash = key_hash;
+  victim->prepare_flag = prepare_flag;
+  victim->user = user;
+  victim->image = image;
+  victim->last_used = ++prepared_session_clock;
+}
+
+/*
+ * prepared_session_invalidate () - free every parked image and keep the open handles from parking theirs
+ *   return: none
+ */
+static void
+prepared_session_invalidate (void)
+{
+  for (int i = 0; i < PREPARED_SESSION_CACHE_SIZE; i++)
+    {
+      PREPARED_SESSION_ENTRY *entry = &prepared_session_cache[i];
+
+      if (entry->key_text != NULL)
+	{
+	  FREE_MEM (entry->key_text);
+	  FREE_MEM (entry->image);
+	}
+    }
+
+  prepared_session_generation++;
+  if (prepared_session_generation == 0)
+    {
+      /* 0 marks a handle that does not park */
+      prepared_session_generation = 1;
+    }
+}
+
+/*
+ * prepared_image_make () - make the image of a freshly compiled session and of the prepare response it produced
+ *   return: the image, or NULL if the statement locked more classes than an image keeps or out of memory
+ *   session(in): the compiled session
+ *   q_result(in): the result prepare_column_list_info_set () filled
+ *   net_buf(in): the response, written up to the end of the column information
+ *   response_offset(in): data_size of net_buf at the start of the response after the handle id
+ *   srv_handle(in): the handle, with use_plan_cache and use_query_cache set
+ *   client_version(in): protocol version of the client
+ */
+static PREPARED_IMAGE *
+prepared_image_make (DB_SESSION * session, const T_QUERY_RESULT * q_result, const T_NET_BUF * net_buf,
+		     int response_offset, const T_SRV_HANDLE * srv_handle, T_BROKER_VERSION client_version)
+{
+  PARSER_CONTEXT *parser = session->parser;
+  PT_NODE *statement = session->statements[0];
+  PREPARED_IMAGE *image;
+  DB_QUERY_TYPE *type_list;
+  bool can_execute = prepared_image_can_execute (session);
+  int response_size = net_buf->data_size - response_offset;
+  int auto_params_size = 0;
+  int size;
+  int offset;
+  char *ptr;
+
+  if (net_buf->err_code != 0 || response_size <= 0 || parser->num_lcks_classes > PREPARED_IMAGE_MAX_CLASSES
+      || (parser->num_lcks_classes > 0 && parser->lcks_locks == NULL))
+    {
+      return NULL;
+    }
+
+  if (can_execute)
+    {
+      for (int i = 0; i < parser->host_var_count; i++)
+	{
+	  auto_params_size += or_packed_domain_size (parser->host_var_expected_domains[i], 0) + 1;
+	}
+      for (int i = 0; i < parser->auto_param_count; i++)
+	{
+	  /* or_pack_value () aligns each value */
+	  auto_params_size += or_packed_value_size (&parser->host_variables[parser->host_var_count + i], 0, 1, 1)
+	    + MAX_ALIGNMENT;
+	}
+      auto_params_size += 2 * MAX_ALIGNMENT;
+    }
+  size = (int) sizeof (PREPARED_IMAGE) + response_size + q_result->num_column;
+  for (int i = 0; i < parser->num_lcks_classes; i++)
+    {
+      size += (int) strlen (parser->lcks_classes[i]) + 1;
+    }
+  size = DB_ALIGN (size, MAX_ALIGNMENT) + auto_params_size;
+
+  image = (PREPARED_IMAGE *) MALLOC (size);
+  if (image == NULL)
+    {
+      return NULL;
+    }
+  memset (image, 0, sizeof (PREPARED_IMAGE));
+  image->size = size;
+  image->client_version = client_version;
+  image->stmt_type = q_result->stmt_type;
+  image->num_markers = srv_handle->num_markers;
+  image->use_plan_cache = srv_handle->use_plan_cache;
+  image->use_query_cache = srv_handle->use_query_cache;
+  image->num_column = q_result->num_column;
+  image->include_oid = q_result->include_oid;
+
+  offset = (int) sizeof (PREPARED_IMAGE);
+  image->response_offset = offset;
+  image->response_size = response_size;
+  memcpy (PREPARED_IMAGE_AT (image, offset), net_buf->data + NET_BUF_HEADER_SIZE + response_offset, response_size);
+  offset += response_size;
+
+  image->null_type_column_offset = offset;
+  if (q_result->num_column > 0)
+    {
+      if (q_result->null_type_column != NULL)
+	{
+	  memcpy (PREPARED_IMAGE_AT (image, offset), q_result->null_type_column, q_result->num_column);
+	}
+      else
+	{
+	  memset (PREPARED_IMAGE_AT (image, offset), 0, q_result->num_column);
+	}
+      offset += q_result->num_column;
+    }
+
+  image->num_classes = parser->num_lcks_classes;
+  for (int i = 0; i < parser->num_lcks_classes; i++)
+    {
+      PREPARED_IMAGE_CLASS *image_class = &image->classes[i];
+      int length = (int) strlen (parser->lcks_classes[i]) + 1;
+      MOP class_mop = ws_find_class (parser->lcks_classes[i]);
+
+      if (class_mop == NULL)
+	{
+	  FREE_MEM (image);
+	  return NULL;
+	}
+      image_class->name_offset = offset;
+      memcpy (PREPARED_IMAGE_AT (image, offset), parser->lcks_classes[i], length);
+      offset += length;
+      image_class->lock = parser->lcks_locks[i];
+      image_class->only_all = parser->lcks_only_all[i];
+      image_class->flags = parser->lcks_flags[i];
+      /* the number the compilation saw, which pt_class_pre_fetch () just made current */
+      COPY_OID (&image_class->oid, ws_oid (class_mop));
+      image_class->chn = locator_get_cache_coherency_number (class_mop);
+    }
+  offset = DB_ALIGN (offset, MAX_ALIGNMENT);
+
+  image->can_execute = can_execute;
+  image->target_class = -1;
+  if (can_execute)
+    {
+      image->can_commit = db_can_execute_statement_with_autocommit (parser, statement);
+      XASL_ID_COPY (&image->xasl_id, statement->xasl_id);
+      if (statement->node_type == PT_SELECT)
+	{
+	  /* do_execute_select () */
+	  image->query_flag = DEFAULT_EXEC_MODE;
+	  if (statement->info.query.flag.reexecute)
+	    {
+	      image->query_flag |= NOT_FROM_RESULT_CACHE;
+	    }
+	  if (statement->info.query.flag.do_cache)
+	    {
+	      image->query_flag |= RESULT_CACHE_REQUIRED;
+	    }
+	  if (statement->info.query.flag.do_not_cache || statement->info.query.oids_included)
+	    {
+	      image->query_flag |= RESULT_CACHE_INHIBITED;
+	    }
+	  if (parser->flag.dont_collect_exec_stats)
+	    {
+	      image->query_flag |= DONT_COLLECT_EXEC_STATS;
+	    }
+	  /* pt_new_query_result_descriptor () */
+	  image->num_columns =
+	    pt_length_of_select_list (pt_get_select_list (parser, statement), EXCLUDE_HIDDEN_COLUMNS);
+	  image->oids_included = statement->info.query.oids_included;
+	  type_list = db_get_query_type_list (session, 1);
+	  for (DB_QUERY_TYPE * t = type_list; t != NULL; t = db_query_format_next (t))
+	    {
+	      image->num_query_types++;
+	    }
+	  db_query_format_free (type_list);
+	}
+      else
+	{
+	  /* do_execute_update () and do_execute_insert () */
+	  image->query_flag = DEFAULT_EXEC_MODE | NOT_FROM_RESULT_CACHE | RESULT_CACHE_INHIBITED;
+	  image->target_class = prepared_image_target_class (image, statement);
+	  if (image->target_class < 0)
+	    {
+	      image->can_execute = false;
+	    }
+	}
+
+      image->host_var_count = parser->host_var_count;
+      image->bind_flags_offset = offset;
+      for (int i = 0; i < parser->host_var_count; i++)
+	{
+	  *PREPARED_IMAGE_AT (image, offset + i) =
+	    pt_host_var_is_assignment (parser, i) ? PREPARED_IMAGE_BIND_ASSIGNMENT : 0;
+	}
+      offset = DB_ALIGN (offset + parser->host_var_count, MAX_ALIGNMENT);
+      image->domains_offset = offset;
+      ptr = PREPARED_IMAGE_AT (image, offset);
+      for (int i = 0; i < parser->host_var_count; i++)
+	{
+	  ptr = or_pack_domain (ptr, parser->host_var_expected_domains[i], 0, 0);
+	}
+      offset = DB_ALIGN ((int) (ptr - (char *) image), MAX_ALIGNMENT);
+
+      image->auto_param_count = parser->auto_param_count;
+      image->auto_params_offset = offset;
+      ptr = PREPARED_IMAGE_AT (image, offset);
+      for (int i = 0; i < parser->auto_param_count; i++)
+	{
+	  ptr = or_pack_value (ptr, &parser->host_variables[parser->host_var_count + i]);
+	}
+      offset = (int) (ptr - (char *) image);
+    }
+  assert (offset <= size);
+  return image;
+}
+
+/*
+ * prepared_image_can_execute () - whether an image of a compiled session can execute the statement without the
+ *				   session: a SELECT whose only host variables are the masked literals, or an INSERT or
+ *				   UPDATE the server executes, whose host variables are cast as pt_set_host_variables ()
+ *				   casts them in its plain case; and the execute takes nothing else from the tree than
+ *				   what the image keeps
+ *   return: true if it can
+ *   session(in): the compiled session, of a reusable statement (prepared_session_is_reusable)
+ */
+static bool
+prepared_image_can_execute (DB_SESSION * session)
+{
+  PARSER_CONTEXT *parser = session->parser;
+  PT_NODE *statement = session->statements[0];
+  bool has_cached_subquery = false;
+
+  if (statement->xasl_id == NULL || statement->next != NULL || parser->host_var_compiled_domains != NULL
+      || parser->flag.has_str_to_date_or_elt || statement->flag.si_datetime || statement->flag.si_tran_id
+      || statement->flag.bind_watch_candidate || statement->flag.hv_pred_plan_unpeeked
+      || parser->auto_param_count > PREPARED_SESSION_MAX_LITERALS)
+    {
+      return false;
+    }
+
+  switch (statement->node_type)
+    {
+    case PT_SELECT:
+      if (parser->host_var_count != 0)
+	{
+	  return false;
+	}
+      break;
+
+    case PT_UPDATE:
+      /* do_check_update_trigger () refuses it under block_nowhere_statement */
+      if (!statement->info.update.server_update || statement->info.update.object != NULL
+	  || statement->info.update.do_class_attrs || statement->info.update.orderby_for != NULL
+	  || statement->info.update.search_cond == NULL)
+	{
+	  return false;
+	}
+      /* db_execute_and_keep_statement_local () may replan it per bind value (db_bind_watch_is_open) */
+      if ((statement->info.update.hint & PT_HINT_BIND_SENSITIVE) != 0
+	  || prm_get_bool_value (PRM_ID_PLAN_CACHE_BIND_SENSITIVITY))
+	{
+	  return false;
+	}
+      break;
+
+    case PT_INSERT:
+      /* do_prepare_insert () decides the server execution of an ON DUPLICATE KEY UPDATE by the update triggers too */
+      if (statement->info.insert.server_allowed != SERVER_INSERT_IS_ALLOWED || statement->info.insert.do_replace
+	  || statement->info.insert.odku_assignments != NULL)
+	{
+	  return false;
+	}
+      break;
+
+    default:
+      return false;
+    }
+
+  /* the server executes it with the commit only: otherwise do_check_*_trigger () fires the statement triggers, which
+   * also keep it from the commit (execute_with_commit_allowed), as the USE_SBR hint does */
+  if (statement->node_type != PT_SELECT && !db_can_execute_statement_with_autocommit (parser, statement))
+    {
+      return false;
+    }
+
+  for (int i = parser->host_var_count; i < parser->host_var_count + parser->auto_param_count; i++)
+    {
+      if (pt_is_derived_host_var (parser, i))
+	{
+	  /* a bind type signature copy of a user host variable (pt_set_derived_host_variable) */
+	  return false;
+	}
+    }
+  for (int i = 0; i < parser->host_var_count; i++)
+    {
+      if (parser->host_var_format_classes != NULL
+	  && PT_HOST_VAR_CLASS (parser->host_var_format_classes[i]) == PT_HOST_VAR_CLASS_AGNOSTIC
+	  && TP_DOMAIN_TYPE (parser->host_var_expected_domains[i]) == DB_TYPE_INTEGER)
+	{
+	  /* only whether the value is NULL reaches the plan (pt_set_agnostic_host_variable) */
+	  return false;
+	}
+    }
+
+  /* db_execute_and_keep_statement_local () executes them first */
+  (void) parser_walk_tree (parser, statement, prepared_image_find_cached_subquery, &has_cached_subquery, NULL, NULL);
+  return !has_cached_subquery;
+}
+
+/*
+ * prepared_image_target_class () - the class of the image an INSERT or UPDATE changes
+ *   return: its index in image->classes, or -1 if there is not exactly one
+ *   image(in): the image, its classes set
+ *   statement(in): the compiled UPDATE
+ */
+static int
+prepared_image_target_class (const PREPARED_IMAGE * image, PT_NODE * statement)
+{
+  PT_NODE *specs = (statement->node_type == PT_UPDATE) ? statement->info.update.spec : statement->info.insert.spec;
+  int target = -1;
+
+  for (PT_NODE * spec = specs; spec != NULL; spec = spec->next)
+    {
+      PT_NODE *flat = spec->info.spec.flat_entity_list;
+
+      if (statement->node_type == PT_UPDATE && !(spec->info.spec.flag & PT_SPEC_FLAG_UPDATE))
+	{
+	  continue;
+	}
+      if (target >= 0 || flat == NULL || flat->next != NULL || flat->info.name.db_object == NULL)
+	{
+	  return -1;
+	}
+      for (int i = 0; i < image->num_classes; i++)
+	{
+	  if (ws_find_class (PREPARED_IMAGE_AT (image, image->classes[i].name_offset)) == flat->info.name.db_object)
+	    {
+	      target = i;
+	    }
+	}
+      if (target < 0)
+	{
+	  return -1;
+	}
+    }
+  return target;
+}
+
+/*
+ * prepared_image_find_cached_subquery () - parser_walk_tree callback finding a subquery of the result cache
+ */
+static PT_NODE *
+prepared_image_find_cached_subquery (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  bool *found = (bool *) arg;
+
+  if (node->node_type == PT_SELECT && node->info.query.flag.subquery_cached)
+    {
+      *found = true;
+      *continue_walk = PT_STOP_WALK;
+    }
+  return node;
+}
+
+/*
+ * prepared_image_execute () - execute the statement of a handle from its image, as db_execute_and_keep_statement ()
+ *			       executes it from its session
+ *   return: number of rows or error code; meaningless if not executed
+ *   srv_handle(in): the handle, with no session
+ *   argc(in), argv(in): the bound values of the request
+ *   net_buf(in): the response, for make_bind_value ()
+ *   clt_cache_time(in): the client result cache time
+ *   result(out): the result
+ *   executed(out): false if the image cannot execute it now, and the caller compiles the session
+ */
+static int
+prepared_image_execute (T_SRV_HANDLE * srv_handle, int argc, void **argv, T_NET_BUF * net_buf,
+			CACHE_TIME * clt_cache_time, DB_QUERY_RESULT ** result, bool * executed)
+{
+  const PREPARED_IMAGE *image = srv_handle->prepared_image;
+  PREPARED_SESSION_KEY key;
+  DB_VALUE *bind_values = NULL;
+  DB_VALUE values[2 * PREPARED_SESSION_MAX_LITERALS];
+  DB_VALUE likes[PREPARED_SESSION_MAX_LITERALS];
+  char bufs[PREPARED_SESSION_MAX_LITERALS][PREPARED_SESSION_MAX_LITERAL_LENGTH + 1];
+  const char *ptr;
+  int num_binds = 0;
+  int num_likes = 0;
+  int num_values;
+  bool has_user_trigger = false;
+  bool use_auto_commit;
+  int err = NO_ERROR;
+  int n = NO_ERROR;
+
+  *executed = false;
+  *result = NULL;
+  key.text = NULL;
+
+  if (!image->can_execute || srv_handle->num_markers != image->host_var_count
+      || image->host_var_count > PREPARED_SESSION_MAX_LITERALS || ws_has_updated ()
+      || prm_get_bool_value (PRM_ID_QUERY_TRACE) || prm_get_integer_value (PRM_ID_SUPPLEMENTAL_LOG) != 0
+      || (image->stmt_type != CUBRID_STMT_SELECT && db_Disable_modifications))
+    {
+      return NO_ERROR;
+    }
+  if (prepared_session_make_key (srv_handle->sql_stmt, &key) != NO_ERROR || key.num_literals != image->auto_param_count)
+    {
+      goto not_executed;
+    }
+
+  /* db_set_statement_auto_commit () */
+  use_auto_commit = false;
+  if (srv_handle->auto_commit_mode && image->can_commit)
+    {
+      err = tr_has_user_trigger (&has_user_trigger);
+      if (err != NO_ERROR)
+	{
+	  FREE_MEM (key.text);
+	  return err;
+	}
+      use_auto_commit = !has_user_trigger;
+    }
+  if (image->stmt_type == CUBRID_STMT_SELECT && use_auto_commit && ws_need_flush ())
+    {
+      goto not_executed;
+    }
+  /* without the commit, do_check_*_trigger () fires the statement triggers; the triggers a class has since its
+   * compilation changed the class, which the prepare found unchanged */
+  if (image->stmt_type != CUBRID_STMT_SELECT && !use_auto_commit)
+    {
+      goto not_executed;
+    }
+
+  /* the user host variables, cast into the domains the compilation expects */
+  if (image->host_var_count > 0)
+    {
+      err = make_bind_value (image->host_var_count, argc, argv, &bind_values, net_buf, DB_TYPE_NULL);
+      if (err < 0)
+	{
+	  /* the session path makes the same values and reports the same error */
+	  goto not_executed;
+	}
+      if (prepared_image_bind (image, image->host_var_count, bind_values, values) != NO_ERROR)
+	{
+	  goto not_executed;
+	}
+      num_binds = image->host_var_count;
+    }
+  /* the auto parameters, each a masked literal of this text in the type the compilation gave its own */
+  ptr = PREPARED_IMAGE_AT (image, image->auto_params_offset);
+  for (num_likes = 0; num_likes < image->auto_param_count; num_likes++)
+    {
+      ptr = or_unpack_value (ptr, &likes[num_likes]);
+      if (ptr == NULL)
+	{
+	  goto not_executed;
+	}
+      if (prepared_session_literal_value (&key.literals[num_likes], &likes[num_likes], bufs[num_likes],
+					  &values[num_binds + num_likes]) != NO_ERROR)
+	{
+	  num_likes++;
+	  goto not_executed;
+	}
+    }
+  num_values = num_binds + num_likes;
+
+  *executed = true;
+
+  /* db_execute_and_keep_statement () */
+  db_invalidate_mvcc_snapshot_before_statement ();
+  er_clear ();
+
+  if (image->stmt_type == CUBRID_STMT_SELECT)
+    {
+      n = prepared_image_execute_select (srv_handle, values, num_values, use_auto_commit, clt_cache_time, result);
+    }
+  else
+    {
+      n = prepared_image_execute_dml (srv_handle, values, num_values, use_auto_commit, result);
+    }
+
+  db_set_read_fetch_instance_version (LC_FETCH_MVCC_VERSION);
+
+  for (int i = 0; i < num_binds; i++)
+    {
+      pr_clear_value (&values[i]);
+    }
+
+not_executed:
+  if (!*executed)
+    {
+      for (int i = 0; i < num_binds; i++)
+	{
+	  pr_clear_value (&values[i]);
+	}
+      /* the session path reports what it finds itself */
+      er_clear ();
+      n = NO_ERROR;
+    }
+  for (int i = 0; i < num_likes; i++)
+    {
+      pr_clear_value (&likes[i]);
+    }
+  if (bind_values != NULL)
+    {
+      for (int i = 0; i < image->host_var_count; i++)
+	{
+	  db_value_clear (&bind_values[i]);
+	}
+      FREE_MEM (bind_values);
+    }
+  FREE_MEM (key.text);
+  return n;
+}
+
+/*
+ * prepared_image_bind () - cast the bound values into the domains the compilation expects, as
+ *			    pt_set_host_variables () does in its plain case
+ *   return: NO_ERROR, or ER_FAILED if a value takes another case or does not cast; values is then cleared
+ *   image(in): the image
+ *   num_bind(in): number of bound values, image->host_var_count
+ *   bind_values(in): the bound values
+ *   values(out): the cast values
+ */
+static int
+prepared_image_bind (const PREPARED_IMAGE * image, int num_bind, DB_VALUE * bind_values, DB_VALUE * values)
+{
+  const char *ptr = PREPARED_IMAGE_AT (image, image->domains_offset);
+  const char *bind_flags = PREPARED_IMAGE_AT (image, image->bind_flags_offset);
+  int i;
+
+  for (i = 0; i < num_bind; i++)
+    {
+      DB_VALUE *val = &bind_values[i];
+      DB_VALUE *hv = &values[i];
+      TP_DOMAIN *hv_dom = NULL;
+      int is_null;
+      DB_TYPE val_type = db_value_type (val);
+
+      db_make_null (hv);
+      ptr = or_unpack_domain ((char *) ptr, &hv_dom, &is_null);
+      if (ptr == NULL || hv_dom == NULL || val_type == DB_TYPE_OBJECT || val_type == DB_TYPE_OID)
+	{
+	  goto failed;
+	}
+      if (TP_DOMAIN_TYPE (hv_dom) == DB_TYPE_UNKNOWN || hv_dom->type->id == DB_TYPE_ENUMERATION)
+	{
+	  pr_clone_value (val, hv);
+	  continue;
+	}
+      if (tp_value_cast_preserve_domain (val, hv, hv_dom, false, true) != DOMAIN_COMPATIBLE)
+	{
+	  /* the session path reports the error */
+	  pr_clear_value (hv);
+	  goto failed;
+	}
+      if (TP_IS_CHAR_TYPE (hv_dom->type->id) && !(bind_flags[i] & PREPARED_IMAGE_BIND_ASSIGNMENT)
+	  && hv_dom->type->id != val_type && val_type == DB_TYPE_VARCHAR)
+	{
+	  pr_clear_value (hv);
+	  pr_clone_value (val, hv);
+	}
+    }
+  return NO_ERROR;
+
+failed:
+  for (int j = 0; j < i; j++)
+    {
+      pr_clear_value (&values[j]);
+    }
+  return ER_FAILED;
+}
+
+/*
+ * prepared_image_execute_select () - execute a SELECT from its image, as do_execute_select () executes it and
+ *				      db_execute_and_keep_statement_local () makes its result
+ *   return: number of rows or error code
+ *   srv_handle(in): the handle
+ *   values(in): the host variables
+ *   num_values(in): their number
+ *   use_auto_commit(in): whether the server commits after the execution
+ *   clt_cache_time(in): the client result cache time
+ *   result(out): the result
+ */
+static int
+prepared_image_execute_select (T_SRV_HANDLE * srv_handle, DB_VALUE * values, int num_values, bool use_auto_commit,
+			       CACHE_TIME * clt_cache_time, DB_QUERY_RESULT ** result)
+{
+  const PREPARED_IMAGE *image = srv_handle->prepared_image;
+  QUERY_ID query_id = NULL_QUERY_ID;
+  QFILE_LIST_ID *list_id = NULL;
+  CACHE_TIME clt_time;
+  CACHE_TIME srv_time;
+  DB_QUERY_RESULT *qres = NULL;
+  int query_flag = image->query_flag;
+  int err;
+  int n;
+
+  db_set_read_fetch_instance_version (LC_FETCH_MVCC_VERSION);
+
+  if (srv_handle->is_holdable)
+    {
+      query_flag |= RESULT_HOLDABLE;
+    }
+  if (use_auto_commit)
+    {
+      query_flag |= EXECUTE_QUERY_WITH_COMMIT;
+    }
+  if (srv_handle->auto_commit_mode)
+    {
+      query_flag |= TRAN_AUTO_COMMIT;
+    }
+
+  CACHE_TIME_RESET (&clt_time);
+  if (clt_cache_time != NULL)
+    {
+      clt_time = *clt_cache_time;
+    }
+  CACHE_TIME_RESET (&srv_time);
+
+  err = execute_query (&image->xasl_id, &query_id, num_values, values, &list_id, (QUERY_FLAG) query_flag, &clt_time,
+		       &srv_time);
+  prepared_image_check_abort (&err);
+  if (err < NO_ERROR)
+    {
+      if (list_id != NULL)
+	{
+	  cursor_free_self_list_id (list_id);
+	}
+      db_update_row_count_cache (-1);
+      return err;
+    }
+
+  if (CACHE_TIME_EQ (&clt_time, &srv_time))
+    {
+      /* the client has the result */
+      qres = pt_make_cache_hit_result_descriptor ();
+      if (list_id != NULL)
+	{
+	  cursor_free_self_list_id (list_id);
+	}
+    }
+  else
+    {
+      /* pt_new_query_result_descriptor () */
+      qres = db_alloc_query_result (T_SELECT, image->num_columns);
+      if (qres != NULL)
+	{
+	  db_init_query_result (qres, T_SELECT);
+	  qres->type = T_SELECT;
+	  qres->col_cnt = image->num_columns;
+	  qres->oid_included = image->oids_included == 1;
+	  qres->res.s.query_id = query_id;
+	  qres->res.s.stmt_id = srv_handle->q_result->stmt_id;
+	  qres->res.s.stmt_type = CUBRID_STMT_SELECT;
+	  qres->res.s.cache_time = srv_time;
+	  memset (&qres->res.s.cursor_id.list_id, 0, sizeof (QFILE_LIST_ID));
+	  qres->res.s.cursor_id.query_id = query_id;
+	  qres->res.s.cursor_id.buffer = NULL;
+	  qres->res.s.cursor_id.tuple_record.tpl = NULL;
+	  qres->res.s.holdable = srv_handle->is_holdable;
+	  qres->type_cnt = image->num_columns;
+	  if (!prepared_image_open_cursor (qres, list_id))
+	    {
+	      db_free_query_result (qres);
+	      qres = NULL;
+	    }
+	}
+      else if (list_id != NULL)
+	{
+	  cursor_free_self_list_id (list_id);
+	}
+      if (qres != NULL)
+	{
+	  qres->query_type = db_alloc_query_format (image->num_query_types);
+	  if (image->num_query_types > 0 && qres->query_type == NULL)
+	    {
+	      db_query_end (qres);
+	      qres = NULL;
+	    }
+	}
+    }
+
+  db_update_row_count_cache (-1);
+  if (qres == NULL)
+    {
+      ASSERT_ERROR_AND_SET (n);
+      return n;
+    }
+  *result = qres;
+  return (qres->type == T_CACHE_HIT) ? 0 : db_query_tuple_count (qres);
+}
+
+/*
+ * prepared_image_execute_dml () - execute an INSERT or UPDATE from its image, as do_execute_insert () and
+ *				   do_execute_update () execute it on the server and db_execute_and_keep_statement_local ()
+ *				   makes its result
+ *   return: number of rows or error code
+ *   srv_handle(in): the handle
+ *   values(in): the host variables
+ *   num_values(in): their number
+ *   use_auto_commit(in): whether the server commits after the execution
+ *   result(out): the result of an INSERT
+ */
+static int
+prepared_image_execute_dml (T_SRV_HANDLE * srv_handle, DB_VALUE * values, int num_values, bool use_auto_commit,
+			    DB_QUERY_RESULT ** result)
+{
+  const PREPARED_IMAGE *image = srv_handle->prepared_image;
+  QUERY_ID query_id = NULL_QUERY_ID;
+  QFILE_LIST_ID *list_id = NULL;
+  MOP target = NULL;
+  int query_flag = image->query_flag;
+  int exec_err;
+  int err = NO_ERROR;
+
+  if (image->stmt_type == CUBRID_STMT_UPDATE)
+    {
+      target = ws_find_class (PREPARED_IMAGE_AT (image, image->classes[image->target_class].name_offset));
+      if (target == NULL)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
+	  return ER_QPROC_INVALID_XASLNODE;
+	}
+      db_set_read_fetch_instance_version (LC_FETCH_DIRTY_VERSION);
+    }
+  else
+    {
+      db_set_read_fetch_instance_version (LC_FETCH_MVCC_VERSION);
+    }
+
+  if (use_auto_commit)
+    {
+      query_flag |= EXECUTE_QUERY_WITH_COMMIT;
+    }
+  if (srv_handle->auto_commit_mode)
+    {
+      query_flag |= TRAN_AUTO_COMMIT;
+    }
+
+  if (image->stmt_type == CUBRID_STMT_UPDATE)
+    {
+      err = use_auto_commit ? tran_flush_to_commit () : sm_flush_objects (target);
+    }
+  else if (use_auto_commit && ws_need_flush ())
+    {
+      err = tran_flush_to_commit ();
+    }
+  if (err != NO_ERROR)
+    {
+      db_update_row_count_cache (-1);
+      return err;
+    }
+
+  exec_err = execute_query (&image->xasl_id, &query_id, num_values, values, &list_id, (QUERY_FLAG) query_flag, NULL,
+			    NULL);
+  err = exec_err;
+  if (err >= NO_ERROR && list_id != NULL)
+    {
+      if (image->stmt_type == CUBRID_STMT_UPDATE && list_id->tuple_cnt > 0)
+	{
+	  if (use_auto_commit && tran_was_latest_query_committed ())
+	    {
+	      /* nothing to flush, and a flush may fetch the class */
+	      err = sm_decache_instances_after_query_executed_with_commit (target);
+	    }
+	  else
+	    {
+	      err = sm_flush_and_decache_objects (target, true);
+	    }
+	}
+      if (err >= NO_ERROR)
+	{
+	  err = list_id->tuple_cnt;
+	}
+    }
+  if (list_id != NULL)
+    {
+      cursor_free_self_list_id (list_id);
+    }
+  /* pt_end_query (), which do_execute_update () skips when the execution fails */
+  if ((image->stmt_type == CUBRID_STMT_INSERT || exec_err >= NO_ERROR) && query_id > 0
+      && !tran_was_latest_query_ended () && er_errid () != ER_LK_UNILATERALLY_ABORTED)
+    {
+      qmgr_end_query (query_id);
+    }
+  prepared_image_check_abort (&err);
+
+  db_update_row_count_cache (err < NO_ERROR ? -1 : err);
+  if (err < NO_ERROR || image->stmt_type != CUBRID_STMT_INSERT)
+    {
+      return err;
+    }
+
+  /* db_execute_and_keep_statement_local (): a server insert gives no object, and the count is the row count */
+  {
+    DB_VALUE *val = db_value_create ();
+
+    if (val == NULL)
+      {
+	ASSERT_ERROR_AND_SET (err);
+	return err;
+      }
+    db_make_object (val, NULL);
+    *result = db_get_db_value_query_result (val);
+    db_value_free (val);
+    if (*result == NULL)
+      {
+	ASSERT_ERROR_AND_SET (err);
+	return err;
+      }
+  }
+  return err;
+}
+
+/*
+ * prepared_image_check_abort () - abort the transaction on the client too if the server aborted it during the
+ *				   execution, as do_execute_statement () does
+ *   return: none
+ *   err(in/out): the error of the execution
+ */
+static void
+prepared_image_check_abort (int *err)
+{
+  if (er_errid () == ER_LK_UNILATERALLY_ABORTED)
+    {
+      *err = ER_LK_UNILATERALLY_ABORTED;
+    }
+  if (*err == ER_LK_UNILATERALLY_ABORTED || tran_was_latest_query_aborted ())
+    {
+      (void) tran_abort_only_client (false);
+    }
+}
+
+/*
+ * prepared_image_open_cursor () - open the cursor of a result on the list file of its execution, as
+ *				   pt_new_query_result_descriptor () does
+ *   return: true if opened
+ *   qres(in/out): the result
+ *   list_id(in): the list file, freed here; NULL for an execution that made none
+ */
+static bool
+prepared_image_open_cursor (DB_QUERY_RESULT * qres, QFILE_LIST_ID * list_id)
+{
+  bool opened;
+
+  if (list_id != NULL)
+    {
+      /* the cursor takes the last page over instead of copying it */
+      PAGE_PTR last_page = list_id->last_pgptr;
+
+      list_id->last_pgptr = NULL;
+      opened = cursor_open (&qres->res.s.cursor_id, list_id, false, qres->oid_included);
+      if (!opened)
+	{
+	  list_id->last_pgptr = last_page;
+	}
+      else
+	{
+	  qres->res.s.cursor_id.list_id.last_pgptr = last_page;
+	}
+      cursor_free_self_list_id (list_id);
+    }
+  else
+    {
+      QFILE_LIST_ID empty_list_id;
+
+      QFILE_CLEAR_LIST_ID (&empty_list_id);
+      opened = cursor_open (&qres->res.s.cursor_id, &empty_list_id, false, qres->oid_included);
+    }
+  return opened;
+}
+
+/*
+ * prepared_image_lock_classes () - lock the classes of an image as its compilation did, and tell whether any of them
+ *				    changed since
+ *   return: NO_ERROR if none changed, 1 if one changed or is gone, or the error code of the lock request
+ *   image(in): the image
+ *
+ * Note: the request is the one pt_class_pre_fetch () makes before a compilation: it waits for a client that alters a
+ *	 class, and refreshes the classes whose cache coherency number the server has a newer one of.
+ */
+static int
+prepared_image_lock_classes (const PREPARED_IMAGE * image)
+{
+  const char *names[PREPARED_IMAGE_MAX_CLASSES];
+  LOCK locks[PREPARED_IMAGE_MAX_CLASSES];
+  int only_all[PREPARED_IMAGE_MAX_CLASSES];
+  LC_PREFETCH_FLAGS flags[PREPARED_IMAGE_MAX_CLASSES];
+  LOCK lock_rr_tran = NULL_LOCK;
+  LC_FIND_CLASSNAME find_result;
+
+  if (image->num_classes == 0)
+    {
+      return NO_ERROR;
+    }
+
+  for (int i = 0; i < image->num_classes; i++)
+    {
+      names[i] = PREPARED_IMAGE_AT (image, image->classes[i].name_offset);
+      locks[i] = image->classes[i].lock;
+      only_all[i] = image->classes[i].only_all;
+      flags[i] = image->classes[i].flags;
+    }
+  if (TM_TRAN_ISOLATION () >= TRAN_REPEATABLE_READ && TM_TRAN_REP_READ_LOCK () == NULL_LOCK)
+    {
+      lock_rr_tran = S_LOCK;
+    }
+
+  find_result = locator_lockhint_classes (image->num_classes, names, locks, only_all, flags, true, lock_rr_tran);
+  if (find_result == LC_CLASSNAME_ERROR)
+    {
+      ASSERT_ERROR ();
+      return er_errid () != NO_ERROR ? er_errid () : ER_FAILED;
+    }
+  if (find_result != LC_CLASSNAME_EXIST)
+    {
+      er_clear ();
+      return 1;
+    }
+
+  for (int i = 0; i < image->num_classes; i++)
+    {
+      MOP class_mop = ws_find_class (names[i]);
+
+      if (class_mop == NULL || !OID_EQ (ws_oid (class_mop), &image->classes[i].oid)
+	  || locator_get_cache_coherency_number (class_mop) != image->classes[i].chn)
+	{
+	  return 1;
+	}
+    }
+  return NO_ERROR;
+}
+
+/*
+ * prepared_image_send_response () - write the prepare response of an image, and set what
+ *				     prepare_column_list_info_set () sets with it
+ *   return: NO_ERROR or error code
+ *   image(in): the image
+ *   q_result(in/out): the result of the handle
+ *   net_buf(in/out): the response, written up to the handle id
+ */
+static int
+prepared_image_send_response (const PREPARED_IMAGE * image, T_QUERY_RESULT * q_result, T_NET_BUF * net_buf)
+{
+  if (image->num_column > 0)
+    {
+      q_result->null_type_column = (char *) MALLOC (image->num_column);
+      if (q_result->null_type_column == NULL)
+	{
+	  return ERROR_INFO_SET (CAS_ER_NO_MORE_MEMORY, CAS_ERROR_INDICATOR);
+	}
+      memcpy (q_result->null_type_column, PREPARED_IMAGE_AT (image, image->null_type_column_offset), image->num_column);
+    }
+  q_result->num_column = image->num_column;
+  q_result->include_oid = image->include_oid;
+  net_buf_cp_str (net_buf, PREPARED_IMAGE_AT (image, image->response_offset), image->response_size);
+  return NO_ERROR;
+}
+
+/*
+ * prepared_image_check_classes () - tell the client of a handle whose prepare took an image that a class changed
+ *				     since, as the execute of a session compiled at the prepare does
+ *				     (db_execute_and_keep_statement_local (), pt_has_modified_class ())
+ *   return: NO_ERROR if none changed, or error code (error info set)
+ *   srv_handle(in): the handle
+ */
+static int
+prepared_image_check_classes (T_SRV_HANDLE * srv_handle)
+{
+  int err;
+
+  if (srv_handle->session != NULL || srv_handle->prepared_image == NULL || srv_handle->is_prepared != TRUE)
+    {
+      return NO_ERROR;
+    }
+
+  err = prepared_image_lock_classes (srv_handle->prepared_image);
+  if (err < 0)
+    {
+      return ERROR_INFO_SET (err, DBMS_ERROR_INDICATOR);
+    }
+  if (err > 0)
+    {
+      prepared_session_invalidate ();
+      if (srv_handle->is_pooled)
+	{
+	  return ERROR_INFO_SET_FORCE (CAS_ER_STMT_POOLING, CAS_ERROR_INDICATOR);
+	}
+      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_QPROC_INVALID_XASLNODE, 0);
+      return ERROR_INFO_SET (ER_QPROC_INVALID_XASLNODE, DBMS_ERROR_INDICATOR);
+    }
+  return NO_ERROR;
+}
+
+/*
+ * prepared_image_materialize () - compile the session of a handle whose prepare took an image instead
+ *   return: NO_ERROR or error code (error info set)
+ *   srv_handle(in/out): the handle
+ *
+ * Note: a handle a prepare served from an image has no session; whatever reads the session calls this first.
+ */
+static int
+prepared_image_materialize (T_SRV_HANDLE * srv_handle)
+{
+  DB_SESSION *session;
+  int stmt_id;
+
+  if (srv_handle->session != NULL || srv_handle->prepared_image == NULL || srv_handle->is_prepared != TRUE)
+    {
+      return NO_ERROR;
+    }
+
+  db_init_lexer_lineno ();
+  session = db_open_buffer (srv_handle->sql_stmt);
+  if (session == NULL)
+    {
+      return ERROR_INFO_SET (db_error_code (), DBMS_ERROR_INDICATOR);
+    }
+  stmt_id = db_compile_statement (session);
+  if (stmt_id < 0)
+    {
+      db_close_session (session);
+      return ERROR_INFO_SET (stmt_id, DBMS_ERROR_INDICATOR);
+    }
+  assert (db_get_statement_type (session, stmt_id) == srv_handle->prepared_image->stmt_type);
+
+  srv_handle->session = session;
+  srv_handle->q_result->stmt_id = stmt_id;
+  return NO_ERROR;
 }
