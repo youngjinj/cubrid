@@ -394,6 +394,8 @@ hm_session_free (T_SRV_HANDLE * srv_handle)
       db_close_session ((DB_SESSION *) (srv_handle->session));
     }
   srv_handle->session = NULL;
+  /* a session compiled in place of this one was not checked for the prepared session cache */
+  srv_handle->session_generation = 0;
 }
 
 void
@@ -407,6 +409,7 @@ srv_handle_content_free (T_SRV_HANDLE * srv_handle)
 {
   FREE_MEM (srv_handle->sql_stmt);
   FREE_MEM (srv_handle->qr_app_sql);
+  FREE_MEM (srv_handle->prepared_image);
   if (!is_cgw_mode)
     {
       hm_prepare_call_info_free (srv_handle->prepare_call_info);

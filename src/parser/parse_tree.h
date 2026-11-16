@@ -42,6 +42,7 @@
 #include "string_opfunc.h"
 #include "system_parameter.h"
 #include "hide_password.h"
+#include "locator.h"
 #include "misctype_def.h"
 
 // forward definitions
@@ -4084,6 +4085,11 @@ struct parser_context
   VIEW_CACHE_INFO *view_cache;	/* parsing cache using in view transformation */
   struct symbol_info *symbols;	/* a place to keep information used in generating query processing (xasl) procedures. */
   char **lcks_classes;
+  /* the rest of the lock hint pt_class_pre_fetch () sent for lcks_classes, which the CAS sends again to skip the
+   * compilation of the same text */
+  LOCK *lcks_locks;
+  int *lcks_only_all;
+  LC_PREFETCH_FLAGS *lcks_flags;
 
   size_t input_buffer_length;
   size_t input_buffer_position;
@@ -4188,6 +4194,8 @@ struct parser_context
 					 * the values' format classes and ELT indexes */
     unsigned needs_bound_hostvar:1;	/* set to 1 when the compile failed because a host variable has no value yet
 					 * (UPDATE OBJECT ?, m () ON ?, TABLE (?)); see db_statement_needs_bound_values () */
+    unsigned has_synonym_spec:1;	/* pt_class_pre_fetch () locked the target of a synonym the text names */
+    unsigned has_vclass_spec:1;	/* pt_class_pre_fetch () locked a view the text names */
   } flag;
 };
 

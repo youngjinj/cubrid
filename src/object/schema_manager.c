@@ -246,6 +246,9 @@ const char TEXT_CONSTRAINT_PREFIX[] = "#text_";
 
 static CUB_THREAD_LOCAL SM_DESCRIPTOR *sm_Descriptors = NULL;
 
+/* false while no class holds a virtual query cache, so the transaction boundary need not visit the resident classes */
+static CUB_THREAD_LOCAL bool sm_Has_virtual_query_cache = false;
+
 /* ROOT_CLASS GLOBALS */
 /* Global root class structure */
 CUB_THREAD_LOCAL ROOT_CLASS sm_Root_class;
@@ -2086,6 +2089,11 @@ sm_free_resident_classes_virtual_query_cache (void)
   SM_CLASS *class_;
   DB_OBJLIST *cl;
 
+  if (!sm_Has_virtual_query_cache)
+    {
+      return;
+    }
+
   /* go through the resident class list and free anything attached to the class that wasn't allocated in the workspace,
    * this is only the virtual_query_cache at this time */
   for (cl = ws_Resident_classes; cl != NULL; cl = cl->next)
@@ -2097,6 +2105,7 @@ sm_free_resident_classes_virtual_query_cache (void)
 	  class_->virtual_query_cache = NULL;
 	}
     }
+  sm_Has_virtual_query_cache = false;
 }
 
 /*
@@ -6992,6 +7001,7 @@ sm_virtual_queries (PARSER_CONTEXT * parser, DB_OBJECT * class_object)
       else
 	{
 	  cl->virtual_query_cache = tmp;
+	  sm_Has_virtual_query_cache = true;
 	}
 
       /* Save local schema ID, global schema ID and snapshot version. They will be used to decide on using current
