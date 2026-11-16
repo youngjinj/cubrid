@@ -226,6 +226,7 @@ set(PARSER_SOURCES
   ${PARSER_DIR}/parser_allocator.cpp
   ${PARSER_DIR}/parser_support.c
   ${PARSER_DIR}/query_result.c
+  ${PARSER_DIR}/query_normalize.c
   ${PARSER_DIR}/scanner_support.c
   ${PARSER_DIR}/semantic_check.c
   ${PARSER_DIR}/show_meta.c
@@ -533,6 +534,7 @@ SET_SOURCE_FILES_PROPERTIES(
   ${PARSER_DIR}/parse_tree_cl.c
   ${PARSER_DIR}/parser_support.c
   ${PARSER_DIR}/query_result.c
+  ${PARSER_DIR}/query_normalize.c
   ${PARSER_DIR}/scanner_support.c
   ${PARSER_DIR}/semantic_check.c
   ${PARSER_DIR}/show_meta.c

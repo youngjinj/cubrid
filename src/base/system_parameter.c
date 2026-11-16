@@ -12543,6 +12543,47 @@ sysprm_print_assign_values (SYSPRM_ASSIGN_VALUE * prm_values, char *buffer, int 
 
 #if !defined (SERVER_MODE)
 /*
+ * sysprm_print_client_parameters_for_key () - print every client parameter whose value differs from its default,
+ *   for a cache key made of a statement's text: unlike a printed statement, the text does not show what the
+ *   parameters did to the parse and the compilation (ansi_quotes, no_backslash_escapes, intl_collation, ...)
+ *
+ * return : printed length, or -1 when the parameters do not fit in the buffer
+ * buf (out) : buffer
+ * len (in) : buffer size
+ */
+int
+sysprm_print_client_parameters_for_key (char *buf, int len)
+{
+  char *ptr = buf;
+  int i, n;
+
+  for (i = 0; i < MAX_SYSTEM_PARAMS; i++)
+    {
+      /* shortcut: no flag tells the parameters a compilation reads, so this takes every one a session or a test can
+       * change and leaves the ones a process sets for itself (er_log_file names each CAS's own file); a parameter
+       * flag for the compilation's inputs replaces the guess.
+       * not PRM_IS_DIFFERENT: only CS_MODE keeps it, and only for the parameters of the printed key */
+      if (!PRM_IS_FOR_CLIENT (GET_PRM (i))
+	  || !(GET_PRM (i)->static_flag & (PRM_USER_CHANGE | PRM_TEST_CHANGE | PRM_FOR_QRY_STRING))
+	  || sysprm_compare_values (GET_PRM (i)) == 0)
+	{
+	  continue;
+	}
+      n = prm_print (GET_PRM (i), ptr, len, PRM_PRINT_ID, PRM_PRINT_CURR_VAL);
+      if (n < 0 || n + 1 >= len)
+	{
+	  return -1;
+	}
+      ptr += n;
+      len -= n;
+      *ptr++ = ';';
+      len--;
+    }
+  *ptr = '\0';
+  return (int) (ptr - buf);
+}
+
+/*
  * sysprm_print_parameters_for_qry_string () - print parameters for query
  *					       string
  *

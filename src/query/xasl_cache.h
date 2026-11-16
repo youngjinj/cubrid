@@ -138,6 +138,10 @@ struct xasl_cache_ent
    * cache_clones_mutex: a mutex of its own would grow every cache entry, variants or not. */
   struct xcache_bind_dir *bind_dir;
 
+  /* what a CAS needs to prepare this entry's text without compiling it, which the server keeps without reading:
+   * its size as an int, then its bytes. Set once (xcache_set_prepared_image), freed with the entry */
+  char *volatile prepared_image;
+
   bool initialized;
 
   // *INDENT-OFF*
@@ -188,6 +192,10 @@ extern int xcache_get_entry_count (void);
 extern bool xcache_uses_clones (void);
 
 extern int xcache_invalidate_qcaches (THREAD_ENTRY * thread_p, const OID * oid);
+extern int xcache_find_prepared_image (THREAD_ENTRY * thread_p, const SHA1Hash * sha1s, int n_sha1, XASL_ID * xasl_id,
+				       char **image, int *image_size);
+extern int xcache_set_prepared_image (THREAD_ENTRY * thread_p, const XASL_ID * xasl_id, const char *image,
+				      int image_size);
 
 extern int xcache_bind_variant (THREAD_ENTRY * thread_p, const BIND_VARIANT_REQUEST * req, BIND_VARIANT_REPLY * reply);
 

@@ -593,8 +593,14 @@ pt_class_pre_fetch (PARSER_CONTEXT * parser, PT_NODE * statement)
 
   /* parser->lcks_classes will be freed at parser_free_parser() */
   parser->lcks_classes = lcks.classes;
+  parser->lcks_locks = lcks.locks;
+  parser->lcks_only_all = lcks.only_all;
+  parser->lcks_flags = lcks.flags;
   parser->num_lcks_classes = lcks.num_classes;
   lcks.classes = NULL;
+  lcks.locks = NULL;
+  lcks.only_all = NULL;
+  lcks.flags = NULL;
 
   (void) parser_walk_tree (parser, statement, pt_set_class_chn, NULL, NULL, NULL);
 

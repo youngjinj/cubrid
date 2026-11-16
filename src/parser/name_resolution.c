@@ -665,6 +665,7 @@ pt_bind_parameter (PARSER_CONTEXT * parser, PT_NODE * parameter)
   db_val = pt_find_value_of_label (name);
   if (db_val)			/* parameter found, resolve to its matching DB_VALUE */
     {
+      parser->flag.has_value_not_in_text = 1;
       /* create a PT_VALUE image of the matching DB_VALUE */
 
       /* If type is object type, the referenced object may not exist. We need to first check its existence, then we

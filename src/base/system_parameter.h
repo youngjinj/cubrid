@@ -851,6 +851,7 @@ extern "C"
 #endif				/* CS_MODE */
 
 #if !defined (SERVER_MODE)
+  extern int sysprm_print_client_parameters_for_key (char *buf, int len);
   extern char *sysprm_print_parameters_for_qry_string (void);
   extern char *sysprm_print_parameters_for_ha_repl (void);
   extern SYSPRM_ERR sysprm_validate_change_parameters (const char *data, bool check,

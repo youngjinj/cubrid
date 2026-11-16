@@ -162,6 +162,14 @@ struct t_srv_handle
   bool is_fetch_completed;
   bool is_holdable;
   bool is_from_current_transaction;
+  bool sets_prepared_image;	/* the image was made from this handle's compilation: closing the handle gives
+				 * it to the server's XASL cache entry of the text (ux_keep_prepared_session) */
+  struct prepared_image *prepared_image;	/* what a later prepare of the text needs; owned by the handle */
+  struct pt_user_text_key *prepared_literals;	/* the masked literals of sql_stmt, which the auto parameters of the
+						 * image take; owned by the handle, without the key text */
+  char *signature_key;		/* the plain user text key of sql_stmt, which the bind type signature of an execute's
+				 * values completes into the key of the signature's XASL; owned by the handle, NULL if
+				 * the prepare compiled a plan */
 
   /* CGW fields */
   void *cgw_hstmt;

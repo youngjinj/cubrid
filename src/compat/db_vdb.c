@@ -141,7 +141,6 @@ static bool is_allowed_as_prepared_statement_with_hv (PT_NODE * node);
 static bool db_check_limit_need_recompile (PARSER_CONTEXT * parser, PT_NODE * statement, int xasl_flag);
 static bool db_check_where_need_recompile (PARSER_CONTEXT * parser, PT_NODE * statement, int xasl_flag);
 
-static bool db_can_execute_statement_with_autocommit (PARSER_CONTEXT * parser, PT_NODE * statement);
 static PT_NODE *do_process_prepare_subquery_pre (PARSER_CONTEXT * parser, PT_NODE * stmt, void *arg,
 						 int *continue_walk);
 
@@ -1526,6 +1525,17 @@ db_begin_signature_compile (PARSER_CONTEXT * parser, int count, const DB_VALUE *
 	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, err, 1, parser->host_var_count * sizeof (TP_DOMAIN *));
 	}
     }
+  if (err == NO_ERROR && count >= parser->host_var_count)
+    {
+      /* the XASL cache key of the compilation appends it (pt_print_user_text_key); without it, the key is the print */
+      const int size = parser->host_var_count * PT_BIND_SIGNATURE_VALUE_SIZE + 1;
+      char *signature = (char *) parser_alloc (parser, size);
+
+      if (signature != NULL && pt_print_bind_signature (parser->host_var_count, values, signature, size) >= 0)
+	{
+	  parser->bind_signature = signature;
+	}
+    }
   return err;
 }
 
@@ -1594,6 +1604,19 @@ db_has_untyped_host_var (const PARSER_CONTEXT * parser)
 }
 
 /*
+ * db_awaits_bind_signature_plan () - CBRD-27583: whether a driver session's one statement was compiled without a plan
+ *   only because a position has no type yet: each execution compiles the plan of its values' bind type signature
+ */
+bool
+db_awaits_bind_signature_plan (const DB_SESSION * session)
+{
+  const PT_NODE *statement = (session->dimension == 1) ? session->statements[0] : NULL;
+
+  return statement != NULL && statement->xasl_id == NULL && !statement->flag.cannot_prepare
+    && db_is_plan_statement (statement) && db_has_untyped_host_var (session->parser);
+}
+
+/*
  * db_compile_statement_local() -
  * return:
  * session(in) :
@@ -1607,6 +1630,8 @@ db_compile_statement_local (DB_SESSION * session)
   PT_NODE *statement_result = NULL;
   DB_QUERY_TYPE *qtype, *q;
   CUBRID_STMT_TYPE cmd_type;
+  char *user_text;
+  int user_text_len;
   int err;
   static long seed = 0;
 
@@ -1659,6 +1684,8 @@ db_compile_statement_local (DB_SESSION * session)
   parser = session->parser;
   stmt_ndx = session->stmt_ndx++;
   statement = session->statements[stmt_ndx];
+  user_text = statement->sql_user_text;
+  user_text_len = statement->sql_user_text_len;
   statement->flag.use_plan_cache = 0;
   parser->flag.needs_bound_hostvar = 0;
   statement->flag.use_query_cache = 0;
@@ -1892,7 +1919,11 @@ db_compile_statement_local (DB_SESSION * session)
 	}
     }
 
-  /* so now, the statement is compiled */
+  /* so now, the statement is compiled. A node the compilation put in place of the statement took the text of the last
+   * parse (parser_new_node), a view's maybe, while the XASL cache key is made of the statement's own
+   * (pt_print_user_text_key) */
+  statement->sql_user_text = user_text;
+  statement->sql_user_text_len = user_text_len;
   session->statements[stmt_ndx] = statement;
   session->stage[stmt_ndx] = StatementCompiledStage;
 
@@ -3013,6 +3044,12 @@ db_compile_signature_text (DB_SESSION * session, int count, DB_VALUE * values,
   if (err != NO_ERROR)
     {
       return err;
+    }
+  if (bind_domains_from != NULL)
+    {
+      /* the second compilation plans with the bind domains the first found, which the signature does not show: it
+       * keys its print, and the key of the signature keeps the first one's XASL */
+      typed->parser->bind_signature = NULL;
     }
   bool selects_only = true;
   for (int i = 0; i < typed->dimension; i++)
@@ -6693,7 +6730,7 @@ db_set_statement_auto_commit (DB_SESSION * session, bool auto_commit)
  * statement(in): the statement
  *
  */
-static bool
+bool
 db_can_execute_statement_with_autocommit (PARSER_CONTEXT * parser, PT_NODE * statement)
 {
   bool has_name_oid = false;

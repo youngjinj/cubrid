@@ -58,6 +58,7 @@
 #include "tde.h"
 #include "jsp_cl.h"
 #include "xasl.h"
+#include "query_normalize.h"
 
 #include <malloc.h>
 
@@ -472,6 +473,15 @@ static PARSER_VARCHAR *pt_print_use (PARSER_CONTEXT * parser, PT_NODE * p);
 #endif
 
 static int parser_print_user (char *user_text, int len);
+static PARSER_VARCHAR *pt_print_user_text_key (PARSER_CONTEXT * parser, const PT_NODE * node, int *key_length);
+static int pt_mask_user_text_literals (const char *text, int text_len, char *out, PT_USER_TEXT_KEY * key);
+static bool pt_is_equal_operand (const char *start, const char *end, const char *after);
+static bool pt_user_text_literals_match (PARSER_CONTEXT * parser, const PT_NODE * node, const PT_USER_TEXT_KEY * key);
+static bool pt_key_has_literal (const char *key_text, const PT_USER_TEXT_LITERAL * literal);
+static PT_NODE *pt_count_literal_uses (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk);
+static PT_NODE *pt_mark_host_var_index (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk);
+static void pt_probe_user_text_key (const PARSER_VARCHAR * print, const PARSER_VARCHAR * key, int key_length);
+static void pt_print_host_var_type (PARSER_CONTEXT * parser, int index, char *out);
 
 static void pt_clean_tree_copy_info (PT_TREE_COPY_INFO * tree_copy_info);
 static const char *pt_json_table_column_behavior_to_string (const json_table_column_behavior_type & behavior_type);
@@ -3119,6 +3129,19 @@ parser_print_tree (PARSER_CONTEXT * parser, const PT_NODE * node)
   string = pt_print_bytes (parser, node);
   if (string)
     {
+      if ((parser->custom_print & PT_PRINT_HOST_VAR_COUNT) != 0 && parser->dblink_server_text == NULL)
+	{
+	  /* the print still runs: it sets the flags the caller checks (long_string_skipped, print_type_ambiguity). The
+	   * key names the parameters and the user itself, so the suffixes below are not appended */
+	  int key_length;
+	  PARSER_VARCHAR *key = pt_print_user_text_key (parser, node, &key_length);
+
+	  if (key != NULL)
+	    {
+	      pt_probe_user_text_key (string, key, key_length);
+	      return (char *) key->bytes;
+	    }
+	}
       if ((parser->custom_print & PT_PRINT_DIFFERENT_SYSTEM_PARAMETERS) != 0)
 	{
 	  char *str = sysprm_print_parameters_for_qry_string ();
@@ -3175,6 +3198,723 @@ parser_print_tree (PARSER_CONTEXT * parser, const PT_NODE * node)
     }
   return NULL;
 #undef PT_QUERY_STRING_USER_TEXT
+}
+
+/* the bind positions a statement has, which pt_print_user_text_key names the types of */
+typedef struct pt_host_var_marks PT_HOST_VAR_MARKS;
+struct pt_host_var_marks
+{
+  bool *marks;
+  int count;
+};
+
+/* the masked literals' auto parameter positions, and how a compiled tree uses them (pt_count_literal_uses) */
+typedef struct pt_literal_uses PT_LITERAL_USES;
+struct pt_literal_uses
+{
+  const int *slots;
+  int num_slots;
+  int all[PT_USER_TEXT_MAX_LITERALS];	/* host variable nodes of each position */
+  int equal[PT_USER_TEXT_MAX_LITERALS];	/* of them, the operand of column = literal */
+};
+
+/*
+ * pt_print_user_text_key () - the XASL cache key of the statement do_prepare_statement () prepares, made of its user
+ *   text instead of its print (pt_make_user_text_key), then what the server reads from the key: the type token of
+ *   each bind position (pt_print_host_var_type) and the count of positions (xcache_decide_param_compares). The
+ *   client hashes the part before the tokens (pt_hash_text_key_length), which a client can make before it parses
+ *   return: key, or NULL to key the statement by its print: another node (a subquery, an internal statement, which
+ *     carry the text of their statement), a text without one normal form, a value the compilation put into the
+ *     statement (has_value_not_in_text), a compilation for the types of bound values without their signature or
+ *     with a STR_TO_DATE or ELT node, a statement that does not use every position of its parser (another statement
+ *     of the parser took some, or the compilation folded one)
+ *   key_length(out): the bytes of the key the user text made, the signature of a compilation for it included
+ *
+ * Note: the masked key is taken only if every masked literal became, in its order, an auto parameter of the
+ *	 compilation (pt_user_text_literals_match): a literal left in the XASL as a constant would serve the other
+ *	 values of the text. The compilation of a bind type signature takes the plain key followed by the signature of
+ *	 its values (pt_print_bind_signature), which a client makes from the values it executes.
+ */
+static PARSER_VARCHAR *
+pt_print_user_text_key (PARSER_CONTEXT * parser, const PT_NODE * node, int *key_length)
+{
+  PT_USER_TEXT_KEY masked, plain;
+  const PT_USER_TEXT_KEY *chosen;
+  char *inputs = NULL;
+  PARSER_VARCHAR *key = NULL;
+  PT_HOST_VAR_MARKS marks;
+  char token[PT_MEMB_BUF_SIZE];
+  int oids_included, i;
+  bool for_signature;
+
+  if (node != parser->user_text_key_statement || node->sql_user_text == NULL || node->sql_user_text_len <= 0
+      || parser->flag.has_value_not_in_text)
+    {
+      return NULL;
+    }
+  /* a signature's compilation keys its plain text and its values' signature; the signature does not show the class of
+   * a STR_TO_DATE format or an ELT index, which the plan also depends on (pt_host_var_format_differs) */
+  for_signature = (parser->host_var_compiled_domains != NULL);
+  if (for_signature && (parser->bind_signature == NULL || parser->flag.has_str_to_date_or_elt))
+    {
+      return NULL;
+    }
+
+  /* the positions of a statement compiled after others in the same parser start after theirs, which the text does not
+   * show: the text keys only a statement that uses every position of its parser, from 0 */
+  marks.count = parser->host_var_count + parser->auto_param_count;
+  marks.marks = NULL;
+  if (marks.count > 0)
+    {
+      marks.marks = (bool *) parser_alloc (parser, marks.count * sizeof (bool));
+      if (marks.marks == NULL)
+	{
+	  return NULL;
+	}
+      memset (marks.marks, 0, marks.count * sizeof (bool));
+      (void) parser_walk_tree (parser, (PT_NODE *) node, pt_mark_host_var_index, &marks, NULL, NULL);
+      for (i = 0; i < marks.count; i++)
+	{
+	  if (!marks.marks[i])
+	    {
+	      return NULL;
+	    }
+	}
+    }
+
+  oids_included = PT_IS_QUERY (node) ? (int) node->info.query.oids_included : 0;
+  masked.text = NULL;
+  plain.text = NULL;
+  inputs = pt_make_user_text_inputs (oids_included);
+  if (inputs == NULL
+      || pt_make_user_text_key (node->sql_user_text, node->sql_user_text_len, !for_signature, inputs,
+				&masked) != NO_ERROR)
+    {
+      goto end;
+    }
+  chosen = &masked;
+  if (masked.num_literals > 0 && !pt_user_text_literals_match (parser, node, &masked))
+    {
+      if (pt_make_user_text_key (node->sql_user_text, node->sql_user_text_len, false, inputs, &plain) != NO_ERROR)
+	{
+	  goto end;
+	}
+      chosen = &plain;
+    }
+  key = pt_append_nulstring (parser, NULL, chosen->text);
+  if (key != NULL && for_signature)
+    {
+      key = pt_append_nulstring (parser, key, parser->bind_signature);
+    }
+  if (key == NULL)
+    {
+      goto end;
+    }
+  *key_length = key->length;
+
+  for (i = 0; i < marks.count; i++)
+    {
+      snprintf (token, sizeof (token), " ?:%d", i);
+      pt_print_host_var_type (parser, i, token + strlen (token));
+      key = pt_append_nulstring (parser, key, token);
+    }
+  snprintf (token, sizeof (token), ";bind_var_cnt=%d;key_length=%d", marks.count, *key_length);
+  key = pt_append_nulstring (parser, key, token);
+
+end:
+  pt_free_user_text_key (&masked);
+  pt_free_user_text_key (&plain);
+  if (inputs != NULL)
+    {
+      free_and_init (inputs);
+    }
+  return key;
+}
+
+/*
+ * pt_make_user_text_inputs () - the inputs that change what a user text compiles to without showing in it, which
+ *   pt_make_user_text_key () appends to the normalized text: the client's charset and collation, which type the
+ *   literals, whether the select list carries the row OID (an updatable prepare, pt_add_row_oid), the parameters
+ *   (sysprm_print_client_parameters_for_key, sysprm_print_parameters_for_qry_string) and the user, in whose schema
+ *   the names resolve
+ *   return: the inputs, allocated, or NULL
+ *   oids_included(in): 1 if the select list carries the row OID
+ *
+ * Note: the masked and the plain key of one text take the same inputs, which the caller makes once.
+ */
+char *
+pt_make_user_text_inputs (int oids_included)
+{
+  char *qry_params = NULL, *all = NULL;
+  char inputs[LINE_MAX];
+  char user[PT_MEMB_BUF_SIZE];
+  int n;
+
+  n = snprintf (inputs, sizeof (inputs), " ;client=%d.%d;oids=%d;params=", (int) lang_get_client_charset (),
+		lang_get_client_collation (), oids_included);
+  if (n < 0 || n >= (int) sizeof (inputs)
+      || sysprm_print_client_parameters_for_key (inputs + n, (int) sizeof (inputs) - n) < 0
+      || parser_print_user (user, (int) sizeof (user)) <= 0)
+    {
+      return NULL;
+    }
+  qry_params = sysprm_print_parameters_for_qry_string ();
+  if (qry_params == NULL)
+    {
+      return NULL;
+    }
+
+  all = (char *) malloc (strlen (inputs) + strlen (qry_params) + strlen (user) + 3);
+  if (all != NULL)
+    {
+      sprintf (all, "%s?%s %s", inputs, qry_params, user);
+    }
+  free_and_init (qry_params);
+  return all;
+}
+
+/*
+ * pt_make_user_text_key () - the part of the XASL cache key of a statement that its user text makes, which a client
+ *   can make before it parses the text (pt_print_user_text_key makes the rest): the text normalized
+ *   (qr_normalize_query), then the inputs (pt_make_user_text_inputs)
+ *   return: NO_ERROR, or ER_FAILED for a text without one normal form or with a masking mark of its own
+ *   text(in): the user text of one statement
+ *   text_len(in): its bytes
+ *   mask(in): whether to mask the literals compared to a column (pt_mask_user_text_literals)
+ *   inputs(in): pt_make_user_text_inputs () of the statement
+ *   key(out): the key; key->literals refer to text
+ */
+int
+pt_make_user_text_key (const char *text, int text_len, bool mask, const char *inputs, PT_USER_TEXT_KEY * key)
+{
+  char *masked = NULL, *normal = NULL;
+  int normal_size, normal_len;
+  unsigned int hash;
+  bool unterminated;
+  int err = ER_FAILED;
+
+  key->text = NULL;
+  key->num_literals = 0;
+  if (text_len <= 0 || memchr (text, PT_USER_TEXT_LITERAL_MARK, text_len) != NULL)
+    {
+      /* a mark of the text's own would make it the key of a masked text */
+      return ER_FAILED;
+    }
+
+  masked = (char *) malloc (text_len + 1);
+  normal_size = 2 * text_len + 16;
+  normal = (char *) malloc (normal_size);
+  if (masked == NULL || normal == NULL)
+    {
+      goto end;
+    }
+  if (!mask || pt_mask_user_text_literals (text, text_len, masked, key) != NO_ERROR)
+    {
+      key->num_literals = 0;
+      memcpy (masked, text, text_len);
+      masked[text_len] = '\0';
+    }
+  normal_len = qr_normalize_query (normal, normal_size, masked, &hash, &unterminated);
+  if (normal_len <= 0 || unterminated)
+    {
+      goto end;
+    }
+
+  key->text = (char *) malloc (normal_len + strlen (inputs) + 1);
+  if (key->text == NULL)
+    {
+      goto end;
+    }
+  sprintf (key->text, "%s%s", normal, inputs);
+  err = NO_ERROR;
+
+end:
+  free_and_init (masked);
+  free_and_init (normal);
+  if (err != NO_ERROR)
+    {
+      key->num_literals = 0;
+    }
+  return err;
+}
+
+/*
+ * pt_free_user_text_key () - free the text of a key pt_make_user_text_key () made
+ */
+void
+pt_free_user_text_key (PT_USER_TEXT_KEY * key)
+{
+  if (key->text != NULL)
+    {
+      free_and_init (key->text);
+    }
+}
+
+/*
+ * pt_hash_text_key_length () - the bytes of an XASL cache key text the client hashes: the part a user text key made
+ *   (pt_print_user_text_key), or the whole text
+ *   return: bytes to hash
+ *   hash_text(in): the key text
+ *
+ * Note: a bind variant key appended after the length (do_append_bind_variant_key) makes the client hash the whole
+ *	 text, since the variant is not in the user text part.
+ */
+int
+pt_hash_text_key_length (const char *hash_text)
+{
+  static const char mark[] = ";key_length=";
+  const char *last = NULL, *p;
+  char *end;
+  long length;
+
+  for (p = strstr (hash_text, mark); p != NULL; p = strstr (p + 1, mark))
+    {
+      last = p;
+    }
+  if (last == NULL)
+    {
+      return (int) strlen (hash_text);
+    }
+  length = strtol (last + sizeof (mark) - 1, &end, 10);
+  if (*end != '\0' || length <= 0 || length > last - hash_text)
+    {
+      return (int) strlen (hash_text);
+    }
+  return (int) length;
+}
+
+/*
+ * pt_print_bind_signature () - the bind type signature of values, which the XASL cache key of the compilation of their
+ *   signature appends to the plain user text key (pt_print_user_text_key), and which a client makes from the values
+ *   it executes before it compiles: the type of each value, whether it is NULL, and the codeset and collation of a
+ *   string, what decides whether a value takes the plan of a signature (pt_value_has_domain_type)
+ *   return: bytes written, or -1 if buf is too small
+ *   count(in): number of values
+ *   values(in): the values
+ *   buf(out): the signature, terminated
+ *   size(in): bytes of buf; PT_BIND_SIGNATURE_VALUE_SIZE per value is enough
+ */
+int
+pt_print_bind_signature (int count, const DB_VALUE * values, char *buf, int size)
+{
+  int length = 0;
+
+  if (size <= 0)
+    {
+      return -1;
+    }
+  buf[0] = '\0';
+  for (int i = 0; i < count; i++)
+    {
+      const DB_TYPE type = DB_VALUE_DOMAIN_TYPE (&values[i]);
+      const bool is_char = TP_IS_CHAR_TYPE (type);
+      int n = snprintf (buf + length, size - length, ";sig%d=%d.%d.%d.%d", i, (int) type,
+			DB_IS_NULL (&values[i]) ? 1 : 0, is_char ? (int) db_get_string_codeset (&values[i]) : 0,
+			is_char ? db_get_string_collation (&values[i]) : 0);
+
+      if (n < 0 || n >= size - length)
+	{
+	  return -1;
+	}
+      length += n;
+    }
+  return length;
+}
+
+/*
+ * pt_mask_user_text_literals () - copy a user text with each masked literal replaced by PT_USER_TEXT_LITERAL_MARK:
+ *   a plain string literal, printable ASCII and the right operand of column = literal. The compilation turns it into
+ *   an auto parameter, whose value a client fills from the next text of the key
+ *   return: NO_ERROR, or ER_FAILED for a text the scan does not read: a backslash may escape a quote, and the scan
+ *     would then misplace the end of a literal
+ *   text(in): the user text
+ *   text_len(in): its bytes
+ *   out(out): text_len + 1 bytes
+ *   key(out): key->literals and key->num_literals
+ */
+static int
+pt_mask_user_text_literals (const char *text, int text_len, char *out, PT_USER_TEXT_KEY * key)
+{
+  const char *p = text, *text_end = text + text_len;
+  char *q = out;
+
+  key->num_literals = 0;
+  if (memchr (text, '\\', text_len) != NULL)
+    {
+      return ER_FAILED;
+    }
+
+  while (p < text_end)
+    {
+      const char *end;
+
+      if (p + 1 < text_end && ((p[0] == '-' && p[1] == '-') || (p[0] == '/' && p[1] == '/')))
+	{
+	  end = (const char *) memchr (p, '\n', text_end - p);
+	  end = (end != NULL) ? end + 1 : text_end;
+	}
+      else if (p + 1 < text_end && p[0] == '/' && p[1] == '*')
+	{
+	  for (end = p + 2; end + 1 < text_end && !(end[0] == '*' && end[1] == '/'); end++)
+	    {
+	      ;
+	    }
+	  if (end + 1 >= text_end)
+	    {
+	      return ER_FAILED;
+	    }
+	  end += 2;
+	}
+      else if (*p == '\'' || *p == '"' || *p == '`' || *p == '[')
+	{
+	  const char close = (*p == '[') ? ']' : *p;
+	  bool is_plain = (*p == '\'');
+
+	  for (end = p + 1; end < text_end; end++)
+	    {
+	      if (*end == close)
+		{
+		  if (close == ']' || end + 1 >= text_end || end[1] != close)
+		    {
+		      break;
+		    }
+		  /* a doubled quote stands for the quote */
+		  end++;
+		}
+	      else if (*end < ' ' || *end > '~')
+		{
+		  is_plain = false;
+		}
+	    }
+	  if (end >= text_end)
+	    {
+	      return ER_FAILED;
+	    }
+	  end++;
+
+	  /* an empty literal is NULL under oracle_style_empty_string */
+	  if (is_plain && key->num_literals < PT_USER_TEXT_MAX_LITERALS && end - p - 2 > 0
+	      && end - p - 2 <= PT_USER_TEXT_MAX_LITERAL_LENGTH && pt_is_equal_operand (out, q, end))
+	    {
+	      key->literals[key->num_literals].text = p + 1;
+	      key->literals[key->num_literals].length = (int) (end - p - 2);
+	      key->num_literals++;
+	      *q++ = PT_USER_TEXT_LITERAL_MARK;
+	      p = end;
+	      continue;
+	    }
+	}
+      else
+	{
+	  end = p + 1;
+	}
+
+      memcpy (q, p, end - p);
+      q += end - p;
+      p = end;
+    }
+  *q = '\0';
+  return NO_ERROR;
+}
+
+/*
+ * pt_is_equal_operand () - whether a literal is the right operand of column = literal in the text
+ *   return: true if it is
+ *   start(in): the masked text made so far
+ *   end(in): the end of the masked text made so far, where the literal goes
+ *   after(in): the text after the literal
+ *
+ * Note: only there the compilation does not rewrite the predicate for the value; LIKE 'a' becomes = 'a', which a
+ *	 later LIKE 'a%' of the same key must not reuse.
+ */
+static bool
+pt_is_equal_operand (const char *start, const char *end, const char *after)
+{
+  const char *s = end;
+
+  while (s > start && char_isspace (s[-1]))
+    {
+      s--;
+    }
+  if (s == start || s[-1] != '=')
+    {
+      return false;
+    }
+  s--;
+  if (s > start && strchr ("<>!:", s[-1]) != NULL)
+    {
+      return false;
+    }
+  while (s > start && char_isspace (s[-1]))
+    {
+      s--;
+    }
+  if (s == start || !(char_isalnum (s[-1]) || s[-1] == '_' || s[-1] == ']' || s[-1] == '"' || s[-1] == '`'))
+    {
+      return false;
+    }
+
+  while (char_isspace (*after))
+    {
+      after++;
+    }
+  return (*after == '\0' || *after == ')' || *after == ',' || *after == ';' || char_isalpha (*after));
+}
+
+/*
+ * pt_user_text_literal_value () - make the value of a masked literal the way the compilation made the value of its
+ *   auto parameter
+ *   return: NO_ERROR, or ER_FAILED if the value of like is not one the compilation makes from a literal
+ *   literal(in): the masked literal
+ *   like(in): an auto parameter value of the compilation
+ *   buf(in): PT_USER_TEXT_MAX_LITERAL_LENGTH + 1 bytes the value refers to
+ *   value(out): the value, referring to buf
+ */
+int
+pt_user_text_literal_value (const PT_USER_TEXT_LITERAL * literal, const DB_VALUE * like, char *buf, DB_VALUE * value)
+{
+  DB_TYPE type = DB_VALUE_DOMAIN_TYPE (like);
+  int precision = db_value_precision (like);
+  int length = 0;
+
+  for (int i = 0; i < literal->length; i++)
+    {
+      buf[length++] = literal->text[i];
+      if (literal->text[i] == '\'')
+	{
+	  /* skip the second quote of a doubled quote */
+	  i++;
+	}
+    }
+  buf[length] = '\0';
+
+  if ((type != DB_TYPE_CHAR && type != DB_TYPE_VARCHAR) || DB_IS_NULL (like))
+    {
+      return ER_FAILED;
+    }
+  if (precision != TP_FLOATING_PRECISION_VALUE)
+    {
+      /* the compilation gave the literal its own length as precision */
+      if (precision != db_get_string_length (like))
+	{
+	  return ER_FAILED;
+	}
+      precision = length;
+    }
+
+  if (type == DB_TYPE_CHAR)
+    {
+      db_make_char (value, precision, buf, length, db_get_string_codeset (like), db_get_string_collation (like));
+    }
+  else
+    {
+      db_make_varchar (value, precision, buf, length, db_get_string_codeset (like), db_get_string_collation (like));
+    }
+  return NO_ERROR;
+}
+
+/*
+ * pt_user_text_literals_match () - whether the auto parameters of a compilation are the masked literals of its text,
+ *   in the order of the text, and the tree uses each one only as the operand of column = literal
+ *   return: true if they are
+ *   parser(in): the compiled parser
+ *   node(in): the compiled statement
+ *   key(in): the masked key of its text
+ */
+static bool
+pt_user_text_literals_match (PARSER_CONTEXT * parser, const PT_NODE * node, const PT_USER_TEXT_KEY * key)
+{
+  int slots[PT_USER_TEXT_MAX_LITERALS];
+  char buf[PT_USER_TEXT_MAX_LITERAL_LENGTH + 1];
+  PT_LITERAL_USES uses;
+  int num_slots = 0;
+
+  for (int k = parser->host_var_count; k < parser->host_var_count + parser->auto_param_count; k++)
+    {
+      if (pt_is_derived_host_var (parser, k))
+	{
+	  /* a bind type signature copy of a user host variable, not a literal */
+	  continue;
+	}
+      if (num_slots == PT_USER_TEXT_MAX_LITERALS)
+	{
+	  return false;
+	}
+      slots[num_slots++] = k;
+    }
+  if (num_slots != key->num_literals)
+    {
+      /* a literal was folded or kept, or an auto parameter comes from elsewhere */
+      return false;
+    }
+
+  for (int i = 0; i < key->num_literals; i++)
+    {
+      const PT_USER_TEXT_LITERAL *literal = &key->literals[i];
+      const DB_VALUE *like = &parser->host_variables[slots[i]];
+      DB_VALUE value;
+
+      if (pt_user_text_literal_value (literal, like, buf, &value) != NO_ERROR
+	  || db_value_precision (&value) != db_value_precision (like)
+	  || db_get_string_size (&value) != db_get_string_size (like)
+	  || memcmp (db_get_string (&value), db_get_string (like), db_get_string_size (like)) != 0)
+	{
+	  return false;
+	}
+      if (pt_key_has_literal (key->text, literal))
+	{
+	  /* the literal the compilation made the auto parameter of may be this unmasked one of the same value */
+	  return false;
+	}
+      for (int j = 0; j < i; j++)
+	{
+	  /* two equal literals could have filled their positions in either order */
+	  if (key->literals[j].length == literal->length
+	      && memcmp (key->literals[j].text, literal->text, literal->length) == 0)
+	    {
+	      return false;
+	    }
+	}
+    }
+
+  /* another predicate may have been rewritten for the value of its literal (LIKE 'a%' into a range) */
+  memset (&uses, 0, sizeof (uses));
+  uses.slots = slots;
+  uses.num_slots = num_slots;
+  (void) parser_walk_tree (parser, (PT_NODE *) node, pt_count_literal_uses, &uses, NULL, NULL);
+  for (int i = 0; i < num_slots; i++)
+    {
+      if (uses.all[i] == 0 || uses.all[i] != uses.equal[i])
+	{
+	  return false;
+	}
+    }
+  return true;
+}
+
+/*
+ * pt_key_has_literal () - whether a key keeps a string literal of the same text as a masked one
+ *   return: true if it does
+ *   key_text(in): the masked key
+ *   literal(in): the masked literal
+ */
+static bool
+pt_key_has_literal (const char *key_text, const PT_USER_TEXT_LITERAL * literal)
+{
+  for (const char *p = strchr (key_text, '\''); p != NULL; p = strchr (p + 1, '\''))
+    {
+      if (strncmp (p + 1, literal->text, literal->length) == 0 && p[1 + literal->length] == '\'')
+	{
+	  return true;
+	}
+    }
+  return false;
+}
+
+/*
+ * pt_count_literal_uses () - parser_walk_tree callback counting, for each masked literal, its auto parameter nodes
+ *   and those of them that are an operand of column = literal
+ */
+static PT_NODE *
+pt_count_literal_uses (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  PT_LITERAL_USES *uses = (PT_LITERAL_USES *) arg;
+  PT_NODE *operand = NULL;
+
+  if (node->node_type == PT_HOST_VAR)
+    {
+      operand = node;
+    }
+  else if (node->node_type == PT_EXPR && node->info.expr.op == PT_EQ)
+    {
+      PT_NODE *arg1 = node->info.expr.arg1;
+      PT_NODE *arg2 = node->info.expr.arg2;
+
+      if (arg1 != NULL && arg1->node_type == PT_NAME)
+	{
+	  operand = arg2;
+	}
+      else if (arg2 != NULL && arg2->node_type == PT_NAME)
+	{
+	  operand = arg1;
+	}
+    }
+  if (operand == NULL || operand->node_type != PT_HOST_VAR)
+    {
+      return node;
+    }
+  for (int i = 0; i < uses->num_slots; i++)
+    {
+      if (uses->slots[i] == operand->info.host_var.index)
+	{
+	  if (operand == node)
+	    {
+	      uses->all[i]++;
+	    }
+	  else
+	    {
+	      uses->equal[i]++;
+	    }
+	  break;
+	}
+    }
+  return node;
+}
+
+/*
+ * pt_mark_host_var_index () - mark the index of a host variable, for pt_print_user_text_key
+ */
+static PT_NODE *
+pt_mark_host_var_index (PARSER_CONTEXT * parser, PT_NODE * node, void *arg, int *continue_walk)
+{
+  PT_HOST_VAR_MARKS *marks = (PT_HOST_VAR_MARKS *) arg;
+
+  if (node->node_type == PT_HOST_VAR && node->info.host_var.index >= 0 && node->info.host_var.index < marks->count)
+    {
+      marks->marks[node->info.host_var.index] = true;
+    }
+  return node;
+}
+
+/*
+ * pt_probe_user_text_key () - shortcut: a diagnostic for the user text key, remove it before a review. With the
+ *   environment variable CUBRID_USER_TEXT_KEY_PROBE naming a file, append one line per key: the hash of the part the
+ *   client hashes, the hash of the print followed by the rest of the key (the type tokens) and the start of the key.
+ *   A hashed part with two prints names two different compilations, so an input of the compilation is missing from
+ *   the hashed part
+ *   key(in): the key, whose first key_length bytes the user text made
+ */
+static void
+pt_probe_user_text_key (const PARSER_VARCHAR * print, const PARSER_VARCHAR * key, int key_length)
+{
+  const char *path = getenv ("CUBRID_USER_TEXT_KEY_PROBE");
+  FILE *fp;
+  unsigned long long h_print = 14695981039346656037ULL, h_key = 14695981039346656037ULL;
+  int i;
+
+  if (path == NULL || path[0] == '\0')
+    {
+      return;
+    }
+  for (i = 0; i < print->length; i++)
+    {
+      h_print = (h_print ^ print->bytes[i]) * 1099511628211ULL;
+    }
+  for (i = key_length; i < key->length; i++)
+    {
+      h_print = (h_print ^ key->bytes[i]) * 1099511628211ULL;
+    }
+  for (i = 0; i < key_length; i++)
+    {
+      h_key = (h_key ^ key->bytes[i]) * 1099511628211ULL;
+    }
+  fp = fopen (path, "a");
+  if (fp == NULL)
+    {
+      return;
+    }
+  fprintf (fp, "%016llx %016llx %.200s\n", h_key, h_print, (const char *) key->bytes);
+  fclose (fp);
 }
 
 /*

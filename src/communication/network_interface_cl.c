@@ -71,6 +71,7 @@
 #include "replication.h"
 #include "es.h"
 #include "db.h"
+#include "parser.h"
 #include "db_query.h"
 #include "dbtype.h"
 #include "compile_context.h"
@@ -5024,7 +5025,9 @@ csession_create_prepared_statement (const char *name, const char *alias_print, c
 
   if (alias_print)
     {
-      req_error = SHA1Compute ((const unsigned char *) alias_print, (unsigned) strlen (alias_print), &alias_sha1);
+      req_error =
+	SHA1Compute ((const unsigned char *) alias_print, (unsigned) pt_hash_text_key_length (alias_print),
+		     &alias_sha1);
       if (req_error != NO_ERROR)
 	{
 	  ASSERT_ERROR ();
@@ -5089,7 +5092,9 @@ cleanup:
       memcpy (local_alias_print, alias_print, len);
       local_alias_print[len] = 0;
 
-      result = SHA1Compute ((const unsigned char *) alias_print, (unsigned) strlen (alias_print), &alias_sha1);
+      result =
+	SHA1Compute ((const unsigned char *) alias_print, (unsigned) pt_hash_text_key_length (alias_print),
+		     &alias_sha1);
       if (result != NO_ERROR)
 	{
 	  ASSERT_ERROR ();
@@ -8128,6 +8133,126 @@ qmgr_bind_variant (const BIND_VARIANT_REQUEST * req, BIND_VARIANT_REPLY * reply)
   exit_server (*thread_p);
 
   return status;
+#endif /* !CS_MODE */
+}
+
+/*
+ * qmgr_find_prepared_image - Send a NET_SERVER_QM_FIND_PREPARED_IMAGE request: the XASL cache entry of the first of
+ *   the keys that has one, and the bytes a CAS keeps in it. This function is a counter part to
+ *   sqmgr_find_prepared_image().
+ *
+ * return	   : error code
+ * sha1s (in)	   : the keys, in the order to try them (at most two)
+ * n_sha1 (in)	   : their count
+ * xasl_id (out)   : the entry found, NULL if none
+ * image (out)	   : the bytes, malloc'd, or NULL if the entry keeps none
+ * image_size (out): their size
+ */
+int
+qmgr_find_prepared_image (const SHA1Hash * sha1s, int n_sha1, XASL_ID * xasl_id, char **image, int *image_size)
+{
+#if defined(CS_MODE)
+  int error = NO_ERROR;
+  int req_error, request_size, reply_size = 0;
+  OR_ALIGNED_BUF (OR_INT_SIZE + 2 * OR_SHA1_SIZE) a_request;
+  OR_ALIGNED_BUF (OR_INT_SIZE + OR_INT_SIZE + OR_XASL_ID_SIZE) a_reply;
+  char *request = OR_ALIGNED_BUF_START (a_request);
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  char *ptr, *reply_data = NULL;
+
+  assert (n_sha1 >= 1 && n_sha1 <= 2);
+  XASL_ID_SET_NULL (xasl_id);
+  *image = NULL;
+  *image_size = 0;
+
+  ptr = or_pack_int (request, n_sha1);
+  for (int i = 0; i < n_sha1; i++)
+    {
+      ptr = or_pack_sha1 (ptr, &sha1s[i]);
+    }
+  request_size = (int) (ptr - request);
+
+  req_error =
+    net_client_request2 (NET_SERVER_QM_FIND_PREPARED_IMAGE, request, request_size, reply,
+			 OR_ALIGNED_BUF_SIZE (a_reply), NULL, 0, &reply_data, &reply_size);
+  if (req_error != NO_ERROR)
+    {
+      return req_error;
+    }
+  ptr = or_unpack_int (reply, &reply_size);
+  ptr = or_unpack_int (ptr, &error);
+  if (error == NO_ERROR)
+    {
+      OR_UNPACK_XASL_ID (ptr, xasl_id);
+      if (reply_data != NULL && reply_size > 0)
+	{
+	  *image = reply_data;
+	  *image_size = reply_size;
+	  reply_data = NULL;
+	}
+    }
+  if (reply_data != NULL)
+    {
+      free_and_init (reply_data);
+    }
+  return error;
+#else /* CS_MODE */
+  int error;
+
+  THREAD_ENTRY *thread_p = enter_server ();
+
+  error = xcache_find_prepared_image (thread_p, sha1s, n_sha1, xasl_id, image, image_size);
+
+  exit_server (*thread_p);
+
+  return error;
+#endif /* !CS_MODE */
+}
+
+/*
+ * qmgr_set_prepared_image - Send a NET_SERVER_QM_SET_PREPARED_IMAGE request: keep in an XASL cache entry what a CAS
+ *   needs to prepare its text without compiling it. This function is a counter part to sqmgr_set_prepared_image().
+ *
+ * return	  : error code
+ * xasl_id (in)	  : the entry
+ * image (in)	  : the bytes
+ * image_size (in): their size
+ */
+int
+qmgr_set_prepared_image (const XASL_ID * xasl_id, const char *image, int image_size)
+{
+#if defined(CS_MODE)
+  int error = NO_ERROR;
+  int req_error;
+  OR_ALIGNED_BUF (OR_XASL_ID_SIZE + OR_INT_SIZE) a_request;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *request = OR_ALIGNED_BUF_START (a_request);
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  char *ptr;
+
+  ptr = request;
+  OR_PACK_XASL_ID (ptr, xasl_id);
+  ptr = or_pack_int (ptr, image_size);
+
+  req_error =
+    net_client_request (NET_SERVER_QM_SET_PREPARED_IMAGE, request, OR_ALIGNED_BUF_SIZE (a_request), reply,
+			OR_ALIGNED_BUF_SIZE (a_reply), (char *) image, image_size, NULL, 0);
+  if (req_error != NO_ERROR)
+    {
+      return req_error;
+    }
+  (void) or_unpack_int (reply, &error);
+  return error;
+#else /* CS_MODE */
+  int error;
+
+  THREAD_ENTRY *thread_p = enter_server ();
+
+  error = xcache_set_prepared_image (thread_p, xasl_id, image, image_size);
+
+  exit_server (*thread_p);
+
+  return error;
 #endif /* !CS_MODE */
 }
 

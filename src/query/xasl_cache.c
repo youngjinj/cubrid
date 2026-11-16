@@ -450,6 +450,7 @@ xasl_cache_ent::xasl_cache_ent ()
 {
   pthread_mutex_init (&cache_clones_mutex, NULL);
   bind_dir = NULL;
+  prepared_image = NULL;
   init_clone_cache ();
 }
 
@@ -459,6 +460,10 @@ xasl_cache_ent::~xasl_cache_ent ()
   if (bind_dir != NULL)
     {
       free_and_init (bind_dir);
+    }
+  if (prepared_image != NULL)
+    {
+      free_and_init (prepared_image);
     }
   pthread_mutex_destroy (&cache_clones_mutex);
 }
@@ -490,6 +495,7 @@ xcache_entry_alloc (void)
   xcache_entry->init_clone_cache ();
   pthread_mutex_init (&xcache_entry->cache_clones_mutex, NULL);
   xcache_entry->bind_dir = NULL;
+  xcache_entry->prepared_image = NULL;
 
   xcache_entry->list_ht_no = -1;
 
@@ -516,6 +522,10 @@ xcache_entry_free (void *entry)
   if (xcache_entry->bind_dir != NULL)
     {
       free_and_init (xcache_entry->bind_dir);
+    }
+  if (xcache_entry->prepared_image != NULL)
+    {
+      free_and_init (xcache_entry->prepared_image);
     }
   pthread_mutex_destroy (&xcache_entry->cache_clones_mutex);
   free (entry);
@@ -550,6 +560,7 @@ xcache_entry_init (void *entry)
   xcache_entry->free_data_on_uninit = false;
   xcache_entry->mem_size = 0;
   xcache_entry->bind_dir = NULL;
+  xcache_entry->prepared_image = NULL;
   xcache_entry->initialized = true;
 
   assert (xcache_entry->n_cache_clones == 0);
@@ -693,6 +704,11 @@ xcache_entry_uninit (void *entry)
     {
       /* the query's plan variants go with its base entry: the next execution starts over */
       free_and_init (xcache_entry->bind_dir);
+    }
+  if (xcache_entry->prepared_image != NULL)
+    {
+      /* a recompiled entry starts without one: the next prepare of its text sets it again */
+      free_and_init (xcache_entry->prepared_image);
     }
   xcache_entry->initialized = false;
   return NO_ERROR;
@@ -3313,5 +3329,125 @@ xcache_bind_variant (THREAD_ENTRY * thread_p, const BIND_VARIANT_REQUEST * req, 
   pthread_mutex_unlock (&xcache_entry->cache_clones_mutex);
   xcache_unfix (thread_p, xcache_entry);
 
+  return NO_ERROR;
+}
+
+/*
+ * xcache_find_prepared_image () - find the entry of the first of several keys that has one, and copy what a CAS
+ *				   keeps in it to prepare its text without compiling it
+ *   return: error code
+ *   thread_p(in): thread entry
+ *   sha1s(in): the keys, in the order to try them
+ *   n_sha1(in): their count
+ *   xasl_id(out): the entry found, NULL if none or if the entry has to be compiled again
+ *   image(out): a copy of the bytes the entry keeps, malloc'd, or NULL if the entry keeps none
+ *   image_size(out): their size
+ */
+int
+xcache_find_prepared_image (THREAD_ENTRY * thread_p, const SHA1Hash * sha1s, int n_sha1, XASL_ID * xasl_id,
+			    char **image, int *image_size)
+{
+  XASL_CACHE_ENTRY *xcache_entry = NULL;
+  xasl_cache_rt_check_result rt_check;
+  int error_code;
+
+  XASL_ID_SET_NULL (xasl_id);
+  *image = NULL;
+  *image_size = 0;
+  if (!xcache_Enabled)
+    {
+      return NO_ERROR;
+    }
+
+  for (int i = 0; i < n_sha1; i++)
+    {
+      rt_check = XASL_CACHE_RECOMPILE_NOT_NEEDED;
+      error_code = xcache_find_sha1 (thread_p, &sha1s[i], XASL_CACHE_SEARCH_FOR_PREPARE, &xcache_entry, &rt_check);
+      if (error_code != NO_ERROR)
+	{
+	  ASSERT_ERROR ();
+	  return error_code;
+	}
+      if (xcache_entry == NULL)
+	{
+	  continue;
+	}
+      if (rt_check == XASL_CACHE_RECOMPILE_NOT_NEEDED)
+	{
+	  const char *kept = xcache_entry->prepared_image;
+
+	  XASL_ID_COPY (xasl_id, &xcache_entry->xasl_id);
+	  if (kept != NULL)
+	    {
+	      int size = *(const int *) kept;
+
+	      *image = (char *) malloc (size);
+	      if (*image != NULL)
+		{
+		  memcpy (*image, kept + sizeof (int), size);
+		  *image_size = size;
+		}
+	    }
+	}
+      /* an entry to compile again: the prepare compiles its text and requests the recompile */
+      xcache_unfix (thread_p, xcache_entry);
+      return NO_ERROR;
+    }
+  return NO_ERROR;
+}
+
+/*
+ * xcache_set_prepared_image () - keep in an entry what a CAS needs to prepare its text without compiling it
+ *   return: error code
+ *   thread_p(in): thread entry
+ *   xasl_id(in): the entry; one of another generation keeps nothing
+ *   image(in): the bytes
+ *   image_size(in): their size
+ *
+ * Note: the first image an entry is given stays: every CAS makes the same one from the same compilation.
+ */
+int
+xcache_set_prepared_image (THREAD_ENTRY * thread_p, const XASL_ID * xasl_id, const char *image, int image_size)
+{
+  XASL_CACHE_ENTRY *xcache_entry = NULL;
+  char *kept;
+  int error_code;
+
+  if (!xcache_Enabled || image_size <= 0)
+    {
+      return NO_ERROR;
+    }
+
+  error_code = xcache_find_sha1 (thread_p, &xasl_id->sha1, XASL_CACHE_SEARCH_GENERIC, &xcache_entry, NULL);
+  if (error_code != NO_ERROR)
+    {
+      ASSERT_ERROR ();
+      return error_code;
+    }
+  if (xcache_entry == NULL)
+    {
+      return NO_ERROR;
+    }
+  if (xcache_entry->prepared_image == NULL && CACHE_TIME_EQ (&xcache_entry->xasl_id.time_stored, &xasl_id->time_stored))
+    {
+      kept = (char *) malloc (sizeof (int) + image_size);
+      if (kept == NULL)
+	{
+	  xcache_unfix (thread_p, xcache_entry);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, sizeof (int) + image_size);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      *(int *) kept = image_size;
+      memcpy (kept + sizeof (int), image, image_size);
+      if (ATOMIC_CAS_ADDR (&xcache_entry->prepared_image, (char *) NULL, kept))
+	{
+	  xcache_entry_add_mem_size (xcache_entry, (INT32) (sizeof (int) + image_size));
+	}
+      else
+	{
+	  free_and_init (kept);
+	}
+    }
+  xcache_unfix (thread_p, xcache_entry);
   return NO_ERROR;
 }

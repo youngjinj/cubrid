@@ -116,6 +116,40 @@ extern "C"
 				    void *pre_argument, PT_NODE_WALK_FUNCTION post_function, void *post_argument);
   extern PT_NODE *pt_continue_walk (PARSER_CONTEXT * parser, PT_NODE * tree, void *arg, int *continue_walk);
 
+  /* the XASL cache key of a statement made of its user text before it parses (pt_make_user_text_key): the text
+   * normalized, with each plain string literal compared to a column (column = 'literal') masked, and the inputs that
+   * change what the text compiles to without showing in it */
+#define PT_USER_TEXT_MAX_LITERALS	16
+#define PT_USER_TEXT_MAX_LITERAL_LENGTH	256	/* a longer literal stays in the key */
+#define PT_USER_TEXT_LITERAL_MARK	'\001'
+
+  typedef struct pt_user_text_literal PT_USER_TEXT_LITERAL;
+  struct pt_user_text_literal
+  {
+    const char *text;		/* the byte after the opening quote, inside the user text */
+    int length;			/* bytes up to the closing quote, a doubled quote counted as two */
+  };
+
+  typedef struct pt_user_text_key PT_USER_TEXT_KEY;
+  struct pt_user_text_key
+  {
+    char *text;			/* allocated; pt_free_user_text_key () frees it */
+    int num_literals;		/* masked in the text, in its order */
+    PT_USER_TEXT_LITERAL literals[PT_USER_TEXT_MAX_LITERALS];
+  };
+
+  extern char *pt_make_user_text_inputs (int oids_included);
+  extern int pt_make_user_text_key (const char *text, int text_len, bool mask, const char *inputs,
+				    PT_USER_TEXT_KEY * key);
+  extern void pt_free_user_text_key (PT_USER_TEXT_KEY * key);
+  extern int pt_user_text_literal_value (const PT_USER_TEXT_LITERAL * literal, const DB_VALUE * like, char *buf,
+					 DB_VALUE * value);
+  extern int pt_hash_text_key_length (const char *hash_text);
+
+  /* bytes pt_print_bind_signature () writes for one value at most */
+#define PT_BIND_SIGNATURE_VALUE_SIZE	48
+  extern int pt_print_bind_signature (int count, const DB_VALUE * values, char *buf, int size);
+
   extern char *parser_print_tree (PARSER_CONTEXT * parser, const PT_NODE * node);
   extern char *parser_print_tree_with_quotes (PARSER_CONTEXT * parser, const PT_NODE * node);
   extern char *parser_print_function_index_expr (PARSER_CONTEXT * parser, const PT_NODE * expr);

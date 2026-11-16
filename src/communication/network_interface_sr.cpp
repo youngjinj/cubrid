@@ -6781,6 +6781,98 @@ sqmgr_bind_variant (THREAD_ENTRY *thread_p, unsigned int rid, char *request, int
 }
 
 /*
+ * sqmgr_find_prepared_image - Process a NET_SERVER_QM_FIND_PREPARED_IMAGE request: the XASL cache entry of the first
+ *   of the keys that has one, and the bytes a CAS keeps in it (xcache_find_prepared_image).
+ *   This function is a counter part to qmgr_find_prepared_image().
+ *
+ *   request(in): the count of keys, then the keys
+ */
+void
+sqmgr_find_prepared_image (THREAD_ENTRY *thread_p, unsigned int rid, char *request, int reqlen)
+{
+  SHA1Hash sha1s[2];
+  XASL_ID xasl_id;
+  OR_ALIGNED_BUF (OR_INT_SIZE + OR_INT_SIZE + OR_XASL_ID_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  char *ptr, *image = NULL;
+  int n_sha1, image_size = 0, error;
+
+  ptr = or_unpack_int (request, &n_sha1);
+  if (n_sha1 < 0 || n_sha1 > (int) DIM (sha1s))
+    {
+      n_sha1 = 0;
+    }
+  for (int i = 0; i < n_sha1; i++)
+    {
+      ptr = or_unpack_sha1 (ptr, &sha1s[i]);
+    }
+
+  error = xcache_find_prepared_image (thread_p, sha1s, n_sha1, &xasl_id, &image, &image_size);
+  if (error != NO_ERROR)
+    {
+      (void) return_error_to_client (thread_p, rid);
+      XASL_ID_SET_NULL (&xasl_id);
+      image_size = 0;
+    }
+
+  ptr = or_pack_int (reply, image_size);
+  ptr = or_pack_int (ptr, error);
+  OR_PACK_XASL_ID (ptr, &xasl_id);
+  auto deleter = [image]() noexcept
+  {
+    if (image != NULL)
+      {
+	free (image);
+      }
+  };
+  css_send_reply_and_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply), image,
+				     image_size, std::move (deleter));
+}
+
+/*
+ * sqmgr_set_prepared_image - Process a NET_SERVER_QM_SET_PREPARED_IMAGE request: keep in an XASL cache entry what a
+ *   CAS needs to prepare its text without compiling it (xcache_set_prepared_image).
+ *   This function is a counter part to qmgr_set_prepared_image().
+ *
+ *   request(in): the XASL id, then the size of the bytes; the bytes follow as data
+ */
+void
+sqmgr_set_prepared_image (THREAD_ENTRY *thread_p, unsigned int rid, char *request, int reqlen)
+{
+  XASL_ID xasl_id;
+  OR_ALIGNED_BUF (OR_INT_SIZE) a_reply;
+  char *reply = OR_ALIGNED_BUF_START (a_reply);
+  char *ptr, *image = NULL;
+  int image_size, error = NO_ERROR;
+
+  ptr = request;
+  OR_UNPACK_XASL_ID (ptr, &xasl_id);
+  ptr = or_unpack_int (ptr, &image_size);
+  if (image_size > 0)
+    {
+      if (css_receive_data_from_client (thread_p->conn_entry, rid, &image, &image_size) != NO_ERROR)
+	{
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_NET_SERVER_DATA_RECEIVE, 0);
+	  css_send_abort_to_client (thread_p->conn_entry, rid);
+	  if (image != NULL)
+	    {
+	      thread_p->release_packet (image);
+	    }
+	  return;
+	}
+      error = xcache_set_prepared_image (thread_p, &xasl_id, image, image_size);
+      thread_p->release_packet (image);
+    }
+  if (error != NO_ERROR)
+    {
+      (void) return_error_to_client (thread_p, rid);
+    }
+
+  (void) or_pack_int (reply, error);
+  css_send_data_to_client (thread_p->conn_entry, rid, reply, OR_ALIGNED_BUF_SIZE (a_reply));
+}
+
+/*
  * sqmgr_drop_query_plans_by_sha1 - Process a NET_SERVER_QM_QUERY_DROP_SHA1_PLANS request
  *
  * return:

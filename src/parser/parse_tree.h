@@ -42,6 +42,7 @@
 #include "string_opfunc.h"
 #include "system_parameter.h"
 #include "hide_password.h"
+#include "locator.h"
 #include "misctype_def.h"
 
 // forward definitions
@@ -4061,6 +4062,11 @@ struct parser_context
 				 * (pt_classify_host_var_positions), while it compiles */
   PT_NODE *host_var_assigned_later;	/* the statement whose class prefetch assigns its positions after its
 					 * translation (pt_assign_host_var_positions), while it compiles */
+  const PT_NODE *user_text_key_statement;	/* the statement do_prepare_statement () prepares: its XASL cache key
+						 * is made of its user text (parser_print_tree), a subquery's or an
+						 * internal statement's of its print */
+  const char *bind_signature;	/* the bind type signature of the values a compilation of a signature takes
+				 * (pt_print_bind_signature), which its user text key appends; NULL for another */
   EXECUTION_STATE_VALUES execution_values;	/* values kept across the execution of statements during a client
 						 * session. */
   int host_var_count;		/* number of input host variables */
@@ -4084,6 +4090,11 @@ struct parser_context
   VIEW_CACHE_INFO *view_cache;	/* parsing cache using in view transformation */
   struct symbol_info *symbols;	/* a place to keep information used in generating query processing (xasl) procedures. */
   char **lcks_classes;
+  /* the rest of the lock hint pt_class_pre_fetch () sent for lcks_classes, which the CAS sends again to skip the
+   * compilation of the same text */
+  LOCK *lcks_locks;
+  int *lcks_only_all;
+  LC_PREFETCH_FLAGS *lcks_flags;
 
   size_t input_buffer_length;
   size_t input_buffer_position;
@@ -4188,6 +4199,8 @@ struct parser_context
 					 * the values' format classes and ELT indexes */
     unsigned needs_bound_hostvar:1;	/* set to 1 when the compile failed because a host variable has no value yet
 					 * (UPDATE OBJECT ?, m () ON ?, TABLE (?)); see db_statement_needs_bound_values () */
+    unsigned has_value_not_in_text:1;	/* the compilation put a value the text does not show into the statement:
+					 * a label's (:a), a table's definition (SHOW CREATE TABLE) */
   } flag;
 };
 

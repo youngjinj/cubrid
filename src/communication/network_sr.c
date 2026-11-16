@@ -500,6 +500,12 @@ net_server_init (void)
   req_p = &net_Requests[NET_SERVER_QM_BIND_VARIANT];
   req_p->processing_function = sqmgr_bind_variant;
 
+  req_p = &net_Requests[NET_SERVER_QM_FIND_PREPARED_IMAGE];
+  req_p->processing_function = sqmgr_find_prepared_image;
+
+  req_p = &net_Requests[NET_SERVER_QM_SET_PREPARED_IMAGE];
+  req_p->processing_function = sqmgr_set_prepared_image;
+
   req_p = &net_Requests[NET_SERVER_QM_QUERY_DUMP_CACHE];
   req_p->processing_function = sqmgr_dump_query_cache;
 

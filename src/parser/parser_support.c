@@ -8223,6 +8223,7 @@ pt_make_query_show_create_table (PARSER_CONTEXT * parser, PT_NODE * table_name)
     }
 
   PT_SELECT_INFO_SET_FLAG (select, PT_SELECT_INFO_READ_ONLY);
+  parser->flag.has_value_not_in_text = 1;
 
   /*
    * SELECT 'table_name' as TABLE, 'create table ...' as CREATE TABLE
