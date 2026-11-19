@@ -4541,8 +4541,7 @@ numeric_sum_acc_add_expr_val (SUM_ACC * acc, const NUMERIC_AGG_EXPR_VAL * val)
  *   return: digit count (1 for zero)
  *
  * Refines a bit-length estimate against the pow10 table, using the same method
- * as float_numeric_get_decimal_digit () for word buffers. Used only when packing
- * a value to determine its result precision.
+ * as float_numeric_get_decimal_digit () for word buffers.
  */
 static int
 numeric_digits_u128 (uint128_t coefficient)
@@ -4551,12 +4550,14 @@ numeric_digits_u128 (uint128_t coefficient)
   int bits = (hi != 0) ? (128 - NUMERIC_CLZ64 (hi)) : (64 - NUMERIC_CLZ64 ((uint64_t) coefficient | 1));
   int digits = ((bits - 1) * 1233 >> 12) + 1;
 
-  while (digits <= NUMERIC_AGG_EXPR_POW10_MAX_EXP && coefficient >= _gv_numeric_agg_expr_pow10_u128[digits])
+  /* the estimate is low by at most one, and passes 38 only for a coefficient of 2^127 or more, which has 39 digits;
+   * one comparison instead of a loop, whose exit the branch predictor misses on mixed digit counts */
+  if (digits > NUMERIC_AGG_EXPR_POW10_MAX_EXP)
     {
-      digits++;
+      return digits;
     }
 
-  return digits;
+  return digits + (coefficient >= _gv_numeric_agg_expr_pow10_u128[digits]);
 }
 
 /*
@@ -7765,6 +7766,13 @@ numeric_db_value_is_zero (const DB_VALUE * arg)
 int
 numeric_get_precision_digits (uint8_t * calc_buf)
 {
+  /* below 2^128 the first byte is zero */
+  if (calc_buf[0] == 0)
+    {
+      return numeric_digits_u128 (((uint128_t) numeric_get_uint64_from_be (calc_buf + 1) << 64)
+				  | numeric_get_uint64_from_be (calc_buf + 1 + sizeof (uint64_t)));
+    }
+
   uint64_t word_buf[NUMERIC_AS_WORDS] = { 0 };
   numeric_bytes_to_words (calc_buf, DB_NUMERIC_BUF_SIZE, word_buf, NUMERIC_AS_WORDS, NUMERIC_AS_WORD_BYTES);
   return float_numeric_get_decimal_digit (word_buf, NUMERIC_AS_WORDS);
