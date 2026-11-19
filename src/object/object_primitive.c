@@ -817,6 +817,9 @@ static DB_VALUE_COMPARE_RESULT mr_data_cmpdisk_numeric (void *mem1, void *mem2, 
 							int total_order, int *start_colp);
 static DB_VALUE_COMPARE_RESULT mr_cmpval_numeric (DB_VALUE * value1, DB_VALUE * value2, int do_coercion,
 						  int total_order, int *start_colp, int collation);
+static int mr_numeric_cmp_magnitude (const unsigned char *a, int len_a, const unsigned char *b, int len_b);
+static bool mr_numeric_cmpdisk_bytes (const unsigned char *disk1, const unsigned char *disk2,
+				      DB_VALUE_COMPARE_RESULT * c);
 static void mr_initmem_resultset (void *mem, TP_DOMAIN * domain);
 static int mr_setmem_resultset (void *mem, TP_DOMAIN * domain, DB_VALUE * value);
 static int mr_getmem_resultset (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy);
@@ -8841,6 +8844,69 @@ mr_index_cmpdisk_numeric (void *mem1, void *mem2, TP_DOMAIN * domain, int do_coe
   return mr_data_cmpdisk_numeric (mem1, mem2, domain, do_coercion, total_order, start_colp);
 }
 
+/* the order of two coefficient magnitudes, big-endian byte strings of any lengths */
+static int
+mr_numeric_cmp_magnitude (const unsigned char *a, int len_a, const unsigned char *b, int len_b)
+{
+  int c;
+
+  for (; len_a > len_b; a++, len_a--)
+    {
+      if (*a != 0)
+	{
+	  return 1;
+	}
+    }
+  for (; len_b > len_a; b++, len_b--)
+    {
+      if (*b != 0)
+	{
+	  return -1;
+	}
+    }
+  c = memcmp (a, b, len_a);
+  return (c > 0) - (c < 0);
+}
+
+/* at one scale the coefficients order the values (numeric_db_value_compare), so the sign and the digit
+ * bytes decide without decoding either image; false for images of different scales */
+static bool
+mr_numeric_cmpdisk_bytes (const unsigned char *disk1, const unsigned char *disk2, DB_VALUE_COMPARE_RESULT * c)
+{
+  const int len1 = (disk1[0] & 0x7F) - NUMERIC_HEADER_SIZE;
+  const int len2 = (disk2[0] & 0x7F) - NUMERIC_HEADER_SIZE;
+  bool is_negative1, is_negative2;
+  int magnitude, i;
+
+  if ((disk1[1] & NUMERIC_HEADER_SCALE_SIGN_BIT_MASK) != (disk2[1] & NUMERIC_HEADER_SCALE_SIGN_BIT_MASK)
+      || disk1[2] != disk2[2] || len1 < 0 || len2 < 0)
+    {
+      return false;
+    }
+  is_negative1 = (disk1[0] & NUMERIC_VALUE_SIGN_BIT_MASK) != 0;
+  is_negative2 = (disk2[0] & NUMERIC_VALUE_SIGN_BIT_MASK) != 0;
+  magnitude = mr_numeric_cmp_magnitude (disk1 + NUMERIC_HEADER_SIZE, len1, disk2 + NUMERIC_HEADER_SIZE, len2);
+  if (magnitude == 0)
+    {
+      /* opposite signs on equal magnitudes are equal only as zeros */
+      for (i = 0; is_negative1 != is_negative2 && i < len1 && disk1[NUMERIC_HEADER_SIZE + i] == 0; i++)
+	{
+	  ;
+	}
+      *c = (is_negative1 == is_negative2 || i == len1) ? DB_EQ : (is_negative1 ? DB_LT : DB_GT);
+    }
+  else if (is_negative1 != is_negative2)
+    {
+      /* the magnitudes differ, so at most one is a zero, whose sign does not change the order */
+      *c = is_negative1 ? DB_LT : DB_GT;
+    }
+  else
+    {
+      *c = ((magnitude > 0) != is_negative1) ? DB_GT : DB_LT;
+    }
+  return true;
+}
+
 static DB_VALUE_COMPARE_RESULT
 mr_data_cmpdisk_numeric (void *mem1, void *mem2, TP_DOMAIN * domain, int do_coercion, int total_order, int *start_colp)
 {
@@ -8851,6 +8917,12 @@ mr_data_cmpdisk_numeric (void *mem1, void *mem2, TP_DOMAIN * domain, int do_coer
   int rc = NO_ERROR;
 
   assert (domain != NULL);
+
+  if (domain->precision != 0
+      && mr_numeric_cmpdisk_bytes ((const unsigned char *) mem1, (const unsigned char *) mem2, &c))
+    {
+      return c;
+    }
 
   or_init (&buf, (char *) mem1, 0);
   rc = mr_data_readval_numeric (&buf, &value1, domain, -1, 0, NULL, 0);
