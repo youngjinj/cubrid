@@ -6499,10 +6499,16 @@ qexec_gby_mtable_add (THREAD_ENTRY * thread_p, QEXEC_GBY_READER * rd, QEXEC_GBY_
  * repeats no key has about as many groups as rows.  The estimate is made over the sample's runs -- a row whose key
  * is not the row before's starts one -- not its rows: a list clustered on its key (sorted, or a key the scan read in
  * its order, such as an order's lines) repeats a key only inside its run, so a sample of its first rows counts a few
- * keys many times and Chao1 over the rows sees nothing unseen (34 to 43 times too few on 3,000,000 rows).  Over the
- * runs: when no key came back after its run, every run is a new key and the list has about as many groups as runs
- * (the sample's share of them, extrapolated); otherwise Chao1 over the runs' keys, at most the list's runs. */
+ * keys many times and Chao1 over the rows sees nothing unseen (34 to 43 times too few on 3,000,000 rows).  A key
+ * that comes back within QEXEC_GBY_SAMPLE_RUN_GAP rows stays in its run too: a list whose keys each come back a few
+ * rows later has its groups whole in the sample as well, and Chao1 over its rows takes the keys seen twice for a
+ * sign of many unseen (5 times too few on 900,000 rows, each fifth key twice 3 rows apart).  Over the runs: when no
+ * key came back after its run, every run is a new key and the list has about as many groups as runs (the sample's
+ * share of them, extrapolated); otherwise Chao1 over the runs' keys, at most the list's runs.  The gap is a small
+ * share of the sample (1/64): a list cycling through fewer keys than the gap is taken for at most that share of its
+ * rows as groups, and is still folded. */
 #define QEXEC_GBY_SAMPLE_ROWS (65536)
+#define QEXEC_GBY_SAMPLE_RUN_GAP (1024)
 
 static int
 qexec_gby_merge_sample_groups (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate, QFILE_LIST_ID * rows, double *groups)
@@ -6511,25 +6517,28 @@ qexec_gby_merge_sample_groups (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate,
   const unsigned int size = QEXEC_GBY_SAMPLE_ROWS * 2, mask = size - 1;
   unsigned int *hashes = (unsigned int *) db_private_alloc (thread_p, size * sizeof (unsigned int));
   int *runs = (int *) db_private_alloc (thread_p, size * sizeof (int));	/* the runs each key starts */
+  int *last = (int *) db_private_alloc (thread_p, size * sizeof (int));	/* the row after each key's last (0: none) */
   QFILE_LIST_SCAN_ID scan;
   QFILE_TUPLE_RECORD tpl = QFILE_TUPLE_RECORD_INITIALIZER;
   int n = 0, d = 0, n_runs = 0, rd = 0, rf1 = 0, rf2 = 0, rc = NO_ERROR;
-  unsigned int prev = 0;
   SCAN_CODE sc = S_END;
   unsigned int i;
 
-  if (hashes == NULL || runs == NULL)
+  if (hashes == NULL || runs == NULL || last == NULL)
     {
       db_private_free_and_init (thread_p, hashes);
       db_private_free_and_init (thread_p, runs);
+      db_private_free_and_init (thread_p, last);
       return ER_FAILED;
     }
   memset (hashes, 0, size * sizeof (unsigned int));
   memset (runs, 0, size * sizeof (int));
+  memset (last, 0, size * sizeof (int));
   if (qfile_open_list_scan (rows, &scan) != NO_ERROR)
     {
       db_private_free_and_init (thread_p, hashes);
       db_private_free_and_init (thread_p, runs);
+      db_private_free_and_init (thread_p, last);
       return ER_FAILED;
     }
   while (n < QEXEC_GBY_SAMPLE_ROWS && (sc = qfile_scan_list_next (thread_p, &scan, &tpl, PEEK)) == S_SUCCESS)
@@ -6549,12 +6558,12 @@ qexec_gby_merge_sample_groups (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate,
       for (i = h & mask; hashes[i] != 0 && hashes[i] != h; i = (i + 1) & mask)
 	;
       hashes[i] = h;
-      if (h != prev)
+      if (last[i] == 0 || n + 1 - last[i] > QEXEC_GBY_SAMPLE_RUN_GAP)
 	{
 	  runs[i]++;
 	  n_runs++;
-	  prev = h;
 	}
+      last[i] = n + 1;
       n++;
     }
   if (sc == S_ERROR && rc == NO_ERROR)
@@ -6572,6 +6581,7 @@ qexec_gby_merge_sample_groups (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate,
     }
   db_private_free_and_init (thread_p, hashes);
   db_private_free_and_init (thread_p, runs);
+  db_private_free_and_init (thread_p, last);
   if (n < QEXEC_GBY_SAMPLE_ROWS)
     {
       /* the whole list */
@@ -7000,7 +7010,8 @@ qexec_gby_merge_free_parts (THREAD_ENTRY * thread_p, int n, QFILE_LIST_ID *** ro
  * ask for, and those are folded in turn -- the sub-partitions' lists are the only ones open besides the split's.
  * A sub-partition whose table reaches QEXEC_GBY_MERGE_SORT_FACTOR budgets is not folded: its rows and partial
  * entries go to to_sort_rows / to_sort_partials as they are, and the sort takes them with whatever else the merge
- * leaves it. */
+ * leaves it.  A partition holds the keys of a share of the hash, so the first table folded tells how much the lists
+ * fold: when min_fold is set and that table took fewer entries a group, the merge stops (fold_little). */
 typedef struct qexec_gby_merge_job QEXEC_GBY_MERGE_JOB;
 struct qexec_gby_merge_job
 {
@@ -7016,7 +7027,10 @@ struct qexec_gby_merge_job
   void *leaf_arg;
   QFILE_LIST_ID *to_sort_rows;	/* what the sort is left: opened on the first need (or by the owner beforehand) */
   QFILE_LIST_ID *to_sort_partials;
-  bool stop;			/* the leaf asks for no more partitions (the group count limit was reached) */
+  double min_fold;		/* the entries a group the first table must fold for the merge to go on (0: none) */
+  bool stop;			/* no more partitions: the leaf asks for none (the group count limit was reached), or
+				 * fold_little */
+  bool fold_little;		/* the first table folded fewer than min_fold entries a group: the merge is given up */
   bool split_again;		/* a partition was split a second time */
   int sorted_parts;		/* the sub-partitions left to the sort */
 };
@@ -7066,6 +7080,24 @@ qexec_gby_merge_n_parts (double bytes, UINT64 budget)
   return (n < 1) ? 1 : (n > QEXEC_GBY_MERGE_MAX_PARTS) ? QEXEC_GBY_MERGE_MAX_PARTS : (int) n;
 }
 
+/* a folded table, of n_read entries, out by job->leaf (); the first one dropped instead when it folded too little
+ * (job->min_fold) */
+static int
+qexec_gby_merge_leaf (THREAD_ENTRY * thread_p, QEXEC_GBY_MERGE_JOB * job, INT64 n_read)
+{
+  if (job->min_fold > 0)
+    {
+      if ((double) n_read < job->min_fold * job->table->count)
+	{
+	  qexec_gby_mtable_rewind (thread_p, job->table);
+	  job->fold_little = job->stop = true;
+	  return NO_ERROR;
+	}
+      job->min_fold = 0;
+    }
+  return job->leaf (thread_p, job, job->table);
+}
+
 /* one partition (see above): rows[i] and partials[i], i < n_pieces, its pieces */
 static int
 qexec_gby_merge_partition (THREAD_ENTRY * thread_p, QEXEC_GBY_MERGE_JOB * job, QFILE_LIST_ID ** rows,
@@ -7095,7 +7127,7 @@ qexec_gby_merge_partition (THREAD_ENTRY * thread_p, QEXEC_GBY_MERGE_JOB * job, Q
 	}
       if (!over)
 	{
-	  return job->leaf (thread_p, job, job->table);
+	  return qexec_gby_merge_leaf (thread_p, job, n_read);
 	}
       /* the estimate missed: the table reached the budget after n_read of the entries */
       est = (double) job->table->bytes * ((double) n_entries / (double) MAX (n_read, (INT64) 1));
@@ -7137,7 +7169,7 @@ qexec_gby_merge_partition (THREAD_ENTRY * thread_p, QEXEC_GBY_MERGE_JOB * job, Q
 	}
       else if (rc == NO_ERROR)
 	{
-	  rc = job->leaf (thread_p, job, job->table);
+	  rc = qexec_gby_merge_leaf (thread_p, job, n_read);
 	}
       /* the sub-partition is in the table or in the sort's lists now */
       qexec_gby_merge_free_list (thread_p, &sub_rows[q]);
@@ -8429,6 +8461,9 @@ qexec_gby_hash_merge (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate, XASL_NOD
   job.leaf_arg = gbstate;
   if (!order_free)
     {
+      /* the sort follows the merge here: when the estimate missed and the lists fold little, the merge would add
+       * its cost to the sort's, so the first table folded decides whether it goes on */
+      job.min_fold = QEXEC_GBY_MERGE_MIN_FOLD;
       /* the collapsed groups go to the sort's lists from the first partition on */
       rc = qexec_gby_merge_job_sort_lists (thread_p, &job);
       if (rc != NO_ERROR)
@@ -8488,8 +8523,9 @@ qexec_gby_hash_merge (THREAD_ENTRY * thread_p, GROUPBY_STATE * gbstate, XASL_NOD
 	  qexec_gby_merge_free_list (thread_p, &part_parts[p]);
 	}
     }
-  if (rc != NO_ERROR)
+  if (rc != NO_ERROR || job.fold_little)
     {
+      /* given up: the sort takes the lists, which the merge only read, as they are */
       goto end;
     }
 
